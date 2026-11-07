@@ -10,6 +10,8 @@ import {
   compileSafeCiRegex,
   evaluateCiExpression,
   evaluateCiRules,
+  hasTestStage,
+  isTestJob,
   mergeRequestContextFor,
   pushContextFor,
 } from './ci-rules.js';
@@ -390,5 +392,40 @@ describe('ciRulesNotice (WP-143)', () => {
     expect(
       ciRulesNotice({ reading: { kind: 'absent' }, branch: BRANCH, defaultBranch: 'main' }),
     ).toBeNull();
+  });
+});
+
+describe("isTestJob — WP-143's convention as one predicate (TD-036 decision 2)", () => {
+  it.each([
+    // [stage, the pipeline has a `test` stage, counted]
+    ['test', true, true],
+    ['release', true, false],
+    ['build', true, false],
+    [null, true, true],
+    ['release', false, true],
+    ['test', false, true],
+    [null, false, true],
+  ] as const)('stage %s with a test stage %s counts: %s', (stage, countsTestStage, counted) => {
+    expect(isTestJob(countsTestStage)({ stage })).toBe(counted);
+  });
+
+  it('switches on a job in stage test, and never on a null stage alone', () => {
+    expect(hasTestStage([{ stage: 'build' }, { stage: 'test' }])).toBe(true);
+    expect(hasTestStage([{ stage: 'build' }, { stage: null }])).toBe(false);
+    expect(hasTestStage([])).toBe(false);
+  });
+
+  it('is the predicate the readiness warning counts by: a job with an unreadable stage counts', () => {
+    // A `stage:` that is not a string reads as `null`, which counts beside the `test` stage, so the
+    // warning does not fire while that job runs on the draft merge-request pipeline.
+    const notice = ciRulesNotice({
+      reading: file({
+        unit: { stage: 'test', rules: [{ when: 'never' }], script: ['t'] },
+        odd: { stage: ['test'], script: ['t'] },
+      }),
+      branch: BRANCH,
+      defaultBranch: 'develop',
+    });
+    expect(notice?.code).not.toBe(CI_RULES_WARNING_CODE);
   });
 });

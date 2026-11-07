@@ -397,6 +397,39 @@ const normalisePipeline = (
       `unknown pipeline status ${JSON.stringify(attributes.status.slice(0, 32))}`,
     );
   }
+  const mr =
+    hook.merge_request == null || hook.merge_request.url == null
+      ? null
+      : {
+          provider: GITLAB_PROVIDER_ID,
+          project_path: project,
+          iid: hook.merge_request.iid,
+          url: hook.merge_request.url,
+          branch: hook.merge_request.source_branch ?? null,
+          head_sha: attributes.sha,
+        };
+  if (mapped === 'manual') {
+    /**
+     * **A held pipeline is heard** (TD-036 decision 6, S-27.2). GitLab reports a pipeline held at a
+     * blocking manual job as `manual` (its UI's *blocked*), and until S-27.2 this hook was dropped
+     * like any non-terminal status, so a webhook binding's CI gate spent its five checks on
+     * AUT-6655's pipeline. It is `ci.pipeline.held` — its own payload, no status and no failed jobs
+     * — and `terminalCiStatus` still excludes `manual`, so `.finished` means what it meant. The
+     * CI-settle duty re-reads the live head's latest pipeline and judges it by the manual-job rule.
+     */
+    const held: NormalisedEvent<'ci.pipeline.held'> = {
+      type: 'ci.pipeline.held',
+      payload: {
+        project_id: context.projectId,
+        task_id: null,
+        mr,
+        head_sha: attributes.sha,
+        pipeline_id: String(attributes.id),
+      },
+      actor,
+    };
+    return { events: [held], ignored: [] };
+  }
   const status = terminalCiStatus(mapped);
   if (status === null) {
     // A pipeline hook fires on every status change; `ci.pipeline.finished` means finished.
@@ -411,17 +444,7 @@ const normalisePipeline = (
     payload: {
       project_id: context.projectId,
       task_id: null,
-      mr:
-        hook.merge_request == null || hook.merge_request.url == null
-          ? null
-          : {
-              provider: GITLAB_PROVIDER_ID,
-              project_path: project,
-              iid: hook.merge_request.iid,
-              url: hook.merge_request.url,
-              branch: hook.merge_request.source_branch ?? null,
-              head_sha: attributes.sha,
-            },
+      mr,
       head_sha: attributes.sha,
       status,
       failed_jobs: failedJobs,

@@ -121,6 +121,70 @@ describe('the keys a file may not apply', () => {
     ]);
   });
 
+  /**
+   * S-27.2, the coordinator's ruling on #114 (BACKLOG 1492): the repository file is written by the
+   * agent whose merge request the CI gate judges, so `pipeline.ci.required_manual_jobs` may only
+   * require more from it — `[]` only ever comes from the project settings.
+   */
+  describe('pipeline.ci.required_manual_jobs from the file (S-27.2)', () => {
+    const KEY = 'pipeline.ci.required_manual_jobs';
+    const file = (required: string[] | 'all') => ({
+      pipeline: { ci: { required_manual_jobs: required } },
+    });
+    const settingsWith = (required: string[] | 'all' | undefined) =>
+      required === undefined ? {} : file(required);
+    /** The file as the reading stores it, then tightened against the settings. */
+    const applied = (repo: string[] | 'all', settings: string[] | 'all' | undefined) => {
+      const graded = withoutNotAppliedKeys(file(repo));
+      const tightened = tightenRepositoryLayer(settingsWith(settings), graded.values);
+      return {
+        value: tightened.values.pipeline?.ci?.required_manual_jobs,
+        notApplied: [...graded.notApplied, ...tightened.notApplied],
+      };
+    };
+
+    it('is graded tighten-only', () => {
+      expect(REPOSITORY_KEY_GRADES['pipeline.ci']).toBe('tighten_only');
+    });
+
+    it('refuses a file’s [] by name, whatever the settings say, and logs the key at the refresh', () => {
+      for (const settings of [undefined, [], ['e2e'], 'all'] as const) {
+        const result = applied([], settings === undefined ? undefined : (settings as never));
+        expect(result.value, JSON.stringify(settings)).toBeUndefined();
+        expect(result.notApplied.map((item) => item.key)).toEqual([KEY]);
+        expect(result.notApplied[0]?.reason).toContain('only the project settings may say it');
+      }
+      // The refusal is the stored reading's own (`withoutNotAppliedKeys`), which the refresh logs.
+      expect(withoutNotAppliedKeys(file([])).notApplied.map((item) => item.key)).toEqual([KEY]);
+    });
+
+    it('accepts a file’s all over any settings', () => {
+      for (const settings of [undefined, [], ['e2e']] as const) {
+        const result = applied('all', settings === undefined ? undefined : [...settings]);
+        expect(result.value, JSON.stringify(settings)).toBe('all');
+        expect(result.notApplied).toEqual([]);
+      }
+    });
+
+    it('cannot drop a name the project settings require: a list is the union, the dropped name reported', () => {
+      const result = applied(['smoke'], ['e2e', 'sentry-release-commit']);
+      expect(result.value).toEqual(['e2e', 'sentry-release-commit', 'smoke']);
+      expect(result.notApplied.map((item) => item.key)).toEqual([KEY]);
+      expect(result.notApplied[0]?.reason).toContain('"e2e"');
+      // Over the settings' [] a list only requires more, and is applied as written.
+      expect(applied(['smoke'], [])).toEqual({ value: ['smoke'], notApplied: [] });
+    });
+
+    it('does not apply a list over the default or over the settings’ all, and says why', () => {
+      const overDefault = applied(['smoke'], undefined);
+      expect(overDefault.value).toBeUndefined();
+      expect(overDefault.notApplied[0]?.reason).toContain('the default is still in force');
+      const overAll = applied(['smoke'], 'all');
+      expect(overAll.value).toBeUndefined();
+      expect(overAll.notApplied[0]?.reason).toContain('(all), which is still in force');
+    });
+  });
+
   it('applies both prompt keys when they name a prompt file, and drops one that names another path (WP-92)', () => {
     expect(REPOSITORY_KEY_GRADES['stages.*.prompt']).toBe('operational');
     expect(REPOSITORY_KEY_GRADES['stages.*.prompt_append']).toBe('operational');

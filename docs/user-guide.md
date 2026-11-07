@@ -1056,19 +1056,30 @@ returned it — the merge request goes back to draft until the task is Ready aga
 (the default branch moved) leaves it ready. So your project's CI has to run its tests on a **draft**
 merge request from an `agentic/` branch. If its rules skip or hold jobs for a `Draft:` title, the CI
 check waits and the task page says what it waits for, from the first check: *"CI is waiting for
-someone to start the manual job sentry-release-commit in GitLab. Start it there and the task
+someone to start the manual job codeception in GitLab. Start it there and the task
 continues."*, with the job linked, a note that links the readiness panel's CI-rules warning (which
 names the rule it understood), and *Start the job in GitLab* as the page's one button.
-**A manual job nobody started is not a check** (BD-024's 2026-11-07 amendment, built by S-27.2; until
-that is deployed, the check waits for every held job). When every job that ran is green and only
-manual jobs are left, CI passes and the task's CI check says *CI passed — the manual job
-sentry-release-commit was not run*. That holds unless one of the manual jobs is a **test job**, one
-in stage `test`: a test is never skipped. The check also waits when a job is queued behind the held one
-(a build step your tests need, say). To set your own rule, use `pipeline.ci.required_manual_jobs` in
-`.agentic/config.yml`: `[]` passes every manual job, `all` waits for every one, and a list of job
-names waits for exactly those. At **Ready for merge**, a task whose pipeline GitLab still shows as blocked says so: if
-your project requires pipelines to succeed, GitLab won't merge until that job has run, so start it
-there. The waiting described next applies to a required job. A held job is
+**A manual job nobody started is not a check** (BD-024's 2026-11-07 amendment). When every job
+that ran is green and only manual jobs are left, CI passes and the task's CI check says *CI passed —
+the manual job sentry-release-commit was not run*, with the job linked. That holds unless one of the
+manual jobs — a manual trigger for another pipeline included — is a **test job** — one in stage `test`, or any job when the pipeline has no `test`
+stage, or a job with no stage at all: a test is never skipped. The check also waits when a job is
+queued behind the held one (a build step your tests need, say), when no job has run yet, and when a
+job that is not allowed to fail failed — which fails the check, as a red pipeline does. To set your
+own rule, use `pipeline.ci.required_manual_jobs`: `[]` requires no manual job (a held test job then
+passes too), `all` waits for every one, as before this rule, and a list of job names waits for
+exactly those — a named job that ran and failed fails the check, so does one the pipeline's rules
+skipped, and a name the pipeline does not contain is not waited for. The project's settings may say
+any of these. `.agentic/config.yml` may only require more: its `all` applies, its list is added to
+the settings' list, and its `[]` never applies (the agent whose change the check judges can edit
+that file); the effective configuration lists what it did not apply, with the reason. A merge request's head held only at a job the rule
+does not wait for keeps one pipeline: the platform asks GitLab for a fresh merge-request pipeline
+only when the rule would wait on a manual job. At **Ready for merge**, a task whose pipeline GitLab
+still shows as blocked says so — on the task page and in the ticket's workpad: *"GitLab shows
+pipeline n, the latest for this commit, as blocked at the manual job sentry-release-commit. If this
+project requires pipelines to succeed, GitLab won't merge it until sentry-release-commit has run:
+start it on GitLab."* The platform never says the merge request can be merged. The waiting
+described next applies to a required job. A held job is
 *Needs you* at once: on the task page, on the board — its card says *CI held · start the job* and
 sits under *Needs you* — and as a row of the Inbox and of Home's *Needs you* (*CI waits for someone
 to start the manual job …*), which opens the task. A paused task shows no CI wait: the check stops while it is paused. While the pipeline is simply running, the page

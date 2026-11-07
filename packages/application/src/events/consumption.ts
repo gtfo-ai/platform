@@ -116,6 +116,8 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'task.completed': 'handled',
   'task.cancelled': 'handled',
   'ci.pipeline.finished': 'handled',
+  // S-27.2 (TD-036 decision 6): the saga's `pipeline.ci` decides, the `ci_settle` duty re-reads.
+  'ci.pipeline.held': 'handled',
   'default_branch.moved': 'handled',
   'mr.merged': 'handled',
   'mr.closed': 'handled',

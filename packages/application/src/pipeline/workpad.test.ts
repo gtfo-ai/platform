@@ -177,6 +177,84 @@ describe('renderWorkpad', () => {
     expect(markdown).toContain('**Needs a human**');
     expect(markdown).toContain('Answer the question');
   });
+
+  /**
+   * S-27.2 (TD-036 decisions 5 and 7): a CI pass that left a manual job nobody started says which,
+   * and at Ready, over a pipeline the provider still shows blocked, says GitLab may not merge it —
+   * never that the merge request *can be merged*.
+   */
+  describe('what the CI pass left unstarted (S-27.2)', () => {
+    const notRun = {
+      pipeline_id: '3038234623',
+      pipeline_url: null,
+      pipeline_status: 'manual' as const,
+      jobs: [{ name: 'sentry-release-commit', stage: 'release', url: null }],
+      checked_at: '2026-11-07T09:00:00.000Z',
+    };
+
+    it('reads CI passed — the manual job sentry-release-commit was not run', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        currentStage: 'code_review',
+        ciManualNotRun: notRun,
+        gitProvider: 'GitLab',
+      });
+      expect(markdown).toContain('CI passed — the manual job sentry-release-commit was not run');
+      expect(markdown, 'not at Ready yet').not.toContain('blocked');
+    });
+
+    it('carries TD-036 decision 7’s sentence at Ready, naming the pipeline and the job to start', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        state: 'ready_for_merge',
+        currentStage: 'ready_for_merge',
+        ciManualNotRun: notRun,
+        gitProvider: 'GitLab',
+      });
+      expect(markdown).toContain(
+        'GitLab shows pipeline 3038234623, the latest for this commit, as blocked at the manual job sentry-release-commit. ' +
+          'If this project requires pipelines to succeed, GitLab won’t merge it until sentry-release-commit has run: start it on GitLab.',
+      );
+      expect(markdown).not.toMatch(/can be merged/i);
+      // A pipeline the provider no longer holds: the CI line, and no blocked sentence.
+      const green = renderWorkpad({
+        ...view,
+        state: 'ready_for_merge',
+        currentStage: 'ready_for_merge',
+        ciManualNotRun: { ...notRun, pipeline_status: 'success' },
+        gitProvider: 'GitLab',
+      });
+      expect(green).toContain('was not run');
+      expect(green).not.toContain('blocked');
+    });
+
+    it('unlabels a markdown link planted in a job name', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        ciManualNotRun: {
+          ...notRun,
+          jobs: [{ name: '[Approve](https://evil.example.test)', stage: null, url: null }],
+        },
+      });
+      expect(markdown).not.toContain('[Approve]');
+      expect(markdown).toContain('the manual job https://evil.example.test was not run');
+    });
+
+    it('opens the sentence with the git provider capitalised when the binding names none', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        state: 'ready_for_merge',
+        currentStage: 'ready_for_merge',
+        ciManualNotRun: notRun,
+      });
+      expect(markdown).toContain('The git provider shows pipeline 3038234623');
+      expect(markdown).toContain('the git provider won’t merge it');
+    });
+
+    it('says nothing about manual jobs when the pass left none', () => {
+      expect(renderWorkpad({ ...view, ciManualNotRun: null })).not.toContain('manual');
+    });
+  });
 });
 
 describe('mappedStatus', () => {

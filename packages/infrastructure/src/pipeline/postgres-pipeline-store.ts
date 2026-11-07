@@ -76,6 +76,7 @@ import {
   artifactTypeSchema,
   budgetApprovalSubjectDetailSchema,
   ciGateEndingSchema,
+  ciManualNotRunSchema,
   contextPackRecordSchema,
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
@@ -1504,6 +1505,37 @@ export const createPostgresPipelineStore = (
         [entry.taskId, entry.stage, entry.attempt, ciGateEndingSchema.parse(ending)],
       );
       return (rowCount ?? 0) > 0;
+    },
+
+    // S-27.2 (TD-036 decision 5): the column's one writer — the open row only, parsed at the write.
+    recordCiManualNotRun: async (tx, entry, value) => {
+      const { rowCount } = await sqlOf(tx).query(
+        `update task_stages set ci_manual_not_run = $4::jsonb
+          where task_id = $1 and stage = $2 and ($3::int is null or attempt = $3)
+            and state = 'running' and exited_at is null`,
+        [
+          entry.taskId,
+          entry.stage,
+          entry.attempt ?? null,
+          JSON.stringify(ciManualNotRunSchema.parse(value)),
+        ],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
+    latestCiManualNotRun: async (tx, taskId, stage) => {
+      const { rows } = await sqlOf(tx).query<{ ci_manual_not_run: unknown }>(
+        `select s.ci_manual_not_run from task_stages s
+          where s.task_id = $1 and s.stage = $2 and s.state = 'completed'
+            and s.attempt = (select max(attempt) from task_stages
+                              where task_id = $1 and stage = $2)
+            and not exists (select 1 from task_stages r
+                             where r.task_id = $1 and r.state = 'returned'
+                               and r.exited_at > s.exited_at)`,
+        [taskId, stage],
+      );
+      const value = rows[0]?.ci_manual_not_run ?? null;
+      return value === null ? null : ciManualNotRunSchema.parse(value);
     },
 
     previousCiPendingRead: async (tx, taskId, stage, attempt) => {

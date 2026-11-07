@@ -1,0 +1,124 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines?sha=8888888888888888888888888888888888888888&order_by=id&sort=desc&per_page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 908,
+          "iid": 20,
+          "project_id": 15513260,
+          "sha": "8888888888888888888888888888888888888888",
+          "ref": "agentic/task-trigger",
+          "status": "manual",
+          "source": "merge_request_event",
+          "name": "Pipeline for branch: agentic/task-trigger",
+          "created_at": "2026-06-01T07:30:00.000Z",
+          "updated_at": "2026-06-01T07:34:00.000Z",
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/908"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/pipelines/",
+        "retrieved": "2026-11-07",
+        "kind": "documented-adapted",
+        "note": "\"List project pipelines\" example response with status manual (GitLab's blocked), values fake."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/908",
+      "status": 200,
+      "body": {
+        "id": 908,
+        "iid": 20,
+        "project_id": 15513260,
+        "sha": "8888888888888888888888888888888888888888",
+        "ref": "agentic/task-trigger",
+        "status": "manual",
+        "source": "merge_request_event",
+        "coverage": null,
+        "created_at": "2026-06-01T07:30:00.000Z",
+        "started_at": "2026-06-01T07:30:20.000Z",
+        "finished_at": null,
+        "duration": 220,
+        "queued_duration": 20,
+        "web_url": "https://gitlab.example.test/acme/api/-/pipelines/908"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/pipelines/",
+        "retrieved": "2026-11-07",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a single pipeline\" example with status manual and no finished_at; values fake."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/908/jobs?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 9081,
+          "name": "phpstan",
+          "stage": "test",
+          "status": "success",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:30:00.000Z",
+          "started_at": "2026-06-01T07:31:00.000Z",
+          "finished_at": "2026-06-01T07:33:00.000Z",
+          "failure_reason": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9081"
+        },
+        {
+          "id": 9082,
+          "name": "sentry-release-commit",
+          "stage": "release",
+          "status": "manual",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:30:00.000Z",
+          "started_at": null,
+          "finished_at": null,
+          "failure_reason": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9082"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-11-07",
+        "kind": "documented-adapted",
+        "note": "\"List all jobs by pipeline\" example fields, two jobs: a test job that succeeded and the release job sentry-release-commit at manual. The trigger job e2e is not among them: the page documents trigger jobs under its own section, \"List all trigger jobs by pipeline\", and its jobs section names no trigger job (the exclusion is the security review of #114's reading of the API, stated here rather than quoted, because the page does not say it in words)."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/908/bridges?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 9083,
+          "name": "e2e",
+          "stage": "test",
+          "status": "manual",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:30:00.000Z",
+          "started_at": null,
+          "finished_at": null,
+          "duration": null,
+          "queued_duration": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9083",
+          "downstream_pipeline": null
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-11-07",
+        "kind": "documented-adapted",
+        "note": "\"List all trigger jobs by pipeline\" example fields (id, name, stage, status, allow_failure, web_url, downstream_pipeline), one trigger job e2e in stage test waiting at manual with allow_failure false and no downstream pipeline yet. Read through the bridges route, which the page marks deprecated in GitLab 19.2 in favour of trigger_jobs; runner, user, commit and project members the adapter never reads are removed."
+      }
+    }
+  ]
+}

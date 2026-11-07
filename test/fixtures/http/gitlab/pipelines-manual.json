@@ -1,0 +1,126 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines?sha=7777777777777777777777777777777777777777&order_by=id&sort=desc&per_page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 907,
+          "iid": 19,
+          "project_id": 15513260,
+          "sha": "7777777777777777777777777777777777777777",
+          "ref": "agentic/task-held",
+          "status": "manual",
+          "source": "merge_request_event",
+          "name": "Pipeline for branch: agentic/task-held",
+          "created_at": "2026-06-01T07:20:00.000Z",
+          "updated_at": "2026-06-01T07:24:00.000Z",
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/907"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/pipelines/",
+        "retrieved": "2026-11-07",
+        "kind": "documented-adapted",
+        "note": "\"List project pipelines\" example response with status manual, the value the API reports for a pipeline GitLab's UI calls blocked (S-27.2, AUT-6655's pipeline 3038234623 had this status). The status value is from the page's status list; the rest is the documented example with fake values."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/907",
+      "status": 200,
+      "body": {
+        "id": 907,
+        "iid": 19,
+        "project_id": 15513260,
+        "sha": "7777777777777777777777777777777777777777",
+        "ref": "agentic/task-held",
+        "status": "manual",
+        "source": "merge_request_event",
+        "coverage": null,
+        "created_at": "2026-06-01T07:20:00.000Z",
+        "started_at": "2026-06-01T07:20:20.000Z",
+        "finished_at": null,
+        "duration": 220,
+        "queued_duration": 20,
+        "web_url": "https://gitlab.example.test/acme/api/-/pipelines/907",
+        "detailed_status": {
+          "icon": "status_manual",
+          "text": "blocked",
+          "label": "waiting for manual action"
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/pipelines/",
+        "retrieved": "2026-11-07",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a single pipeline\" example with status manual and no finished_at. The detailed_status words are not read by the adapter; they are the UI's blocked label described on https://docs.gitlab.com/ci/jobs/job_control/ (a manual job with allow_failure false blocks the pipeline)."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/907/jobs?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 9071,
+          "name": "build_composer",
+          "stage": "build",
+          "status": "success",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:20:00.000Z",
+          "started_at": "2026-06-01T07:20:20.000Z",
+          "finished_at": "2026-06-01T07:21:00.000Z",
+          "failure_reason": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9071"
+        },
+        {
+          "id": 9072,
+          "name": "phpstan",
+          "stage": "test",
+          "status": "success",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:20:00.000Z",
+          "started_at": "2026-06-01T07:21:00.000Z",
+          "finished_at": "2026-06-01T07:23:00.000Z",
+          "failure_reason": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9072"
+        },
+        {
+          "id": 9073,
+          "name": "sentry-release-commit",
+          "stage": "release",
+          "status": "manual",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:20:00.000Z",
+          "started_at": null,
+          "finished_at": null,
+          "failure_reason": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9073"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-11-07",
+        "kind": "documented-adapted",
+        "note": "\"List pipeline jobs\" example fields (id, name, stage, status, allow_failure, web_url), three jobs in AUT-6655's shape: a build and a test job that succeeded and the release job sentry-release-commit waiting at manual with allow_failure false, the default for when: manual inside rules (https://docs.gitlab.com/ci/jobs/job_control/). The runner, artifacts and user members the adapter never reads are removed."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/907/bridges?per_page=100&page=1",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-11-07",
+        "kind": "inferred",
+        "note": "\"List all trigger jobs by pipeline\" (the bridges route, deprecated in GitLab 19.2 for trigger_jobs and still served). A pipeline with no trigger job answers an empty list; the page documents a list and does not publish the empty case."
+      }
+    }
+  ]
+}

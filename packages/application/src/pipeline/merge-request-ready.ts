@@ -16,7 +16,8 @@
  *
  *  1. **`mr_pipeline`** — on `task.stage.completed` for the stage that produces `ImplementationNotes`.
  *     It no longer marks anything ready: it reads the merge request's live head and, when that head
- *     has **no** pipeline — or one held at a `manual` job (backlog 459) — and the default branch has a
+ *     has **no** pipeline — or one the CI gate's manual-job rule would wait on (backlog 459, S-27.2:
+ *     a manual test job by default, not a release step) — and the default branch has a
  *     CI file **or the platform cannot tell**, asks the provider for a merge-request pipeline (the
  *     *Run pipeline* button's API), keyed per head sha. GitLab documents three events that start a
  *     merge-request pipeline — a new merge request from a branch with commits, a push to its source
@@ -54,6 +55,7 @@ import type { EventHandler, HandlerContext } from '../events/handler.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { manualJobPolicyOf, manualJobsHolding } from './ci-manual-jobs.js';
 import { ciConfigOnDefaultBranch } from './gates.js';
 import {
   codeMergeRequestWrites,
@@ -289,16 +291,20 @@ export const runMergeRequestPipeline = async (
    * nobody finished (eight e2e cases stuck at `ci_gate`); a held job is the evidence that mattered.
    */
   const status = await gitReads(integrations).pipelineStatus(head, context);
-  // A **blocking** manual job only (`allow_failure: false`): an optional one — Autix's image builds
-  // are `when: manual, allow_failure: true` in every merge-request pipeline — holds nothing, and
-  // counting it asked for a second pipeline on every Developer completion (first local test,
-  // 2026-10-06, backlog 459's follow-up).
-  const heldAtManual =
-    status !== null &&
-    (status.status === 'manual' ||
-      status.jobs.some((job) => job.status === 'manual' && !job.allow_failure));
-  if (status !== null && !heldAtManual) {
-    return 'not_needed';
+  /**
+   * **The CI gate's own question** (S-27.2, TD-036 decision 4): a fresh pipeline is asked for only
+   * when the gate's manual-job rule, with the project's `pipeline.ci.required_manual_jobs`, would
+   * keep it waiting *because of a manual job* (`manualJobsHolding`, the one function both call). A
+   * head held only at a job the rule does not wait for — AUT-6655's `sentry-release-commit`, a
+   * release step — gets none, so it keeps one pipeline per head and the gate reads that one; a
+   * head held at a manual **test** job still gets one, once per head (the key). An optional manual
+   * job (`allow_failure: true`) holds nothing, as before (backlog 459's follow-up).
+   */
+  if (status !== null) {
+    const policy = manualJobPolicyOf(await options.settings.forProject(stored.task.projectId));
+    if (!manualJobsHolding(status, policy).holds) {
+      return 'not_needed';
+    }
   }
   const writes = codeMergeRequestWrites(integrations);
   try {

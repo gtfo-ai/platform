@@ -18,6 +18,8 @@ import {
   MAX_CI_TIMEOUT_MINUTES,
   MAX_CONTEXT_BUDGET_TOKENS,
   MAX_LIFECYCLE_RETURNED_STATUSES,
+  MAX_REQUIRED_MANUAL_JOB_CHARS,
+  MAX_REQUIRED_MANUAL_JOBS,
   MAX_WIP_PARALLEL_TASKS,
   MAX_WIP_TASKS_IN_PIPELINE,
   MIN_CI_TIMEOUT_MINUTES,
@@ -60,6 +62,7 @@ const DOC_EXAMPLE = {
       question_timeout: '1 working day',
     },
     wip: { max_parallel_tasks: 2, max_tasks_in_pipeline: 5 },
+    ci: { required_manual_jobs: ['e2e'] },
   },
   stages: {
     refinement: { model: 'claude-opus-5', effort: 'medium', max_turns: 30, budget_usd: 2 },
@@ -540,6 +543,38 @@ describe('pipeline.limits.ci_timeout_minutes (WP-136)', () => {
       expect(parsed.success, String(refused)).toBe(false);
       expect(parsed.error?.issues[0]?.path).toEqual(['pipeline', 'limits', 'ci_timeout_minutes']);
     }
+  });
+});
+
+describe('pipeline.ci.required_manual_jobs (S-27.2, TD-036 decision 3)', () => {
+  const withCi = (ci: unknown) => agenticConfigSchema.safeParse({ version: 1, pipeline: { ci } });
+
+  it('has three states and a list: absent, [], all, or exact names', () => {
+    expect(withCi({}).success, 'absent: the default').toBe(true);
+    expect(withCi({ required_manual_jobs: [] }).success).toBe(true);
+    expect(withCi({ required_manual_jobs: 'all' }).success).toBe(true);
+    expect(withCi({ required_manual_jobs: ['sentry-release-commit', 'e2e'] }).success).toBe(true);
+  });
+
+  it('refuses an unknown key under pipeline.ci, and another word than all', () => {
+    const unknown = withCi({ required_manual_jobs: [], skip_tests: true });
+    expect(unknown.success).toBe(false);
+    expect(unknown.error?.issues[0]?.code).toBe('unrecognized_keys');
+    for (const refused of ['none', 'ALL', '*', true, 3, [''], [7]]) {
+      expect(withCi({ required_manual_jobs: refused }).success, JSON.stringify(refused)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('bounds the list at 50 names of at most 255 characters, each named once', () => {
+    expect([MAX_REQUIRED_MANUAL_JOBS, MAX_REQUIRED_MANUAL_JOB_CHARS]).toEqual([50, 255]);
+    const names = (count: number) => Array.from({ length: count }, (_, index) => `job-${index}`);
+    expect(withCi({ required_manual_jobs: names(50) }).success).toBe(true);
+    expect(withCi({ required_manual_jobs: names(51) }).success).toBe(false);
+    expect(withCi({ required_manual_jobs: ['x'.repeat(255)] }).success).toBe(true);
+    expect(withCi({ required_manual_jobs: ['x'.repeat(256)] }).success).toBe(false);
+    expect(withCi({ required_manual_jobs: ['e2e', 'e2e'] }).success).toBe(false);
   });
 });
 

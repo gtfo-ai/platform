@@ -215,11 +215,54 @@ export const wipLimitsConfigSchema = z
     }
   });
 
+/** The most job names `pipeline.ci.required_manual_jobs` may list (TD-036 decision 3). */
+export const MAX_REQUIRED_MANUAL_JOBS = 50;
+/** The longest job name it may list — GitLab's own job-name bound (TD-036 decision 3). */
+export const MAX_REQUIRED_MANUAL_JOB_CHARS = 255;
+
+/**
+ * **Which manual jobs must have run before the CI gate passes** (TD-036 decision 3, BD-024's
+ * 2026-11-07 amendment). Three states, and absent is the first:
+ *
+ *  - **absent** — the default: a manual job nobody started is not a check **unless it is a test
+ *    job** (stage `test`, WP-143's convention; a job with no stage counts), so an optional release
+ *    step does not block and a test is never skipped;
+ *  - **`[]`** — no manual job is required: the test-job condition is dropped, while a job still
+ *    queued or running, a failure the provider does not allow, or a pipeline in which no job ran
+ *    still keeps the gate from passing;
+ *  - **`all`** — every blocking manual job must have run: the gate's behaviour before TD-036.
+ *
+ * A **list of exact names** (no globs: a job name is an identity) replaces the test-job condition
+ * with *exactly these must have run*: a named job that is still manual keeps the gate waiting
+ * whatever its stage, even on a `success` pipeline; a named job that ran and failed fails the gate;
+ * a name the pipeline does not contain is not waited for (BACKLOG 1474).
+ */
+export const requiredManualJobsSchema = z.union([
+  z.literal('all'),
+  z
+    .array(z.string().min(1).max(MAX_REQUIRED_MANUAL_JOB_CHARS))
+    .max(MAX_REQUIRED_MANUAL_JOBS)
+    .refine((names) => new Set(names).size === names.length, {
+      message: 'a job is named at most once',
+    }),
+]);
+
+/**
+ * `pipeline.ci` — what the CI gate counts as evidence (TD-036 decision 3). It sits **beside**
+ * `pipeline.limits`, which holds bounds (how long and how often, BD-008): this is a policy about
+ * what counts, and `ci_timeout_minutes` stays where every document states it.
+ */
+export const pipelineCiConfigSchema = z.strictObject({
+  required_manual_jobs: requiredManualJobsSchema.optional(),
+});
+
 export const pipelineConfigSchema = z.strictObject({
   template_overrides: z.record(templateIdSchema, templateOverrideSchema).optional(),
   custom_stages: z.array(customStageSchema).optional(),
   limits: pipelineLimitsSchema.optional(),
   wip: wipLimitsConfigSchema.optional(),
+  /** TD-036 decision 3 (S-27.2): which manual jobs the CI gate requires. */
+  ci: pipelineCiConfigSchema.optional(),
 });
 
 // ── stages (agent settings) ──────────────────────────────────────────────────
@@ -1120,6 +1163,7 @@ export type AgenticConfig = z.infer<typeof agenticConfigSchema>;
 export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 export type PipelineConfig = z.infer<typeof pipelineConfigSchema>;
 export type PipelineLimits = z.infer<typeof pipelineLimitsSchema>;
+export type RequiredManualJobs = z.infer<typeof requiredManualJobsSchema>;
 export type WipLimitsConfig = z.infer<typeof wipLimitsConfigSchema>;
 export type StageAgentSettings = z.infer<typeof stageAgentSettingsSchema>;
 export type PoliciesConfig = z.infer<typeof policiesConfigSchema>;

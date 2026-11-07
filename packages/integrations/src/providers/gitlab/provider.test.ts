@@ -811,6 +811,8 @@ describe('CI', () => {
           body: [{ id: 900, sha: pipeline.sha, status: 'failed' }],
         },
         [`GET /projects/${P}/pipelines/900`]: { status: 200, body: { ...pipeline, coverage } },
+        // The security review of #114: the trigger jobs are a second list.
+        [`GET /projects/${P}/pipelines/900/bridges?per_page=100&page=1`]: { status: 200, body: [] },
         [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: { status: 200, body: [] },
       });
       const status = await port.getPipelineStatus(PROJECT, pipeline.sha);
@@ -833,6 +835,8 @@ describe('CI', () => {
         status: 200,
         body: { ...pipeline, status: 'manual', finished_at: null },
       },
+      // The security review of #114: the trigger jobs are a second list.
+      [`GET /projects/${P}/pipelines/900/bridges?per_page=100&page=1`]: { status: 200, body: [] },
       [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: {
         status: 200,
         body: [
@@ -854,6 +858,140 @@ describe('CI', () => {
       ['sentry-release-commit', 'manual', `${HOST}/acme/api/-/jobs/9003`],
       ['lint', 'success', null],
     ]);
+  });
+
+  /**
+   * S-27.2 (TD-036 decision 1): the jobs API's `stage` reaches the port — the CI gate passes a held
+   * release step only because it knows the stage — and an absent or empty stage maps to `null`
+   * (a provider with no stages, which the gate counts as a test), never to a guessed `test`.
+   */
+  it('maps each job’s stage, and null for a job the payload gives none', async () => {
+    const { port } = build({
+      [`GET /projects/${P}/pipelines?sha=${pipeline.sha}&order_by=id&sort=desc&per_page=1`]: {
+        status: 200,
+        body: [{ id: 900, sha: pipeline.sha, status: 'manual' }],
+      },
+      [`GET /projects/${P}/pipelines/900`]: {
+        status: 200,
+        body: { ...pipeline, status: 'manual', finished_at: null },
+      },
+      // The security review of #114: the trigger jobs are a second list.
+      [`GET /projects/${P}/pipelines/900/bridges?per_page=100&page=1`]: { status: 200, body: [] },
+      [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          { id: 9003, name: 'sentry-release-commit', stage: 'release', status: 'manual' },
+          { id: 9004, name: 'lint', stage: 'test', status: 'success', allow_failure: false },
+          { id: 9005, name: 'no-stage', status: 'success', allow_failure: false },
+          { id: 9006, name: 'empty-stage', stage: '', status: 'success', allow_failure: false },
+        ],
+      },
+    });
+    const status = await port.getPipelineStatus(PROJECT, pipeline.sha);
+    expect(status?.jobs.map((job) => [job.name, job.stage, job.allow_failure])).toEqual([
+      ['sentry-release-commit', 'release', false],
+      ['lint', 'test', false],
+      ['no-stage', null, false],
+      ['empty-stage', null, false],
+    ]);
+  });
+
+  /**
+   * BACKLOG 1490: a job list cut at the binding's `max_pages` says so on the port, because the CI
+   * gate passes a held pipeline on its jobs and must not pass one on half a list; the whole list
+   * says nothing.
+   */
+  it('reports a job list cut at max_pages as jobs_truncated, and a whole one without it', async () => {
+    const script = (nextPage: string) => ({
+      [`GET /projects/${P}/pipelines?sha=${pipeline.sha}&order_by=id&sort=desc&per_page=1`]: {
+        status: 200,
+        body: [{ id: 900, sha: pipeline.sha, status: 'manual' }],
+      },
+      [`GET /projects/${P}/pipelines/900`]: {
+        status: 200,
+        body: { ...pipeline, status: 'manual', finished_at: null },
+      },
+      // The security review of #114: the trigger jobs are a second list.
+      [`GET /projects/${P}/pipelines/900/bridges?per_page=100&page=1`]: { status: 200, body: [] },
+      [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: {
+        status: 200,
+        body: [{ id: 9004, name: 'lint', stage: 'test', status: 'success', allow_failure: false }],
+        headers: { 'x-next-page': nextPage },
+      },
+    });
+    const cut = await build(script('2'), { config: { max_pages: 1 } }).port.getPipelineStatus(
+      PROJECT,
+      pipeline.sha,
+    );
+    expect(cut?.jobs_truncated).toBe(true);
+    const whole = await build(script(''), { config: { max_pages: 1 } }).port.getPipelineStatus(
+      PROJECT,
+      pipeline.sha,
+    );
+    expect(whole).not.toHaveProperty('jobs_truncated');
+  });
+
+  /**
+   * The security review of #114: "List all jobs by pipeline" does not list trigger jobs; "List all
+   * trigger jobs by pipeline" (`/bridges`) does. The adapter reads both into `jobs`, with stage,
+   * status and `allow_failure`, no log of a bridge's own, and a cut bridge list as `jobs_truncated`.
+   */
+  it('reads the pipeline’s trigger jobs into its jobs, and a cut bridge list as jobs_truncated', async () => {
+    const script = (nextPage: string) => ({
+      [`GET /projects/${P}/pipelines?sha=${pipeline.sha}&order_by=id&sort=desc&per_page=1`]: {
+        status: 200,
+        body: [{ id: 900, sha: pipeline.sha, status: 'manual' }],
+      },
+      [`GET /projects/${P}/pipelines/900`]: {
+        status: 200,
+        body: { ...pipeline, status: 'manual', finished_at: null },
+      },
+      [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          { id: 9004, name: 'phpstan', stage: 'test', status: 'success', allow_failure: false },
+          {
+            id: 9005,
+            name: 'sentry-release-commit',
+            stage: 'release',
+            status: 'manual',
+            allow_failure: false,
+          },
+        ],
+      },
+      [`GET /projects/${P}/pipelines/900/bridges?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          {
+            id: 9006,
+            name: 'e2e',
+            stage: 'test',
+            status: 'manual',
+            allow_failure: false,
+            web_url: `${HOST}/acme/api/-/jobs/9006`,
+            downstream_pipeline: null,
+          },
+        ],
+        headers: { 'x-next-page': nextPage },
+      },
+    });
+    const status = await build(script(''), { config: { max_pages: 1 } }).port.getPipelineStatus(
+      PROJECT,
+      pipeline.sha,
+    );
+    expect(
+      status?.jobs.map((job) => [job.name, job.stage, job.status, job.allow_failure, job.log_ref]),
+    ).toEqual([
+      ['phpstan', 'test', 'success', false, '9004'],
+      ['sentry-release-commit', 'release', 'manual', false, '9005'],
+      ['e2e', 'test', 'manual', false, null],
+    ]);
+    expect(status).not.toHaveProperty('jobs_truncated');
+    const cut = await build(script('2'), { config: { max_pages: 1 } }).port.getPipelineStatus(
+      PROJECT,
+      pipeline.sha,
+    );
+    expect(cut?.jobs_truncated).toBe(true);
   });
 
   it('rejects a log ref that is not a GitLab job id before making a request', async () => {

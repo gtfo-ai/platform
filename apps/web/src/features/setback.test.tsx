@@ -621,3 +621,43 @@ describe('the words', () => {
     }
   });
 });
+
+/**
+ * S-27.2 (TD-036 decision 7; the UI session's review of #114): at Ready, over a pipeline GitLab still
+ * shows blocked, the callout says so as information — the Ready block, never *Needs you* — and a
+ * task whose pass left nothing unstarted shows no such block.
+ */
+describe('the Ready callout over a pipeline the provider still shows blocked (S-27.2)', () => {
+  const NOT_RUN = {
+    pipeline_id: '3038234623',
+    pipeline_url: null,
+    pipeline_status: 'manual' as const,
+    jobs: [{ name: 'sentry-release-commit', stage: 'release', url: null }],
+    checked_at: RETURNED_AT,
+  };
+  const ready = { state: 'ready_for_merge' as const, current_stage: 'ready_for_merge' };
+
+  it('shows the Ready block, naming the pipeline and the job, and asks nothing', () => {
+    renderCallout(detail({ returns: [], stages: [], ci_manual_not_run: NOT_RUN }, ready));
+    const notice = screen.getByTestId('ready-blocked-notice');
+    expect(notice.textContent).toContain(
+      'GitLab shows pipeline 3038234623, the latest for this commit, as blocked at the manual job sentry-release-commit.',
+    );
+    expect(notice.textContent).not.toMatch(/can be merged/i);
+    expect(screen.queryByTestId('needs-you-callout')).toBeNull();
+    expect(notice.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('shows none when the pipeline is no longer held, or the pass left nothing unstarted', () => {
+    renderCallout(
+      detail(
+        { returns: [], stages: [], ci_manual_not_run: { ...NOT_RUN, pipeline_status: 'success' } },
+        ready,
+      ),
+    );
+    expect(screen.queryByTestId('ready-blocked-notice')).toBeNull();
+    cleanup();
+    renderCallout(detail({ returns: [], stages: [], ci_manual_not_run: null }, ready));
+    expect(screen.queryByTestId('ready-blocked-notice')).toBeNull();
+  });
+});

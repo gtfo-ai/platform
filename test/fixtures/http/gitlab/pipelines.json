@@ -131,6 +131,18 @@
     },
     {
       "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/900/bridges?per_page=100&page=1",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-11-07",
+        "kind": "inferred",
+        "note": "\"List all trigger jobs by pipeline\" (the bridges route, deprecated in GitLab 19.2 for trigger_jobs and still served). A pipeline with no trigger job answers an empty list; the page documents a list and does not publish the empty case."
+      }
+    },
+    {
+      "method": "GET",
       "path": "/projects/acme%2Fapi/jobs/9002/trace",
       "status": 200,
       "text": "$ pnpm test\nFAIL src/billing/totals.test.ts\n  expected 42, received 41\n  at totals (src/billing/totals.ts:18:7)\nERROR: Job failed: exit code 1\n",

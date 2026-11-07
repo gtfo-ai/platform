@@ -1234,6 +1234,9 @@ reads their recorded classes:
 - **Every one `additive`** — it **starts**, logs a `schema_ahead_additive` warning naming them, and
   `/readyz` answers 200 with `"schema":"degraded"` in `checks` and `"schema":"ahead_additive"` in
   `details`. That is a code-only rollback, and it is safe to leave running until you roll forward.
+  One exception: a build from before S-27.2 cannot parse a stored `ci.pipeline.held` event (a
+  GitLab pipeline held at a manual job), so its dispatcher dead-letters that event and escalates the
+  task it was for to *Needs you* (BACKLOG 1494) — roll forward, or retry those tasks after it.
 - **Any one `contract`, or any one from before 0092** (its class is `null`, read as `contract`) — it
   **refuses to start**.
 

@@ -29,6 +29,7 @@ import type {
   AgentRole,
   ArtifactType,
   CiGateEnding,
+  CiManualNotRun,
   ContextPackRecord,
   DomainEvent,
   EstimateBasis,
@@ -45,6 +46,7 @@ import type {
 } from '@platform/contracts';
 import {
   ciGateEndingSchema,
+  ciManualNotRunSchema,
   mergeRequestRefSchema,
   storedTicketClaimSchema,
   taskCoverageSchema,
@@ -160,6 +162,8 @@ interface StageRow {
   ciPendingRead?: CiPendingRead | null;
   /** `task_stages.ci_ending` (migration 0107, backlog 1078): how the CI gate's wait ended it. */
   ciEnding?: CiGateEnding | null;
+  /** `task_stages.ci_manual_not_run` (migration 0109, S-27.2): what a CI pass left unstarted. */
+  ciManualNotRun?: CiManualNotRun | null;
   enteredAt: number;
   /**
    * The instant the row was entered, on {@link MemoryPipelineStoreOptions.now} — PostgreSQL's
@@ -1335,6 +1339,38 @@ export const createMemoryPipelineStore = (
       if (row === undefined) return false;
       row.ciEnding = ciGateEndingSchema.parse(ending);
       return true;
+    },
+    // S-27.2: the SQL store's statement — the open row of the stage (of `attempt`, when named).
+    recordCiManualNotRun: async (_tx, entry, value) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === entry.taskId &&
+          candidate.stage === entry.stage &&
+          (entry.attempt === undefined || candidate.attempt === entry.attempt) &&
+          candidate.state === 'running' &&
+          candidate.exitedAt === null,
+      );
+      if (row === undefined) return false;
+      row.ciManualNotRun = clone(ciManualNotRunSchema.parse(value));
+      return true;
+    },
+    latestCiManualNotRun: async (_tx, taskId, stage) => {
+      const newest = stages
+        .filter((row) => row.taskId === taskId && row.stage === stage)
+        .sort((a, b) => b.attempt - a.attempt)[0];
+      if (newest === undefined || newest.state !== 'completed' || newest.exitedAt === null) {
+        return null;
+      }
+      const passedAt = newest.exitedAt;
+      const sentBack = stages.some(
+        (row) =>
+          row.taskId === taskId &&
+          row.state === 'returned' &&
+          row.exitedAt !== null &&
+          row.exitedAt > passedAt,
+      );
+      const value = sentBack ? null : (newest.ciManualNotRun ?? null);
+      return value === null ? null : ciManualNotRunSchema.parse(value);
     },
     previousCiPendingRead: async (_tx, taskId, stage, attempt) => {
       const previous = stages

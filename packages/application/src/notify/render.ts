@@ -339,3 +339,49 @@ export const settledQuestionBody = (input: {
     ]),
   };
 };
+
+/**
+ * A job name as the CI sentences below carry it: its markdown links unlabelled (a name is provider
+ * text, BD-022, and a ticket comment renders markdown) and otherwise as recorded — unquoted, as the
+ * task page says it, so the workpad and the page read the same sentence (the UI review of #114).
+ * The caller has already redacted and bounded it (`ci_manual_not_run`'s writer did).
+ */
+const jobName = (name: string): string => unlabelledLinks(name);
+
+/** "the manual job X" / "the manual jobs X, Y" — platform words around the names. */
+const manualJobsPhrase = (jobs: readonly string[]): string =>
+  `the manual ${jobs.length === 1 ? 'job' : 'jobs'} ${jobs.map(jobName).join(', ')}`;
+
+/**
+ * **What a CI pass left unstarted, in one line** (S-27.2, TD-036 decision 5): *CI passed — the
+ * manual job sentry-release-commit was not run*. The workpad's CI line; `jobs` are the names
+ * `ci_manual_not_run` recorded, at least one.
+ */
+export const manualNotRunSentence = (jobs: readonly string[]): string =>
+  `CI passed — ${manualJobsPhrase(jobs)} ${jobs.length === 1 ? 'was' : 'were'} not run`;
+
+/** A provider's name opening a sentence: "the git provider" becomes "The git provider". */
+const atSentenceStart = (name: string): string => `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+
+/**
+ * **Ready over a pipeline the provider still shows blocked** (S-27.2, TD-036 decision 7): *"GitLab
+ * shows pipeline n, the latest for this commit, as blocked at the manual job X. If this project
+ * requires pipelines to succeed, GitLab won’t merge it until X has run: start it on GitLab."* — the
+ * task page's sentence, word for word. The platform never says a merge request *can be merged*
+ * (BD-007: a person merges). `provider` is the binding's display name as it reads mid-sentence (`GitLab`,
+ * or `the git provider`), capitalised where it opens the sentence; `pipelineId` and `jobs` are what
+ * `ci_manual_not_run` recorded. Pure, so the workpad and any notification that says Ready say the
+ * same sentence.
+ */
+export const readyBlockedSentence = (input: {
+  readonly provider: string;
+  readonly pipelineId: string;
+  readonly jobs: readonly string[];
+}): string => {
+  const phrase = manualJobsPhrase(input.jobs);
+  const names = input.jobs.map(jobName).join(', ');
+  return (
+    `${atSentenceStart(input.provider)} shows pipeline ${unlabelledLinks(input.pipelineId)}, the latest for this commit, as blocked at ${phrase}. ` +
+    `If this project requires pipelines to succeed, ${input.provider} won’t merge it until ${names} ${input.jobs.length === 1 ? 'has run: start it' : 'have run: start them'} on ${input.provider}.`
+  );
+};

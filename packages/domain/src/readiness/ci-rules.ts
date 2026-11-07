@@ -830,7 +830,7 @@ export const evaluateCiRules = (input: {
   return {
     kind: 'evaluated',
     contexts: [evaluateIn(contexts[0]), evaluateIn(contexts[1])],
-    countsTestStage: jobs.some(({ job }) => job.stage === 'test'),
+    countsTestStage: hasTestStage(jobs.map(({ job }) => job)),
   };
 };
 
@@ -868,11 +868,32 @@ const note = (message: string): ReadinessNotice => ({
   message: bounded(message),
 });
 
-/** Is a job counted, given whether the file has any job in stage `test`? */
-const counted =
+/** GitLab's default stage, and the one WP-143 reads as "the tests" (TD-036 decision 2). */
+export const TEST_STAGE = 'test';
+
+/** A job as the test-job convention reads it: only its stage, `null` when it has none or it is unknown. */
+export interface StagedJob {
+  readonly stage: string | null;
+}
+
+/** Whether any of `jobs` is in stage `test` — the switch {@link isTestJob} takes. */
+export const hasTestStage = (jobs: readonly StagedJob[]): boolean =>
+  jobs.some((job) => job.stage === TEST_STAGE);
+
+/**
+ * **Is this job a test job?** WP-143's convention, the one definition both readers use (TD-036
+ * decision 2): the readiness CI-rules warning below, and the CI gate's rule for an unstarted manual
+ * job (`packages/application/src/pipeline/ci-manual-jobs.ts`). A job in stage `test` is a test job
+ * when the file — or the pipeline — has any job in stage `test` (`countsTestStage`); when it has
+ * none, every job is. A job whose stage is `null` (a provider with no stages, or a `stage:` the
+ * reader could not read) **counts**, so the absence of a stage never turns a test into a release
+ * step: a provider with no stages waits on every blocking manual job, which is the gate's behaviour
+ * before TD-036.
+ */
+export const isTestJob =
   (countsTestStage: boolean) =>
-  (job: CiJob): boolean =>
-    !countsTestStage || job.stage === 'test';
+  (job: StagedJob): boolean =>
+    !countsTestStage || job.stage === null || job.stage === TEST_STAGE;
 
 /**
  * The notice a reading earns: the warning, a note naming what was not seen, or `null` when there is
@@ -913,7 +934,7 @@ export const ciRulesNotice = (input: {
       `The CI rules in ${path} were not evaluated for an agentic/ branch: ${evaluation.why}.`,
     );
   }
-  const isCounted = counted(evaluation.countsTestStage);
+  const isCounted = isTestJob(evaluation.countsTestStage);
   const jobsWord = evaluation.countsTestStage ? 'test job (stage test)' : 'job';
   const unseen: string[] = [];
   const running: string[] = [];

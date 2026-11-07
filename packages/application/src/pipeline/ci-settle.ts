@@ -24,6 +24,12 @@
  * transaction, applies the product/04 S4 convergence rule (three identical failures escalate) and
  * enqueues the next stage — so both paths share one settlement and one convergence rule.
  *
+ * **A held pipeline wakes it too** (S-27.2, TD-036 decision 6): `ci.pipeline.held` — GitLab's
+ * `manual` hook — carries no jobs, so the duty re-reads the live head's **latest** pipeline and
+ * judges it by the CI gate's manual-job rule (`gates.ts`' `ciVerdictOf`), as it does a `success`
+ * event when the project names required manual jobs (a named job may still be manual). A pass and
+ * a failure settle; a wait is the gate's poll's, and this wake-up settles nothing.
+ *
  * **The read count this costs**: one `get_merge_request` per finished pipeline for a task waiting
  * at a CI gate, and one per poll of the gate (`gates.ts`). A pipeline for a task *not* at the gate
  * costs nothing — the handler filters it before enqueueing.
@@ -34,7 +40,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { failingJobs } from './ci-log.js';
-import { judgeCiSettlement } from './gates.js';
+import { type CiReading, ciVerdictOf, judgeCiSettlement, manualJobPolicyFor } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { gateSettlementOf, type PipelineOutboundData, settleGate } from './jobs.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -52,11 +58,12 @@ export const runCiSettle = async (
   const stage = data.stage;
   const headSha = data.head_sha;
   const status = data.ci_status;
+  const held = data.ci_held === true;
   if (
     taskId === undefined ||
     stage === undefined ||
     headSha === undefined ||
-    status === undefined
+    (status === undefined && !held)
   ) {
     logger.warn(
       { duty: data.duty, task_id: taskId ?? null },
@@ -102,6 +109,40 @@ export const runCiSettle = async (
 
   const failing = [...(data.failed_jobs ?? [])].sort();
   const passed = status === 'success';
+  const context = { projectId: stored.task.projectId, taskId };
+  /**
+   * **A held pipeline, and a green one a project's named jobs may still hold** (S-27.2, TD-036
+   * decisions 3 and 6): the event cannot be judged from — `ci.pipeline.held` carries no jobs, and a
+   * `success` event does not say whether a job the project named is still manual — so the duty
+   * re-reads the live head's **latest** pipeline and asks the gate's manual-job rule, exactly as the
+   * poll does (`ciVerdictOf`). A wait settles nothing: the gate's own poll decides it.
+   */
+  const policy = await manualJobPolicyFor(options, stored.task.projectId, {
+    status: held ? 'manual' : passed ? 'success' : 'failed',
+  });
+  let reread: CiReading | null = null;
+  if (held || (passed && policy.kind === 'named')) {
+    const pipeline = await gitReads(integrations).pipelineStatus(headSha, context);
+    const redact = (text: string): string =>
+      integrations.git === null ? text : integrations.git.redactor.redactText(text).value;
+    const verdict =
+      pipeline === null
+        ? null
+        : ciVerdictOf(pipeline, policy, { redact, checkedAt: options.clock.now() });
+    if (verdict === null || verdict.kind === 'waiting') {
+      logger.info(
+        {
+          task_id: taskId,
+          head_sha: headSha,
+          pipeline_id: data.ci_pipeline_id ?? pipeline?.id ?? null,
+          cause: verdict === null ? 'no_pipeline' : verdict.judgement.cause,
+        },
+        'a held or finished pipeline did not settle the CI gate; the gate’s poll decides it',
+      );
+      return;
+    }
+    reread = verdict.reading;
+  }
   /**
    * **The same settlement as the poll** (WP-81): `judgeCiSettlement` makes the tamper check and, on
    * a failure, reads every failing job's log (backlog 485) — so a pipeline's event is not a side
@@ -114,25 +155,27 @@ export const runCiSettle = async (
     integrations,
     stored,
     headSha,
-    passed
-      ? { kind: 'passed', detail: `pipeline for ${headSha} succeeded` }
-      : {
-          kind: 'failed',
-          status,
-          failingJobs: failing,
-          logJobs:
-            logs === undefined
-              ? failing.map((name) => ({ name, logRef: null }))
-              : failingJobs(
-                  logs.map((job) => ({
-                    name: job.name,
-                    status: 'failed' as const,
-                    allow_failure: false,
-                    log_ref: job.log_ref,
-                  })),
-                ),
-          detail: `pipeline for ${headSha} ${status}${failing.length === 0 ? '' : `: ${failing.join(', ')}`}`,
-        },
+    reread !== null
+      ? reread
+      : passed
+        ? { kind: 'passed', detail: `pipeline for ${headSha} succeeded` }
+        : {
+            kind: 'failed',
+            status: status ?? 'failed',
+            failingJobs: failing,
+            logJobs:
+              logs === undefined
+                ? failing.map((name) => ({ name, logRef: null }))
+                : failingJobs(
+                    logs.map((job) => ({
+                      name: job.name,
+                      status: 'failed' as const,
+                      allow_failure: false,
+                      log_ref: job.log_ref,
+                    })),
+                  ),
+            detail: `pipeline for ${headSha} ${status ?? 'failed'}${failing.length === 0 ? '' : `: ${failing.join(', ')}`}`,
+          },
   );
   if (result.kind === 'pending') {
     // The tamper check cannot be made yet (no changed file listed); the gate's own poll asks again,

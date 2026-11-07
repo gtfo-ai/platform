@@ -436,6 +436,13 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     failed_jobs: [{ name: 'unit', log_ref: 'jobs/9911' }],
     coverage_pct: 81.4,
   },
+  'ci.pipeline.held': {
+    ...projectScoped,
+    task_id: null,
+    mr,
+    head_sha: 'abc1235',
+    pipeline_id: '3038234623',
+  },
   'default_branch.moved': { ...projectScoped, branch: 'main', new_head: 'beef123' },
   'budget.threshold.reached': { ...budget, pct: 80 },
   'budget.exhausted': budget,

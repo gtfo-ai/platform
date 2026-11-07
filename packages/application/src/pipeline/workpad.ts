@@ -43,13 +43,15 @@
  * transition" — not "guess": a wrong transition on somebody's board is worse than none, and
  * `transition` refuses a status the workflow does not have anyway (product/08).
  */
-import type { EstimateBasis, Id, Slug, TaskState } from '@platform/contracts';
+import type { CiManualNotRun, EstimateBasis, Id, Slug, TaskState } from '@platform/contracts';
 import { lifecycleMapsAnySlot } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
+import { manualNotRunSentence, readyBlockedSentence } from '../notify/render.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { CI_GATE_STAGE } from './gates.js';
 import type { PipelineIntegrationsPort } from './integrations.js';
 import { integrationsForProject, noRunScopedSecrets, ticketWrites } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from './jobs.js';
@@ -147,6 +149,14 @@ export interface WorkpadView {
     readonly branch: string;
     readonly sessionId: string | null;
   } | null;
+  /**
+   * What the latest CI pass left unstarted (S-27.2, TD-036 decision 5): the CI line *CI passed —
+   * the manual job "X" was not run*, and at Ready, when the provider still shows the pipeline
+   * blocked, TD-036 decision 7's sentence. Absent or `null`: no such line.
+   */
+  readonly ciManualNotRun?: CiManualNotRun | null;
+  /** The git binding's provider name as people know it (`GitLab`), for that sentence. */
+  readonly gitProvider?: string;
 }
 
 /**
@@ -205,6 +215,22 @@ export const renderWorkpad = (view: WorkpadView): string => {
   if (view.mrUrl !== null) {
     lines.push(`Merge request: ${view.mrUrl}`);
   }
+  const notRun = view.ciManualNotRun ?? null;
+  if (notRun !== null) {
+    const jobs = notRun.jobs.map((job) => job.name);
+    lines.push(manualNotRunSentence(jobs));
+    if (view.state === 'ready_for_merge' && notRun.pipeline_status === 'manual') {
+      lines.push(
+        '',
+        readyBlockedSentence({
+          // Mid-sentence form; the sentence capitalises it where it opens (UI review of #114).
+          provider: view.gitProvider ?? 'the git provider',
+          pipelineId: notRun.pipeline_id,
+          jobs,
+        }),
+      );
+    }
+  }
   if (view.blocker !== null) {
     lines.push('', '**Needs a human**', view.blocker);
   }
@@ -244,7 +270,9 @@ const viewOf = (
   budgetUsd: number,
   blocker: string | null,
   takenOver: WorkpadView['takenOver'] = null,
+  ci: Pick<WorkpadView, 'ciManualNotRun' | 'gitProvider'> = {},
 ): WorkpadView => ({
+  ...ci,
   ticketKey: stored.task.ticket.key,
   state: stored.task.state,
   currentStage: stored.task.currentStage,
@@ -416,13 +444,25 @@ export const runWorkpadRender = async (
           takenOver: await options.store.tasks.takenOver(scope.tx, taskId),
           // The task's own cap when a maintainer raised it (WP-131 review round 1).
           capUsd: await options.store.tasks.budgetCap(scope.tx, taskId),
+          // S-27.2: what the latest CI pass left unstarted, for the CI line and Ready's sentence.
+          ciManualNotRun: await options.store.tasks.latestCiManualNotRun(
+            scope.tx,
+            taskId,
+            CI_GATE_STAGE,
+          ),
         };
   });
   if (read === null) {
     return;
   }
-  const { stored, takenOver, capUsd } = read;
+  const { stored, takenOver, capUsd, ciManualNotRun } = read;
   const settings = await options.settings.forProject(stored.task.projectId);
+  // The workpad is written outside any run, so the call's scope holds no minted credential (Q55).
+  const integrations = await integrationsForProject(
+    options.integrations,
+    stored.task.projectId,
+    noRunScopedSecrets(),
+  );
   const markdown = renderWorkpadComment(
     taskId,
     viewOf(
@@ -430,13 +470,13 @@ export const runWorkpadRender = async (
       capUsd ?? settings.taskBudgetUsd,
       data.blocker_brief ?? null,
       takenOver === null ? null : { branch: takenOver.branch, sessionId: takenOver.sessionId },
+      {
+        ciManualNotRun,
+        ...(integrations.git === null
+          ? {}
+          : { gitProvider: integrations.git.providerName ?? integrations.git.ref.provider }),
+      },
     ),
-  );
-  // The workpad is written outside any run, so the call's scope holds no minted credential (Q55).
-  const integrations = await integrationsForProject(
-    options.integrations,
-    stored.task.projectId,
-    noRunScopedSecrets(),
   );
   const ref = await ticketWrites(integrations).upsertWorkpad(
     stored.task.ticket,

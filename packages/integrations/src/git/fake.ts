@@ -271,6 +271,15 @@
  * 35. **Stricter — a note states no edit unless `addHumanDiscussion` names one** (S-26.6). GitLab
  *     answers `updated_at` on every note; this fake answers it only for an `updatedAt` seed, so a
  *     link code in an unseeded note is refused as `edit_state_unknown`.
+ * 36. **Stricter — a job's `stage` is what the seed says, and absent reads as `null`** (S-27.2,
+ *     TD-036). GitLab names a stage on every job (`test` when the CI file names none); a seed that
+ *     names none here answers `null` — the port's *provider with no stages*, which the CI gate's
+ *     manual-job rule counts as a test, so an unseeded stage keeps a held pipeline waiting. It keeps
+ *     **one** job list: a trigger job, which GitLab serves from a list of its own (bridges), is
+ *     seeded as one of the jobs — the port's shape, which the GitLab adapter builds from both. `emitPipelineFinished` for a stored `manual` pipeline normalises to
+ *     `ci.pipeline.held`, as GitLab's `manual` Pipeline Hook does; a `pending`/`running` one is
+ *     still reported `failed` (`terminalStatus`), which GitLab drops — **different**, and no test
+ *     emits one.
  */
 import {
   type BranchPushProtection,
@@ -432,6 +441,8 @@ interface StoredJob {
   id: string;
   name: string;
   status: PipelineStatusValue;
+  /** The job's stage as a test seeded it (TD-036), `null` when it named none. */
+  stage: string | null;
   log: string | null;
   allow_failure: boolean;
 }
@@ -616,6 +627,8 @@ export interface FakeGitProvider extends GitProviderPort {
     readonly jobs?: readonly {
       name: string;
       status: PipelineStatusValue;
+      /** The provider's stage (TD-036). Absent reads as `null`: a provider with no stages. */
+      stage?: string | null;
       log?: string;
       allowFailure?: boolean;
     }[];
@@ -1110,6 +1123,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       id: job.id,
       name: job.name,
       status: job.status,
+      stage: job.stage,
       log_ref: job.log === null ? null : `log:${job.id}`,
       allow_failure: job.allow_failure,
       // Backlog 1078: every job has a page, as GitLab's "List pipeline jobs" says of its jobs.
@@ -1216,22 +1230,39 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         const mr = mergeRequests.find(
           (candidate) => candidate.project === body.project && candidate.head_sha === body.head_sha,
         );
+        const mrRef =
+          mr === undefined
+            ? null
+            : {
+                provider: PROVIDER,
+                project_path: mr.project,
+                iid: mr.iid,
+                url: mrUrl(mr),
+                branch: mr.source_branch,
+                head_sha: mr.head_sha,
+              };
+        if (pipeline.status === 'manual') {
+          // S-27.2 (TD-036 decision 6): a held pipeline's hook is `ci.pipeline.held`, as GitLab's
+          // adapter maps a `manual` Pipeline Hook — no status and no failed jobs.
+          const held: NormalisedEvent<'ci.pipeline.held'> = {
+            type: 'ci.pipeline.held',
+            payload: {
+              project_id: context.projectId,
+              task_id: null,
+              mr: mrRef,
+              head_sha: pipeline.head_sha,
+              pipeline_id: pipeline.id,
+            },
+            actor,
+          };
+          return { events: [held], ignored: [] };
+        }
         const event: NormalisedEvent<'ci.pipeline.finished'> = {
           type: 'ci.pipeline.finished',
           payload: {
             project_id: context.projectId,
             task_id: null,
-            mr:
-              mr === undefined
-                ? null
-                : {
-                    provider: PROVIDER,
-                    project_path: mr.project,
-                    iid: mr.iid,
-                    url: mrUrl(mr),
-                    branch: mr.source_branch,
-                    head_sha: mr.head_sha,
-                  },
+            mr: mrRef,
             head_sha: pipeline.head_sha,
             status: terminalStatus(pipeline.status),
             failed_jobs: pipeline.jobs
@@ -2108,6 +2139,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
           id: `${pipelineCounter}-${index + 1}`,
           name: job.name,
           status: job.status,
+          stage: job.stage ?? null,
           log: job.log ?? null,
           allow_failure: job.allowFailure ?? false,
         })),

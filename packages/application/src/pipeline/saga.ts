@@ -1732,10 +1732,11 @@ const approvalResumedHandler = (options: PipelineSagaOptions): EventHandler => (
 const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.ci',
   priority: 10,
-  eventTypes: ['ci.pipeline.finished'],
+  // S-27.2 (TD-036 decision 6): a held pipeline wakes the same duty, which re-reads the head.
+  eventTypes: ['ci.pipeline.finished', 'ci.pipeline.held'],
   handle: async (context) => {
     const event = context.event.event;
-    if (event.type !== 'ci.pipeline.finished') {
+    if (event.type !== 'ci.pipeline.finished' && event.type !== 'ci.pipeline.held') {
       return;
     }
     const iid = event.payload.mr?.iid;
@@ -1775,20 +1776,32 @@ const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
      * `ci_settle` (`ci-settle.ts`) reads it and settles only on a match — the convergence rule
      * (three identical failures) moved with it, into the settlement both paths share (`jobs.ts`).
      */
-    const data: PipelineOutboundData = {
-      duty: 'ci_settle',
-      project_id: event.payload.project_id,
-      task_id: stored.task.id,
-      cause_event_id: event.id,
-      stage,
-      head_sha: event.payload.head_sha,
-      ci_status: event.payload.status,
-      failed_jobs: event.payload.failed_jobs.map((job) => job.name),
-      failed_job_logs: event.payload.failed_jobs.map((job) => ({
-        name: job.name,
-        log_ref: job.log_ref ?? null,
-      })),
-    };
+    const data: PipelineOutboundData =
+      event.type === 'ci.pipeline.held'
+        ? {
+            duty: 'ci_settle',
+            project_id: event.payload.project_id,
+            task_id: stored.task.id,
+            cause_event_id: event.id,
+            stage,
+            head_sha: event.payload.head_sha,
+            ci_held: true,
+            ci_pipeline_id: event.payload.pipeline_id,
+          }
+        : {
+            duty: 'ci_settle',
+            project_id: event.payload.project_id,
+            task_id: stored.task.id,
+            cause_event_id: event.id,
+            stage,
+            head_sha: event.payload.head_sha,
+            ci_status: event.payload.status,
+            failed_jobs: event.payload.failed_jobs.map((job) => job.name),
+            failed_job_logs: event.payload.failed_jobs.map((job) => ({
+              name: job.name,
+              log_ref: job.log_ref ?? null,
+            })),
+          };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);
     });

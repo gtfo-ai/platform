@@ -33,6 +33,7 @@ import {
   runMergeRequestPipeline,
   runMergeRequestReady,
 } from './merge-request-ready.js';
+import { defaultProjectSettings, staticProjectSettings } from './settings.js';
 import type { StoredTask } from './store.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
@@ -96,6 +97,14 @@ const world = async (
     /** The head pipeline's status and its jobs' statuses, when `pipeline` is true. */
     readonly pipelineStatus?: string;
     readonly jobStatuses?: readonly string[];
+    /**
+     * S-27.2: the jobs' stages, by index (`null` or absent: none — which the CI gate's rule counts
+     * as a test) and their names (`job-<n>` when absent).
+     */
+    readonly jobStages?: readonly (string | null)[];
+    readonly jobNames?: readonly string[];
+    /** S-27.2: `pipeline.ci.required_manual_jobs`. @default absent — TD-036's default. */
+    readonly requiredManualJobs?: 'all' | readonly string[];
     /** The task's state when the duty fires. @default `active` at `code_review`. */
     readonly state?: 'active' | 'ready_for_merge' | 'done' | 'paused';
     /** The live merge request on the provider. @default an open draft. */
@@ -199,8 +208,9 @@ const world = async (
             // `manual?` is a manual job with `allow_failure: true` — an optional one.
             jobs: (options.jobStatuses ?? []).map((status, index) => ({
               id: String(index + 1),
-              name: `job-${String(index + 1)}`,
+              name: options.jobNames?.[index] ?? `job-${String(index + 1)}`,
               status: status.replace(/\?$/, ''),
+              stage: options.jobStages?.[index] ?? null,
               allow_failure: status.endsWith('?'),
             })),
             coverage_pct: null,
@@ -219,6 +229,24 @@ const world = async (
   const options_ = {
     unitOfWork: memory,
     store,
+    settings: staticProjectSettings((projectId) =>
+      defaultProjectSettings(projectId, {
+        ...(options.requiredManualJobs === undefined
+          ? {}
+          : {
+              config: {
+                pipeline: {
+                  ci: {
+                    required_manual_jobs:
+                      options.requiredManualJobs === 'all'
+                        ? 'all'
+                        : [...options.requiredManualJobs],
+                  },
+                },
+              },
+            }),
+      }),
+    ),
     repositoryFiles: files(
       options.ci ?? 'present',
       ciConfig.kind === 'repository' ? ciConfig.path : '.gitlab-ci.yml',
@@ -297,6 +325,54 @@ describe('the mr_pipeline duty, after the Developer stage (backlog 486)', () => 
       expect(pipelines).toEqual([7]);
       expect(updates).toEqual([]);
     }
+  });
+
+  /**
+   * S-27.2 (TD-036 decision 4): `mr_pipeline` asks the CI gate's own question. AUT-6655's head was
+   * held only at `sentry-release-commit`, a release step the gate does not wait for, and asking for
+   * a fresh pipeline gave every head two — the gate then waited on the second. A head held at a
+   * manual **test** job still gets one, once per head.
+   */
+  it('asks for no pipeline for a head held only at sentry-release-commit, and one for a held test job (S-27.2)', async () => {
+    const release = await world({
+      pipeline: true,
+      pipelineStatus: 'manual',
+      jobStatuses: ['success', 'success', 'manual'],
+      jobStages: ['build', 'test', 'release'],
+      jobNames: ['build_composer', 'phpstan', 'sentry-release-commit'],
+    });
+    expect(await release.run()).toBe('not_needed');
+    expect(release.pipelines).toEqual([]);
+
+    const test = await world({
+      pipeline: true,
+      pipelineStatus: 'manual',
+      jobStatuses: ['success', 'manual'],
+      jobStages: ['build', 'test'],
+      jobNames: ['build_composer', 'codeception'],
+    });
+    expect(await test.run()).toBe('requested');
+    expect(await test.run(), 'a redelivered wake-up replays').toBe('requested');
+    expect(test.pipelines, 'once per head').toEqual([7]);
+  });
+
+  it('asks the project’s rule: all requests one for the release step, [] for none, a name for exactly it (S-27.2)', async () => {
+    const held = {
+      pipeline: true,
+      pipelineStatus: 'manual',
+      jobStatuses: ['success', 'manual'],
+      jobStages: ['test', 'release'],
+      jobNames: ['phpstan', 'sentry-release-commit'],
+    } as const;
+    expect(await (await world({ ...held, requiredManualJobs: 'all' })).run()).toBe('requested');
+    expect(
+      await (await world({ ...held, jobStages: ['build', 'test'], requiredManualJobs: [] })).run(),
+      '[]: even a held test job asks for nothing',
+    ).toBe('not_needed');
+    expect(
+      await (await world({ ...held, requiredManualJobs: ['sentry-release-commit'] })).run(),
+    ).toBe('requested');
+    expect(await (await world({ ...held, requiredManualJobs: ['e2e'] })).run()).toBe('not_needed');
   });
 
   it('asks for nothing when the only manual job is an optional one (allow_failure), as in every Autix pipeline', async () => {

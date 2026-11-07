@@ -154,10 +154,25 @@ export type FileDiff = z.infer<typeof fileDiffSchema>;
  */
 export const pipelineStatusValueSchema = ciPipelineStatusSchema;
 
+/**
+ * One job of a pipeline. **What its fields mean is the port's, not GitLab's** (TD-036 decision 1,
+ * BD-017) — any git adapter maps its provider onto these meanings:
+ *
+ *  - `status: 'manual'` means the job does not run until a person starts it;
+ *  - `allow_failure: true` means the provider does not count the job's result toward the
+ *    pipeline's, and `false` means it does — so a `manual` job with `false` is **blocking**;
+ *  - `stage` is the provider's stage name, or `null` from a provider that has none.
+ *
+ * The CI gate reads all three (`ci-manual-jobs.ts`): a blocking manual job nobody started is not a
+ * check unless it is a test job (WP-143's convention, `isTestJob` in `@platform/domain`), and a
+ * `null` stage counts as a test.
+ */
 export const pipelineJobSchema = z.strictObject({
   id: nonEmptyStringSchema,
   name: nonEmptyStringSchema,
   status: pipelineStatusValueSchema,
+  /** The provider's stage name (GitLab's jobs API `stage`), or `null` when it has none (TD-036). */
+  stage: nonEmptyStringSchema.nullable(),
   /** Opaque handle for `getJobLog`; `null` when the provider keeps no log for this job. */
   log_ref: nonEmptyStringSchema.nullish(),
   allow_failure: z.boolean(),
@@ -172,6 +187,10 @@ export const pipelineJobSchema = z.strictObject({
   web_url: urlSchema.nullish(),
 });
 
+/**
+ * A commit's latest pipeline. Its `status: 'manual'` means the provider holds the pipeline at a
+ * **blocking** manual job (TD-036 decision 1) — GitLab's *blocked*.
+ */
 export const pipelineStatusSchema = z.strictObject({
   id: nonEmptyStringSchema,
   head_sha: shaSchema,
@@ -180,6 +199,13 @@ export const pipelineStatusSchema = z.strictObject({
   jobs: z.array(pipelineJobSchema),
   coverage_pct: coveragePctSchema.nullish(),
   finished_at: isoDateTimeSchema.nullish(),
+  /**
+   * `true` when the provider's job list was **cut** — GitLab's walk stopped at the binding's
+   * `max_pages` (BACKLOG 1490) — so `jobs` is not every job of the pipeline. The CI gate's
+   * manual-job rule never passes a held pipeline on a cut list (it cannot say no unlisted job is a
+   * manual test), and waits as before. Absent or `false`: `jobs` is the whole list.
+   */
+  jobs_truncated: z.boolean().optional(),
 });
 
 /** What {@link GitProviderPort.createMergeRequestPipeline} answers: the pipeline it started (WP-138). */
@@ -523,6 +549,8 @@ export type GitProviderInboundEvent =
   | 'mr.approved'
   | 'mr.review.comment'
   | 'ci.pipeline.finished'
+  /** S-27.2 (TD-036 decision 6): a pipeline the provider holds at a blocking manual job. */
+  | 'ci.pipeline.held'
   | 'default_branch.moved';
 
 // ── The port ─────────────────────────────────────────────────────────────────

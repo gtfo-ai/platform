@@ -90,18 +90,21 @@ callout's slot carry one sentence. It names the cause, who acts, and how many tr
   AUT-6655. GitLab held its pipeline at a manual job, the platform waited 60 minutes twice, and the page showed only
   "CI" and *Needs you*. The waiting gate's last read is shown on the task header, the callout and the board card while
   it waits, not only after the timeout:
-  - a pipeline held at a manual job: "CI is waiting for someone to start the manual job *sentry-release-commit* in
+  - a pipeline held at a manual job: "CI is waiting for someone to start the manual job *codeception* in
     GitLab. Start it there and the task continues." The job and pipeline are linked through `safeHref`. When the
     platform keeps the merge request a draft and the project's CI rules hold jobs for drafts, it adds a link to the
     readiness panel's CI-rules warning;
   - a pipeline still running: "CI is running (pipeline *n*, 12 min so far; the task gives up after 60)".
   This is *Needs you* the moment a person's action is the only way forward (a held manual job is that), with the one
-  next step. It does not wait for the timeout to become *Needs you* (a task the timeout parked stays *Needs you* too).
+  next step. *(Checked at S-27.2: since BD-024's 2026-11-07 amendment the gate waits only on a manual job the rule
+  requires — a test job such as* codeception *by default — so AUT-6655's release step* sentry-release-commit *no
+  longer holds it: the CI check then reads "CI passed — the manual job sentry-release-commit was not run", and Ready
+  says when GitLab still shows the pipeline blocked.)* It does not wait for the timeout to become *Needs you* (a task the timeout parked stays *Needs you* too).
 - **A timed-out wait says it timed out**, with the last read: "CI did not finish within 60 minutes: pipeline *n* was
-  still held at the manual job *sentry-release-commit*." The next step is *Start the job in GitLab, then Retry*. The
+  still held at the manual job *codeception*." The next step is *Start the job in GitLab, then Retry*. The
   task page never reads as a failed check when nothing failed.
 - **A Retry on a pipeline that is still held does not wait again.** It stops at once and says why: "The pipeline is
-  still held at the manual job *sentry-release-commit*, so Retry did not wait again. Start the job in GitLab, or change
+  still held at the manual job *codeception*, so Retry did not wait again. Start the job in GitLab, or change
   its rule, then Retry." This is the worker session's #89, `ci_held_unchanged`.
 - *Amended 2026-11-07 (S-25.12).* All of the above is built from the gate's **structured read**, never from its
   recorded sentence: the pipeline and its link, the held job and its link, the draft flag, minutes waited, the

@@ -429,6 +429,18 @@ const gitlabScript = (): Script => ({
   [`GET /projects/${P}/pipelines/900/jobs`]: {
     body: [{ id: 9002, name: `build ${GITLAB_TOKEN}`, status: 'success', allow_failure: false }],
   },
+  // The security review of #114: trigger jobs are read too, and their names are provider text.
+  [`GET /projects/${P}/pipelines/900/bridges`]: {
+    body: [
+      {
+        id: 9003,
+        name: `trigger ${GITLAB_TOKEN}`,
+        stage: 'test',
+        status: 'success',
+        allow_failure: false,
+      },
+    ],
+  },
   [`GET /projects/${P}/jobs/9002/trace`]: {
     text: `$ echo pushing\nremote: https://oauth2:${GITLAB_TOKEN}@gitlab.example.test/acme/api\nfatal\n`,
   },

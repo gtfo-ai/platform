@@ -283,6 +283,17 @@ export interface GitProviderContractContext {
   readonly pipelineSha: string;
   readonly failingJobName: string;
   /**
+   * S-27.2 (TD-036 decision 1): a pipeline the provider holds at a **blocking** manual job —
+   * AUT-6655's shape. `sha` is its head; `releaseJob` the manual job (`allow_failure: false`) in a
+   * stage that is not `test`; `testJob` a job in stage `test` that succeeded.
+   */
+  readonly heldPipeline: {
+    readonly sha: string;
+    readonly releaseJob: string;
+    readonly releaseStage: string;
+    readonly testJob: string;
+  };
+  /**
    * A job log reference this provider does not have.
    *
    * Provider-shaped, not suite-shaped: the fake keys logs as `log:<id>` and GitLab by numeric job
@@ -351,6 +362,18 @@ export interface GitProviderContractContext {
   emitMerged(): WebhookDelivery;
   emitReviewComment(text: string): WebhookDelivery;
   emitPipelineFinished(): WebhookDelivery;
+  /**
+   * The security review of #114: a pipeline held at the release step **and** at an unstarted manual
+   * **trigger** job (a downstream e2e pipeline) in stage `test`. A provider that lists trigger jobs
+   * apart from its jobs (GitLab's bridges) must still report it in `jobs`.
+   */
+  readonly triggerPipeline: {
+    readonly sha: string;
+    readonly releaseJob: string;
+    readonly triggerJob: string;
+  };
+  /** S-27.2 (TD-036 decision 6): the provider's delivery for {@link heldPipeline}'s status change. */
+  emitPipelineHeld(): WebhookDelivery;
   readonly projectId: Id;
   readonly integrationId: Id;
   cleanup(): Promise<void>;
@@ -1100,6 +1123,46 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         expect(log.length).toBeGreaterThan(0);
       });
 
+      /**
+       * S-27.2 (TD-036 decision 1): the port's meanings, from the provider. A pipeline held at a
+       * blocking manual job is `manual`; the job is `manual` with `allow_failure: false`; and every
+       * job names its stage — the CI gate's manual-job rule passes a held release step only
+       * because the provider said which stage it is in.
+       */
+      it('reports a held pipeline as manual, with its blocking manual job and every stage', async () => {
+        const held = context.heldPipeline;
+        const pipeline = await port.getPipelineStatus(context.project, held.sha);
+        expect(pipeline?.status).toBe('manual');
+        const release = pipeline?.jobs.find((job) => job.name === held.releaseJob);
+        expect(release?.status).toBe('manual');
+        expect(release?.allow_failure, 'a blocking manual job').toBe(false);
+        expect(release?.stage).toBe(held.releaseStage);
+        expect(held.releaseStage).not.toBe('test');
+        const test = pipeline?.jobs.find((job) => job.name === held.testJob);
+        expect(test?.status).toBe('success');
+        expect(test?.stage).toBe('test');
+        for (const job of pipeline?.jobs ?? []) {
+          expect(
+            job.stage === null || (typeof job.stage === 'string' && job.stage.length > 0),
+          ).toBe(true);
+        }
+      });
+
+      /**
+       * The security review of #114: a manual trigger job in stage `test` holds the pipeline as
+       * a manual test job does, so the port must list it — with its stage, its status and its
+       * `allow_failure` — wherever the provider keeps trigger jobs.
+       */
+      it('reports a held pipeline’s manual trigger job among its jobs, with stage and allow_failure', async () => {
+        const held = context.triggerPipeline;
+        const pipeline = await port.getPipelineStatus(context.project, held.sha);
+        expect(pipeline?.status).toBe('manual');
+        expect(pipeline?.jobs.find((job) => job.name === held.releaseJob)?.status).toBe('manual');
+        const trigger = pipeline?.jobs.find((job) => job.name === held.triggerJob);
+        expect(trigger).toMatchObject({ status: 'manual', stage: 'test', allow_failure: false });
+        expect(pipeline?.jobs_truncated ?? false).toBe(false);
+      });
+
       it('returns null when no pipeline ran for a commit', async () => {
         expect(await port.getPipelineStatus(context.project, 'f'.repeat(40))).toBeNull();
       });
@@ -1397,6 +1460,25 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         expect((payload.failed_jobs as { name: string }[]).map((job) => job.name)).toContain(
           context.failingJobName,
         );
+      });
+
+      /**
+       * S-27.2 (TD-036 decision 6): a held pipeline is heard as `ci.pipeline.held` — its own
+       * payload with the pipeline's id and no status or failed jobs — never as `.finished`, whose
+       * status stays terminal.
+       */
+      it('normalises a held pipeline as ci.pipeline.held, never as finished', async () => {
+        const result = await port.inbound.normalise(context.emitPipelineHeld(), inboundContext());
+        expect(result.events.map((event) => event.type)).toEqual(['ci.pipeline.held']);
+        const [event] = result.events;
+        const { payload } = expectCatalogueEvent(
+          event as NonNullable<typeof event>,
+          'ci.pipeline.held',
+        );
+        expect(payload.head_sha).toBe(context.heldPipeline.sha);
+        expect(typeof payload.pipeline_id).toBe('string');
+        expect(Object.hasOwn(payload, 'status')).toBe(false);
+        expect(Object.hasOwn(payload, 'failed_jobs')).toBe(false);
       });
     });
   });

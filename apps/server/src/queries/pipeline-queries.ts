@@ -93,6 +93,7 @@ import type {
 import {
   artifactBodyPath,
   ciGateEndingSchema,
+  ciManualNotRunSchema,
   contextPackRecordSchema,
   MAX_INBOX_ESCALATED,
   MAX_RUN_COMMANDS,
@@ -2127,6 +2128,42 @@ export const lastGateWaitOf = (
 };
 
 /**
+ * **What the latest CI pass left unstarted** (S-27.2, TD-036 decision 5): the newest `ci_gate`
+ * attempt closed `completed` — a pass — and its `task_stages.ci_manual_not_run`, parsed with the
+ * writer's strict schema; `null` when that attempt recorded none or no attempt has passed. A stored
+ * value that does not parse is **refused** by name ({@link UnprojectableRowError}), never served as
+ * `null`, as {@link recordedGateWaitOf} refuses a read. Whatever the task's state: the page's Checks
+ * item and its Ready callout both read it.
+ */
+export const ciManualNotRunOf = (
+  stageRows: readonly Pick<
+    StageRowSelect,
+    'taskId' | 'stage' | 'attempt' | 'state' | 'ciManualNotRun'
+  >[],
+): TaskDetailResponse['ci_manual_not_run'] => {
+  const passed = stageRows
+    .filter((row) => row.stage === CI_GATE_STAGE && row.state === 'completed')
+    .reduce<(typeof stageRows)[number] | null>(
+      (newest, row) => (newest === null || row.attempt > newest.attempt ? row : newest),
+      null,
+    );
+  if (passed === null || passed.ciManualNotRun === null || passed.ciManualNotRun === undefined) {
+    return null;
+  }
+  const parsed = ciManualNotRunSchema.safeParse(passed.ciManualNotRun);
+  if (!parsed.success) {
+    const paths = parsed.error.issues
+      .map((issue) => (issue.path.length === 0 ? '(root)' : issue.path.join('.')))
+      .join(', ');
+    throw new UnprojectableRowError(
+      `task ${passed.taskId}`,
+      `what the CI gate's pass left unstarted (\`task_stages.ci_manual_not_run\`, attempt ${passed.attempt}) does not parse at ${paths}`,
+    );
+  }
+  return parsed.data;
+};
+
+/**
  * What the reads that carry `waiting` (S-26.5) need from the composition: the core's current run
  * and egress digests, which a machine's claim compares with what it holds — `null` when this
  * process has no worker release, and then no machine is counted as able to claim, as none can.
@@ -2237,6 +2274,8 @@ export const findTaskDetail = async (
     gate_feedback: gateFeedbackOf(task, stageRows),
     gate_wait: gateWaitOf(task, stageRows),
     last_gate_wait: lastGateWaitOf(task, stageRows),
+    // S-27.2: the manual jobs the latest CI pass left unstarted.
+    ci_manual_not_run: ciManualNotRunOf(stageRows),
     // S-25.11: the returns and the stop, off the same rows.
     returns: returnsOf(setbackRows, compiledPipelineOf(task)),
     stop: stopOf(task, setbackRows),

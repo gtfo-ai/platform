@@ -30,10 +30,12 @@
  * `httpUrlSchema` never has to refuse it).
  */
 import {
+  type CiManualNotRun,
   ciPipelineStatusSchema,
   type GateWait,
   httpUrlSchema,
   isoDateTimeSchema,
+  MAX_CI_MANUAL_NOT_RUN_JOBS,
   MAX_GATE_WAIT_HELD_JOB_CHARS,
   nonEmptyStringSchema,
 } from '@platform/contracts';
@@ -74,11 +76,18 @@ export type RedactText = (text: string) => string;
  * The job a pipeline is held at: the first `manual` job of a pipeline whose **own** status is
  * `manual` (backlog 486 — a `running` pipeline with a manual deploy job later is still running).
  * One choice for the pending detail's words and for the recorded `held_job`, so the two agree.
+ *
+ * `heldAt` (S-27.2) is the manual-job rule's own list (`judgeCiPipeline`'s `heldAt`: the jobs the
+ * policy waits for first): when it names one, that is the job — so a pipeline held at an optional
+ * release step **and** a manual test job says it waits for the test, not for the release step.
  */
 export const heldManualJob = (
   status: Pick<PipelineStatus, 'status' | 'jobs'>,
+  heldAt: readonly PipelineStatus['jobs'][number][] = [],
 ): PipelineStatus['jobs'][number] | undefined =>
-  status.status === 'manual' ? status.jobs.find((job) => job.status === 'manual') : undefined;
+  status.status === 'manual'
+    ? (heldAt[0] ?? status.jobs.find((job) => job.status === 'manual'))
+    : undefined;
 
 /**
  * A provider URL as a read keeps it: an `http(s)` URL with no user or password, no longer than
@@ -109,7 +118,13 @@ export const safeProviderUrl = (
  */
 export const ciPipelineReadOf = (
   status: Pick<PipelineStatus, 'id' | 'status' | 'url' | 'jobs'>,
-  facts: { readonly headSha: string; readonly draft: boolean; readonly redact: RedactText },
+  facts: {
+    readonly headSha: string;
+    readonly draft: boolean;
+    readonly redact: RedactText;
+    /** S-27.2: the manual-job rule's `heldAt`, so the recorded job is the one the wait is for. */
+    readonly heldAt?: readonly PipelineStatus['jobs'][number][];
+  },
 ): CiPipelineRead | null => {
   const { redact } = facts;
   if (
@@ -119,7 +134,7 @@ export const ciPipelineReadOf = (
   ) {
     return null;
   }
-  const held = heldManualJob(status);
+  const held = heldManualJob(status, facts.heldAt);
   // Redacted first and cut after: a cut first could split a secret the redactor then cannot see.
   const heldName =
     held === undefined ? '' : redact(held.name).slice(0, MAX_GATE_WAIT_HELD_JOB_CHARS);
@@ -131,6 +146,55 @@ export const ciPipelineReadOf = (
     held_job: heldName.length === 0 ? null : heldName,
     held_job_url: held === undefined ? null : safeProviderUrl(held.web_url, redact),
     draft: facts.draft,
+  };
+};
+
+/** A job's name or stage as a record keeps it: redacted first, then cut; `null` when nothing is left. */
+const boundedProviderText = (value: string | null, redact: RedactText): string | null => {
+  if (value === null) {
+    return null;
+  }
+  const kept = redact(value).slice(0, MAX_GATE_WAIT_HELD_JOB_CHARS);
+  return kept.length === 0 ? null : kept;
+};
+
+/**
+ * **What a CI pass left unstarted** (S-27.2, TD-036 decision 5): `task_stages.ci_manual_not_run`
+ * for a pass whose pipeline still holds the blocking manual jobs `notRun`, or `null` when there are
+ * none — or when the pipeline's identity cannot be recorded as the provider sent it (the same rule
+ * as {@link ciPipelineReadOf}: an identity is never cut or redacted into another). Names and stages
+ * are redacted then bounded, URLs kept only as {@link safeProviderUrl} keeps them; at most
+ * {@link MAX_CI_MANUAL_NOT_RUN_JOBS} jobs, in the pipeline's order. A job whose redacted name is
+ * empty is not listed (a name is the one thing a person reads it by).
+ */
+export const ciManualNotRunOf = (
+  status: Pick<PipelineStatus, 'id' | 'status' | 'url'>,
+  notRun: readonly Pick<PipelineStatus['jobs'][number], 'name' | 'stage' | 'web_url'>[],
+  facts: { readonly redact: RedactText; readonly checkedAt: string },
+): CiManualNotRun | null => {
+  const { redact } = facts;
+  if (status.id.length > MAX_CI_READ_ID_CHARS || redact(status.id) !== status.id) {
+    return null;
+  }
+  const jobs = notRun
+    .map((job) => ({
+      name: boundedProviderText(job.name, redact),
+      stage: boundedProviderText(job.stage, redact),
+      url: safeProviderUrl(job.web_url, redact),
+    }))
+    .filter(
+      (job): job is { name: string; stage: string | null; url: string | null } => job.name !== null,
+    )
+    .slice(0, MAX_CI_MANUAL_NOT_RUN_JOBS);
+  if (jobs.length === 0) {
+    return null;
+  }
+  return {
+    pipeline_id: status.id,
+    pipeline_url: safeProviderUrl(status.url, redact),
+    pipeline_status: status.status,
+    jobs,
+    checked_at: facts.checkedAt,
   };
 };
 
