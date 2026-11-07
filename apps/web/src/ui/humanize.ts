@@ -626,7 +626,7 @@ export const OWNER_WORDS = {
   /**
    * The person picker (§ 2's *Assign…*). Its other words — what choosing a person does, the empty
    * list, the read — are `features/owner-assign-words.ts`, which only the SPA's lazy owner dialogs
-   * import (this module also ships on the worker's local page, BACKLOG 1299).
+   * import, so the picker's words stay out of the initial graph.
    */
   'owner.picker': {
     title: (ticketKey: string): string => `Assign ${ticketKey}`,
