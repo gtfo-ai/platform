@@ -1557,8 +1557,6 @@ export const projectExecution = projectExecutionResponseSchema.parse({
     open: 0,
     closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
   },
-  // S-26.5: the server claimant runs and the mode lets it claim, so it takes unassigned tasks.
-  others_take_unassigned: true,
 });
 
 /**

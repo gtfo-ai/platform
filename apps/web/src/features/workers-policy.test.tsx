@@ -52,7 +52,10 @@ const project = (id: string, key: string, name: string): ProjectSummary => ({
 
 const PROJECTS = [project(AUTIX, 'AUT', 'Autix'), project(FONTAI, 'FON', 'Fontai')];
 
-/** `GET …/execution`, with `others_take_unassigned` only when the case knows it. */
+/**
+ * `GET …/execution`. `others_take_unassigned` is required on the wire: leaving it out (`undefined`)
+ * makes an answer the client refuses, the parse-error case.
+ */
 const execution = (othersTakeUnassigned: boolean | undefined) => ({
   mode: 'hybrid',
   prefer: 'server',
@@ -451,7 +454,9 @@ describe('the consequence line on the Workers screen (S-26.8a)', () => {
     },
   );
 
-  it('says nothing for a project whose read carries no answer', async () => {
+  // `others_take_unassigned` is required since #110 (BACKLOG 1445): a read without it is one this
+  // build cannot parse, which is an error like any other — the project stays unknown.
+  it('says nothing for a project whose read this build cannot parse (no answer in it)', async () => {
     const state = world({ othersTake: { [AUTIX]: undefined, [FONTAI]: false } });
     renderWorkers(state);
     const card = await policyOf(MINE);
