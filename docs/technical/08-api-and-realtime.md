@@ -792,7 +792,9 @@ carries `escalation` — `{at, reason, brief, brief_original_chars}` (`taskEscal
 rediscovery read's `last_discovery.escalation` already had), the newest `task.escalated` event's reason and
 `blocker_brief`, the brief cut at 1 000 characters with its pre-cut length — while the task is
 `needs_human`, `null` otherwise or when the event lacks either string. Required. The task page's callout
-leads with it (*Why it stopped (time): …*) and falls back to the stage row's word only without one.
+uses it as the one *why* when the read has no structured `stop` (*Why it stopped (time): …*, replacing the
+stage row's word); beside a `stop` the stop's sentence leads and the brief is collapsed under *Details*, in
+place of the stop's *What the platform saw last:* line — never two headlines.
 
 **Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
 vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental

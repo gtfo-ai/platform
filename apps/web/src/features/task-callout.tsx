@@ -331,13 +331,24 @@ export const TaskCallout = ({
     );
   }
   const stop = reasons.includes('escalation') ? detail.stop : null;
-  // BACKLOG 850: the escalation's own brief leads when the read has one; the row's recorded word
-  // is the fallback for a task whose stream holds none (an escalation written before briefs).
+  // BACKLOG 850: the escalation's own brief. With no structured stop it is the one *why* and
+  // replaces the row's word; beside a structured stop (S-25.11/12: a spent loop, a repeated failure,
+  // a check with no answer) the stop's sentence leads and the brief sits collapsed under *Details*,
+  // in place of the stop's *What the platform saw last:* line — never two headlines (review of #111).
   const escalation = reasons.includes('escalation') ? detail.escalation : null;
+  const briefLeads = escalation !== null && stop === null;
+  const briefDetails = escalation !== null && stop !== null ? escalation : null;
   const reason =
     reasons.includes('escalation') && stop === null && escalation === null
       ? escalationReason(task, stages)
       : null;
+  // The brief's text, as untrusted prose: a brief can hold paragraphs (`\n\n`).
+  const briefText = (value: NonNullable<typeof escalation>): ReactElement => (
+    <>
+      <UntrustedProse value={value.brief} />
+      {value.brief_original_chars === null ? null : <p className="text-sm">(shortened)</p>}
+    </>
+  );
   const stopped = stop === null ? null : stopWords(stop, detail.loop_limits);
   // S-25.12: a CI check that got no answer, worded from the attempt's structured read when it
   // recorded one; the recorded sentence is only the fallback for an attempt with none.
@@ -394,15 +405,12 @@ export const TaskCallout = ({
           ) : null}
           {reasons.includes('escalation') ? (
             <div className="flex flex-col gap-2">
-              {escalation === null ? null : (
-                <p data-escalation-brief="">
-                  <span className="font-medium">
-                    Why it stopped ({formatDateTime(escalation.at)}):
-                  </span>{' '}
+              {!briefLeads || escalation === null ? null : (
+                <div data-escalation-brief="" className="flex flex-col gap-1">
+                  <p className="font-medium">Why it stopped ({formatDateTime(escalation.at)}):</p>
                   {/* Platform words that may quote a provider or a run (BD-022). */}
-                  <UntrustedText value={escalation.brief} />
-                  {escalation.brief_original_chars === null ? null : ' (shortened)'}
-                </p>
+                  {briefText(escalation)}
+                </div>
               )}
               <EscalationText
                 merged={merged}
@@ -416,7 +424,7 @@ export const TaskCallout = ({
                   <p data-stop-sentence="">
                     <UntrustedText value={stopped.sentence} />
                   </p>
-                  {stopped.recordedLead === null ? null : (
+                  {stopped.recordedLead === null || briefDetails !== null ? null : (
                     <p data-stop-recorded="">
                       {stopped.recordedLead}
                       {stop.recorded === null ? null : (
@@ -443,6 +451,12 @@ export const TaskCallout = ({
                     )}
                   </p>
                 </div>
+              )}
+              {briefDetails === null ? null : (
+                <details data-escalation-details="">
+                  <summary className="cursor-pointer text-sm">Details</summary>
+                  <div className="pt-1">{briefText(briefDetails)}</div>
+                </details>
               )}
               {reason === null ? null : (
                 <p data-escalation-reason="">

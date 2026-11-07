@@ -733,6 +733,74 @@ describe('the needs-you callout', () => {
     expect(callout.querySelector('[data-escalation-reason]')).toBeNull();
   });
 
+  // Review of PR #111: a structured stop (S-25.11/12) is the one headline; the brief is kept, but
+  // collapsed under *Details* in place of the stop's *What the platform saw last:* line.
+  it('says why once when the read carries both a structured stop and the escalation’s brief', async () => {
+    const brief = 'The CI check failed the same way twice.\n\nLook at job unit.';
+    start(
+      detail(
+        {
+          stages: [stage('ci_gate', 4, 'failed', 'undecided')],
+          stop: {
+            stage: 'ci_gate',
+            attempt: 4,
+            cause: 'same_failure',
+            loop: null,
+            ci_failure: { status: 'failed', jobs: 'unit' },
+            recorded: 'pipeline 41 failed: unit',
+            recorded_cut: false,
+            ci_ending: null,
+          },
+          escalation: {
+            at: '2026-11-06T22:53:34.691Z',
+            reason: 'the same CI failure twice',
+            brief,
+            brief_original_chars: null,
+          },
+        },
+        { state: 'needs_human', current_stage: 'ci_gate' },
+      ),
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    // One headline: the structured stop's sentence; neither the brief nor the row's word as another.
+    expect(callout.querySelector('[data-stop="same_failure"] [data-stop-sentence]')).not.toBeNull();
+    expect(callout.querySelector('[data-escalation-brief]')).toBeNull();
+    expect(callout.querySelector('[data-escalation-reason]')).toBeNull();
+    expect(callout.querySelector('[data-stop-recorded]')).toBeNull();
+    expect(callout.textContent).not.toContain('What the platform saw last');
+    // The brief, collapsed, as prose: its two paragraphs are two paragraphs.
+    const details = callout.querySelector<HTMLDetailsElement>('details[data-escalation-details]');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('summary')?.textContent).toBe('Details');
+    expect([...(details?.querySelectorAll('p') ?? [])].map((p) => p.textContent)).toEqual([
+      'The CI check failed the same way twice.',
+      'Look at job unit.',
+    ]);
+  });
+
+  it('shows no Details disclosure when the brief is the one why', async () => {
+    start(
+      detail(
+        {
+          stages: [stage('architecture', 1, 'completed', 'approve')],
+          escalation: {
+            at: '2026-11-06T14:47:56.803Z',
+            reason: 'the approval expired',
+            brief: 'Nobody decided the plan approval for AUT-6639 in time.',
+            brief_original_chars: null,
+          },
+        },
+        { state: 'needs_human', current_stage: 'architecture' },
+      ),
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    expect(callout.querySelector('[data-escalation-brief]')?.textContent).toContain(
+      'Nobody decided the plan approval for AUT-6639 in time.',
+    );
+    expect(callout.querySelector('[data-escalation-details]')).toBeNull();
+  });
+
   it('says a cut brief was shortened', async () => {
     start(
       detail(

@@ -992,12 +992,6 @@ describe('the task projection', () => {
   });
 
   /**
-   * **The box the return dialog offers** (WP-152, PROGRESS backlog 491): a length, never the text,
-   * and only for a task parked at a **gate** whose attempt the gate closed `returned` with a reason —
-   * the three facts the command's default reads. Both directions (rule 42): an agent stage holding a
-   * return reason, a running task at the gate, and an escalation's `failed` close publish nothing.
-   */
-  /**
    * **Why a task waits, in the escalation's own words** (BACKLOG 850): the newest `task.escalated`
    * event's reason and brief, only while the task is `needs_human`, the brief cut at 1 000 with its
    * length before the cut. Both directions (rule 42): an older escalation is replaced by the newer,
@@ -1070,6 +1064,12 @@ describe('the task projection', () => {
     expect((await findTaskDetail(drizzled, briefless))?.escalation).toBeNull();
   });
 
+  /**
+   * **The box the return dialog offers** (WP-152, PROGRESS backlog 491): a length, never the text,
+   * and only for a task parked at a **gate** whose attempt the gate closed `returned` with a reason —
+   * the three facts the command's default reads. Both directions (rule 42): an agent stage holding a
+   * return reason, a running task at the gate, and an escalation's `failed` close publish nothing.
+   */
   it('publishes the parked gate’s failure as a length, and nothing where a return could not attach it', async () => {
     const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
       (await pool.query<T>(text, values)).rows[0] as T;
