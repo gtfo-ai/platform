@@ -25,10 +25,11 @@
  * else — an administrator reading every machine — reads the sentence with the owner's name
  * ("Vojtěch’s tasks"), and the server refuses them regardless. A refused save is said in words:
  * `422 claim_scope_empty` here, `403`/`404`/`project_not_eligible` by the card's own words. The
- * card's consequence line ("Unassigned tasks in Autix have nowhere to run.") is **not shown here
- * yet**: the execution read's `others_take_unassigned` excludes every machine of the reader, so it
- * would be false for an owner whose other machine takes unassigned work; the card is given no
- * answer (unknown, so hidden) and no project's execution is asked (BACKLOG 1350).
+ * card's consequence line ("Unassigned tasks in Autix have nowhere to run.") reads each project's
+ * `others_take_unassigned` from its execution read asked **for this machine** (`?worker_id=`, so
+ * the owner's other machines still count): one read per project, asked only once the owner opens
+ * *Change* — never on the page's load — and cached per (project, machine). Until it answers, on an
+ * error, and on a read-only card the line is unknown and says nothing.
  *
  * **It refreshes by itself**: no event announces a heartbeat, a handshake or a new worker, so the
  * list is asked again every {@link WORKERS_REFRESH_MS} while the page is open (and in the
@@ -63,6 +64,7 @@ import { type ReactElement, useEffect, useState } from 'react';
 import { ApiError } from '../api/http.js';
 import {
   useProjects,
+  useProjectsExecutionFor,
   useSession,
   useSettingsCommands,
   useWorkerDevice,
@@ -286,11 +288,12 @@ const cardProjectsOf = (
       ];
 
 /**
- * A row's *What this machine takes*. **No consequence line here yet**: the execution read's
- * `others_take_unassigned` excludes **every** machine of the reader, so an owner whose other
- * machine takes unassigned work would be told *nowhere to run* falsely. Until the read can exclude
- * only the machine being edited (the worker session's fix), the card gets no `unassignedHasTaker`
- * — unknown, so the line is hidden — and nothing is asked (BACKLOG 1350).
+ * A row's *What this machine takes*, and its consequence line's evidence: each of the card's
+ * projects' execution read asked **for this machine** (`?worker_id=`, so the owner's other machines
+ * and the server still count), only once *Change* opens the controls (the card's `onOpenChange`) —
+ * never on the page's load — and cached per (project, machine). An answer that has not arrived, a
+ * `404` or any other error leaves that project out of `unassignedHasTaker`: unknown, so the card says
+ * nothing for it. The card itself decides when the line applies (*Only my tasks*).
  */
 const WorkerPolicy = ({
   worker,
@@ -306,6 +309,14 @@ const WorkerPolicy = ({
   readonly onSave: ((next: ClaimPolicyValue) => Promise<void>) | null;
 }): ReactElement => {
   const editable = onSave !== null;
+  const [asked, setAsked] = useState(false);
+  const ids = editable ? projects.map((project) => project.id) : [];
+  const executions = useProjectsExecutionFor(ids, worker.id, asked);
+  const unassignedHasTaker: Record<string, boolean> = {};
+  ids.forEach((id, index) => {
+    const known = executions[index]?.data?.others_take_unassigned;
+    if (known !== undefined) unassignedHasTaker[id] = known;
+  });
   const skipped = worker.policy_skipped_offers ?? 0;
   return (
     <div className="flex flex-col gap-1" data-worker-policy="">
@@ -315,7 +326,16 @@ const WorkerPolicy = ({
         surface="workers"
         headingLevel="h2"
         framed={false}
-        {...(onSave === null ? {} : { onSave })}
+        unassignedHasTaker={unassignedHasTaker}
+        {...(onSave === null
+          ? {}
+          : {
+              onSave,
+              // Asked once, and kept: closing the controls forgets nothing already read.
+              onOpenChange: (open: boolean) => {
+                if (open) setAsked(true);
+              },
+            })}
         {...(ownerName === null ? {} : { ownerName })}
       />
       {skipped > 0 ? (

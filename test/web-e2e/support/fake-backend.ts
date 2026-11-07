@@ -277,7 +277,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
   let waitingOpen = false;
   /**
    * `POST /__test__/workers-others` (S-26.8a): the workers read carries another person's machine,
-   * and the project's execution read says nobody else takes its unassigned tasks.
+   * and the project has no server claimant (`?worker_id=` is answered by {@link executionFor}).
    */
   let workersOthers = false;
   /**
@@ -288,6 +288,57 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     string,
     { readonly claim_policy: WorkerClaimPolicy; readonly claim_project_ids: string[] | null }
   >();
+
+  /** `GET /api/workers`: the fixture list (with another person's machine on request), each stored policy applied. */
+  const workersRead = () => {
+    const base = workersOthers ? fixtures.workersWithOthers : fixtures.workers;
+    return {
+      ...base,
+      items: base.items.map((item) => {
+        const stored = claimPolicies.get(item.id);
+        return stored === undefined
+          ? item
+          : {
+              ...item,
+              claim_policy: stored.claim_policy,
+              claim_projects:
+                stored.claim_project_ids?.map((projectId) => ({
+                  id: projectId,
+                  key: projectId === fixtures.IDS.project ? fixtures.PROJECT_KEY : null,
+                })) ?? null,
+            };
+      }),
+    };
+  };
+
+  /**
+   * `GET …/execution?worker_id=` (BACKLOG 1456, the Workers screen's consequence line), as the
+   * server asks it (`othersTakeUnassigned`): `others_take_unassigned` is the server claimant
+   * running, or **another** listed machine than `worker_id` — the owner's others included — that is
+   * active, takes the project and whose policy admits unassigned tasks; a `worker_id` the workers
+   * read does not list is `404`.
+   */
+  const executionFor = (workerId: string): { status: number; body: unknown } => {
+    const listed = workersRead().items;
+    if (!listed.some((item) => item.id === workerId)) {
+      return {
+        status: 404,
+        body: { error: { code: 'not_found', message: `worker ${workerId}` } },
+      };
+    }
+    const base = workersOthers ? fixtures.projectExecutionNoTaker : fixtures.projectExecution;
+    const others =
+      base.server_claimant === 'running' ||
+      listed.some(
+        (item) =>
+          item.id !== workerId &&
+          item.state === 'active' &&
+          (item.claim_policy === 'everything' || item.claim_policy === 'mine_and_unassigned') &&
+          (item.claim_projects === null ||
+            item.claim_projects.some((project) => project.id === fixtures.IDS.project)),
+      );
+    return { status: 200, body: { ...base, others_take_unassigned: others } };
+  };
 
   const writeFrame = (stream: Stream, frame: SseFrame, event: string): void => {
     const lines: string[] = [];
@@ -859,6 +910,16 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       return;
     }
 
+    const executionWorker = url.searchParams.get('worker_id');
+    if (
+      method === 'GET' &&
+      path === `/api/projects/${fixtures.IDS.project}/execution` &&
+      executionWorker !== null
+    ) {
+      const answer = executionFor(executionWorker);
+      json(response, answer.status, answer.body);
+      return;
+    }
     if (method === 'GET') {
       const withAnswers = {
         ...fixtures.taskDetail,
@@ -882,25 +943,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
           ),
         },
         // S-26.8a: with another person's machine on request, and each stored claim policy applied.
-        '/api/workers': {
-          ...(workersOthers ? fixtures.workersWithOthers : fixtures.workers),
-          items: (workersOthers ? fixtures.workersWithOthers : fixtures.workers).items.map(
-            (item) => {
-              const stored = claimPolicies.get(item.id);
-              return stored === undefined
-                ? item
-                : {
-                    ...item,
-                    claim_policy: stored.claim_policy,
-                    claim_projects:
-                      stored.claim_project_ids?.map((projectId) => ({
-                        id: projectId,
-                        key: projectId === fixtures.IDS.project ? fixtures.PROJECT_KEY : null,
-                      })) ?? null,
-                  };
-            },
-          ),
-        },
+        '/api/workers': workersRead(),
         [`/api/runs/${fixtures.IDS.runWorker}/messages`]: fixtures.emptyRunMessages,
         [`/api/runs/${fixtures.IDS.runQueued}/messages`]: fixtures.emptyRunMessages,
         '/api/org/models': fixtures.orgModels,

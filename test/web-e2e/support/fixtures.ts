@@ -1562,11 +1562,10 @@ export const projectExecution = projectExecutionResponseSchema.parse({
 });
 
 /**
- * S-26.8a: the same project with no server claimant and no other person's machine taking its
- * unassigned tasks — served with {@link workersWithOthers}. The Workers screen must still say no
- * consequence line (BACKLOG 1350: the read excludes every machine of the reader, so the screen does
- * not use it yet), and `workers.spec.ts` holds that against this answer. (`vojta-mbp` takes only
- * its owner's tasks, so it is not such a machine.)
+ * S-26.8a: the same project with no server claimant — served with {@link workersWithOthers}. Asked
+ * without a machine it says nobody else takes the project's unassigned tasks; asked `?worker_id=`
+ * (the Workers screen's consequence line) the fake computes the answer from the listed machines, as
+ * the server does (`fake-backend.ts`'s `executionFor`), so the owner's other machine counts.
  */
 export const projectExecutionNoTaker = projectExecutionResponseSchema.parse({
   ...projectExecution,

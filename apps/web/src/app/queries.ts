@@ -259,6 +259,30 @@ export const useProjectExecution = (projectId: string | null) => {
   });
 };
 
+/**
+ * The execution read of several projects **for one machine** (`?worker_id=`, #108), asked only
+ * while `enabled` — the Workers screen's consequence line (S-26.8a): a row asks its projects once
+ * its owner opens *Change*, never on the page's load, and each answer is cached per
+ * (project, machine). A refusal is not retried: the line is hidden on any error, so asking again
+ * would only repeat it.
+ */
+export const useProjectsExecutionFor = (
+  projectIds: readonly string[],
+  workerId: string,
+  enabled: boolean,
+) => {
+  const { endpoints } = useServices();
+  return useQueries({
+    queries: projectIds.map((projectId) => ({
+      queryKey: queryKeys.projectExecutionFor(projectId, workerId),
+      queryFn: () => endpoints.projectExecution(projectId, workerId),
+      enabled,
+      retry: false,
+      ...FOREVER,
+    })),
+  });
+};
+
 export const useProjectBudgets = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({

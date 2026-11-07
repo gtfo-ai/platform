@@ -3,8 +3,9 @@
  * `createApp` with a fake server so the real router, query client and endpoint parsers are in the
  * path: per role (the owner changes it, an administrator reads somebody else's with their name, a
  * member is offered nothing on somebody else's), the save's request and its refusals in words, the
- * muted *Skipped …* line, and the consequence line — not said here yet, and nothing asked for it
- * (BACKLOG 1350: the execution read's answer excludes every machine of the reader).
+ * muted *Skipped …* line, and the consequence line — its evidence, one execution read per project
+ * asked for this machine (`?worker_id=`), read only once *Change* opens the controls, and the line
+ * said only where it is known to be true.
  */
 import type {
   ProjectSummary,
@@ -84,7 +85,10 @@ interface World {
     url: string;
     body: { claim_policy: WorkerClaimPolicy; claim_project_ids: string[] | null };
   }[];
-  executionReads: string[];
+  /** Every execution read, with the machine it was asked for (`?worker_id=`, `null` without). */
+  executionReads: { project: string; workerId: string | null }[];
+  /** Per project id: the execution read answers this status instead (its line must stay hidden). */
+  executionFails: Record<string, number>;
 }
 
 const world = (overrides: Partial<World> = {}): World => ({
@@ -94,6 +98,7 @@ const world = (overrides: Partial<World> = {}): World => ({
   refuse: null,
   puts: [],
   executionReads: [],
+  executionFails: {},
   ...overrides,
 });
 
@@ -140,9 +145,14 @@ const server = (state: World): typeof fetch =>
         timezone: 'UTC',
       });
     }
-    const read = /\/api\/projects\/([^/]+)\/execution$/.exec(url);
+    const read = /\/api\/projects\/([^/?]+)\/execution(\?.*)?$/.exec(url);
     if (read !== null) {
-      state.executionReads.push(read[1] ?? '');
+      const workerId = new URLSearchParams(read[2] ?? '').get('worker_id');
+      state.executionReads.push({ project: read[1] ?? '', workerId });
+      const fails = state.executionFails[read[1] ?? ''];
+      if (fails !== undefined) {
+        return json({ error: { code: 'not_found', message: 'no such worker' } }, fails);
+      }
       return json(execution(state.othersTake[read[1] ?? '']));
     }
     if (url.endsWith('/api/projects')) return json({ items: PROJECTS, can_create: false });
@@ -323,31 +333,87 @@ describe('the runs a policy leaves for others (S-26.8a)', () => {
   });
 });
 
-describe('the consequence line on the Workers screen (S-26.8a, BACKLOG 1350)', () => {
-  // `others_take_unassigned` excludes every machine of the reader, so the screen does not say the
-  // line yet: it asks no project's execution and gives the card no answer, whatever the read says.
-  it('asks no project’s execution, on load or on Change, and says no line under Only my tasks', async () => {
-    const state = world();
-    renderWorkers(state);
-    const card = await policyOf(MINE);
-    expect(state.executionReads).toEqual([]);
+describe('the consequence line on the Workers screen (S-26.8a)', () => {
+  /** Opens *Change* on a row and chooses *Only my tasks*. */
+  const chooseOnlyMine = async (card: HTMLElement): Promise<void> => {
     const user = userEvent.setup();
     await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
     await user.click(within(card).getByRole('radio', { name: 'Only my tasks' }));
-    // The controls are open and the draft is *Only my tasks*, and Autix's read would say false.
-    expect(within(card).getByRole('radio', { name: 'Only my tasks' })).toHaveProperty(
-      'checked',
-      true,
-    );
-    expect(card.textContent).not.toContain('nowhere to run');
+  };
+
+  it('asks nothing on load, then each project for this machine once Change opens, and names the one nobody else takes', async () => {
+    const state = world();
+    renderWorkers(state);
+    const card = await policyOf(MINE);
+    // The page's load asks no project anything.
     expect(state.executionReads).toEqual([]);
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
+    await waitFor(() => expect(state.executionReads).toHaveLength(2));
+    // Every read carries this machine, so the owner's other machines still count.
+    expect([...state.executionReads].sort((a, b) => a.project.localeCompare(b.project))).toEqual([
+      { project: AUTIX, workerId: MINE },
+      { project: FONTAI, workerId: MINE },
+    ]);
+    // The default policy says nothing; *Only my tasks* names Autix (false), not Fontai (true).
+    expect(card.textContent).not.toContain('nowhere to run');
+    await user.click(within(card).getByRole('radio', { name: 'Only my tasks' }));
+    expect(
+      await within(card).findByText('Unassigned tasks in Autix have nowhere to run.'),
+    ).toBeTruthy();
+    // Closing and opening again asks nothing more: the answers are cached per (project, machine).
+    await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.cancel }));
+    await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
+    expect(state.executionReads).toHaveLength(2);
   });
 
-  it('says no line for a stored Only my tasks, mine or somebody else’s', async () => {
+  it('says nothing for a project somebody else takes, beside one nobody takes', async () => {
+    // Fontai's `false` is the control: once its line shows, Autix's `true` has been read too.
+    const state = world({ othersTake: { [AUTIX]: true, [FONTAI]: false } });
+    renderWorkers(state);
+    const card = await policyOf(MINE);
+    await chooseOnlyMine(card);
+    expect(
+      await within(card).findByText('Unassigned tasks in Fontai have nowhere to run.'),
+    ).toBeTruthy();
+    expect(card.textContent).not.toContain('Autix have');
+    expect(card.textContent).not.toContain('Autix and Fontai');
+  });
+
+  it.each([404, 500])(
+    'says nothing for a project whose read answers %s, and does not ask it again',
+    async (status) => {
+      const state = world({
+        othersTake: { [AUTIX]: false, [FONTAI]: false },
+        executionFails: { [AUTIX]: status },
+      });
+      renderWorkers(state);
+      const card = await policyOf(MINE);
+      await chooseOnlyMine(card);
+      // Fontai is known and named; Autix's refusal leaves it unknown, so it is not.
+      expect(
+        await within(card).findByText('Unassigned tasks in Fontai have nowhere to run.'),
+      ).toBeTruthy();
+      expect(card.textContent).not.toContain('Autix');
+      expect(state.executionReads.filter((entry) => entry.project === AUTIX)).toHaveLength(1);
+    },
+  );
+
+  it('says nothing for a project whose read carries no answer', async () => {
+    const state = world({ othersTake: { [AUTIX]: undefined, [FONTAI]: false } });
+    renderWorkers(state);
+    const card = await policyOf(MINE);
+    await chooseOnlyMine(card);
+    expect(
+      await within(card).findByText('Unassigned tasks in Fontai have nowhere to run.'),
+    ).toBeTruthy();
+    expect(card.textContent).not.toContain('Autix');
+  });
+
+  it('asks nothing for a read-only card, even for a stored Only my tasks', async () => {
     const state = world({
       role: 'admin',
       workers: [
-        workerFixture({ id: MINE, claim_policy: 'mine' }),
         workerFixture({
           id: THEIRS,
           name: 'vojta-mbp',
@@ -357,7 +423,6 @@ describe('the consequence line on the Workers screen (S-26.8a, BACKLOG 1350)', (
       ],
     });
     renderWorkers(state);
-    await policyOf(MINE);
     await policyOf(THEIRS);
     expect(screen.queryByText(/nowhere to run/)).toBeNull();
     expect(state.executionReads).toEqual([]);

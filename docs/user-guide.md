@@ -1938,8 +1938,11 @@ machine takes** says the machine's setting in the same sentence as its own page 
 takes*, below): on your own machine with **Change**, the same two choices and **Save**; on somebody
 else's — an administrator sees every machine — with their name (*This machine takes **only Vojtěch's
 tasks**, in **all their projects**.*) and nothing to press, because only a machine's owner changes it.
-The card's warning *Unassigned tasks in Autix have nowhere to run.* is not shown here yet (see section
-13). A muted *Skipped 3 runs this machine doesn't take* counts the waiting runs its choice leaves
+On your own machine, under *Only my tasks*, the card warns *Unassigned tasks in Autix have nowhere to
+run.* for each project where neither the platform server nor any other machine — your others included —
+takes unassigned tasks by itself, as the machine's own page does; the screen asks once you press
+**Change**, so before that, when the platform did not answer, and on somebody else's machine it says
+nothing. A muted *Skipped 3 runs this machine doesn't take* counts the waiting runs its choice leaves
 for others. **Details**
 holds when it was registered and last seen, its worker version and the image digests it
 reported. The header counts *2 ready · 1 can't take work · 1 revoked*. The page refreshes by itself
@@ -2099,7 +2102,6 @@ In one place, so it is not spread across thirteen sections:
 | Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, New project step 1 |
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
 | Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
-| The card's warning *Unassigned tasks in Autix have nowhere to run.* on the Workers screen (the machine's own page says it since BACKLOG 1456) | Workers screen |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`
