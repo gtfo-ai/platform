@@ -50,12 +50,13 @@ import { buttonClassName } from '../ui/button.js';
 import { Counter } from '../ui/counter.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
-import { type BoardOwnerFilter, OWNER_WORDS, TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
+import { TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
 import { Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
 import { ListBox, ListBoxHeader } from '../ui/list-box.js';
 import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { type BoardOwnerFilter, OWNER_WORDS } from '../ui/words/owners.js';
 import {
   type AgentEntry,
   type MenuCapabilities,

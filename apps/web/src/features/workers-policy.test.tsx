@@ -18,7 +18,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { MACHINE_TAKES_WORDS, WORKERS_POLICY_WORDS } from '../ui/humanize.js';
+import { MACHINE_TAKES_WORDS } from '../ui/humanize.js';
+import { WORKERS_POLICY_WORDS } from '../ui/words/workers-policy.js';
 import { USER_ID, workerFixture } from './worker.test-fixture.js';
 import { claimPolicySaveRefusal, storedClaimPolicyOf } from './workers.js';
 

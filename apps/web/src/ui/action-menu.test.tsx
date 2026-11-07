@@ -200,4 +200,67 @@ describe('ActionMenu drawn before its menu module has loaded (S-25.13)', () => {
     expect(trigger.isConnected).toBe(true);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
   });
+
+  /** A fresh, unloaded `action-menu.tsx` with two items, its plain trigger focused. */
+  const plainMenu = async () => {
+    vi.resetModules();
+    const fresh = await import('./action-menu.js');
+    render(
+      <fresh.ActionMenu label="More actions">
+        <fresh.ActionMenuItem>Rename</fresh.ActionMenuItem>
+        <fresh.ActionMenuItem>Retire</fresh.ActionMenuItem>
+      </fresh.ActionMenu>,
+    );
+    const plain = screen.getByRole('button', { name: 'More actions' });
+    plain.focus();
+    return fresh;
+  };
+
+  it.each([
+    ['Enter', '{Enter}', 'Rename'],
+    ['ArrowDown', '{ArrowDown}', 'Rename'],
+    ['ArrowUp', '{ArrowUp}', 'Retire'],
+  ])(
+    'opens from the plain trigger on %s, with the focus on the item Base UI chooses',
+    async (_key, keys, focused) => {
+      await plainMenu();
+      await userEvent.setup().keyboard(keys);
+      await screen.findByRole('menu');
+      await waitFor(() => {
+        expect(document.activeElement?.textContent).toBe(focused);
+      });
+    },
+  );
+
+  it('says beside the trigger that the menu could not be loaded, and the next press retries', async () => {
+    vi.resetModules();
+    const actual =
+      await vi.importActual<typeof import('./action-menu-base.js')>('./action-menu-base.js');
+    let broken = true;
+    vi.doMock('./action-menu-base.js', () => {
+      if (broken) {
+        throw new Error('the chunk is gone');
+      }
+      return actual;
+    });
+    try {
+      const fresh = await import('./action-menu.js');
+      render(
+        <fresh.ActionMenu label="More actions">
+          <fresh.ActionMenuItem>Rename</fresh.ActionMenuItem>
+        </fresh.ActionMenu>,
+      );
+      const plain = screen.getByRole('button', { name: 'More actions' });
+      fireEvent.click(plain);
+      expect((await screen.findByRole('alert')).textContent).toBe(fresh.MENU_LOAD_FAILED);
+      expect(screen.queryByRole('menu')).toBeNull();
+
+      broken = false;
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      expect(await screen.findByRole('menu')).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      vi.doUnmock('./action-menu-base.js');
+    }
+  });
 });

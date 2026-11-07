@@ -58,11 +58,11 @@ import {
 } from '../app/queries.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
 import { CheckboxList } from '../ui/checkbox-list.js';
-import { ASSIGN_OWNER_WORDS } from '../ui/humanize.js';
 import { Badge, Button, ErrorNotice, Loading } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { ASSIGN_OWNER_WORDS } from '../ui/words/owners.js';
 import { bindingConfigOf } from './operating-mode.js';
 import { useStepActionTone } from './step-action-tone.js';
 

@@ -38,7 +38,7 @@
  *   machine picks it up at the next stage.* A refusal (`403 owner_change_not_permitted`,
  *   `409 task_finished`, `422 owner_not_project_member`) is said in words (`api/read-error.ts`).
  *
- * Every word on this module's own surface is `ui/humanize.ts`' `OWNER_WORDS`; the picker's are
+ * Every word on this module's own surface is `ui/words/owners.ts`' `OWNER_WORDS`; the picker's are
  * `./owner-assign-words.ts`, in the lazy chunk.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
@@ -47,10 +47,10 @@ import { lazy, type ReactElement, Suspense, useState } from 'react';
 import { useSession, useTaskOwnerCommand } from '../app/queries.js';
 import { ActionMenuItem } from '../ui/action-menu.js';
 import { Avatar } from '../ui/avatar.js';
-import { OWNER_WORDS, trackerName } from '../ui/humanize.js';
 import { Button, ErrorNotice } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { OWNER_WORDS, trackerName } from '../ui/words/owners.js';
 import { isOrgSectionFor } from './settings-sections.js';
 import type { TakeConfirm } from './task-owner-dialogs.js';
 import { showsSomeoneElse, trackerShowsFor } from './tracker-shows.js';

@@ -13,15 +13,23 @@
  * - **it is not** — the frame's own menus on the first paint: a plain trigger, **the same element**
  *   (the `···` {@link IconButton} or the caller's own) with the closed menu button's
  *   `aria-haspopup="menu"` and `aria-expanded="false"`, which fetches the module as it mounts and
- *   swaps only when it is **pressed**: Base UI's trigger then replaces it, the focus is put back on
- *   it if the button had it, and the press is handed on as a `click()` on the new trigger — the path
- *   a keyboard's Enter takes — so the menu opens, focuses and closes by Base UI's own code. Never a
- *   swap when the module merely arrives: that would replace the element under a press already on
- *   its way, the defect `features/readiness-label.tsx` measured on CI for its popover (#83), whose
- *   pattern this is. A caller's own `onClick` runs once, on the handed-on press.
+ *   swaps only when it is **pressed** — a click, Enter, Space, or the ArrowDown and ArrowUp Base UI's
+ *   trigger opens on by itself: Base UI's trigger then replaces it, the focus is put back on it if
+ *   the button had it, and the press is **replayed** on the new trigger — the key's `keydown`, then
+ *   the `click()` an Enter, a Space or a pointer made — so the menu opens, focuses (the first item,
+ *   or the last for ArrowUp) and closes by Base UI's own code. Never a swap when the module merely
+ *   arrives: that would replace the element under a press already on its way, the defect
+ *   `features/readiness-label.tsx` measured on CI for its popover (#83), whose pattern this is. A
+ *   caller's own `onClick` runs once, on the replayed press.
+ *
+ * **What it trades, accepted in the review of #116:** a *pointer* press on a plain trigger is
+ * replayed as a bare `click()`, the path a keyboard's activation takes, so that first opening may
+ * put the focus on the first item as a keyboard opening does — once per menu, for the frame's
+ * menus only, in a session's first moments.
  *
  * Items render only inside an open menu, so they meet a loaded module. A failed load is forgotten,
- * so the next press tries again, and the trigger says so in its title. `loadActionMenu` is exported
+ * so the next press tries again, and {@link MENU_LOAD_FAILED} is said beside the trigger in an
+ * `alert` region — seen and heard, not a `title` only a pointer finds. `loadActionMenu` is exported
  * for the ui tier's setup file (`test/support/web-lazy-chunks.ts`), which loads the module before a
  * test file renders, so a test meets Base UI's Menu as it did when the import was static.
  */
@@ -30,6 +38,7 @@ import {
   cloneElement,
   type MouseEvent,
   type ReactElement,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useEffect,
   useRef,
@@ -90,13 +99,25 @@ export type ActionMenuProps = {
     }
 );
 
+/** A press the plain trigger took: whether it had the focus, the key it came by, and its click. */
+interface HandOn {
+  readonly refocus: boolean;
+  readonly key: string | null;
+  readonly click: boolean;
+}
+
+/** Said beside the trigger when the menu's module could not be loaded; the next press retries. */
+export const MENU_LOAD_FAILED = 'Couldn’t open the menu. Try again.';
+
 export const ActionMenu = (props: ActionMenuProps): ReactElement => {
   // The module when this menu first rendered, or the one a press asked for — never a swap of its own.
   const [menu, setMenu] = useState<MenuModule | null>(currentModule);
   const [failed, setFailed] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   // A press the plain trigger took, to hand on once Base UI's trigger has replaced it.
-  const handOn = useRef<{ readonly refocus: boolean } | null>(null);
+  const handOn = useRef<HandOn | null>(null);
+  // Enter or Space on the plain trigger: the click the browser makes of it is that key's press.
+  const activationKey = useRef<string | null>(null);
   const plain = menu === null;
   useEffect(() => {
     if (plain) {
@@ -111,10 +132,23 @@ export const ActionMenu = (props: ActionMenuProps): ReactElement => {
     }
     handOn.current = null;
     const trigger = triggerRef.current;
-    if (press.refocus) {
-      trigger?.focus();
+    if (trigger === null) {
+      return;
     }
-    trigger?.click();
+    if (press.refocus) {
+      trigger.focus();
+    }
+    // The press replayed on Base UI's trigger as the browser delivered it: the key first — which
+    // Base UI reads to decide the item an opening focuses (an arrow key opens the menu itself) —
+    // then the click an Enter, a Space or a pointer made.
+    if (press.key !== null) {
+      trigger.dispatchEvent(
+        new KeyboardEvent('keydown', { key: press.key, bubbles: true, cancelable: true }),
+      );
+    }
+    if (press.click) {
+      trigger.click();
+    }
   }, [menu]);
 
   const trigger =
@@ -133,25 +167,47 @@ export const ActionMenu = (props: ActionMenuProps): ReactElement => {
       </menu.ActionMenu>
     );
   }
+  const press = (target: EventTarget, key: string | null, click: boolean): void => {
+    const refocus = document.activeElement === target;
+    setFailed(false);
+    loadActionMenu().then(
+      (loaded) => {
+        handOn.current = { refocus, key, click };
+        setMenu(loaded);
+      },
+      () => {
+        setFailed(true);
+      },
+    );
+  };
   // Base UI's closed trigger's own attributes, so nothing a reader or a test sees changes on arrival.
-  return cloneElement(trigger as ReactElement<Record<string, unknown>>, {
-    'aria-haspopup': 'menu',
-    'aria-expanded': false,
-    onClick: (event: MouseEvent<HTMLElement>) => {
-      const refocus = document.activeElement === event.currentTarget;
-      setFailed(false);
-      loadActionMenu().then(
-        (loaded) => {
-          handOn.current = { refocus };
-          setMenu(loaded);
+  return (
+    <>
+      {cloneElement(trigger as ReactElement<Record<string, unknown>>, {
+        'aria-haspopup': 'menu',
+        'aria-expanded': false,
+        onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            // Base UI's trigger opens on these itself (`openOnArrowKeyDown`), with no click.
+            event.preventDefault();
+            press(event.currentTarget, event.key, false);
+            return;
+          }
+          activationKey.current = event.key === 'Enter' || event.key === ' ' ? event.key : null;
         },
-        () => {
-          setFailed(true);
+        onClick: (event: MouseEvent<HTMLElement>) => {
+          const key = activationKey.current;
+          activationKey.current = null;
+          press(event.currentTarget, key, true);
         },
-      );
-    },
-    ...(failed ? { title: 'The menu could not be loaded. Press again to try once more.' } : {}),
-  });
+      })}
+      {failed ? (
+        <span role="alert" className="text-xs text-danger">
+          {MENU_LOAD_FAILED}
+        </span>
+      ) : null}
+    </>
+  );
 };
 
 type ItemProps = Parameters<MenuModule['ActionMenuItem']>[0];

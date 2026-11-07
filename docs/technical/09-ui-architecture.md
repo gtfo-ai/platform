@@ -85,17 +85,21 @@ gzipped of the graph, measured — is a chunk of its own, `ui/action-menu-base.t
 first renders. A menu drawn after the module has arrived — every screen's, since the frame's menus
 fetch it as they mount — is Base UI's Menu as before. The frame's own menus on the first paint are a
 plain trigger, the same element with the closed menu button's `aria-haspopup`/`aria-expanded`, which
-swaps **only on a press**, `features/readiness-label.tsx`'s pattern for its popover (S-25.6): Base
-UI's trigger replaces it, the focus is put back if the button had it, and the press is handed on as a
-`click()` — the path a keyboard's Enter takes — so the menu opens by Base UI's own code; never a
-swap when the module merely arrives, which would replace the element under a press on its way. A
-failed load is forgotten and the trigger's title says to press again. The ui tier loads the module
+swaps **only on a press** — a click, Enter, Space, or the ArrowDown/ArrowUp Base UI's trigger opens
+on by itself — `features/readiness-label.tsx`'s pattern for its popover (S-25.6): Base UI's trigger
+replaces it, the focus is put back if the button had it, and the press is replayed on it (the key's
+`keydown`, then the `click()` an Enter, a Space or a pointer made), so the menu opens and focuses
+its first item (the last for ArrowUp) by Base UI's own code; never a swap when the module merely
+arrives, which would replace the element under a press on its way. A first pointer press is so
+replayed as a keyboard activation, which may focus the first item once (accepted in the review of
+#116). A failed load is forgotten, the next press retries, and *Couldn’t open the menu. Try again.*
+is said beside the trigger in an `alert` region. The ui tier loads the module
 before each test file (`test/support/web-lazy-chunks.ts`), and `bundle:check` refuses the Menu in
 any initial asset by a marker (`LAZY_ONLY`). **The word maps only
 lazy screens show** left `ui/humanize.ts`, which the frame imports, for `ui/words/*` modules of
 their own that `humanize.ts` does not re-export (`readiness-criteria`, `loops`, `integrations`,
-`project-execution`, `settings`): a module's statements sit in one chunk, so a map in `humanize.ts`
-was in the initial graph whichever screen used it. The graph after both is 275 318 B (−21 970 B).
+`project-execution`, `settings`, `approvals`, `owners`, `workers-policy`, `ci-manual-jobs`): a module's statements sit in one chunk, so a map in `humanize.ts`
+was in the initial graph whichever screen used it. Measured on `main` at `b867b5b2`, the graph after both is 275 223 B against 298 066 B before (−22 843 B).
 
 The account menu in the top bar (`app/shell.tsx`) is the first screen use of Base UI: who is signed
 in, with which role, and **Sign out** (no theme choice: one dark theme, TD-033's 2026-11-05 amendment). `app/app.tsx` wraps the tree in

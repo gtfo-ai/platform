@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
@@ -20,6 +21,7 @@ import { afterAll, describe, expect, it } from 'vitest';
  * and pass, and it can measure correctly and not fail. All three are here.
  */
 const GUARD = join(dirname(fileURLToPath(import.meta.url)), 'bundle-budget.mjs');
+const REPOSITORY_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const temporaryDirectories: string[] = [];
 
@@ -180,6 +182,18 @@ describe('the bundle budget guard', () => {
     const admitted = run(['--dist', lazy.path, '--budget-bytes', '300000']);
     expect(admitted.status).toBe(0);
     expect(admitted.stdout).toContain('PASS: bundle:check');
+  });
+
+  it('takes the Menu’s marker from Base UI’s own source, so an upgrade cannot empty the guard', () => {
+    // The plant above proves the guard reads the marker; this proves the library still carries it.
+    // A Base UI that renamed the parent type would otherwise let the Menu back in unrefused.
+    const script = readFileSync(GUARD, 'utf8');
+    const marker = /name: "@base-ui\/react's Menu", marker: '([^']+)'/.exec(script)?.[1];
+    expect(marker).toBe('menubar');
+    const webRequire = createRequire(join(REPOSITORY_ROOT, 'apps', 'web', 'package.json'));
+    const baseUi = dirname(webRequire.resolve('@base-ui/react/package.json'));
+    const menuRoot = readFileSync(join(baseUi, 'menu', 'root', 'MenuRoot.mjs'), 'utf8');
+    expect(menuRoot).toContain(`'${marker as string}'`);
   });
 
   it('fails over budget, names the overage and does not suggest raising the number', () => {

@@ -88,7 +88,6 @@ import {
   leadingClaimBlocker,
   UPDATING_WORDS,
   WORKER_CLAIM_BLOCKER_WORDS,
-  WORKERS_POLICY_WORDS,
 } from '../ui/humanize.js';
 import {
   Button,
@@ -107,6 +106,7 @@ import { type Status, StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
+import { WORKERS_POLICY_WORDS } from '../ui/words/workers-policy.js';
 import { workerReadinessOf } from './worker-readiness.js';
 import { SINCE_SKEW_MS, WORKER_LOCAL_PAGE } from './worker-wizard-steps.js';
 
