@@ -1029,10 +1029,11 @@ names the rule it understood), and *Start the job in GitLab* as the page's one b
 **A manual job nobody started is not a check** (BD-024's 2026-11-07 amendment, built by S-27.2; until
 that is deployed, the check waits for every held job). When every job that ran is green and only
 manual jobs are left, CI passes and the task's CI check says *CI passed — the manual job
-sentry-release-commit was not run*. The check still waits when a job is queued behind the held one
-(a build step your tests need, say), or when the project requires that job: list the manual jobs that
-must run under `pipeline.ci.required_manual_jobs` in `.agentic/config.yml`, or write `all` to wait
-for every one. At **Ready for merge**, a task whose pipeline GitLab still shows as blocked says so: if
+sentry-release-commit was not run*. That holds unless one of the manual jobs is a **test job**, one
+in stage `test`: a test is never skipped. The check also waits when a job is queued behind the held one
+(a build step your tests need, say). To set your own rule, use `pipeline.ci.required_manual_jobs` in
+`.agentic/config.yml`: `[]` passes every manual job, `all` waits for every one, and a list of job
+names waits for exactly those. At **Ready for merge**, a task whose pipeline GitLab still shows as blocked says so: if
 your project requires pipelines to succeed, GitLab won't merge until that job has run, so start it
 there. The waiting described next applies to a required job. A held job is
 *Needs you* at once on the task page; the board's card does not show it until the check stops — the
