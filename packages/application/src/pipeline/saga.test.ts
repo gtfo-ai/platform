@@ -4466,9 +4466,10 @@ describe('the ticket’s own words (WP-15f)', () => {
    *
    * The ticket is read at intake, refinement asks a question, a human rewrites the description
    * while the task waits, and the provider announces it (`ticket.updated`). The answer re-runs
-   * refinement, and that stage's prompt must carry the **new** words — read once more, from the
-   * stage job, because the snapshot is older than the signal. Before WP-60 the count stayed at one
-   * and the prompt kept the intake text for the rest of the task.
+   * refinement, and that stage's prompt must carry the **new** words — read once more because the
+   * snapshot is older than the signal: since S-26.1 by the `owner_sync` duty the signal wakes,
+   * before it by the stage job. Before WP-60 the count stayed at one and the prompt kept the
+   * intake text for the rest of the task.
    */
   it('re-reads the ticket at the next agent stage after the provider announces an edit', async () => {
     const calls = { count: 0 };
@@ -4506,8 +4507,11 @@ describe('the ticket’s own words (WP-15f)', () => {
     }) as DomainEvent;
     await harness.publish([edited]);
     expect(taskOf(harness).ticketSignalAt).toBe(harness.clock.now());
-    // Recording the signal reads nothing: the read is the next stage's.
-    expect(calls.count).toBe(1);
+    // Since S-26.1 the signal wakes the `owner_sync` duty, which re-reads the stale ticket once and
+    // stores the new words (`ensureTicketSnapshot`, the same freshness rule) — before S-26.1 that
+    // one read was the next stage's.
+    expect(calls.count).toBe(2);
+    expect(taskOf(harness).ticketSnapshot?.description).toBe(description);
 
     const asked = harness.events().find((entry) => entry.type === 'task.question.asked') as Extract<
       DomainEvent,
@@ -4523,8 +4527,8 @@ describe('the ticket’s own words (WP-15f)', () => {
     });
     await harness.drain();
 
-    // Exactly one more read — the re-run refinement's — and none after it, because the new
-    // snapshot is fresh against the same signal.
+    // Exactly one more read in all — the duty's — and none at the re-run refinement or after it,
+    // because the new snapshot is fresh against the same signal.
     expect(calls.count).toBe(2);
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
     expect(taskOf(harness).ticketSnapshot?.description).toBe(description);
