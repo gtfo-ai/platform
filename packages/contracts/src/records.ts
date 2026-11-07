@@ -1047,6 +1047,26 @@ export const taskRecordSchema = z.strictObject({
    * task read and the board's page always send it.
    */
   waiting: offerWaitingSchema.nullable().optional(),
+  /**
+   * **Who the tracker shows as the ticket's assignee** (S-26.8b's follow-up, the review of PR
+   * #103), as the platform last read it (`tasks.ticket_assignee`), or `null` when the ticket is
+   * unassigned there, was never read, or is assigned to the platform itself (the binding's own
+   * account or a machine — `platform` true), so it never names the platform. Unlike
+   * `unlinked_assignee` it names a **linked** person too: after Vojtěch, written back, unassigns
+   * himself the task has no owner yet the tracker still shows him, and a take or an assignment
+   * that writes back replaces him there, which a confirmation must say.
+   *
+   * `user_id` is the user the identity resolves to **live** (`user_identities`, a `person` link,
+   * and `userMayOwnInProjectSql` — so a disabled user or one below `member` in the project is
+   * `null`), or `null` for anybody else: the reader treats a `null` as *someone else*.
+   * `display_name` is untrusted provider text, redacted and bounded at the write, and `null` when
+   * the provider gave none. Optional on the wire like the other owner fields; this build's server
+   * always sends it.
+   */
+  tracker_assignee: z
+    .strictObject({ display_name: z.string().nullable(), user_id: idSchema.nullable() })
+    .nullable()
+    .optional(),
 });
 
 /** A `sha256` digest as lowercase hex — what `runs.settings_hash` stores (WP-91). */

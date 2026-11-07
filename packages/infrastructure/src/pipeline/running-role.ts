@@ -89,3 +89,22 @@ export const taskHeldElsewhereSql = (task: string): string => `(
                       and hi.external_id = ${task}.ticket_assignee ->> 'external_id'
                       and hi.kind = 'person'
                       and ${userMayOwnInProjectSql('hi.user_id', `${task}.project_id`)}))`;
+
+/**
+ * **The user the task `task`'s stored tracker assignee resolves to** (S-26.8b's follow-up, the task
+ * DTO's `tracker_assignee.user_id`): a scalar subquery answering the `user_id` of the `person`
+ * identity the assignee names when that user may own the project's tasks
+ * ({@link userMayOwnInProjectSql}, which refuses a disabled account), else `null` — never for a
+ * `platform` assignee (the binding's own account, a machine). The positive half of
+ * {@link taskHeldElsewhereSql}, over the same identity and the same predicate, read live.
+ */
+export const trackerAssigneeUserSql = (task: string): string => `(
+       select ti.user_id from user_identities ti
+        where ${task}.ticket_assignee is not null
+          and coalesce((${task}.ticket_assignee ->> 'platform')::boolean, false) = false
+          and ti.provider = ${task}.ticket_assignee ->> 'provider'
+          and ti.external_id = ${task}.ticket_assignee ->> 'external_id'
+          and ti.kind = 'person'
+          and ${userMayOwnInProjectSql('ti.user_id', `${task}.project_id`)}
+        order by ti.user_id
+        limit 1)`;

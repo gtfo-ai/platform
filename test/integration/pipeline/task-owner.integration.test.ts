@@ -13,7 +13,10 @@
  *  4. **The stage offer names the owner** (`routeNewOffer`, closes backlog 730) while the owner's
  *     machine is online and takes the project automatically — not when it is pick-only, offline,
  *     or when the task has no owner.
- *  5. **The board's owner filter and the DTO's four fields** (`listProjectTasks`).
+ *  5. **The board's owner filter and the DTO's owner fields** (`listProjectTasks`), and since
+ *     S-26.8b's follow-up `tracker_assignee`: a linked person by user id (read live, so a disabled
+ *     account no longer resolves), a viewer and an unlinked account by name only, the platform's
+ *     own account never.
  */
 import {
   heldElsewhereNow,
@@ -493,6 +496,67 @@ describe('the board’s owner filter and the DTO’s four fields (criterion 6)',
       owner_source: null,
       unlinked_assignee: { display_name: 'Jan Novák' },
       owner_writes_back: false,
+      tracker_assignee: { display_name: 'Jan Novák', user_id: null },
     });
+    // Nobody in the tracker: it names nobody.
+    expect(mineItem?.tracker_assignee).toBeNull();
+  });
+
+  it('publishes who the tracker shows: a linked person by user id, never the platform (S-26.8b)', async () => {
+    const drizzled = drizzle(pool, { schema: db.schema });
+    const heldBy = async (externalId: string, name: string, platform = false): Promise<Id> => {
+      const taskId = await committedTask();
+      await within((tx) =>
+        store.tasks.saveOwner(tx, taskId, {
+          expected: { ownerUserId: null, ticketAssignee: null },
+          next: {
+            ...UNOWNED,
+            ticketAssignee: {
+              provider: 'jira-cloud',
+              external_id: externalId,
+              display_name: name,
+              platform,
+            },
+          },
+        }),
+      );
+      return taskId;
+    };
+    // Alice may own the project's tasks: a released task whose ticket still shows her, no owner.
+    const linked = await heldBy('acct-alice', 'Alice in Jira');
+    // Carol is linked but a project viewer: she may not own, so she is somebody else.
+    const viewer = await heldBy('acct-carol', 'Carol in Jira');
+    // The binding's own account: the platform, never named.
+    const platform = await heldBy('acct-bot', 'Agentic bot', true);
+
+    const published = async () => {
+      const items = (await listProjectTasks(drizzled, projectId, { limit: 200 }))?.items ?? [];
+      return (taskId: Id) => items.find((item) => item.id === taskId);
+    };
+    let of = await published();
+    expect(of(linked)).toMatchObject({
+      owner: null,
+      unlinked_assignee: null,
+      tracker_assignee: { display_name: 'Alice in Jira', user_id: users.alice },
+    });
+    expect(of(viewer)).toMatchObject({
+      unlinked_assignee: { display_name: 'Carol in Jira' },
+      tracker_assignee: { display_name: 'Carol in Jira', user_id: null },
+    });
+    expect(of(platform)).toMatchObject({ unlinked_assignee: null, tracker_assignee: null });
+
+    // Read live: a disabled account no longer resolves, so Alice reads as somebody else.
+    await query("update users set status = 'disabled' where id = $1", [users.alice]);
+    try {
+      of = await published();
+      expect(of(linked)?.tracker_assignee).toEqual({
+        display_name: 'Alice in Jira',
+        user_id: null,
+      });
+    } finally {
+      await query("update users set status = 'active' where id = $1", [users.alice]);
+    }
+    of = await published();
+    expect(of(linked)?.tracker_assignee?.user_id).toBe(users.alice);
   });
 });

@@ -753,6 +753,7 @@ describe('GET /api/tasks/:task_id — the owner control (S-26.1)', () => {
                 owner_source: owner === null ? null : 'platform',
                 unlinked_assignee: held ? { display_name: 'Jan Novák' } : null,
                 owner_writes_back: false,
+                tracker_assignee: held ? { display_name: 'Jan Novák', user_id: null } : null,
               },
             };
             const reply = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
@@ -800,6 +801,7 @@ describe('GET /api/tasks/:task_id — the owner control (S-26.1)', () => {
         owner: null,
         unlinked_assignee: { display_name: 'Jan Novák' },
         owner_writes_back: false,
+        tracker_assignee: { display_name: 'Jan Novák', user_id: null },
       },
     };
     const read = async () =>

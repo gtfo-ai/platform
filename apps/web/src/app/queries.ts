@@ -1134,6 +1134,15 @@ export const useTaskOwnerCommand = (taskId: string, projectId: string, mint?: Mi
       await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) });
       await queryClient.invalidateQueries({ queryKey: ['project', projectId, 'tasks'] });
     },
+    // A 422: the person stopped being one who may own here since the picker read them, so the
+    // picker reads its people again and they drop off the list.
+    onError: async (error) => {
+      if (error instanceof ApiError && error.status === 422) {
+        await queryClient.invalidateQueries({
+          queryKey: ['project', projectId, 'owner-candidates'],
+        });
+      }
+    },
   });
 };
 

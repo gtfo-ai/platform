@@ -85,6 +85,7 @@ import type {
   TaskStageOutcome,
   TaskStageState,
   TaskState,
+  TicketAssignee,
   TranscriptEvent,
 } from '@platform/contracts';
 import {
@@ -1384,9 +1385,12 @@ interface OwnerView {
   readonly ownerName: string | null;
   readonly heldElsewhere: boolean;
   readonly writesBack: boolean;
+  /** The user the stored tracker assignee resolves to, live (`trackerAssigneeUserSql`). */
+  readonly assigneeUserId: string | null;
 }
 
 const HELD_ELSEWHERE = sql.raw(pipelineAdapters.taskHeldElsewhereSql('t'));
+const TRACKER_ASSIGNEE_USER = sql.raw(pipelineAdapters.trackerAssigneeUserSql('t'));
 
 /**
  * **Whether assigning each of `userIds` to one task would reach the tracker** (S-26.3): the
@@ -1499,9 +1503,11 @@ const ownerViewsFor = async (
     owner_name: string | null;
     held_elsewhere: boolean;
     owner_has_identity: boolean;
+    assignee_user_id: string | null;
   }>(sql`
     select t.id, t.project_id, t.ticket_provider, t.mode, u.name as owner_name,
            ${HELD_ELSEWHERE} as held_elsewhere,
+           ${TRACKER_ASSIGNEE_USER} as assignee_user_id,
            exists (select 1 from user_identities ui
                     where ui.user_id = t.owner_user_id
                       and ui.provider = t.ticket_provider
@@ -1522,6 +1528,7 @@ const ownerViewsFor = async (
       {
         ownerName: row.owner_name,
         heldElsewhere: row.held_elsewhere === true,
+        assigneeUserId: row.assignee_user_id ?? null,
         // The duty's own predicate over the current owner (`ownerWriteBackFor`'s, per row).
         writesBack: ownerWriteBackReachesTracker({
           assignOwner: assigning.has(row.project_id),
@@ -1534,11 +1541,27 @@ const ownerViewsFor = async (
   );
 };
 
-/** The four ownership fields of the task DTO, off the row and its {@link OwnerView}. */
+/**
+ * `tracker_assignee` (S-26.8b's follow-up): who the tracker shows, off the stored assignee and the
+ * user it resolves to live — `null` for no assignee and for the platform's own (`platform` true),
+ * so it never names the platform; `user_id` only for a user who may own the project's tasks.
+ */
+export const trackerAssigneeOf = (
+  assignee: TicketAssignee | null,
+  resolvedUserId: string | null,
+): TaskRecord['tracker_assignee'] =>
+  assignee === null || assignee.platform
+    ? null
+    : { display_name: assignee.display_name, user_id: (resolvedUserId ?? null) as Id | null };
+
+/** The ownership fields of the task DTO, off the row and its {@link OwnerView}. */
 const ownerFieldsOf = (
   row: typeof tasks.$inferSelect,
   view: OwnerView | undefined,
-): Pick<TaskRecord, 'owner' | 'owner_source' | 'unlinked_assignee' | 'owner_writes_back'> => {
+): Pick<
+  TaskRecord,
+  'owner' | 'owner_source' | 'unlinked_assignee' | 'owner_writes_back' | 'tracker_assignee'
+> => {
   const assignee = ticketAssigneeSchema.nullable().safeParse(row.ticketAssignee ?? null);
   if (!assignee.success) {
     throw new UnprojectableRowError(
@@ -1558,6 +1581,7 @@ const ownerFieldsOf = (
         : null,
     // S-26.3: the binding's switch and the owner's account for the provider ({@link OwnerView}).
     owner_writes_back: row.ownerUserId !== null && view?.writesBack === true,
+    tracker_assignee: trackerAssigneeOf(assignee.data, view?.assigneeUserId ?? null),
   };
 };
 

@@ -335,6 +335,8 @@ export const featureTask = taskRecordSchema.parse({
   owner_source: 'tracker',
   unlinked_assignee: null,
   owner_writes_back: false,
+  // S-26.8b's follow-up: Jira shows the owner, linked — the person a written-back assignment replaces.
+  tracker_assignee: { display_name: OWNER_NAME, user_id: IDS.ownerVojtech },
   // A merge request whose URL is a `data:` document. `taskRecordSchema` accepts it — which is the
   // point — and React would render it unchanged, so whatever refuses it is the application's own.
   mr_ref: { provider: 'gitlab', project_path: 'demo/service', iid: 7, url: HOSTILE.mrUrlData },
@@ -354,6 +356,7 @@ export const bugTask = taskRecordSchema.parse({
   owner_source: null,
   unlinked_assignee: { display_name: UNLINKED_ASSIGNEE },
   owner_writes_back: false,
+  tracker_assignee: { display_name: UNLINKED_ASSIGNEE, user_id: null },
   state: 'waiting_answers',
   current_stage: 'investigation',
   iteration_counters: {},
@@ -674,6 +677,7 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
     owner: null,
     owner_source: null,
     unlinked_assignee: null,
+    tracker_assignee: null,
     mr_ref: null,
     state: 'needs_human',
     current_stage: 'implementation',
@@ -1903,7 +1907,7 @@ export const shadowBatches = shadowBatchesResponseSchema.parse({
 
 /**
  * `GET /api/projects/:id/owner-candidates` (S-26.1's follow-up, S-26.8b's *Assign…*): by name, the
- * operator (not written back), Petra (written back — her name carries the hostile script, since a
+ * operator (not written back), Petra (written back — the name carries the hostile script, since a
  * person's name is their own text) and DEMO-1's owner, who the picker marks and does not offer.
  */
 export const ownerCandidates = ownerCandidatesResponseSchema.parse({

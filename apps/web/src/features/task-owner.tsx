@@ -25,9 +25,10 @@
  *   machine stops getting it.*, confirmed by *Take it from Vojtěch*; when *Take it* by this reader
  *   writes the assignment back to the tracker (`take_writes_back`, per caller — not
  *   `owner_writes_back`, which is about the current owner) it adds *also assigns DEMO-1 in Jira*
- *   (*, replacing Jan Novák* when the tracker shows a person the platform cannot link), and says
- *   nothing of the tracker otherwise. **Taking a task nobody owns that the tracker assigns to such
- *   a person** asks only when the take writes back — *Take DEMO-2? This also assigns DEMO-2 in
+ *   (*, replacing Vojtěch* or *Jan Novák* — whoever the read's `tracker_assignee` says the tracker
+ *   shows, when that is not the reader), and says nothing of the tracker otherwise. **Taking a task
+ *   nobody owns that the tracker assigns to somebody else** (unlinked, or a linked person who gave
+ *   it back) asks only when the take writes back — *Take DEMO-2? This also assigns DEMO-2 in
  *   Jira to you, replacing Jan Novák.*, *Take it and assign in Jira* — and is taken at once when it
  *   does not ({@link takeConfirmFor}). The dialog is a lazy chunk, fetched the first time it opens.
  * - **Unassign never writes to the tracker** (TD-031's amendment item 4): its words never claim a
@@ -52,6 +53,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { isOrgSectionFor } from './settings-sections.js';
 import type { TakeConfirm } from './task-owner-dialogs.js';
+import { showsSomeoneElse, trackerShowsFor } from './tracker-shows.js';
 
 /** A task's owner as the read publishes it. */
 export type TaskOwnerView = NonNullable<TaskRecord['owner']>;
@@ -92,30 +94,30 @@ export const ownerName = (owner: TaskOwnerView): string =>
 /**
  * What *Take it* must confirm, or `null` to take it at once:
  *
- * - somebody **other than the reader** owns the task — confirmed against their name, with the
- *   tracker assignee it would replace when the tracker shows a person the platform cannot link
- *   (the dialog says it only when the take writes back);
- * - nobody owns it, the tracker assigns it to such a person, **and** *Take it* by this reader
- *   writes the assignment back (`take_writes_back`, S-26.3, the read's per-caller answer) — taking
- *   it reassigns the ticket in the tracker, so it asks; when it does not, taking it changes nothing
- *   there and asks nothing;
- * - otherwise (nobody owns it and nobody holds it, or the reader owns it) — at once.
+ * - somebody **other than the reader** owns the task — confirmed against their name, with whom
+ *   the tracker shows when that is not the reader (`tracker_assignee`: the owner, or anybody
+ *   else), which the dialog says only when the take writes back;
+ * - nobody owns it, the tracker shows somebody **other than the reader** — a person the platform
+ *   cannot link, or a linked one who gave the task back (Vojtěch, written back, then unassigned:
+ *   the ticket still shows him) — **and** *Take it* by this reader writes the assignment back
+ *   (`take_writes_back`, S-26.3, the read's per-caller answer): taking it replaces them in the
+ *   tracker, so it asks; when it does not, taking it changes nothing there and asks nothing;
+ * - otherwise (nobody owns it and the tracker shows nobody else, or the reader owns it) — at once.
  */
 export const takeConfirmFor = (
-  task: Pick<TaskRecord, 'owner' | 'unlinked_assignee'>,
+  task: Pick<TaskRecord, 'owner' | 'unlinked_assignee' | 'tracker_assignee'>,
   viewerId: string | null,
   takeWritesBack: boolean,
 ): TakeConfirm | null => {
   const owner = task.owner ?? null;
-  const unlinked = task.unlinked_assignee ?? null;
+  const shows = trackerShowsFor(task);
+  const replaced = showsSomeoneElse(shows, viewerId) ? shows : null;
   if (owner !== null) {
     return owner.user_id === viewerId
       ? null
-      : { kind: 'owner', ownerName: ownerName(owner), replacing: unlinked?.display_name ?? null };
+      : { kind: 'owner', ownerName: ownerName(owner), replacing: replaced };
   }
-  return unlinked !== null && takeWritesBack
-    ? { kind: 'held', assignee: unlinked.display_name }
-    : null;
+  return replaced !== null && takeWritesBack ? { kind: 'held', assignee: replaced.name } : null;
 };
 
 /** The page's owner control: what is offered, what was done, and the confirmation's state. */

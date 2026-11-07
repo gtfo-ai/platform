@@ -17,8 +17,9 @@
  *   for this task). Choosing somebody says what follows before *Assign* is pressed: *Assign DEMO-1
  *   to Petra?*, *Vojtěch’s machine stops getting it.* when somebody owns it now, *This also assigns
  *   DEMO-1 in Jira to Petra, replacing Jan Novák.* only on that candidate's `writes_back`, and
- *   *Jira still shows Jan Novák.* when it is false and the tracker shows somebody
- *   ({@link trackerShowsFor}). An empty list says why; a read that fails says so. The words are
+ *   *Jira still shows Jan Novák.* when it is false and the tracker shows somebody else — read off
+ *   the task's `tracker_assignee` (`trackerShowsFor`), so a linked person the tracker still shows
+ *   after they gave the task back is named too. An empty list says why; a read that fails says so. The words are
  *   `./owner-assign-words.ts`, never `ui/humanize.ts` (it ships on the worker's page).
  *
  * A ticket key and a person's name are text somebody else wrote: a dialog's title is a string, so
@@ -37,18 +38,20 @@ import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { ASSIGN_WORDS } from './owner-assign-words.js';
+import { showsSomeoneElse, type TrackerShows, trackerShowsFor } from './tracker-shows.js';
 
 /**
  * What *Take it* must confirm (`takeConfirmFor` in `./task-owner.tsx`):
  *
- * - `owner` — somebody else owns the task. `replacing` is the tracker assignee the platform cannot
- *   link, when the tracker shows one with a name, said only when the assignment is written back.
- * - `held` — nobody owns it, the tracker assigns it to a person the platform cannot link, and
- *   taking it by this reader writes the assignment back (`take_writes_back`): taking it reassigns
- *   the ticket there (S-26.3).
+ * - `owner` — somebody else owns the task. `replacing` is whom the tracker shows when that is not
+ *   the reader (`tracker_assignee`: the owner, or anybody else), said only when the take writes
+ *   back.
+ * - `held` — nobody owns it, the tracker shows somebody other than the reader (unlinked, or a
+ *   linked person who gave the task back), and taking it by this reader writes the assignment back
+ *   (`take_writes_back`): taking it reassigns the ticket there (S-26.3).
  */
 export type TakeConfirm =
-  | { readonly kind: 'owner'; readonly ownerName: string; readonly replacing: string | null }
+  | { readonly kind: 'owner'; readonly ownerName: string; readonly replacing: TrackerShows }
   | { readonly kind: 'held'; readonly assignee: string | null };
 
 export const TakeConfirmDialog = ({
@@ -92,7 +95,11 @@ export const TakeConfirmDialog = ({
                 {writesBack && confirm.replacing !== null ? (
                   <>
                     {words.replacing}
-                    <UntrustedText value={confirm.replacing} />
+                    {confirm.replacing.name === null ? (
+                      OWNER_WORDS['owner.take_held'].nameless
+                    ) : (
+                      <UntrustedText value={confirm.replacing.name} />
+                    )}
                   </>
                 ) : null}
                 {words.end}
@@ -152,30 +159,9 @@ export interface PickerOwner {
   readonly you: boolean;
 }
 
-/**
- * Who the tracker shows as the ticket's assignee, as far as the task read says, or `null` when it
- * says nobody or does not know: a person the platform cannot link (`unlinked_assignee`, whose name
- * may be `null`), else the owner when the tracker set them (`owner_source: tracker`) or the
- * platform wrote them back (`owner_writes_back`).
- */
-export type TrackerShows = { readonly name: string | null } | null;
-
 /** A person's name as a sentence says it; an account with no name is said so, never blank. */
 const nameOf = (name: string): string =>
   name.trim() === '' ? OWNER_WORDS['owner.nameless'] : name;
-
-export const trackerShowsFor = (
-  task: Pick<TaskRecord, 'owner' | 'owner_source' | 'unlinked_assignee' | 'owner_writes_back'>,
-): TrackerShows => {
-  const unlinked = task.unlinked_assignee ?? null;
-  if (unlinked !== null) {
-    return { name: unlinked.display_name };
-  }
-  const owner = task.owner ?? null;
-  return owner !== null && (task.owner_source === 'tracker' || task.owner_writes_back === true)
-    ? { name: nameOf(owner.name) }
-    : null;
-};
 
 /** What choosing `candidate` does, in sentences — names as text, each sentence one node. */
 const assignConsequence = (
@@ -205,27 +191,29 @@ const assignConsequence = (
       ),
     );
   }
+  // Whom the tracker shows, unless it already shows the chosen person.
+  const replaced = showsSomeoneElse(shows, candidate.user_id) ? shows : null;
   if (candidate.writes_back === true) {
     const also = ASSIGN_WORDS.also;
     sentences.push(
       <span key="tracker" data-assign-tracker="writes">
         {also.before(ticketKey, tracker)}
         <UntrustedText value={name} />
-        {shows === null ? null : (
+        {replaced === null ? null : (
           <>
             {also.replacing}
-            {shows.name === null ? also.nameless : <UntrustedText value={shows.name} />}
+            {replaced.name === null ? also.nameless : <UntrustedText value={replaced.name} />}
           </>
         )}
         {also.end}
       </span>,
     );
-  } else if (shows !== null) {
+  } else if (replaced !== null) {
     const untouched = ASSIGN_WORDS.untouched;
     sentences.push(
       <span key="tracker" data-assign-tracker="untouched">
         {untouched.before(tracker)}
-        {shows.name === null ? untouched.nameless : <UntrustedText value={shows.name} />}
+        {replaced.name === null ? untouched.nameless : <UntrustedText value={replaced.name} />}
         {untouched.end}
       </span>,
     );
@@ -384,13 +372,7 @@ export const AssignDialog = ({
   readonly onOpenChange: (open: boolean) => void;
   readonly task: Pick<
     TaskRecord,
-    | 'id'
-    | 'project_id'
-    | 'ticket'
-    | 'owner'
-    | 'owner_source'
-    | 'unlinked_assignee'
-    | 'owner_writes_back'
+    'id' | 'project_id' | 'ticket' | 'owner' | 'unlinked_assignee' | 'tracker_assignee'
   >;
   readonly viewerId: string | null;
   readonly tracker: string;

@@ -807,14 +807,15 @@ the task's runs (*Settings → Execution*, below).
 *Owner: Vojtěch* (*(you)* when it is you), *Unassigned* in grey, or — for a tracker assignee the
 platform cannot link — *Assigned in Jira to Jan Novák (not linked to a platform account)*, with
 *Link account…* (Settings → Linked accounts) for an administrator. Buttons by that line, and the
-`···` menu, offer **Take it**, **Assign…** and **Unassign** — only what your role may do: a member
+`···` menu, show **Take it**, **Assign…** and **Unassign** — only what your role may do: a member
 takes a task nobody owns or gives back their own, a maintainer any of the three on anybody's task.
 Taking a task somebody else owns asks first — *Take DEMO-1 from Vojtěch? Their machine stops
 getting it.* — and, when your taking it writes the assignment back to the tracker (the project
 writes owners back and your account is linked there), says that it also assigns the ticket there
-(and whom it replaces, when the tracker shows a person the platform cannot link). Taking a task
-nobody owns that the tracker assigns to such a person asks only when your taking it is written
-back: *Take DEMO-2? This also assigns DEMO-2 in Jira to you, replacing Jan Novák.* **Assign…**
+(and whom it replaces there — whoever the tracker shows, the owner included). Taking a task nobody
+owns that the tracker still assigns to somebody else — a person the platform cannot link, or a
+colleague who gave the task back — asks only when your taking it is written back: *Take DEMO-2?
+This also assigns DEMO-2 in Jira to you, replacing Jan Novák.* **Assign…**
 opens a list of exactly the people the platform accepts as the owner (a member or above in the
 project, with an active account); choosing one says what follows before you press *Assign* —
 *Assign DEMO-1 to Petra? Vojtěch’s machine stops getting it.*, then *This also assigns DEMO-1 in

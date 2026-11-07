@@ -81,6 +81,7 @@ const TASK_ROW: TaskRecord = {
   owner_source: null,
   unlinked_assignee: null,
   owner_writes_back: false,
+  tracker_assignee: null,
 };
 
 const detail = (
@@ -134,6 +135,18 @@ const detail = (
 
 const OWNED_BY_VOJTECH = { owner: { user_id: VOJTECH, name: 'Vojtěch' } } as const;
 const OWNED_BY_ME = { owner: { user_id: ME, name: 'Fake Operator' } } as const;
+
+/** The tracker shows a person the platform cannot link: both fields, as the server sends them. */
+const HELD_BY = (name: string) =>
+  ({
+    unlinked_assignee: { display_name: name },
+    tracker_assignee: { display_name: name, user_id: null },
+  }) as const;
+
+/** The tracker shows Vojtěch, linked — whether or not he still owns the task. */
+const JIRA_SHOWS_VOJTECH = {
+  tracker_assignee: { display_name: 'Vojtěch', user_id: VOJTECH },
+} as const;
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -443,11 +456,7 @@ describe('taking a task', () => {
     start(
       detail(
         { can_take: true, take_writes_back: false },
-        {
-          ...OWNED_BY_VOJTECH,
-          unlinked_assignee: { display_name: 'Jan Novák' },
-          owner_writes_back: true,
-        },
+        { ...OWNED_BY_VOJTECH, ...HELD_BY('Jan Novák'), owner_writes_back: true },
       ),
       'maintainer',
     );
@@ -480,8 +489,8 @@ describe('taking a task', () => {
   });
 
   it('confirms against an owner who is somebody else, and a held ticket only when the take writes back', () => {
-    const none = { owner: null, unlinked_assignee: null };
-    const held = { display_name: 'Jan Novák' };
+    const none = { owner: null, unlinked_assignee: null, tracker_assignee: null };
+    const jan = HELD_BY('Jan Novák');
     expect(takeConfirmFor(none, ME, false)).toBeNull();
     expect(takeConfirmFor(none, ME, true)).toBeNull();
     expect(
@@ -496,18 +505,102 @@ describe('taking a task', () => {
       replacing: null,
     });
     expect(
+      takeConfirmFor({ owner: { user_id: VOJTECH, name: 'Vojtěch' }, ...jan }, ME, true),
+    ).toEqual({
+      kind: 'owner',
+      ownerName: 'Vojtěch',
+      replacing: { name: 'Jan Novák', userId: null },
+    });
+    // A written-back owner the tracker shows: the take replaces him there, by name.
+    expect(
       takeConfirmFor(
-        { owner: { user_id: VOJTECH, name: 'Vojtěch' }, unlinked_assignee: held },
+        { ...none, owner: { user_id: VOJTECH, name: 'Vojtěch' }, ...JIRA_SHOWS_VOJTECH },
         ME,
         true,
       ),
-    ).toEqual({ kind: 'owner', ownerName: 'Vojtěch', replacing: 'Jan Novák' });
+    ).toEqual({
+      kind: 'owner',
+      ownerName: 'Vojtěch',
+      replacing: { name: 'Vojtěch', userId: VOJTECH },
+    });
     // Held only by the tracker's unlinked assignee: asked only when this reader's take writes back.
-    expect(takeConfirmFor({ ...none, unlinked_assignee: held }, ME, false)).toBeNull();
-    expect(takeConfirmFor({ ...none, unlinked_assignee: held }, ME, true)).toEqual({
+    expect(takeConfirmFor({ ...none, ...jan }, ME, false)).toBeNull();
+    expect(takeConfirmFor({ ...none, ...jan }, ME, true)).toEqual({
       kind: 'held',
       assignee: 'Jan Novák',
     });
+    // Vojtěch's released task: no owner, nobody unlinked, and Jira still shows him.
+    expect(takeConfirmFor({ ...none, ...JIRA_SHOWS_VOJTECH }, ME, false)).toBeNull();
+    expect(takeConfirmFor({ ...none, ...JIRA_SHOWS_VOJTECH }, ME, true)).toEqual({
+      kind: 'held',
+      assignee: 'Vojtěch',
+    });
+    // A nameless somebody is still somebody.
+    expect(
+      takeConfirmFor(
+        { ...none, tracker_assignee: { display_name: null, user_id: null } },
+        ME,
+        true,
+      ),
+    ).toEqual({ kind: 'held', assignee: null });
+    // The tracker already shows the reader: the take replaces nobody there, so it asks nothing.
+    expect(
+      takeConfirmFor(
+        { ...none, tracker_assignee: { display_name: 'Me in Jira', user_id: ME } },
+        ME,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it('asks before taking a task Vojtěch gave back while Jira still shows him, when the take writes back', async () => {
+    const { sent } = start(
+      detail({ can_take: true, take_writes_back: true }, JIRA_SHOWS_VOJTECH),
+      'maintainer',
+    );
+    const line = await ownerLine();
+    const user = userEvent.setup();
+    await user.click(await within(line).findByRole('button', { name: 'Take it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Take ACME-12?' }, { timeout: 5000 });
+    const describedBy = dialog.getAttribute('aria-describedby') ?? '';
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      'This also assigns ACME-12 in Jira to you, replacing Vojtěch.',
+    );
+    expect(sent).toHaveLength(0);
+
+    // The same task where this reader's take writes nothing back: taken at once.
+    cleanup();
+    const again = start(
+      detail({ can_take: true, take_writes_back: false }, JIRA_SHOWS_VOJTECH),
+      'maintainer',
+    );
+    const line2 = await ownerLine();
+    await userEvent.setup().click(await within(line2).findByRole('button', { name: 'Take it' }));
+    await waitFor(() => {
+      expect(again.sent).toHaveLength(1);
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('names a written-back owner the take replaces in the tracker', async () => {
+    start(
+      detail(
+        { can_take: true, take_writes_back: true },
+        { ...OWNED_BY_VOJTECH, ...JIRA_SHOWS_VOJTECH },
+      ),
+      'maintainer',
+    );
+    const line = await ownerLine();
+    await userEvent.setup().click(await within(line).findByRole('button', { name: 'Take it' }));
+    const dialog = await screen.findByRole(
+      'dialog',
+      { name: 'Take ACME-12 from Vojtěch?' },
+      { timeout: 5000 },
+    );
+    const describedBy = dialog.getAttribute('aria-describedby') ?? '';
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      'Their machine stops getting it, and this also assigns ACME-12 in Jira, replacing Vojtěch.',
+    );
   });
 
   it('asks before taking a ticket the tracker assigns to somebody, when the take writes back', async () => {
@@ -515,7 +608,7 @@ describe('taking a task', () => {
     const { sent } = start(
       detail(
         { can_take: true, take_writes_back: true },
-        { unlinked_assignee: { display_name: `Jan Novák ${HOSTILE}` }, owner_writes_back: false },
+        { ...HELD_BY(`Jan Novák ${HOSTILE}`), owner_writes_back: false },
       ),
       'maintainer',
     );
@@ -544,7 +637,7 @@ describe('taking a task', () => {
       detail(
         { can_take: true, take_writes_back: false },
         // Even where the project writes owners back: this reader's take does not.
-        { unlinked_assignee: { display_name: 'Jan Novák' }, owner_writes_back: true },
+        { ...HELD_BY('Jan Novák'), owner_writes_back: true },
       ),
       'maintainer',
     );
@@ -561,11 +654,7 @@ describe('taking a task', () => {
     start(
       detail(
         { can_take: true, take_writes_back: true },
-        {
-          ...OWNED_BY_VOJTECH,
-          unlinked_assignee: { display_name: 'Jan Novák' },
-          owner_writes_back: false,
-        },
+        { ...OWNED_BY_VOJTECH, ...HELD_BY('Jan Novák'), owner_writes_back: false },
       ),
       'maintainer',
     );
@@ -664,7 +753,7 @@ describe('assigning a task (Assign…)', () => {
     const { sent, candidateReads } = start(
       detail(
         { can_take: true, can_assign: true, can_unassign: true },
-        { ...OWNED_BY_VOJTECH, unlinked_assignee: { display_name: `Jan Novák ${HOSTILE}` } },
+        { ...OWNED_BY_VOJTECH, ...HELD_BY(`Jan Novák ${HOSTILE}`) },
       ),
       'maintainer',
     );
@@ -696,7 +785,7 @@ describe('assigning a task (Assign…)', () => {
     start(
       detail(
         { can_assign: true },
-        { ...OWNED_BY_VOJTECH, owner_source: 'tracker', owner_writes_back: false },
+        { ...OWNED_BY_VOJTECH, ...JIRA_SHOWS_VOJTECH, owner_source: 'tracker' },
       ),
       'maintainer',
       undefined,
@@ -757,6 +846,37 @@ describe('assigning a task (Assign…)', () => {
       await within(dialog).findByText('The people who can own it could not be read.'),
     ).toBeTruthy();
     expect(within(dialog).queryByLabelText('Person')).toBeNull();
+  });
+
+  it('names Vojtěch, whom Jira still shows after he gave the task back, as the person replaced', async () => {
+    start(detail({ can_assign: true }, JIRA_SHOWS_VOJTECH), 'maintainer');
+    const dialog = await openPicker();
+    // Nobody owns it, so no machine stops getting it; Petra writes back and replaces him in Jira.
+    expect(await choose(dialog, PETRA)).toBe(
+      'Assign ACME-12 to Petra? This also assigns ACME-12 in Jira to Petra, replacing Vojtěch.',
+    );
+  });
+
+  it('says a written-back assignment replaces the person Jira shows who is not linked', async () => {
+    start(detail({ can_assign: true }, HELD_BY('Jan Novák')), 'maintainer');
+    const dialog = await openPicker();
+    expect(await choose(dialog, PETRA)).toBe(
+      'Assign ACME-12 to Petra? This also assigns ACME-12 in Jira to Petra, replacing Jan Novák.',
+    );
+  });
+
+  it('reads the people again after a 422, so the person who may no longer own drops off', async () => {
+    const { candidateReads } = start(detail({ can_assign: true }), 'maintainer', () =>
+      json({ error: { code: 'owner_not_project_member', message: 'refused' } }, 422),
+    );
+    const dialog = await openPicker();
+    await choose(dialog, PETRA);
+    expect(candidateReads).toHaveLength(1);
+    await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Assign' }));
+    await within(dialog).findByText('The owner was not changed.');
+    await waitFor(() => {
+      expect(candidateReads).toHaveLength(2);
+    });
   });
 
   it('says each refusal in words inside the picker, and nothing was done', async () => {

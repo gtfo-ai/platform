@@ -6,7 +6,9 @@
  *   why when nobody else can own tasks, or that the people are being read or could not be. Once
  *   somebody is chosen it says what follows, both ways on each fact: the current owner's machine
  *   (or the reader's), the tracker reassigned only on that candidate's `writes_back` (replacing whom
- *   the tracker shows), and *Jira still shows …* when it does not write back. Names are text.
+ *   the tracker shows — off `tracker_assignee`, a linked person who gave the task back included —
+ *   and nobody when it already shows the chosen person), and *Jira still shows …* when it does not
+ *   write back. Names are text.
  * - `TakeConfirmDialog` names the owner in its title and its act, and mentions the tracker only when
  *   the take writes the assignment back — with the tracker assignee it replaces, as text, when
  *   the tracker shows one; on a task held only by such an assignee it says the ticket is
@@ -22,9 +24,8 @@ import {
   type PickerOwner,
   type TakeConfirm,
   TakeConfirmDialog,
-  type TrackerShows,
-  trackerShowsFor,
 } from './task-owner-dialogs.js';
+import { type TrackerShows, trackerShowsFor } from './tracker-shows.js';
 
 const ADA = '00000000-0000-4000-8000-000000000011';
 const VOJTECH = '00000000-0000-4000-8000-000000000012';
@@ -195,7 +196,7 @@ describe('what choosing a person says (the candidate’s writes_back, the owner,
       <Picker
         candidates={[ada(true)]}
         currentOwner={VOJTECH_OWNS}
-        trackerShows={{ name: `Jan Novák ${HOSTILE}` }}
+        trackerShows={{ name: `Jan Novák ${HOSTILE}`, userId: null }}
         assigned={[]}
       />,
     );
@@ -211,7 +212,9 @@ describe('what choosing a person says (the candidate’s writes_back, the owner,
     );
 
     cleanup();
-    render(<Picker candidates={[ada(true)]} trackerShows={{ name: null }} assigned={[]} />);
+    render(
+      <Picker candidates={[ada(true)]} trackerShows={{ name: null, userId: null }} assigned={[]} />,
+    );
     expect(await chooseAndRead(ADA)).toBe(
       'Assign ACME-12 to Ada? This also assigns ACME-12 in Jira to Ada, replacing its current assignee there.',
     );
@@ -222,7 +225,7 @@ describe('what choosing a person says (the candidate’s writes_back, the owner,
       <Picker
         candidates={[ada(false)]}
         currentOwner={VOJTECH_OWNS}
-        trackerShows={{ name: 'Jan Novák' }}
+        trackerShows={{ name: 'Jan Novák', userId: null }}
         assigned={[]}
       />,
     );
@@ -237,36 +240,64 @@ describe('what choosing a person says (the candidate’s writes_back, the owner,
     render(
       <Picker
         candidates={[{ user_id: ADA, name: 'Ada' }]}
-        trackerShows={{ name: null }}
+        trackerShows={{ name: null, userId: null }}
         assigned={[]}
       />,
     );
     expect(await chooseAndRead(ADA)).toBe('Assign ACME-12 to Ada? Jira still shows someone else.');
   });
 
-  it('reads who the tracker shows off the task: its unlinked assignee, else a tracker-set or written-back owner', () => {
-    const none = {
-      owner: null,
-      owner_source: null,
-      unlinked_assignee: null,
-      owner_writes_back: false,
-    };
-    const owner = { user_id: VOJTECH, name: 'Vojtěch' };
-    expect(trackerShowsFor(none)).toBeNull();
-    expect(trackerShowsFor({ ...none, unlinked_assignee: { display_name: 'Jan Novák' } })).toEqual({
-      name: 'Jan Novák',
-    });
-    expect(trackerShowsFor({ ...none, unlinked_assignee: { display_name: null } })).toEqual({
-      name: null,
-    });
-    // A platform-set owner the tracker was never told about: the read does not know who it shows.
-    expect(trackerShowsFor({ ...none, owner, owner_source: 'platform' })).toBeNull();
+  it('names a linked person the tracker still shows after they gave the task back, both ways', async () => {
+    // Vojtěch owned it, was written back, then unassigned: no owner, and Jira still shows him.
+    const vojtechInJira: TrackerShows = { name: 'Vojtěch in Jira', userId: VOJTECH };
+    render(<Picker candidates={[ada(true)]} trackerShows={vojtechInJira} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe(
+      'Assign ACME-12 to Ada? This also assigns ACME-12 in Jira to Ada, replacing Vojtěch in Jira.',
+    );
+
+    cleanup();
+    render(<Picker candidates={[ada(false)]} trackerShows={vojtechInJira} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe(
+      'Assign ACME-12 to Ada? Jira still shows Vojtěch in Jira.',
+    );
+  });
+
+  it('replaces nobody when the tracker already shows the chosen person', async () => {
+    const adaInJira: TrackerShows = { name: 'Ada in Jira', userId: ADA };
+    render(<Picker candidates={[ada(true)]} trackerShows={adaInJira} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe(
+      'Assign ACME-12 to Ada? This also assigns ACME-12 in Jira to Ada.',
+    );
+
+    cleanup();
+    render(<Picker candidates={[ada(false)]} trackerShows={adaInJira} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe('Assign ACME-12 to Ada?');
+  });
+
+  it('reads who the tracker shows off the task’s tracker_assignee, never off owner_writes_back', () => {
+    expect(trackerShowsFor({ tracker_assignee: null, unlinked_assignee: null })).toBeNull();
     expect(
-      trackerShowsFor({ ...none, owner, owner_source: 'platform', owner_writes_back: true }),
-    ).toEqual({ name: 'Vojtěch' });
-    expect(trackerShowsFor({ ...none, owner, owner_source: 'tracker' })).toEqual({
-      name: 'Vojtěch',
+      trackerShowsFor({
+        tracker_assignee: { display_name: 'Vojtěch', user_id: VOJTECH },
+        unlinked_assignee: null,
+      }),
+    ).toEqual({ name: 'Vojtěch', userId: VOJTECH });
+    expect(
+      trackerShowsFor({
+        tracker_assignee: { display_name: null, user_id: null },
+        unlinked_assignee: { display_name: null },
+      }),
+    ).toEqual({ name: null, userId: null });
+    // The server's tracker_assignee decides, null included: it says the tracker shows nobody else.
+    expect(
+      trackerShowsFor({ tracker_assignee: null, unlinked_assignee: { display_name: 'Jan Novák' } }),
+    ).toBeNull();
+    // An older server that sends no tracker_assignee: only the unlinked assignee is known.
+    expect(trackerShowsFor({ unlinked_assignee: { display_name: 'Jan Novák' } })).toEqual({
+      name: 'Jan Novák',
+      userId: null,
     });
+    expect(trackerShowsFor({ unlinked_assignee: null })).toBeNull();
   });
 });
 
@@ -327,7 +358,10 @@ describe('taking a task from its owner', () => {
   });
 
   it('names the tracker assignee it replaces, as text, only when it writes back', async () => {
-    const replacing: TakeConfirm = { ...FROM_VOJTECH, replacing: `Jan Novák ${HOSTILE}` };
+    const replacing: TakeConfirm = {
+      ...FROM_VOJTECH,
+      replacing: { name: `Jan Novák ${HOSTILE}`, userId: null },
+    };
     render(<Take confirm={replacing} writesBack confirmed={[]} />);
     let dialog = await screen.findByRole('dialog', { name: 'Take DEMO-1 from Vojtěch?' });
     expect(consequenceOf(dialog)).toBe(
@@ -340,6 +374,33 @@ describe('taking a task from its owner', () => {
     dialog = await screen.findByRole('dialog', { name: 'Take DEMO-1 from Vojtěch?' });
     expect(consequenceOf(dialog)).toBe('Their machine stops getting it.');
     expect(dialog.textContent).not.toContain('Jan Novák');
+  });
+
+  it('names the owner it replaces in the tracker when the tracker shows them, and a nameless one plainly', async () => {
+    render(
+      <Take
+        confirm={{ ...FROM_VOJTECH, replacing: { name: 'Vojtěch', userId: VOJTECH } }}
+        writesBack
+        confirmed={[]}
+      />,
+    );
+    let dialog = await screen.findByRole('dialog', { name: 'Take DEMO-1 from Vojtěch?' });
+    expect(consequenceOf(dialog)).toBe(
+      'Their machine stops getting it, and this also assigns DEMO-1 in Jira, replacing Vojtěch.',
+    );
+
+    cleanup();
+    render(
+      <Take
+        confirm={{ ...FROM_VOJTECH, replacing: { name: null, userId: null } }}
+        writesBack
+        confirmed={[]}
+      />,
+    );
+    dialog = await screen.findByRole('dialog', { name: 'Take DEMO-1 from Vojtěch?' });
+    expect(consequenceOf(dialog)).toBe(
+      'Their machine stops getting it, and this also assigns DEMO-1 in Jira, replacing its current assignee there.',
+    );
   });
 });
 
