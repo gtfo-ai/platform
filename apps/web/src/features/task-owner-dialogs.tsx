@@ -61,7 +61,7 @@ export const TakeFromDialog = ({
       keepLabel={words.keep}
       pending={pending}
       error={error}
-      errorTitle="The owner was not changed."
+      errorTitle={OWNER_WORDS['owner.refused']}
       onConfirm={() => {
         onConfirm();
       }}
@@ -175,7 +175,7 @@ export const OwnerPicker = ({
           </div>
         )}
         {error === undefined || error === null ? null : (
-          <ErrorNotice title="The owner was not changed." error={error} />
+          <ErrorNotice title={OWNER_WORDS['owner.refused']} error={error} />
         )}
       </div>
     </Dialog>

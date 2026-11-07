@@ -702,6 +702,8 @@ export const OWNER_WORDS = {
   'owner.took': 'Assigned to you. Your machine picks it up at the next stage.',
   'owner.assigned': (name: string): string =>
     `Assigned to ${name}. Their machine picks it up at the next stage.`,
+  /** The title of a refused owner change, wherever it is shown. */
+  'owner.refused': 'The owner was not changed.',
   'owner.unassigned_done':
     'Unassigned. A machine that takes unassigned tasks picks it up at the next stage.',
   /** The header's line: "Owner: Vojtěch". */

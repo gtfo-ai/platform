@@ -560,7 +560,14 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
   const userId = session.data?.user.id ?? null;
   const stored = readStoredOwnerFilter(globalThis.localStorage, userId);
   const owner = boardOwnerFilter(search.owner, stored);
-  const tasks = useProjectTasks(project?.id ?? null, undefined, ownerSearchValue(owner), true);
+  // Held until the session read settles: before it, the remembered filter is unknown, and an
+  // unfiltered read would go out first and then be replaced by the filtered one.
+  const tasks = useProjectTasks(
+    session.isPending ? null : (project?.id ?? null),
+    undefined,
+    ownerSearchValue(owner),
+    true,
+  );
   const agents = useAgents();
   const { now } = useServices();
   const view: BoardView = search.view === 'list' ? 'list' : 'board';

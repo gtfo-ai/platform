@@ -1928,6 +1928,8 @@ Principles, as in M25:
   warning).
 - **Tracker assignee who isn't a platform user:** "Assigned in Jira to *Jan Novák* (not linked to a platform account)".
   The name is UntrustedText. A maintainer gets a *Link account…* link, which opens § 5.
+  `[S-26.8b: shown to admins only — Linked accounts is admin-only (settings-sections.ts minRole); a
+  maintainer would be redirected]`
 - **Actions**, in the header's ⋯ menu and as one secondary button by the owner line:
   - *Take it* when you aren't the owner and may take it;
   - *Assign…* (a person picker, maintainers only);

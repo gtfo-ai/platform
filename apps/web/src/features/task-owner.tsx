@@ -214,7 +214,7 @@ export const OwnerFeedback = ({
         </p>
       )}
       {control.command.isError && !control.confirming ? (
-        <ErrorNotice title="The owner was not changed." error={control.command.error} />
+        <ErrorNotice title={OWNER_WORDS['owner.refused']} error={control.command.error} />
       ) : null}
       {!control.loaded || control.takeFrom === null ? null : (
         <Suspense fallback={null}>
