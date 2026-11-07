@@ -96,7 +96,7 @@ callout's slot carry one sentence. It names the cause, who acts, and how many tr
     readiness panel's CI-rules warning;
   - a pipeline still running: "CI is running (pipeline *n*, 12 min so far; the task gives up after 60)".
   This is *Needs you* the moment a person's action is the only way forward (a held manual job is that), with the one
-  next step. It is not *Needs you* after the timeout.
+  next step. It does not wait for the timeout to become *Needs you* (a task the timeout parked stays *Needs you* too).
 - **A timed-out wait says it timed out**, with the last read: "CI did not finish within 60 minutes: pipeline *n* was
   still held at the manual job *sentry-release-commit*." The next step is *Start the job in GitLab, then Retry*. The
   task page never reads as a failed check when nothing failed.
