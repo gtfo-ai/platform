@@ -93,7 +93,7 @@ import {
   setupProjectOf,
 } from './home-setup.js';
 import { ReadinessLabel } from './readiness-label.js';
-import { WaitingWords, waitingTail } from './waiting-words.js';
+import { WaitingWords, waitingShort } from './waiting-words.js';
 import { useWorkerNeed, useWorkersWhen } from './worker-need.js';
 import { isReadyToWork, workerReadinessOf } from './worker-readiness.js';
 
@@ -598,7 +598,7 @@ const homeActivity = (entry: AgentEntry, now: number) =>
 
 /**
  * The row's activity — and while the run waits for a machine nobody has (S-26.8b part 2, the M26
- * UX spec § 4), why, in short form: "Waiting: Vojtěch’s machine is offline", every name through
+ * UX spec § 4), why, in its short form: "Waiting · Vojtěch’s machine is offline", every name through
  * `UntrustedText`; *your machine* when it is the reader's.
  */
 const HomeActivity = ({
@@ -610,14 +610,13 @@ const HomeActivity = ({
   readonly now: number;
   readonly viewerId: string | null;
 }): ReactElement => {
-  const tail =
-    homeActivity(entry, now).activity === 'waiting' ? waitingTail(entry.waiting, viewerId) : null;
-  return tail === null ? (
+  const short =
+    homeActivity(entry, now).activity === 'waiting' ? waitingShort(entry.waiting, viewerId) : null;
+  return short === null ? (
     <>{homeActivityWords(entry, now)}</>
   ) : (
     <span data-home-waiting={entry.waiting?.reason ?? ''}>
-      {`${ACTIVITY_META.waiting.label}: `}
-      <WaitingWords parts={tail} />
+      <WaitingWords parts={short} />
     </span>
   );
 };

@@ -1868,7 +1868,9 @@ after it lands; **the last S-26 slice to start** · risk low · no migration.
 - Files: those four files, `ui/humanize.ts`, `ui/activity.ts`. *Assign…*'s person picker reads
   `GET /api/projects/:id/owner-candidates` (S-26.1's follow-up); its entry in `client-census.test.ts`'s
   `SERVED_BEFORE_ITS_CALLER` goes when the picker calls it.
-- New humanize keys:
+- New words (`waiting.*` was planned as humanize keys; S-26.8b part 2 put them in
+  `features/waiting-words.tsx` instead, an SPA-only module that the worker page never imports, as `waitingLong`,
+  `waitingShort` and `waitingTail` per reason — the owner keys stay in `ui/humanize.ts`):
   - waiting: `waiting.owner_worker_offline`, `waiting.owner_worker_paused`, `waiting.owner_no_worker`,
     `waiting.owner_pick_only`, `waiting.no_taker`, `waiting.assignee_not_linked`,
     `waiting.owner_worker_cannot_take` (S-26.5's seventh reason, worded in the UX spec §4);
@@ -1969,15 +1971,17 @@ Principles, as in M25:
   card's top-right next to the menu. An unassigned card shows nothing; an empty slot isn't noise. The *Needs you* column
   rule (S-25.4) doesn't change with ownership. *Needs you* means a person must act, and the callout says who.
 
-**4. Waiting words** (humanize keys; the sub-label of the `waiting` activity)
+**4. Waiting words** (the sub-label of the `waiting` activity; `features/waiting-words.tsx` since S-26.8b part 2,
+not humanize keys)
 - `waiting.owner_worker_offline`: "Waiting for Vojtěch's machine. It's offline (last seen 2 h ago)."
 - `waiting.owner_worker_paused`: "Waiting for Vojtěch's machine. It's paused."
 - `waiting.owner_no_worker`: "Waiting for Vojtěch. They have no machine that takes this project."
 - `waiting.owner_pick_only`: "Waiting for Vojtěch to pick it on their machine."
 - `waiting.no_taker`: "Waiting: no machine takes unassigned tasks in Autix."
 - `waiting.assignee_not_linked`: "Waiting for a machine that takes everyone's tasks. It's assigned in Jira to *Jan
-  Novák*, who isn't linked to a platform account." The name is UntrustedText. Next steps: for a maintainer, *Link
-  account…* (opens Settings → Linked accounts, prefilled) and *Assign…*; for anyone allowed, *Take it*. Short form for
+  Novák*, who isn't linked to a platform account." The name is UntrustedText. Next steps: for an administrator, *Link
+  account…* (opens Settings → Linked accounts, which is admin-only); for a maintainer, *Assign…*; for anyone
+  allowed, *Take it*. Short form for
   Agents/Home rows: "Waiting · assigned to Jan Novák (not linked)".
 - `waiting.owner_worker_cannot_take` `[added at S-26.8b part 2: S-26.5's seventh reason]`: the owner's machine is
   connected and not paused by its owner, and still can't take this task. `blockers` is sorted most-fundamental-first,

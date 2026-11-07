@@ -478,7 +478,9 @@ export const Phase = ({
   const stages = phaseStagesFor(null, task.stages, task.current_stage ?? null);
   const activity = cardActivity(task, agent, nowMs, viewerId);
   const live = agent !== undefined;
-  const waiting = waitingShort(task.waiting, viewerId) !== null;
+  // The waiting words take the state word's place only when nobody is needed: a task with an
+  // open ask keeps its *Needs you* (the one rule's word) whatever its run waits for.
+  const waiting = !needsYou(task) && waitingShort(task.waiting, viewerId) !== null;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       {stages.length === 0 ? null : (

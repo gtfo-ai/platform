@@ -604,6 +604,55 @@ describe('a run that waits for a machine (S-26.8b part 2, the M26 UX spec § 4)'
     ).toBeTruthy();
   });
 
+  it('sends the callout’s Take it and Assign… through the header’s one owner control', async () => {
+    const jan = { display_name: 'Jan Novák', user_id: null };
+    const { sent } = start(
+      detail(
+        { can_take: true, can_assign: true, take_writes_back: true },
+        {
+          state: 'active',
+          current_stage: 'implementation',
+          unlinked_assignee: { display_name: 'Jan Novák' },
+          tracker_assignee: jan,
+          waiting: {
+            ...offline,
+            reason: 'assignee_not_linked',
+            user: null,
+            assignee_name: 'Jan Novák',
+          },
+        },
+      ),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+    );
+    const user = userEvent.setup();
+    const notice = await screen.findByRole('region', { name: 'Why it waits' });
+    // Take it writes back, replacing whom the tracker shows: #103's confirmation, asked once.
+    await user.click(within(notice).getByRole('button', { name: 'Take it' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Take ACME-12?' }, { timeout: 5000 });
+    expect(confirm.textContent).toContain(
+      'This also assigns ACME-12 in Jira to you, replacing Jan Novák.',
+    );
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await user.click(within(confirm).getByRole('button', { name: 'Take it and assign in Jira' }));
+    await waitFor(() => {
+      expect(sent).toContainEqual({
+        path: `/api/tasks/${TASK}/owner`,
+        body: { user_id: SESSION.user.id },
+      });
+    });
+    // The header's own status line says what followed: the control is the header's.
+    expect(
+      await screen.findByText('Assigned to you. Your machine picks it up at the next stage.'),
+    ).toBeTruthy();
+    // Assign… opens #103's person picker — the one the header's own Assign… opens.
+    await user.click(within(notice).getByRole('button', { name: 'Assign…' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Assign ACME-12' }, { timeout: 5000 }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
   it('says "your machine" to the machine’s owner, with Open Workers', async () => {
     start(
       detail(

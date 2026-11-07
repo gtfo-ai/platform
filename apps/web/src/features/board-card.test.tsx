@@ -845,6 +845,11 @@ describe('a card that waits for a machine, or for a person to start a CI job', (
       user: { user_id: '00000000-0000-4000-8000-000000000001', name: 'Fake Operator' },
     }),
   });
+  const ASKING = task(10, {
+    current_stage: 'implementation',
+    open_questions: 1,
+    waiting: waiting({}),
+  });
   const FREE = task(9, {
     current_stage: 'implementation',
     waiting: waiting({ reason: null, user: null, last_seen_at: null }),
@@ -880,6 +885,16 @@ describe('a card that waits for a machine, or for a person to start a CI job', (
     const free = await card('ACME-9');
     expect(free.querySelector('[data-card-waiting]')).toBeNull();
     expect(free.querySelector('[data-task-state="active"]')?.textContent).toBe('Active');
+  });
+
+  it('keeps Needs you on a waiting task with an open ask, rather than the waiting words', async () => {
+    open({ items: [ASKING], agents: false });
+    const asking = await card('ACME-10');
+    await waitFor(() => {
+      expect(asking.querySelector('[data-task-state="active"]')?.textContent).toBe('Needs you');
+    });
+    expect(asking.querySelector('[data-card-waiting]')).toBeNull();
+    expect(asking.querySelector('[data-needs-you]')).not.toBeNull();
   });
 
   it('makes the waiting activity’s sub-label the reason while a run waits to start', () => {

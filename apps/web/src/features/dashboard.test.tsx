@@ -761,7 +761,7 @@ describe('Home, running now', () => {
     const list = await screen.findByRole('list', { name: 'Running now' });
     await waitFor(() => {
       expect(list.querySelector('[data-home-activity]')?.textContent).toBe(
-        'Waiting: Vojtěch’s machine is offline',
+        'Waiting · Vojtěch’s machine is offline',
       );
     });
     expect(list.querySelector('[data-home-waiting]')?.getAttribute('data-home-waiting')).toBe(
