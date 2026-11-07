@@ -73,16 +73,20 @@ export class CoreCallError extends Error {
   readonly status: number | null;
   /** The envelope's `error.code`, when the core sent one. */
   readonly code: string | null;
+  /** The envelope's `error.details`, when the core sent them (S-26.7: a refused pick's owner). */
+  readonly details: readonly { readonly path: string; readonly message: string }[];
   constructor(
     kind: CoreCallErrorKind,
     status: number | null,
     code: string | null,
     message: string,
+    details: readonly { readonly path: string; readonly message: string }[] = [],
   ) {
     super(message);
     this.kind = kind;
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -327,6 +331,7 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
       answer.status,
       code,
       `${verb}: ${message}`,
+      parsed.success ? (parsed.data.error.details ?? []) : [],
     );
   };
 

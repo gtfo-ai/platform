@@ -709,13 +709,18 @@ claim_policy_owner_only` (they read it), anybody else's worker `404`; `[]` is `4
 project the user may not run in `422 project_not_eligible`; it answers `{worker_id, claim_policy,
 claim_project_ids, performed}`. `GET /api/workers` adds `claim_policy` (as it reads) and
 `policy_skipped_offers` (`null` while the core cannot name its images); the local page's state adds the two
-as its core last said them, its `POST /api/local/claim-scope` takes `claim_policy` — and, until S-26.7
-rewrites the page, maps the page's protocol-3 vocabulary as the core maps a version-3 worker
-(`remote-worker/page-scope.ts`): a save of `[]` with no policy is sent as `pick_only` over every project,
-a list saved while the policy reads `pick_only` leaves it for `mine_and_unassigned`, and a `pick_only`
-worker reads back as `[]` — and its `POST
-/api/local/offers/:id/take` takes `as_of`. The project's execution read reports a `pick_only` policy as
-`picked_only` under `scope_excludes`.
+as its core last said them, and its `POST /api/local/claim-scope` takes `claim_policy`. **S-26.7's page
+speaks the policy**: every save names `claim_policy` and sends `null`, never `[]`, for every project, and
+it reads `GET /api/local/claim-scope?vocabulary=policy`, which answers the stored projects as they are —
+a save that names its policy is answered the same way. For an **older cached page** (a tab still open on
+the page an earlier image served) the worker keeps mapping protocol 3's vocabulary as the core maps a
+version-3 worker (`remote-worker/page-scope.ts`): a save of `[]` with no policy is sent as `pick_only`
+over every project, a list saved while the policy reads `pick_only` leaves it for `mine_and_unassigned`,
+and a `pick_only` worker reads back as `[]` without the query. Its `POST /api/local/offers/:id/take`
+takes `as_of`, and a `409 task_taken_by_another` / `task_owned_by_another` carries the owner the core
+named as the local envelope's `error.owner` `{user_id, name}` (the name through the worker's redactor),
+so the page says *Vojtěch took DEMO-1 a moment ago* without parsing a message. The project's execution
+read reports a `pick_only` policy as `picked_only` under `scope_excludes`.
 
 **Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
 vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental

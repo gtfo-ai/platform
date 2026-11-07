@@ -433,7 +433,7 @@ user).
   ticket key is a field of an event; the residual is the core's: a library's error message that
   quotes untrusted text carries up to 1 KiB of it, redacted for secrets but not for meaning.
   The DSN names a host the developer chose: the worker sends its errors there and nowhere else.
-- *What this worker takes by itself* and *Take this one* (WP-293, protocol 3; S-26.4, protocol 4 — a
+- *What this machine takes* and *Take this one* (WP-293, protocol 3; S-26.4, protocol 4 — a
   core accepts `[3, 4]`, so a worker image older than protocol 3 must be updated first): the owner's
   **claim scope** (every project or named projects) is stored on the core in `workers.claim_project_ids`
   and its **claim policy** (*my tasks and unassigned ones* — the default for a new machine —, *only my

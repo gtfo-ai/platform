@@ -24,8 +24,10 @@
  * served on the developer's own machine, to the person whose subscription the run spends, about a
  * run that machine is executing — the same words the worker uploads, nothing more.
  *
- * **What the worker picks up** (WP-293) is `pick-work.tsx`: the claim scope and the list of runs
- * waiting for a worker, each with *Take this one*.
+ * **What the worker picks up** (WP-293) is `pick-work.tsx`: *What this machine takes* (S-26.7, the
+ * M26 UX spec § 1: `ui/claim-policy-card.tsx`) and the list of runs waiting for a machine, each
+ * with *Take this one*, *Run it here* or nothing to press (§ 6). The header repeats the card's
+ * sentence, from the same stored setting.
  *
  * A run's stage is a `PhaseTrack` only when the page knows **more than one** stage; the worker's
  * package names one, so today it is the stage's name as text — a strip of one dot says nothing.
@@ -45,7 +47,7 @@
  *
  * **Error reporting** (WP-295) is a setting of the room, not a wizard step (`error-reporting.tsx`).
  */
-import type { WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
+import type { WorkerLocalClaimScope, WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
 import {
   type ReactElement,
   useCallback,
@@ -56,6 +58,7 @@ import {
 } from 'react';
 import { Seat } from '../ui/bot/seat.js';
 import { Button } from '../ui/button.js';
+import { ClaimPolicySentence } from '../ui/claim-policy-card.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Flash } from '../ui/flash.js';
 import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
@@ -82,6 +85,7 @@ import {
   restartNoticeOf,
   slotsWords,
   spendWords,
+  storedClaimPolicyOf,
   tailLinesOf,
   UPDATE_PENDING_WORDS,
   wizardOf,
@@ -312,6 +316,8 @@ export const WorkerApp = ({
   /** The last state read, and whether the Claude step says the worker restarted (BACKLOG 1053). */
   const last = useRef<WorkerLocalState | null>(null);
   const [restarted, setRestarted] = useState(false);
+  /** What this machine takes, as last read or saved — the header's sentence (S-26.7). */
+  const [scope, setScope] = useState<WorkerLocalClaimScope | null>(null);
   const take = useCallback((next: WorkerLocalState): void => {
     const previous = last.current;
     last.current = next;
@@ -432,6 +438,11 @@ export const WorkerApp = ({
               )}
             </span>
           </p>
+          {scope === null ? null : (
+            <p data-claim-policy-header="" className="text-sm text-fg-muted">
+              <ClaimPolicySentence stored={storedClaimPolicyOf(scope)} projects={scope.projects} />
+            </p>
+          )}
         </div>
         {held ? null : (
           <div className="flex flex-wrap items-start gap-4">
@@ -591,6 +602,8 @@ export const WorkerApp = ({
         takeBlocked={takeBlockedOf(state, at)}
         emptyWords={emptyOffersWords(state)}
         onTaken={() => void refresh()}
+        onScope={setScope}
+        statePolicy={state.claim_policy ?? null}
       />
       <section aria-label="This machine" className="flex flex-col gap-2" data-machine="">
         <h2 className="text-base font-semibold text-fg">This machine</h2>

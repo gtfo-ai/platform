@@ -1,50 +1,41 @@
 /**
- * **What this worker picks up** (WP-293, TD-031's 2026-11-05 claim-scope amendment): two sections of
- * the worker's local page.
+ * **What this machine takes, and the runs it may pick** (WP-293; since S-26.7 the M26 UX spec § 1
+ * and § 6): two sections of the worker's local page.
  *
- * - **What it takes by itself** — the claim scope: *every project you work on* (the default),
- *   *only these projects*, or *only what you pick* (`[]`). Stored on the core, per worker; a
- *   preference the claim enforces, never a boundary — it only narrows what the platform already
- *   lets this worker take.
- * - **Runs waiting for a worker** — the open offers this worker could take **now** (the claim's own
- *   eligibility, the scope ignored), each with *Take this one*. A pick is an ordering choice inside
- *   the same eligibility: it never jumps the platform's own turn on a project its administrator
- *   prefers the server for, nor another developer's head start (Q127 (a)), so a run that is not
- *   listed is not this worker's to take yet. The list is polled every {@link OFFERS_POLL_MS} **only
- *   while the page is visible**.
+ * - **What this machine takes** — `ui/claim-policy-card.tsx`, the card the platform's Workers screen
+ *   draws too: the claim **policy** (*My tasks and unassigned ones*, *Only my tasks*, *Everything*,
+ *   *Only what I pick*) over the project scope (*All projects you can see*, or *Only these:*). It is
+ *   read with `?vocabulary=policy`, so a *pick only* machine's stored projects come back as they
+ *   are, and a save **always** sends the policy and the projects — `null` for every project, never
+ *   `[]` (`client.ts`). The sentence is the stored setting's: what the worker answered, never the
+ *   draft. It is read again whenever the polled state's `claim_policy` moves (another screen's
+ *   change).
+ * - **Runs waiting for a machine** — the open offers this worker could take **now** (the claim's own
+ *   eligibility, the scope ignored). A task nobody owns reads *Take this one* with "Assigns DEMO-1 to
+ *   you." (a pick assigns, S-26.4); the reader's own task reads *Run it here* with no such line;
+ *   another person's task reads "Vojtěch’s task" with **nothing to press**. An ask is labelled by
+ *   its **asker** (`mine`), never by its task's owner (BACKLOG 1432), and a pick of one assigns
+ *   nothing. A stale press the core refuses says the owner by name: `task_taken_by_another` and
+ *   `task_owned_by_another` in the spec's words. The list's `as_of` goes back with every pick. The
+ *   list is polled every {@link OFFERS_POLL_MS} **only while the page is visible**.
  *
- * Every string a tracker or a person wrote (the ticket key, the title, a project's name) is a React
- * text node through `ui/untrusted.tsx` (BD-022). An ask is listed as a question on its task — never
- * the question's text, which the core does not send.
+ * Every string a tracker or a person wrote (the ticket key, the title, a project's or a person's
+ * name) is a React text node through `ui/untrusted.tsx` (BD-022). An ask is listed as a question on
+ * its task — never the question's text, which the core does not send.
  */
-import type { WorkerLocalClaimScope, WorkerOffer } from '@platform/contracts';
-import { type ReactElement, useCallback, useEffect, useState } from 'react';
+import type { WorkerClaimPolicy, WorkerLocalClaimScope, WorkerOffer } from '@platform/contracts';
+import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button.js';
+import { ClaimPolicyCard, type ClaimPolicyValue } from '../ui/claim-policy-card.js';
 import { Flash } from '../ui/flash.js';
-import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
+import { PICK_WORDS as P, ROLE_LABEL, stageLabel } from '../ui/humanize.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
+import { storedClaimPolicyOf } from './model.js';
 
 /** How often the list of waiting runs is asked for while the page is visible (amendment §4). */
 export const OFFERS_POLL_MS = 10_000;
-
-/** The three answers to *what does this worker take by itself*. */
-export type ScopeMode = 'every' | 'some' | 'pick_only';
-
-export const scopeModeOf = (ids: readonly string[] | null): ScopeMode =>
-  ids === null ? 'every' : ids.length === 0 ? 'pick_only' : 'some';
-
-/** The scope as one sentence, for the line under the section's heading. */
-export const scopeWords = (scope: WorkerLocalClaimScope): string => {
-  const ids = scope.claim_project_ids;
-  if (ids === null) return 'It takes runs of every project you work on by itself.';
-  if (ids.length === 0) return 'It takes nothing by itself: only the runs you pick below.';
-  const keys = ids.map(
-    (id) => scope.projects.find((project) => project.id === id)?.key ?? 'a project you left',
-  );
-  return `It takes runs of ${keys.join(', ')} by itself.`;
-};
 
 /** An offer's subject line: its project and ticket, as the run cards name them. */
 const subjectOf = (offer: WorkerOffer): string =>
@@ -55,6 +46,38 @@ const workOf = (offer: WorkerOffer): string =>
   offer.kind === 'ask'
     ? `A question to the ${ROLE_LABEL[offer.role]}`
     : `${offer.stage === null ? ROLE_LABEL[offer.role] : stageLabel(offer.stage)} · ${ROLE_LABEL[offer.role]}`;
+
+/**
+ * What a row offers (the spec § 6):
+ * - `take` — nobody owns the task (or the core said nothing of owners): *Take this one*, and for a
+ *   stage of a task the core said nobody owns, "Assigns DEMO-1 to you.";
+ * - `run_here` — the reader's own task, or an ask they asked: *Run it here*;
+ * - `someones` — a stage of a task another person owns: their name, nothing to press.
+ */
+export type OfferAction =
+  | { readonly kind: 'take'; readonly assigns: boolean }
+  | { readonly kind: 'run_here' }
+  | { readonly kind: 'someones'; readonly name: string | null };
+
+export const offerActionOf = (offer: WorkerOffer): OfferAction => {
+  if (offer.mine === true) return { kind: 'run_here' };
+  // An ask's owner is its task's, not its asker (BACKLOG 1432): a pick of one is never refused for
+  // it and assigns nothing.
+  if (offer.kind === 'ask') return { kind: 'take', assigns: false };
+  if (offer.owner === undefined) return { kind: 'take', assigns: false };
+  if (offer.owner === null) return { kind: 'take', assigns: true };
+  return { kind: 'someones', name: offer.owner.name.trim() === '' ? null : offer.owner.name };
+};
+
+/**
+ * What a pick's answer leaves on the page: a starting line (`started`), a refusal that names the
+ * task's owner in the spec's words (`warning`), or any other refusal (`danger`). The text may carry
+ * a person's name or a ticket key, so it is rendered through `UntrustedText`.
+ */
+interface Outcome {
+  readonly tone: 'started' | 'warning' | 'danger';
+  readonly text: string;
+}
 
 const visibleNow = (): boolean =>
   typeof document === 'undefined' || document.visibilityState === 'visible';
@@ -67,9 +90,16 @@ export interface PickWorkProps {
    * What an empty list says (S-22.19, R-L7): why this worker sees nothing — the core lists nothing
    * to a worker that cannot take work — or where runs that never reach a worker wait.
    */
-  readonly emptyWords?: string;
+  readonly emptyWords: string;
   /** Called once a take started a run, so the page shows it at once. */
   readonly onTaken: () => void;
+  /** The stored setting, each time it is read or saved — the page header's sentence. */
+  readonly onScope?: (scope: WorkerLocalClaimScope) => void;
+  /**
+   * The policy the polled state carries (`WorkerLocalState.claim_policy`): whenever it moves, the
+   * setting is read again — after a save here, or when another screen changed it.
+   */
+  readonly statePolicy?: WorkerClaimPolicy | null;
   readonly pollMs?: number;
   /** Test seam: whether the page is visible. */
   readonly visible?: () => boolean;
@@ -78,31 +108,31 @@ export interface PickWorkProps {
 export const PickWork = ({
   client,
   takeBlocked,
-  emptyWords = 'Nothing is waiting for this worker right now.',
+  emptyWords,
   onTaken,
+  onScope,
+  statePolicy,
   pollMs = OFFERS_POLL_MS,
   visible = visibleNow,
 }: PickWorkProps): ReactElement => {
   const [scope, setScope] = useState<WorkerLocalClaimScope | null>(null);
-  const [mode, setMode] = useState<ScopeMode>('every');
-  const [chosen, setChosen] = useState<readonly string[]>([]);
   const [offers, setOffers] = useState<readonly WorkerOffer[] | null>(null);
+  const [asOf, setAsOf] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [taking, setTaking] = useState<string | null>(null);
+  // The caller's callback by reference: an inline arrow must not re-run the read on every render.
+  const onScopeRef = useRef(onScope);
+  onScopeRef.current = onScope;
 
   const adopt = useCallback((answer: WorkerLocalClaimScope): void => {
     setScope(answer);
-    setMode(scopeModeOf(answer.claim_project_ids));
-    // A stale id — a project the user has left — is not offered back: saving it would be a 422.
-    setChosen(
-      (answer.claim_project_ids ?? []).filter((id) =>
-        answer.projects.some((project) => project.id === id),
-      ),
-    );
+    onScopeRef.current?.(answer);
   }, []);
 
+  // Read at mount, and again whenever the polled state's policy moves — a save here, or another
+  // screen (the platform's Workers page) changing it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `statePolicy` is the trigger, not an input.
   useEffect(() => {
     let stopped = false;
     client.claimScope().then(
@@ -116,12 +146,13 @@ export const PickWork = ({
     return () => {
       stopped = true;
     };
-  }, [client, adopt]);
+  }, [client, adopt, statePolicy]);
 
   const refreshOffers = useCallback(async (): Promise<void> => {
     try {
       const answer = await client.offers();
       setOffers(answer.offers);
+      setAsOf(answer.as_of);
     } catch (caught) {
       setError((caught as Error).message);
     }
@@ -160,52 +191,44 @@ export const PickWork = ({
     };
   }, [refreshOffers, pollMs, visible]);
 
-  const wanted: readonly string[] | null =
-    mode === 'every' ? null : mode === 'pick_only' ? [] : chosen;
-  const unchanged =
-    scope !== null &&
-    JSON.stringify(
-      scope.claim_project_ids === null ? null : [...scope.claim_project_ids].sort(),
-    ) === JSON.stringify(wanted === null ? null : [...wanted].sort());
-  const incomplete = mode === 'some' && chosen.length === 0;
-
-  const save = async (): Promise<void> => {
-    setBusy(true);
-    try {
-      adopt(await client.setClaimScope(wanted));
-      setSaved('Saved. The platform applies it to this worker’s next claim.');
-      setError(null);
-      await refreshOffers();
-    } catch (caught) {
-      setError((caught as Error).message);
-      setSaved(null);
-    } finally {
-      setBusy(false);
-    }
+  /** The card's *Save*: the policy and the projects, always both; a refusal is thrown to the card. */
+  const save = async (next: ClaimPolicyValue): Promise<void> => {
+    adopt(await client.setClaimScope(next.policy, next.projectIds));
+    setError(null);
+    await refreshOffers();
   };
 
-  const take = async (runId: string): Promise<void> => {
-    setTaking(runId);
+  const take = async (offer: WorkerOffer, action: OfferAction): Promise<void> => {
+    setTaking(offer.run_id);
+    setOutcome(null);
     try {
-      await client.take(runId);
+      await client.take(offer.run_id, asOf);
       setError(null);
+      setOutcome({
+        tone: 'started',
+        text: action.kind === 'take' && action.assigns ? P.takenAssigned : P.taken,
+      });
       onTaken();
     } catch (caught) {
-      setError(
-        caught instanceof LocalCallError && caught.code === 'offer_not_claimable'
-          ? 'That run is no longer this worker’s to take — another worker or the platform took it, or it is not ready for workers yet. The list is refreshed.'
-          : (caught as Error).message,
+      const code = caught instanceof LocalCallError ? caught.code : null;
+      // The core named the owner; a nameless one (or none) is "another person".
+      const name = (caught as LocalCallError).owner?.name.trim() || null;
+      const ticket = offer.ticket_key ?? P.thisTask;
+      setOutcome(
+        code === 'task_taken_by_another'
+          ? { tone: 'warning', text: P.takenByAnother(name ?? P.namelessStart, ticket) }
+          : code === 'task_owned_by_another'
+            ? { tone: 'warning', text: P.ownedByAnother(name ?? P.nameless, ticket) }
+            : {
+                tone: 'danger',
+                text: code === 'offer_not_claimable' ? P.noLonger : (caught as Error).message,
+              },
       );
     } finally {
       setTaking(null);
       await refreshOffers();
     }
   };
-
-  const toggle = (id: string): void =>
-    setChosen((current) =>
-      current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
-    );
 
   return (
     <>
@@ -214,106 +237,32 @@ export const PickWork = ({
           <UntrustedText value={error} />
         </Flash>
       )}
-      <section aria-label="What this worker takes" className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold text-fg">What this worker takes by itself</h2>
-        {scope === null ? (
-          <Skeleton label="Asking the platform what this worker takes…" lines={2} />
-        ) : (
-          <>
-            <p data-scope-words="" className="text-sm text-fg">
-              <UntrustedText value={scopeWords(scope)} />
-            </p>
-            <fieldset className="flex flex-col gap-2 rounded-md border border-line bg-surface p-4">
-              <legend className="px-1 text-sm font-medium text-fg">Take by itself</legend>
-              {(
-                [
-                  ['every', 'Every project you work on'],
-                  ['some', 'Only these projects'],
-                  ['pick_only', 'Nothing — only the runs I pick below'],
-                ] as const
-              ).map(([value, label]) => (
-                <label key={value} className="flex items-center gap-2 text-sm text-fg">
-                  <input
-                    type="radio"
-                    name="claim-scope"
-                    value={value}
-                    checked={mode === value}
-                    onChange={() => {
-                      setMode(value);
-                      setSaved(null);
-                    }}
-                  />
-                  {label}
-                </label>
-              ))}
-              {mode === 'some' ? (
-                scope.projects.length === 0 ? (
-                  <p className="ml-6 text-sm text-fg-muted">
-                    You take runs in no project yet: ask an administrator to add you to one.
-                  </p>
-                ) : (
-                  <ul aria-label="Projects" className="ml-6 flex flex-col gap-1">
-                    {scope.projects.map((project) => (
-                      <li key={project.id}>
-                        <label className="flex items-center gap-2 text-sm text-fg">
-                          <input
-                            type="checkbox"
-                            value={project.id}
-                            checked={chosen.includes(project.id)}
-                            onChange={() => {
-                              toggle(project.id);
-                              setSaved(null);
-                            }}
-                          />
-                          <span className="font-mono">
-                            <UntrustedText value={project.key} />
-                          </span>
-                          <span className="text-fg-muted">
-                            <UntrustedText value={project.name} />
-                          </span>
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                )
-              ) : null}
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                <Button
-                  size="sm"
-                  tone="primary"
-                  disabled={busy || unchanged || incomplete}
-                  onClick={() => void save()}
-                >
-                  Save
-                </Button>
-                {incomplete ? (
-                  <span className="text-xs text-fg-muted">
-                    Choose at least one project, or pick only.
-                  </span>
-                ) : saved === null ? null : (
-                  <span className="text-xs text-fg-muted">{saved}</span>
-                )}
-              </div>
-            </fieldset>
-            <p className="text-xs text-fg-muted">
-              This only narrows what the platform already lets this worker take. Your other machines
-              keep their own setting.
-            </p>
-          </>
-        )}
-      </section>
+      {scope === null ? (
+        <Skeleton label="Asking the platform what this machine takes…" lines={2} />
+      ) : (
+        <ClaimPolicyCard
+          stored={storedClaimPolicyOf(scope)}
+          projects={scope.projects}
+          onSave={save}
+        />
+      )}
 
-      <section aria-label="Runs waiting for a worker" className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold text-fg">Runs waiting for a worker</h2>
-        <p className="text-xs text-fg-muted">
-          Take one and this worker claims it now. A pick never jumps the platform’s own turn on a
-          project its administrator prefers the server for, nor another developer’s head start: a
-          run that is not listed here is not this worker’s to take yet.
-        </p>
+      <section aria-label={P.heading} className="flex flex-col gap-3">
+        <h2 className="text-base font-semibold text-fg">{P.heading}</h2>
+        <p className="text-xs text-fg-muted">{P.explain}</p>
         {takeBlocked === null ? null : (
           <p data-take-blocked="" className="text-sm text-fg-muted">
             {takeBlocked}
           </p>
+        )}
+        {outcome === null ? null : outcome.tone === 'started' ? (
+          <p role="status" className="text-sm text-fg">
+            {outcome.text}
+          </p>
+        ) : (
+          <Flash tone={outcome.tone} live="status" data-testid="pick-refused">
+            <UntrustedText value={outcome.text} />
+          </Flash>
         )}
         {offers === null ? (
           <Skeleton label="Asking the platform which runs are waiting…" lines={2} />
@@ -323,33 +272,55 @@ export const PickWork = ({
           </p>
         ) : (
           <ul aria-label="Waiting runs" className="flex flex-col gap-2">
-            {offers.map((offer) => (
-              <li
-                key={offer.run_id}
-                data-offer={offer.run_id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface p-3"
-              >
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <span className="font-mono text-xs text-fg-muted">
-                    <UntrustedText value={subjectOf(offer)} />
-                  </span>
-                  <span className="min-w-0 truncate text-sm font-semibold text-fg">
-                    <UntrustedText value={offer.title ?? 'A task with no title'} />
-                  </span>
-                  <span className="text-xs text-fg-muted">
-                    {workOf(offer)}
-                    {offer.automatic ? ' · this worker would take it by itself' : ''}
-                  </span>
-                </div>
-                <Button
-                  size="sm"
-                  disabled={takeBlocked !== null || taking !== null}
-                  onClick={() => void take(offer.run_id)}
+            {offers.map((offer) => {
+              const action = offerActionOf(offer);
+              return (
+                <li
+                  key={offer.run_id}
+                  data-offer={offer.run_id}
+                  data-offer-action={action.kind}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface p-3"
                 >
-                  {taking === offer.run_id ? 'Taking…' : 'Take this one'}
-                </Button>
-              </li>
-            ))}
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-mono text-xs text-fg-muted">
+                      <UntrustedText value={subjectOf(offer)} />
+                    </span>
+                    <span className="min-w-0 truncate text-sm font-semibold text-fg">
+                      <UntrustedText value={offer.title ?? 'A task with no title'} />
+                    </span>
+                    <span className="text-xs text-fg-muted">
+                      {workOf(offer)}
+                      {offer.kind === 'ask' && offer.mine === true ? P.yourQuestion : ''}
+                      {offer.automatic ? P.automatic : ''}
+                    </span>
+                  </div>
+                  {action.kind === 'someones' ? (
+                    <span data-offer-someones="" className="text-sm text-fg-muted">
+                      <UntrustedText value={P.someones(action.name ?? P.namelessStart)} />
+                    </span>
+                  ) : (
+                    <div className="flex flex-col items-end gap-0.5">
+                      <Button
+                        size="sm"
+                        disabled={takeBlocked !== null || taking !== null}
+                        onClick={() => void take(offer, action)}
+                      >
+                        {taking === offer.run_id
+                          ? P.starting
+                          : action.kind === 'run_here'
+                            ? P.runHere
+                            : P.take}
+                      </Button>
+                      {action.kind === 'take' && action.assigns ? (
+                        <span data-offer-assigns="" className="text-xs text-fg-muted">
+                          <UntrustedText value={P.assigns(offer.ticket_key ?? P.thisTask)} />
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

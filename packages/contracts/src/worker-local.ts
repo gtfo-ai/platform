@@ -420,9 +420,18 @@ export const workerLocalClaudeTokenRequestSchema = z.strictObject({
   token: z.string().min(1).max(1_024),
 });
 
-/** Every local answer that is not 2xx: `{ error: { code, message } }`, the API's envelope. */
+/**
+ * Every local answer that is not 2xx: `{ error: { code, message, owner? } }`, the API's envelope.
+ * `owner` (S-26.7) is the task's owner a refused pick names — the core's `details` of `409
+ * task_taken_by_another` / `task_owned_by_another`, the name through the worker's redactor — so the
+ * page can say "Vojtěch took DEMO-1 a moment ago". Absent from every other refusal.
+ */
 export const workerLocalErrorSchema = z.strictObject({
-  error: z.strictObject({ code: z.string().max(64), message: z.string().max(2_000) }),
+  error: z.strictObject({
+    code: z.string().max(64),
+    message: z.string().max(2_000),
+    owner: z.strictObject({ user_id: idSchema, name: z.string().max(200) }).optional(),
+  }),
 });
 
 /**

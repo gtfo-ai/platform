@@ -14,9 +14,9 @@ import {
 import type { launcher as launcherAdapters } from '@platform/infrastructure';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { RemoteWorkerConfig } from './config.js';
-import type { CoreFetch } from './core-client.js';
+import { CoreCallError, type CoreFetch } from './core-client.js';
 import { CREDENTIAL_FILE } from './credential.js';
-import { type RemoteWorkerRuntime, startRemoteWorker } from './runtime.js';
+import { pickOwnerOf, type RemoteWorkerRuntime, startRemoteWorker } from './runtime.js';
 
 const scratch = mkdtempSync(path.join(tmpdir(), 'remote-worker-runtime-'));
 afterAll(() => {
@@ -139,6 +139,37 @@ const until = async (what: string, check: () => boolean): Promise<void> => {
   }
   throw new Error(`timed out waiting for ${what}`);
 };
+
+describe('the owner a refused pick names (S-26.7)', () => {
+  const OWNER = '00000000-0000-4000-8000-000000026751';
+  const details = [
+    { path: 'owner.user_id', message: OWNER },
+    { path: 'owner.name', message: 'Vojtěch' },
+  ];
+  const refusal = (status: number, code: string | null, given = details): CoreCallError =>
+    new CoreCallError('refused', status, code, 'offers/x/claim: refused', given);
+
+  it('reads it off the two ownership refusals only', () => {
+    for (const code of ['task_taken_by_another', 'task_owned_by_another']) {
+      expect(pickOwnerOf(refusal(409, code))).toEqual({ user_id: OWNER, name: 'Vojtěch' });
+    }
+    expect(pickOwnerOf(refusal(409, 'offer_not_claimable'))).toBeUndefined();
+    expect(pickOwnerOf(refusal(422, 'task_owned_by_another'))).toBeUndefined();
+    expect(pickOwnerOf(refusal(409, null))).toBeUndefined();
+  });
+
+  it('names nobody from details that do not read as an owner', () => {
+    expect(pickOwnerOf(refusal(409, 'task_owned_by_another', []))).toBeUndefined();
+    expect(
+      pickOwnerOf(
+        refusal(409, 'task_owned_by_another', [
+          { path: 'owner.user_id', message: 'not-a-uuid' },
+          { path: 'owner.name', message: 'Vojtěch' },
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+});
 
 describe('the remote worker process (WP-283 (1), (3))', () => {
   it('logs in with the device flow, stores the credential 0600, handshakes, claims, and answers its local listener', async () => {

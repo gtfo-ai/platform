@@ -16,6 +16,7 @@ import type {
   RunStatus,
   TranscriptEvent,
   WorkerClaimBlocker,
+  WorkerLocalClaimScope,
   WorkerLocalCoreFailure,
   WorkerLocalRun,
   WorkerLocalSignInFailure,
@@ -32,6 +33,7 @@ import {
   toolActivityLabel,
 } from '../ui/activity.js';
 import type { BotPhase } from '../ui/bot/bot.js';
+import type { ClaimPolicyValue } from '../ui/claim-policy-card.js';
 import { ROLE_LABEL, stageLabel, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import type { Status } from '../ui/status.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
@@ -598,3 +600,17 @@ export const logLineWords = (line: string): string => {
 /** The core's page for a run — steer and take-over live there (amendment §4). */
 export const coreRunUrl = (coreUrl: string | null, runId: string): string =>
   `${(coreUrl ?? '').replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}`;
+
+/**
+ * The stored setting as *What this machine takes* reads it (S-26.7). A worker always answers the
+ * policy; one that did not (a core below protocol 4) reads as S-26.4 stores it: `[]` is *pick only*
+ * over every project, anything else *everything* over it.
+ */
+export const storedClaimPolicyOf = (scope: WorkerLocalClaimScope): ClaimPolicyValue => {
+  const ids = scope.claim_project_ids;
+  const empty = ids?.length === 0;
+  return {
+    policy: scope.claim_policy ?? (empty ? 'pick_only' : 'everything'),
+    projectIds: empty ? null : ids,
+  };
+};

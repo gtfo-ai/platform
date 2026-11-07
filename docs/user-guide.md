@@ -1945,37 +1945,44 @@ did not say when it resets, and the worker waits an hour), and the run's page sa
 *Runs on*. A second usage limit on the same stage goes to *Needs you*. A person's *Pause* is a
 different hold: the end of a usage limit never lifts it.
 
-**What a worker picks up.** On the worker's own page, **What this worker takes by itself** chooses
-what it claims without being asked: *every project you work on* (the default), *only these
-projects*, or *nothing — only the runs I pick*. It is set per machine — your desktop may take
-everything while your laptop takes only what you pick — and it only narrows what the platform already
-lets that machine take; it never adds a project you do not work on. Below it, **Runs waiting for a
-worker** lists what the machine could take right now, refreshed every 10 seconds while the page is
-open, with **Take this one**: the machine claims that run at once and starts it, if it has a free slot.
-A pick is a choice of order inside what the machine may already take, not a priority: it never jumps
-the platform's own turn on a project whose administrator prefers the server, nor another developer's
-head start on their own run — so on such a project the list is usually empty, and a run that is not
-listed is not yours to take yet. A question asked on a task is listed as a question, never with its
-text. If another worker or the platform takes a run first, *Take* says so and the list refreshes. A
-machine set to *only what I pick* takes nothing by itself, and is not given a head start on runs it
-would not take. The Workers screen shows each machine's choice (*takes every project*, *pick only*,
-or the projects' keys); only the machine's owner changes it, from the machine's page.
+**What a machine takes.** The worker's own page has a card, **What this machine takes**, with one
+sentence that says the setting as it is stored — *This machine takes **your tasks and unassigned
+ones**, in **Autix and Fontai**.* (up to three project names, then *Autix, Fontai +2*) — and the same
+sentence under the machine's name at the top of the page. **Change** opens two choices:
 
-**Which tasks a machine takes** (S-26.4). Beside the projects, each machine has a second choice:
-*my tasks and unassigned ones* (what a newly approved machine starts with), *only my tasks*,
-*everything* (any task in its projects, including a colleague's — what a machine approved before this
-choice existed keeps, unless it was set to pick only), or *only what I pick*. "Your task" is a task you
-own; a question you asked on a task is yours whoever owns the task. "Unassigned" means nobody owns the
-task and its ticket is not held by someone the platform cannot match to a member — a ticket a member
-gave back is unassigned. A machine that takes only your tasks and finds none waits by choice, and is
-not shown as blocked; the Workers screen counts the runs it left for others. When you **take** a run
-nobody owns, the task becomes yours. A run someone else owns is never taken from them by a pick —
-*Take* says that they took it a moment ago, or that it is theirs and a maintainer can reassign it on the
-task page; a run whose ticket is held by somebody the platform cannot match is taken without making it
-yours. The list of runs waiting now shows only the projects the machine works on. The machine's owner
-changes the choice; an administrator sees it and cannot change it. A change applies to the next run,
-never to one in flight. The control for it on the machine's page and on the Workers screen is not
-built yet (see the list below): until it is, a new machine keeps *my tasks and unassigned ones*.
+- **Which tasks**: *My tasks and unassigned ones* (what a newly approved machine starts with), *Only my
+  tasks*, *Everything* (any task in its projects, including a colleague's — what a machine approved
+  before this choice existed keeps, unless it was set to pick only), or *Only what I pick* (it takes
+  nothing by itself; you choose each run on this page, and choosing one assigns the task to you). Each
+  says in one line what follows.
+- **In which projects**: *All projects you can see* (the default) or *Only these:* and the projects you
+  tick. It applies to every choice above; under *Only what I pick* it narrows the list of runs.
+
+**Save** stores it and the card says *Saved · applies to the next run*: a run in flight is never moved.
+It is set per machine — your desktop may take everything while your laptop takes only what you pick —
+and it only narrows what the platform already lets that machine take; it never adds a project you do
+not work on. "Your task" is a task you own; a question you asked on a task is yours whoever owns the
+task. "Unassigned" means nobody owns the task and its ticket is not held by someone the platform cannot
+match to a member — a ticket a member gave back is unassigned. A machine that takes only your tasks and
+finds none waits by choice, and is not shown as blocked; the Workers screen counts the runs it left for
+others. The machine's owner changes the choice; an administrator sees it on the Workers screen and
+cannot change it.
+
+**Picking a run.** Below the card, **Runs waiting for a machine** lists what the machine could take
+right now, refreshed every 10 seconds while the page is open. A run of a task nobody owns reads **Take
+this one** with *Assigns DEMO-1 to you.* under it; pressing it says *Assigned to you · starting on this
+machine…* and the task becomes yours. A run of your own task reads **Run it here**. A run of a task
+someone else owns reads *Vojtěch's task* and has nothing to press — a pick never takes a task from its
+owner; if they took it while the list was open, the press says *Vojtěch took DEMO-1 a moment ago. Pick
+another.*, and if it was already theirs, *DEMO-1 is Vojtěch's. A maintainer can reassign it on the task
+page.* A question asked on a task is listed as a question, never with its text, and picking it makes
+nobody its owner; one you asked reads *Your question*. A run whose ticket is held by somebody the
+platform cannot match is taken without making it yours. A pick is a choice of order inside what the
+machine may already take, not a priority: it never jumps the platform's own turn on a project whose
+administrator prefers the server, nor another person's head start on their own run — so on such a
+project the list is usually empty, and a run that is not listed is not yours to take yet. If another
+machine or the platform takes a run first, the press says so and the list refreshes. A machine set to
+*only what I pick* takes nothing by itself, and is not given a head start on runs it would not take.
 
 ## 13. The whole list of what is not there yet
 
@@ -1993,7 +2000,8 @@ In one place, so it is not spread across thirteen sections:
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
 | Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
 | *Settings → Your accounts* — linking your own Jira or GitLab account in the browser (the server half is built, S-26.6; the screen is S-26.8a) | settings |
-| Choosing which tasks a machine takes, and *Take this one* naming whose a run is, on the machine's page and the Workers screen (the platform stores the choice, applies it and serves it) | worker page, Workers screen |
+| Choosing which tasks a machine takes on the Workers screen (the machine's own page has it; the Workers screen still shows the projects only, S-26.8a) | Workers screen |
+| The card's warning *Unassigned tasks in Autix have nowhere to run.* under *Only my tasks* (the card is built to say it; the platform's answer to whether anyone else takes unassigned work is S-26.5) | worker page |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

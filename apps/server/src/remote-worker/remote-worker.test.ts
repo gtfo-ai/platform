@@ -47,6 +47,7 @@ import {
   workerHandshakeRequestSchema,
   workerHeartbeatRequestSchema,
   workerLocalClaimScopeSchema,
+  workerLocalErrorSchema,
   workerLocalOffersSchema,
   workerLocalStateSchema,
   workerManualPauseRequestSchema,
@@ -319,8 +320,15 @@ const fakeCore = (options: {
   readonly transcript?: (n: number) => { readonly status: number; readonly body: unknown } | null;
   /** `GET offers`' entries (WP-293); absent is none. */
   readonly offers?: readonly unknown[];
-  /** What `POST offers/:id/claim` answers (WP-293): the package, or `409 offer_not_claimable`. */
-  readonly takes?: readonly (RunPackage | 'refused')[];
+  /**
+   * What `POST offers/:id/claim` answers (WP-293): the package, `409 offer_not_claimable`, or (S-26.7)
+   * a refusal of its own.
+   */
+  readonly takes?: readonly (
+    | RunPackage
+    | 'refused'
+    | { readonly refusal: { readonly status: number; readonly body: unknown } }
+  )[];
   /** The projects `GET claim-scope` lists (WP-293). */
   readonly scopeProjects?: readonly { id: string; key: string; name: string }[];
   /** The handshake's answer by number (from 1); absent is the worker's settings (WP-294 (6)). */
@@ -512,6 +520,9 @@ const fakeCore = (options: {
       case 'offers/:id/claim': {
         workerOfferClaimRequestSchema.parse(parsed);
         const next = takes.shift() ?? 'refused';
+        if (next !== 'refused' && 'refusal' in next) {
+          return answer(next.refusal.status, next.refusal.body);
+        }
         return next === 'refused'
           ? answer(409, {
               error: { code: 'offer_not_claimable', message: 'this offer cannot be taken' },
@@ -1804,6 +1815,104 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       expect(full.status).toBe(409);
       expect(JSON.parse(full.text).error.code).toBe('no_free_slot');
       expect(core.captured.filter((call) => call.verb === 'offers/:id/claim')).toHaveLength(2);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  /**
+   * S-26.7: the page that speaks the policy reads a *pick only* machine's projects as stored
+   * (`?vocabulary=policy`) while an older cached page still reads `[]`; and a pick the core refuses
+   * for its owner reaches the page with the owner, the name through the worker's redactor.
+   */
+  it('reads the policy’s vocabulary for the new page and hands a refused pick’s owner to it', async () => {
+    const stateDir = stateDirWithCredential();
+    const OWNER_ID = '00000000-0000-4000-8000-000000026741';
+    const PROJECT = { id: PROJECT_ID, key: 'ACME', name: 'Acme storefront' };
+    const ownedBody = (code: string, name: string) => ({
+      error: {
+        code,
+        message: `${name} took this task a moment ago; pick another`,
+        details: [
+          { path: 'owner.user_id', message: OWNER_ID },
+          { path: 'owner.name', message: name },
+        ],
+      },
+    });
+    const core = fakeCore({
+      takes: [
+        { refusal: { status: 409, body: ownedBody('task_taken_by_another', 'Vojtěch') } },
+        {
+          refusal: {
+            status: 409,
+            body: ownedBody('task_owned_by_another', `Vojtěch ${WORKER_CREDENTIAL}`),
+          },
+        },
+      ],
+      scopeProjects: [PROJECT],
+    });
+    const { worker } = await start({ stateDir, core });
+    try {
+      const port = portOf(worker.uiAddress());
+      const token = readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim();
+      const auth = { authorization: `Bearer ${token}` };
+      const origin = { origin: `http://127.0.0.1:${PUBLISHED}` };
+      await until('the worker is connected', () => worker.state().connection === 'connected');
+
+      // A save that names its policy is the new page: answered as stored, never mapped to `[]`.
+      const saved = await request(port, {
+        method: 'POST',
+        path: '/api/local/claim-scope',
+        headers: { ...auth, ...origin },
+        body: { claim_project_ids: [PROJECT.id], claim_policy: 'pick_only' },
+      });
+      expect(saved.status).toBe(200);
+      expect(workerLocalClaimScopeSchema.parse(JSON.parse(saved.text))).toEqual({
+        claim_project_ids: [PROJECT.id],
+        claim_policy: 'pick_only',
+        projects: [PROJECT],
+      });
+      const policyRead = await request(port, {
+        path: '/api/local/claim-scope?vocabulary=policy',
+        headers: auth,
+      });
+      expect(workerLocalClaimScopeSchema.parse(JSON.parse(policyRead.text))).toEqual({
+        claim_project_ids: [PROJECT.id],
+        claim_policy: 'pick_only',
+        projects: [PROJECT],
+      });
+      // An older cached page reads *pick only* as its own `[]` (`page-scope.ts`).
+      const olderRead = await request(port, { path: '/api/local/claim-scope', headers: auth });
+      expect(
+        workerLocalClaimScopeSchema.parse(JSON.parse(olderRead.text)).claim_project_ids,
+      ).toEqual([]);
+
+      // The two ownership refusals: their code, and the owner the core named, redacted.
+      const take = `/api/local/offers/${RUN_ID}/take`;
+      const taken = await request(port, {
+        method: 'POST',
+        path: take,
+        headers: { ...auth, ...origin },
+        body: { as_of: '2026-11-07T10:00:00.000Z' },
+      });
+      expect(taken.status).toBe(409);
+      const takenError = workerLocalErrorSchema.parse(JSON.parse(taken.text)).error;
+      expect(takenError.code).toBe('task_taken_by_another');
+      expect(takenError.owner).toEqual({ user_id: OWNER_ID, name: 'Vojtěch' });
+      const pick = core.captured.find((call) => call.verb === 'offers/:id/claim');
+      expect(JSON.parse(pick?.body ?? '{}').as_of).toBe('2026-11-07T10:00:00.000Z');
+      const owned = await request(port, {
+        method: 'POST',
+        path: take,
+        headers: { ...auth, ...origin },
+        body: {},
+      });
+      expect(owned.status).toBe(409);
+      const ownedError = workerLocalErrorSchema.parse(JSON.parse(owned.text)).error;
+      expect(ownedError.code).toBe('task_owned_by_another');
+      expect(ownedError.owner?.user_id).toBe(OWNER_ID);
+      expect(owned.text).not.toContain(WORKER_CREDENTIAL);
+      expect(worker.sessions.size).toBe(0);
     } finally {
       await worker.stop();
     }

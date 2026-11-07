@@ -83,6 +83,7 @@ import {
   type WorkerManualPauseVia as ManualPauseVia,
   type RunPackage,
   shaSchema,
+  taskOwnerViewSchema,
   WORKER_LOCAL_LOG_LINE_MAX_CHARS,
   WORKER_LOCAL_LOG_TAIL,
   WORKER_PROTOCOL_VERSION,
@@ -138,7 +139,7 @@ import {
 } from './core-client.js';
 import { CoreCheckError, checkCoreAddress, probeCoreCandidates } from './core-probe.js';
 import { CREDENTIAL_FILE, ensureCredential } from './credential.js';
-import { createLocalUiServer, LocalUiError } from './local-ui.js';
+import { createLocalUiServer, LocalUiError, type LocalUiOwner } from './local-ui.js';
 import { claimScopeReadForPage, claimScopeWriteOfPage } from './page-scope.js';
 import { backoffMs, RETRY_MAX_MS, sleepMs } from './retry.js';
 import {
@@ -242,6 +243,31 @@ export const coreFailureOf = (error: unknown): WorkerLocalCoreFailure => {
   }
   if (error.status === 429 || error.status >= 500) return 'no_answer';
   return 'not_a_platform';
+};
+
+/** The two refusals of a pick that name the task's owner (S-26.4's `pick-verbs.ts`). */
+const OWNED_REFUSALS: ReadonlySet<string> = new Set([
+  'task_taken_by_another',
+  'task_owned_by_another',
+]);
+
+/**
+ * The owner a refused pick names (S-26.7), off the core's `details` (`owner.user_id`,
+ * `owner.name`), so the page can say "Vojtěch took DEMO-1 a moment ago" — `undefined` for every
+ * other refusal and for details that do not read as an owner. The name is redacted where it is
+ * answered (`local-ui.ts`).
+ */
+export const pickOwnerOf = (error: CoreCallError): LocalUiOwner | undefined => {
+  if (error.status !== 409 || error.code === null || !OWNED_REFUSALS.has(error.code)) {
+    return undefined;
+  }
+  const detail = (field: string): string | undefined =>
+    error.details.find((entry) => entry.path === `owner.${field}`)?.message;
+  const parsed = taskOwnerViewSchema.safeParse({
+    user_id: detail('user_id'),
+    name: detail('name'),
+  });
+  return parsed.success ? { user_id: parsed.data.user_id, name: parsed.data.name } : undefined;
 };
 
 /** The marker a drain leaves in `worker-state`: its pause is cleared at the next start (WP-292). */
@@ -1081,6 +1107,7 @@ export const startRemoteWorker = async (
         error.status === 422 ? 422 : 409,
         error.code ?? 'refused',
         `the core refused to ${what}: ${error.message}`,
+        pickOwnerOf(error),
       );
     }
     return new LocalUiError(
@@ -1090,8 +1117,11 @@ export const startRemoteWorker = async (
     );
   };
 
-  /** The claim scope and the projects it may name, as the core holds them (WP-293). */
-  const readClaimScope = async (): Promise<WorkerLocalClaimScope> => {
+  /**
+   * The claim scope and the projects it may name, as the core holds them (WP-293). The page that
+   * speaks the policy (S-26.7) reads it as stored; an older cached page reads `[]` for *pick only*.
+   */
+  const readClaimScope = async (policyVocabulary = false): Promise<WorkerLocalClaimScope> => {
     const held = connectedCredential();
     try {
       const answer = await connectedCore().claimScope(held);
@@ -1100,10 +1130,9 @@ export const startRemoteWorker = async (
       if (answer.policy_skipped_offers !== undefined) {
         policySkippedOffers = answer.policy_skipped_offers;
       }
-      // S-26.4: the page in this build says *pick only* as `[]` (`page-scope.ts`).
-      return claimScopeReadForPage(
-        workerLocalClaimScopeSchema.parse(redactKeysAndValues(pageRedactor(), answer)),
-      );
+      const read = workerLocalClaimScopeSchema.parse(redactKeysAndValues(pageRedactor(), answer));
+      // S-26.4: an older cached page says *pick only* as `[]` (`page-scope.ts`).
+      return policyVocabulary ? read : claimScopeReadForPage(read);
     } catch (error) {
       throw asLocalError(error, 'read the claim scope');
     }
@@ -1137,8 +1166,9 @@ export const startRemoteWorker = async (
       throw asLocalError(error, 'set the claim scope');
     }
     // No call-off: the held claim re-reads the scope in its statement at every poll (≤ 5 s), and
-    // calling it off would only log a false failure and back off.
-    return readClaimScope();
+    // calling it off would only log a false failure and back off. A save that named its policy is
+    // S-26.7's page, which reads the policy's vocabulary.
+    return readClaimScope(policy !== undefined);
   };
 
   /** What this worker could take now (WP-293): the core's list, through every exact secret. */

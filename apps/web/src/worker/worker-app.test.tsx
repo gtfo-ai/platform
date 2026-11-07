@@ -15,7 +15,12 @@
  *   advances by itself on the next state poll, with no reload; the approval code is the dominant
  *   element, with *Copy*, a countdown and an approval link only on the platform's own origin.
  */
-import type { TranscriptEvent, WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
+import type {
+  TranscriptEvent,
+  WorkerClaimPolicy,
+  WorkerLocalRun,
+  WorkerLocalState,
+} from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -120,8 +125,9 @@ const fakeClient = (initial: WorkerLocalState) => {
     })),
     // WP-293's two sections: nothing waiting, every project (`pick-work.test.tsx` drives them).
     claimScope: vi.fn(async () => ({ claim_project_ids: null, projects: [] })),
-    setClaimScope: vi.fn(async (ids: readonly string[] | null) => ({
+    setClaimScope: vi.fn(async (policy: WorkerClaimPolicy, ids: readonly string[] | null) => ({
       claim_project_ids: ids === null ? null : [...ids],
+      claim_policy: policy,
       projects: [],
     })),
     offers: vi.fn(async () => ({ offers: [] })),
@@ -1054,6 +1060,31 @@ describe('why it takes nothing, and one control for its hold (S-22.19)', () => {
         /^No run is waiting for a worker\. On projects that prefer the platform server/,
       ),
     );
+  });
+});
+
+describe('what this machine takes, in the page’s header (S-26.7, the M26 UX spec § 1)', () => {
+  const AUTIX = '00000000-0000-4000-8000-000000026711';
+  it('repeats the card’s sentence from the stored setting under the machine’s name', async () => {
+    const client = fakeClient(state({ claim_policy: 'pick_only' }));
+    client.claimScope.mockResolvedValue({
+      claim_project_ids: [AUTIX],
+      claim_policy: 'pick_only',
+      projects: [{ id: AUTIX, key: 'AUT', name: 'Autix' }],
+    } as never);
+    const { container } = renderPage(client);
+    const sentence =
+      'This machine takes nothing by itself. You pick runs on its page (Autix only).';
+    await waitFor(() =>
+      expect(container.querySelector('[data-claim-policy-header]')?.textContent).toBe(sentence),
+    );
+    expect(
+      container.querySelector('[data-claim-policy-card] [data-claim-policy-sentence]')?.textContent,
+    ).toBe(sentence);
+    // The page's one primary stays its own (TD-033): the card adds none.
+    expect(
+      container.querySelectorAll('[data-claim-policy-card] [class~="border-primary-line"]'),
+    ).toHaveLength(0);
   });
 });
 

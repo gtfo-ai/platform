@@ -14,6 +14,7 @@
  * there.)
  */
 import type {
+  WorkerClaimPolicy,
   WorkerLocalCancelResponse,
   WorkerLocalClaimScope,
   WorkerLocalCoreCheckResponse,
@@ -75,31 +76,53 @@ export const takeToken = (place: TokenPlace): string | null => {
   return stored !== null && TOKEN_SHAPE.test(stored) ? stored : null;
 };
 
+/** The person a refused pick names (S-26.7: `task_taken_by_another`, `task_owned_by_another`). */
+export interface LocalCallOwner {
+  readonly user_id: string;
+  /** Untrusted (a person's display name), redacted by the worker. */
+  readonly name: string;
+}
+
 /** A refusal the worker answered, in its words (already redacted there). */
 export class LocalCallError extends Error {
   override readonly name = 'LocalCallError';
   readonly status: number;
   readonly code: string;
-  constructor(status: number, code: string, message: string) {
+  /** The task's owner, when the refusal is a pick of somebody else's task. */
+  readonly owner: LocalCallOwner | undefined;
+  constructor(status: number, code: string, message: string, owner?: LocalCallOwner) {
     super(message);
     this.status = status;
     this.code = code;
+    this.owner = owner;
   }
 }
+
+/**
+ * The claim-scope read in the policy's vocabulary (S-26.7): a *pick only* machine's projects come
+ * back as stored. Without it the worker answers an older cached page's `[]` (`page-scope.ts`).
+ */
+export const CLAIM_SCOPE_POLICY_READ = 'claim-scope?vocabulary=policy';
 
 export interface LocalClient {
   state(): Promise<WorkerLocalState>;
   pause(paused: boolean): Promise<WorkerLocalState>;
   drain(): Promise<WorkerLocalState>;
   cancel(runId: string, idempotencyKey: string): Promise<WorkerLocalCancelResponse>;
-  /** The claim scope and the projects it may name (WP-293). */
+  /** The claim policy, its project scope and the projects it may name (WP-293, S-26.7). */
   claimScope(): Promise<WorkerLocalClaimScope>;
-  /** Set the claim scope: `null` every project, `[]` pick only, otherwise those projects. */
-  setClaimScope(projectIds: readonly string[] | null): Promise<WorkerLocalClaimScope>;
+  /**
+   * Save what this machine takes (S-26.7): always the policy, and `null` for every project or a
+   * non-empty list — never `[]`, which the core refuses (*pick only* is a policy).
+   */
+  setClaimScope(
+    policy: WorkerClaimPolicy,
+    projectIds: readonly string[] | null,
+  ): Promise<WorkerLocalClaimScope>;
   /** What this worker could take now (WP-293). */
   offers(): Promise<WorkerLocalOffers>;
-  /** *Take this one* (WP-293). */
-  take(runId: string): Promise<WorkerLocalTakeResponse>;
+  /** *Take this one* / *Run it here* (WP-293), with the list's `as_of` (S-26.4). */
+  take(runId: string, asOf?: string): Promise<WorkerLocalTakeResponse>;
   // The first-run wizard (WP-294): each answers the worker's state after it.
   checkCore(url: string): Promise<WorkerLocalCoreCheckResponse>;
   setCore(url: string | null): Promise<WorkerLocalState>;
@@ -155,6 +178,7 @@ export const createLocalClient = (
         response.status,
         refusal?.code ?? 'failed',
         refusal?.message ?? `the worker answered ${response.status}`,
+        refusal?.owner,
       );
     }
     const answer = read(json);
@@ -175,13 +199,21 @@ export const createLocalClient = (
       call('POST', `runs/${encodeURIComponent(runId)}/cancel`, readCancel, {
         headers: { 'idempotency-key': idempotencyKey },
       }),
-    claimScope: () => call('GET', 'claim-scope', readClaimScope),
-    setClaimScope: (projectIds) =>
+    claimScope: () => call('GET', CLAIM_SCOPE_POLICY_READ, readClaimScope),
+    setClaimScope: (policy, projectIds) =>
       call('POST', 'claim-scope', readClaimScope, {
-        body: { claim_project_ids: projectIds === null ? null : [...projectIds] },
+        body: {
+          // `[]` is not a scope at protocol 4: an empty list is every project.
+          claim_project_ids:
+            projectIds === null || projectIds.length === 0 ? null : [...projectIds],
+          claim_policy: policy,
+        },
       }),
     offers: () => call('GET', 'offers', readOffers),
-    take: (runId) => call('POST', `offers/${encodeURIComponent(runId)}/take`, readTake),
+    take: (runId, asOf) =>
+      call('POST', `offers/${encodeURIComponent(runId)}/take`, readTake, {
+        body: asOf === undefined ? {} : { as_of: asOf },
+      }),
     checkCore: (url) => call('POST', 'core/check', readCoreCheck, { body: { url } }),
     setCore: (url) => call('POST', 'core', readState, { body: { url } }),
     signIn: (action) => call('POST', 'claude/sign-in', readState, { body: { action } }),

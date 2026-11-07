@@ -48,6 +48,7 @@ import {
   readCancel,
   readClaimScope,
   readCoreCheck,
+  readError,
   readErrorReportingTest,
   readOffers,
   readState,
@@ -452,6 +453,29 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     const answer = { run_id: RUN.run_id, accepted: true, task_state: 'paused' };
     expect(readCancel(answer)).toEqual(answer);
     expect(readCancel({ ...answer, more: 1 })).toBeNull();
+  });
+
+  it('reads a refusal with the owner a refused pick names, strictly, as the schema does (S-26.7)', () => {
+    const plain = { error: { code: 'offer_not_claimable', message: 'this offer cannot be taken' } };
+    const owned = {
+      error: {
+        code: 'task_taken_by_another',
+        message: 'the core refused to hand over that run',
+        owner: { user_id: '00000000-0000-4000-8000-000000026731', name: 'Vojtěch' },
+      },
+    };
+    for (const answer of [plain, owned]) {
+      expect(workerLocalErrorSchema.safeParse(answer).success).toBe(true);
+      expect(readError(answer)).toEqual(answer.error);
+    }
+    for (const refused of [
+      { error: { ...owned.error, owner: { user_id: 'not-a-uuid', name: 'Vojtěch' } } },
+      { error: { ...owned.error, owner: { ...owned.error.owner, email: 'v@example.test' } } },
+      { error: { ...owned.error, owner: { ...owned.error.owner, name: 'x'.repeat(201) } } },
+    ]) {
+      expect(workerLocalErrorSchema.safeParse(refused).success).toBe(false);
+      expect(readError(refused)).toBeNull();
+    }
   });
 });
 
