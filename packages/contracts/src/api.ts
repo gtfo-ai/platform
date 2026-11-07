@@ -29,6 +29,7 @@ import {
   executionModeSchema,
   executionPreferenceSchema,
   gitBranchNameSchema,
+  httpUrlSchema,
   idSchema,
   integrationTypeSchema,
   isoDateSchema,
@@ -69,6 +70,7 @@ import {
   autonomyPoliciesSchema,
   budgetRecordSchema,
   budgetWindowSchema,
+  ciPipelineStatusSchema,
   configSourceSchema,
   contextPackRecordSchema,
   humanTimeKindSchema,
@@ -1575,6 +1577,18 @@ export const taskReturnSchema = z.strictObject({
 });
 export type TaskReturn = z.infer<typeof taskReturnSchema>;
 
+/**
+ * **How the CI gate's own wait ended the attempt** (backlog 1078), read off
+ * `task_stages.ci_ending` — the two endings of {@link taskStopSchema}'s `no_answer` at `ci_gate`
+ * that the page words on their own:
+ *
+ * - `ci_timed_out` — the wait on a poll-only binding reached `pipeline.limits.ci_timeout_minutes`;
+ * - `ci_held_unchanged` — a Retry's first read found the previous attempt's pipeline, on the same
+ *   head, still held at a manual job, so the gate escalated at once rather than wait again.
+ */
+export const ciGateEndingSchema = z.enum(['ci_timed_out', 'ci_held_unchanged']);
+export type CiGateEnding = z.infer<typeof ciGateEndingSchema>;
+
 /** The longest recorded sentence a {@link taskStopSchema} carries before it is cut. */
 export const MAX_TASK_STOP_RECORDED_CHARS = 2_000;
 
@@ -1602,6 +1616,14 @@ export const taskStopSchema = z.strictObject({
   ci_failure: taskCiFailureSchema.nullable(),
   recorded: z.string().max(MAX_TASK_STOP_RECORDED_CHARS).nullable(),
   recorded_cut: z.boolean(),
+  /**
+   * Which of the CI gate's own wait endings a `no_answer` at `ci_gate` was
+   * ({@link ciGateEndingSchema}, backlog 1078), `null` for every other stop. A field beside
+   * `cause` rather than two more causes, so a reader that switches over `cause` keeps compiling;
+   * optional on the schema only until the web app's fixtures name it (backlog 1099), and the server
+   * always sends it.
+   */
+  ci_ending: ciGateEndingSchema.nullable().optional(),
 });
 export type TaskStop = z.infer<typeof taskStopSchema>;
 
@@ -1889,6 +1911,45 @@ const taskCallerFactsMask = Object.fromEntries(
   readonly [K in TaskCallerFactKey | (typeof TASK_OWNER_CALLER_FACT_KEYS)[number]]: true;
 };
 
+/**
+ * The longest held-job name `gate_wait` carries, in characters — the CI gate's own bound on that
+ * provider text (`pendingPipelineDetail` quotes the same 100).
+ */
+export const MAX_GATE_WAIT_HELD_JOB_CHARS = 100;
+
+/**
+ * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read
+ * of the head pipeline — one that was neither passed nor failed — on either kind of git binding.
+ * `null` when the task's current stage has no open CI wait: another stage, an attempt that is
+ * closed (the task was parked, moved on or settled), or an attempt whose last read found no
+ * pipeline at all.
+ *
+ * Every string but the instants is the **provider's** text (BD-022), stored redacted:
+ *  - `pipeline_url`, `held_job_url` — the pipeline's and the held job's own pages, `http(s)` only;
+ *    `null` when the provider gave none or gave something else (a reader renders them through
+ *    `safeHref` regardless);
+ *  - `held_job` — the first `manual` job of a pipeline whose own status is `manual`, cut at
+ *    {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; `null` for a pipeline that is not held, or one held with
+ *    no job named.
+ *
+ * `status` is the git port's vocabulary — in practice `pending`, `running` or `manual`, the
+ * statuses the gate waits on. `draft` is the merge request's draft flag at that read. `checked_at`
+ * is the read's instant, `waiting_since` the attempt's entry (`task_stages.entered_at`, which the
+ * CI timeout counts from), and `timeout_minutes` the CI timeout that bounds this wait — `null` on a
+ * binding a webhook reaches, whose wait is bounded by a count of checks instead.
+ */
+export const gateWaitSchema = z.strictObject({
+  pipeline_id: nonEmptyStringSchema,
+  pipeline_url: httpUrlSchema.nullable(),
+  status: ciPipelineStatusSchema,
+  held_job: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS).nullable(),
+  held_job_url: httpUrlSchema.nullable(),
+  draft: z.boolean(),
+  checked_at: isoDateTimeSchema,
+  waiting_since: isoDateTimeSchema,
+  timeout_minutes: z.int().positive().nullable(),
+});
+
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
   ...taskCallerFactsShape,
@@ -1927,6 +1988,21 @@ export const taskDetailResponseSchema = z.strictObject({
    * `loop_limits`, so the page can say *round 2 of 3*. `null` when the stored limits do not parse.
    */
   loop_limits: z.record(slugSchema, z.int().nonnegative()).nullable(),
+  /**
+   * The current stage's open CI wait (backlog 1078) — see {@link gateWaitSchema}; `null` when there
+   * is none. The server always sends it; the key is optional only so the web app's fixtures need
+   * not name it until a UI slice reads it (`BACKLOG.md` 1099 makes it required).
+   */
+  gate_wait: gateWaitSchema.nullable().optional(),
+  /**
+   * The **parked** CI wait's last read (backlog 1078) — {@link gateWaitSchema}'s shape, read off the
+   * latest `ci_gate` attempt when the task is `needs_human` at `ci_gate` and that attempt was closed
+   * `failed`/`undecided` (the gate's own no-answer escalation: its timeout, its checks or backstop,
+   * a provider that did not answer, or a Retry on the unchanged held pipeline), with a recorded
+   * read; `null` otherwise. `waiting_since` is that attempt's entry. Optional for the reason
+   * `gate_wait` is.
+   */
+  last_gate_wait: gateWaitSchema.nullable().optional(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -3744,6 +3820,7 @@ export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type StartTaskResponse = z.infer<typeof startTaskResponseSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
+export type GateWait = z.infer<typeof gateWaitSchema>;
 /** The task read before the route adds what it says about the caller. */
 export type TaskDetailRecord = Omit<TaskDetailResponse, TaskCallerFactKey>;
 export type TakenOver = z.infer<typeof takenOverSchema>;

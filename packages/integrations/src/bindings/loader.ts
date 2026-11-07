@@ -113,6 +113,15 @@ import type { Id, IntegrationType, JsonObject } from '@platform/contracts';
 import type { IntegrationPortByType, IntegrationRegistry } from '../registry.js';
 import { deployKeyRunCredentialOf, staticRunCredentialOf } from '../static-run-credential.js';
 
+/**
+ * A registration's display name as a sentence names the provider: up to any parenthetical, so
+ * `GitLab (gitlab.com and self-managed)` reads `GitLab` (backlog 1078's review).
+ */
+export const providerNameOf = (displayName: string): string => {
+  const cut = displayName.indexOf(' (');
+  return cut <= 0 ? displayName : displayName.slice(0, cut);
+};
+
 export class BindingLoadError extends Error {
   override readonly name = 'BindingLoadError';
   /**
@@ -374,6 +383,8 @@ interface Built<TType extends IntegrationType> {
   readonly digestChannel: string;
   /** The registration's credential-minting hints (WP-107); absent for a provider that mints nothing. */
   readonly mintingHints?: CredentialMintingHints;
+  /** The registration's display name up to any parenthetical (`GitLab`), for platform sentences. */
+  readonly providerName: string;
   /** The integration's static run credential (WP-137); absent unless it declares one. */
   readonly staticRunCredential?: StaticRunCredential;
   /** The integration's SSH deploy key (WP-146); absent unless it declares one. */
@@ -599,6 +610,7 @@ export const createPipelineIntegrationsLoader = (
             };
       return {
         ...channels,
+        providerName: providerNameOf(registration.displayName),
         ...(mintingHints === undefined ? {} : { mintingHints }),
         ...(assignPermission === undefined ? {} : { assignPermission }),
         ...(staticRunCredential === undefined ? {} : { staticRunCredential }),
@@ -786,6 +798,9 @@ export const createPipelineIntegrationsLoader = (
                 // WP-24: the same value the adapter was built with, for the two sinks the pipeline
                 // owns itself — `tasks.review_subject` and a finding on its way to a thread.
                 redactor: git.built.redactor,
+                // Backlog 1078's review: the name a person knows the provider by, for the CI
+                // gate's retry brief ("Start the job on GitLab").
+                providerName: git.built.providerName,
                 // WP-107 (backlog 278): the provider's words for the mint refusals, so the ring
                 // that renders them names no provider.
                 ...(git.built.mintingHints === undefined

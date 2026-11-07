@@ -268,6 +268,19 @@ export const diffStatsSchema = z.strictObject({
 export const ciStatusSchema = z.enum(['success', 'failed', 'canceled', 'skipped']);
 
 /**
+ * A pipeline's or a job's status as the git port normalises it (`PipelineStatus.status`): a terminal
+ * {@link ciStatusSchema} outcome, or still in flight — `pending`, `running`, or `manual` (held until
+ * somebody starts a manual job). Declared here so the task-detail DTO's `gate_wait` (backlog 1078)
+ * and the port speak one vocabulary; `git-provider.ts`' `pipelineStatusValueSchema` is this schema.
+ */
+export const ciPipelineStatusSchema = z.enum([
+  ...ciStatusSchema.options,
+  'pending',
+  'running',
+  'manual',
+]);
+
+/**
  * Which cap paused a task for `budget` (WP-131 review round 2): the task's own cap, a `budgets` row's
  * scope (`organization`, `project`), a feature cap (`shadow`, `maintenance`, `bootstrap`) or the run's
  * own cap (`run`, a run that stopped at its per-run budget). Only the `task` cap can be raised from

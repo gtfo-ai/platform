@@ -21,6 +21,8 @@ import { runStatusSchema, taskStageStateSchema, taskStateSchema } from '@platfor
 import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
+  gateWaitOf,
+  lastGateWaitOf,
   latestProgressOfRow,
   runStageOf,
   savedWorkOf,
@@ -266,6 +268,156 @@ describe('ticketClaimViewOf', () => {
       expect((failure as UnprojectableRowError).code).toBe('row_not_projectable');
       expect((failure as Error).message).toContain(`task ${TASK}`);
       expect((failure as Error).message).toContain('tasks.ticket_claim');
+    }
+  });
+});
+
+/**
+ * Backlog 1078: `gate_wait` is the **open** `ci_gate` attempt's last pending read, at the stage the
+ * task is at — and a stored value that does not parse is refused by name, never served as null.
+ */
+describe('gate_wait on the task detail', () => {
+  type StageRow = Parameters<typeof gateWaitOf>[1][number];
+  const TASK = '00000000-0000-4000-8000-000000001078';
+  const ENTERED = new Date('2026-11-06T19:28:00.000Z');
+  const READ = {
+    pipeline_id: '3038234623',
+    pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+    head_sha: '1111111111111111111111111111111111111111',
+    status: 'manual',
+    held_job: 'sentry-release-commit',
+    held_job_url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+    draft: true,
+    checked_at: '2026-11-06T19:58:00.000Z',
+    timeout_minutes: 60,
+  };
+  const row = (over: Partial<StageRow> = {}): StageRow =>
+    ({
+      taskId: TASK,
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'running',
+      enteredAt: ENTERED,
+      exitedAt: null,
+      ciPendingRead: READ,
+      ...over,
+    }) as unknown as StageRow;
+
+  it('serves the open attempt’s read, timed from its entry, without the head it keys on', () => {
+    expect(gateWaitOf({ currentStage: 'ci_gate' }, [row()])).toEqual({
+      pipeline_id: '3038234623',
+      pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+      status: 'manual',
+      held_job: 'sentry-release-commit',
+      held_job_url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+      draft: true,
+      checked_at: '2026-11-06T19:58:00.000Z',
+      waiting_since: '2026-11-06T19:28:00.000Z',
+      timeout_minutes: 60,
+    });
+  });
+
+  it('reads the newest attempt: a closed first attempt’s read is not the open second’s', () => {
+    const closed = row({ state: 'failed', exitedAt: new Date('2026-11-06T20:28:00.000Z') });
+    const reopened = row({
+      attempt: 2,
+      enteredAt: new Date('2026-11-06T21:53:00.000Z'),
+      ciPendingRead: { ...READ, status: 'running', held_job: null, held_job_url: null },
+    });
+    expect(gateWaitOf({ currentStage: 'ci_gate' }, [closed, reopened])).toMatchObject({
+      status: 'running',
+      held_job: null,
+      waiting_since: '2026-11-06T21:53:00.000Z',
+    });
+  });
+
+  it('is null at another stage, for a closed attempt and for an attempt with no read', () => {
+    expect(gateWaitOf({ currentStage: 'code_review' }, [row()])).toBeNull();
+    expect(gateWaitOf({ currentStage: null }, [row()])).toBeNull();
+    expect(
+      gateWaitOf({ currentStage: 'ci_gate' }, [
+        row({ state: 'failed', exitedAt: new Date('2026-11-06T20:28:00.000Z') }),
+      ]),
+    ).toBeNull();
+    expect(gateWaitOf({ currentStage: 'ci_gate' }, [row({ ciPendingRead: null })])).toBeNull();
+    expect(gateWaitOf({ currentStage: 'ci_gate' }, [row({ stage: 'rebase_gate' })])).toBeNull();
+  });
+
+  /**
+   * Review of #89 (A): the **parked** wait's last read — `needs_human` at `ci_gate`, the newest
+   * attempt closed `failed`/`undecided`, with a read — and `null` for every neighbouring shape.
+   */
+  it('serves a parked wait’s last read as last_gate_wait, and never beside gate_wait', () => {
+    const timedOut = row({
+      state: 'failed',
+      outcome: 'undecided',
+      exitedAt: new Date('2026-11-06T20:28:00.000Z'),
+    });
+    const parked = { state: 'needs_human', currentStage: 'ci_gate' } as const;
+    expect(lastGateWaitOf(parked, [timedOut])).toEqual({
+      pipeline_id: '3038234623',
+      pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+      status: 'manual',
+      held_job: 'sentry-release-commit',
+      held_job_url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+      draft: true,
+      checked_at: '2026-11-06T19:58:00.000Z',
+      waiting_since: '2026-11-06T19:28:00.000Z',
+      timeout_minutes: 60,
+    });
+    expect(gateWaitOf(parked, [timedOut])).toBeNull();
+    // The open wait is gate_wait's, never this one's.
+    expect(lastGateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [row()])).toBeNull();
+    expect(lastGateWaitOf(parked, [row()])).toBeNull();
+  });
+
+  it('is null for last_gate_wait unless the task is parked at ci_gate by a no-answer ending with a read', () => {
+    const closed = (over: Partial<StageRow>) =>
+      row({ state: 'failed', exitedAt: new Date('2026-11-06T20:28:00.000Z'), ...over });
+    const parked = { state: 'needs_human', currentStage: 'ci_gate' } as const;
+    const cases: readonly [string, { state: string; currentStage: string | null }, StageRow[]][] = [
+      [
+        'not needs_human',
+        { state: 'active', currentStage: 'ci_gate' },
+        [closed({ outcome: 'undecided' })],
+      ],
+      [
+        'another stage',
+        { state: 'needs_human', currentStage: 'code_review' },
+        [closed({ outcome: 'undecided' })],
+      ],
+      ['a repeated failure', parked, [closed({ outcome: 'converged' })]],
+      ['an unsupported gate', parked, [closed({ outcome: 'unsupported' })]],
+      ['a person’s return', parked, [closed({ state: 'returned', outcome: 'returned' })]],
+      ['no read recorded', parked, [closed({ outcome: 'undecided', ciPendingRead: null })]],
+      [
+        'a newer attempt without one',
+        parked,
+        [closed({ outcome: 'undecided' }), closed({ attempt: 2, outcome: 'superseded' })],
+      ],
+      ['no ci_gate row', parked, []],
+    ];
+    for (const [why, task, rows] of cases) {
+      expect(lastGateWaitOf(task, rows), why).toBeNull();
+    }
+  });
+
+  it('refuses a stored read that does not parse, by name, never as null', () => {
+    for (const corrupt of [
+      { ...READ, status: 'held' },
+      { ...READ, pipeline_url: 'javascript:alert(1)' },
+      { ...READ, extra: true },
+      'not an object',
+    ]) {
+      const failure = (() => {
+        try {
+          return gateWaitOf({ currentStage: 'ci_gate' }, [row({ ciPendingRead: corrupt })]);
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(failure, JSON.stringify(corrupt)).toBeInstanceOf(UnprojectableRowError);
+      expect((failure as Error).message).toContain('task_stages.ci_pending_read');
     }
   });
 });

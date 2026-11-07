@@ -74,6 +74,7 @@ import {
   DEFAULT_CI_TIMEOUT_MINUTES,
   isBuiltinGateStageId,
   MAX_CI_TIMEOUT_MINUTES,
+  MAX_GATE_WAIT_HELD_JOB_CHARS,
   MIN_CI_TIMEOUT_MINUTES,
 } from '@platform/contracts';
 import type { CompiledPipeline, PipelineStage } from '@platform/domain';
@@ -92,6 +93,7 @@ import {
   failingJobs,
   readFailingJobLogs,
 } from './ci-log.js';
+import { type CiPipelineRead, ciPipelineReadOf, heldManualJob } from './ci-pending-read.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import { type TransientProviderCode, transientProviderFailure } from './gate-outage.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
@@ -147,9 +149,15 @@ export type GateResult =
   /**
    * The answer is not available yet; the job asks again. `ciWait` is present exactly when the CI
    * gate is waiting on a **poll-only** git binding (WP-136): the job then bounds the wait by time
-   * rather than by {@link MAX_GATE_CHECKS} (`ci-wait.ts`).
+   * rather than by {@link MAX_GATE_CHECKS} (`ci-wait.ts`). `ciRead` is present on **every** pending
+   * answer of the CI gate, whatever the binding (backlog 1078): the job records it on the attempt.
    */
-  | { readonly kind: 'pending'; readonly detail: string; readonly ciWait?: CiWait }
+  | {
+      readonly kind: 'pending';
+      readonly detail: string;
+      readonly ciWait?: CiWait;
+      readonly ciRead?: CiGateRead;
+    }
   /** The platform cannot evaluate this gate at all; the task escalates. */
   | { readonly kind: 'unsupported'; readonly detail: string };
 
@@ -248,6 +256,19 @@ export interface CiWait {
   readonly provider: string;
   /** The head pipeline the gate read, or `null` when none has started for the head commit. */
   readonly pipeline: { readonly id: string; readonly status: string } | null;
+}
+
+/**
+ * **What a pending CI read saw** (backlog 1078, `ci-pending-read.ts`): the head pipeline the gate is
+ * waiting on — one neither passed nor failed — or `null` when the read found none to wait on (no
+ * head yet, no pipeline yet, a passed pipeline whose tamper check cannot be made yet, or an id the
+ * read cannot record). The job writes `pipeline` on the open attempt, `null` included, so a read
+ * about an older head never outlives it.
+ */
+export interface CiGateRead {
+  /** The git binding's provider id, named in a retry's brief (`gitlab`). */
+  readonly provider: string;
+  readonly pipeline: CiPipelineRead | null;
 }
 
 /**
@@ -531,7 +552,9 @@ export const judgeCiSettlement = async (
     ...exceptionsOf(artifacts),
   });
   const redact = (text: string): string => git.redactor.redactText(text).value;
-  const ciDetail = reading.kind === 'no_pipeline' ? NO_PIPELINE_DETAIL : reading.detail;
+  // Review of #89: the reading's detail names failing jobs (provider text) on the poll path and on
+  // the pipeline event's (`ci-settle.ts`), so it is redacted here, once, for both.
+  const ciDetail = reading.kind === 'no_pipeline' ? NO_PIPELINE_DETAIL : redact(reading.detail);
 
   if (verdict.kind === 'changed' || reading.kind === 'failed') {
     const head = [
@@ -542,7 +565,7 @@ export const judgeCiSettlement = async (
       reading.kind === 'failed'
         ? await readFailingJobLogs(bindings, reading.logJobs, context)
         : null;
-    const composed = composeFailureDetail(head, logs);
+    const composed = composeFailureDetail(head, logs, redact);
     return {
       kind: 'settled',
       passed: false,
@@ -593,6 +616,7 @@ export const judgeCiSettlement = async (
 const composeFailureDetail = (
   head: string,
   logs: FailingJobLogs | null,
+  redact: (text: string) => string,
 ): { readonly detail: string; readonly originalChars: number | null } => {
   if (logs === null) {
     return { detail: head, originalChars: null };
@@ -606,16 +630,16 @@ const composeFailureDetail = (
   let cutChars = 0;
   const parts = logs.logs.map((log) => {
     if (log.kind === 'unreadable') {
-      return `No log of the failing job ${log.job} is included: ${log.why}.`;
+      return `No log of the failing job ${redact(log.job)} is included: ${log.why}.`;
     }
     if (log.originalChars !== null) {
       cutChars += log.originalChars - log.text.length;
     }
-    return `Log of the failing job ${log.job}, redacted:\n${log.text}`;
+    return `Log of the failing job ${redact(log.job)}, redacted:\n${log.text}`;
   });
   if (logs.omitted.length > 0) {
     parts.push(
-      `${logs.omitted.length} more failing ${logs.omitted.length === 1 ? 'job' : 'jobs'} past the first ${logs.logs.length}, whose logs were not read: ${logs.omitted.join(', ')}.`,
+      `${logs.omitted.length} more failing ${logs.omitted.length === 1 ? 'job' : 'jobs'} past the first ${logs.logs.length}, whose logs were not read: ${logs.omitted.map(redact).join(', ')}.`,
     );
   }
   const detail = [head, ...parts].join('\n');
@@ -652,9 +676,6 @@ const withCiWait = async (
 const CI_TERMINAL_PASS = new Set(['success']);
 const CI_TERMINAL_FAIL = new Set(['failed', 'canceled', 'skipped']);
 
-/** How much of a held job's name (provider text) the pending detail quotes. */
-const MAX_HELD_JOB_NAME_CHARS = 100;
-
 /**
  * The CI gate's pending detail for a pipeline that is neither green nor red — and, for one **held
  * at a manual job**, a plain sentence about why (backlog 486). The merge request stays a draft
@@ -664,18 +685,29 @@ const MAX_HELD_JOB_NAME_CHARS = 100;
  * nothing about that. Only a pipeline whose own status is `manual` is called held: a `running`
  * pipeline with a manual deploy job in a later stage is still running.
  */
+/**
+ * A job's name as the gate's sentences carry it: redacted by the git binding's redactor first, then
+ * cut at {@link MAX_GATE_WAIT_HELD_JOB_CHARS} (a cut first could split a secret the redactor would
+ * then miss). The words around it are unchanged: the held job is quoted, failing jobs are listed.
+ */
+export const boundedJobName = (name: string, redact: (text: string) => string): string =>
+  redact(name).slice(0, MAX_GATE_WAIT_HELD_JOB_CHARS);
+
 export const pendingPipelineDetail = (
   status: Pick<PipelineStatus, 'id' | 'status' | 'jobs'>,
   draft: boolean,
+  redact: (text: string) => string,
 ): string => {
   if (status.status !== 'manual') {
     return `pipeline ${status.id} is ${status.status}`;
   }
-  const job = status.jobs.find((entry) => entry.status === 'manual');
+  // The same job the recorded read names as `held_job` (backlog 1078, `heldManualJob`).
+  const job = heldManualJob(status);
+  // Review of #89: the name is provider text in the gate's reason — redacted, then bounded.
   const held =
     job === undefined
       ? 'a manual job'
-      : `manual job ${JSON.stringify(job.name.slice(0, MAX_HELD_JOB_NAME_CHARS))}`;
+      : `manual job ${JSON.stringify(boundedJobName(job.name, redact))}`;
   return draft
     ? `the merge request is a draft and pipeline ${status.id} is held at ${held} — the project's CI rules may skip or hold jobs for drafts, and the platform keeps its merge request a draft until Ready; see the readiness panel's CI-rules warning`
     : `pipeline ${status.id} is held at ${held}: nothing runs until somebody starts it on the provider`;
@@ -766,6 +798,10 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
         if (stage.id === 'ci_gate') {
           // WP-136: the head pipeline the read saw, for a poll-only binding's brief.
           let seenPipeline: CiWait['pipeline'] = null;
+          // Backlog 1078: the pending pipeline the read saw, recorded on the attempt by the job.
+          let pendingRead: CiPipelineRead | null = null;
+          // The git binding's redactor over provider text this gate writes into its own sentences.
+          const redact = (text: string): string => binding.redactor.redactText(text).value;
           const read = async (): Promise<GateResult> => {
             /**
              * **The live head, not the recorded one** (WP-60 review round 2). `tasks.mr_ref.head_sha`
@@ -821,17 +857,39 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
                 status: status.status,
                 failingJobs: failed,
                 logJobs: failingJobs(status.jobs),
+                // Review of #89: each failing job's name is provider text on its way into the
+                // return reason — redacted, then bounded, as the held job's is.
                 detail:
                   failed.length === 0
                     ? `pipeline ${status.id} ${status.status}`
-                    : `pipeline ${status.id} ${status.status}: ${failed.join(', ')}`,
+                    : `pipeline ${status.id} ${status.status}: ${failed.map((name) => boundedJobName(name, redact)).join(', ')}`,
               });
             }
-            return { kind: 'pending', detail: pendingPipelineDetail(status, live?.draft === true) };
+            pendingRead = ciPipelineReadOf(status, {
+              headSha,
+              draft: live?.draft === true,
+              redact,
+            });
+            return {
+              kind: 'pending',
+              detail: pendingPipelineDetail(status, live?.draft === true, redact),
+            };
           };
           const result = await read();
           return result.kind === 'pending'
-            ? withCiWait(options, bindings, stored, result, seenPipeline)
+            ? withCiWait(
+                options,
+                bindings,
+                stored,
+                {
+                  ...result,
+                  ciRead: {
+                    provider: binding.providerName ?? binding.ref.provider,
+                    pipeline: pendingRead,
+                  },
+                },
+                seenPipeline,
+              )
             : result;
         }
 

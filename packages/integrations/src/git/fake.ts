@@ -1112,6 +1112,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       status: job.status,
       log_ref: job.log === null ? null : `log:${job.id}`,
       allow_failure: job.allow_failure,
+      // Backlog 1078: every job has a page, as GitLab's "List pipeline jobs" says of its jobs.
+      web_url: `${baseUrl}/${pipeline.project}/-/jobs/${job.id}`,
     })),
     coverage_pct: pipeline.coverage_pct,
     finished_at: pipeline.finished_at,
