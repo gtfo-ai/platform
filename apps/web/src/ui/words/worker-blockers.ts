@@ -26,6 +26,10 @@ export const UPDATER_FIX =
  * **Why a worker takes no work**, in one set of words for the Workers screen, a project's execution
  * panel and the worker's own local page (TD-031's 2026-11-05 blocker-vocabulary amendment, S-22.19).
  * Each sentence names *the worker* or *it*, so it reads the same on the platform and on the machine.
+ *
+ * Home's count of several machines words the same blockers a second way, singular and plural
+ * ("2 not connected, 1 needs an update"): `COUNT_WORDS` in `features/home-setup.ts`, kept out of
+ * this table so the worker's page does not load it (S-25.15). Reword a blocker in both.
  */
 export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, ClaimBlockerWords>> = {
   not_set_up: {

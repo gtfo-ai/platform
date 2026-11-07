@@ -237,6 +237,13 @@ export interface MissingPiece {
  * Why a machine can't take work, as a count says it (S-25.15): "2 not connected, 1 needs an
  * update" — the singular, and the plural where the verb changes. Short on purpose: the sentence
  * names the reasons and the Workers screen says each machine's fix.
+ *
+ * **The second wording of `WORKER_CLAIM_BLOCKER_WORDS`** (`ui/words/worker-blockers.ts`), keyed by
+ * the same blockers — the type makes a blocker added there fail to compile here until it has its
+ * count form, and a reworded blocker there is reworded here too. It is not derived from that
+ * table's `word`: those are row headlines ("Not connected to the platform", "It has no run
+ * images") with no plural, and a `count` field on that table would put these words in the
+ * worker's local page, which loads it within its own 120 kB budget (BACKLOG 1455).
  */
 const COUNT_WORDS: Readonly<
   Record<WorkerClaimBlocker | 'updating', string | readonly [string, string]>

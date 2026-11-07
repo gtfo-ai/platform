@@ -22,7 +22,10 @@
  * The order, the first that applies: the take-over to hand back, the agent's question, an approval
  * the reader may decide, the task's own cap, a manual CI job only a person can start, then the
  * stop's own way out — *Take it* for a ticket somebody else holds (S-25.14, nothing at all when the
- * reader may not take it), *Retry stage…* for a structured stop — and a resume last.
+ * reader may not take it), *Retry stage…* for a structured stop with no approval pending — and a
+ * resume last. A stop beside a pending approval keeps the rule before S-25.15 (review of #118):
+ * *Review plan* for a reader who may decide it, else *Resume*, which re-enters that approval's wait
+ * rather than running the stage past it, else none.
  */
 import type { TaskDetailResponse, TaskState } from '@platform/contracts';
 import { gateWaitHeld, gateWaitJobUrl, openGateWait } from './gate-wait.js';
@@ -99,7 +102,14 @@ export const taskPrimaryAction = (input: PrimaryFacts): TaskPrimaryAction => {
     input.canResume !== false && (input.state === 'paused' || input.state === 'needs_human');
   // `retry-stage` and `resume` are the same role on the server (`task.retry_stage` and
   // `task.resume` are both a member's) and both admit `needs_human`; the read carries the second.
-  if (input.stopRetry === true && input.state === 'needs_human' && resumable) {
+  // Review of #118: never over a pending approval (one the reader may not decide reaches here) —
+  // Resume goes back into that approval's wait first, and a retry does not, so Resume stays.
+  if (
+    input.stopRetry === true &&
+    input.state === 'needs_human' &&
+    input.pendingApprovals === 0 &&
+    resumable
+  ) {
     return 'retry_stage';
   }
   return resumable ? 'resume' : null;

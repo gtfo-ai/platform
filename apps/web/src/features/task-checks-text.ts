@@ -20,6 +20,7 @@ import type {
   TaskReviewers,
   TaskReviewThreads,
   TaskState,
+  TaskStop,
 } from '@platform/contracts';
 import { stageLabel } from '../ui/humanize.js';
 import { formatDateTime, formatMinutes } from '../ui/kit.js';
@@ -399,16 +400,24 @@ export const gateValueText = (
  *    settlement before WP-81 wrote, and the row cannot tell the two apart. The item says so rather
  *    than drawing *clean* for a gate that may never have looked (standing rule 16);
  *  - an escalation the CI gate closed `undecided` — **not checked** (S-25.15): the check is made
- *    when the gate settles on a finished pipeline, and this gate never settled (CI timed out, was
- *    held at a manual job, its provider did not answer, or the changed files were never listed),
- *    so the item says so, muted, and does not count as a check that needs a person — the CI item
- *    beside it does. The row cannot say *which* of those it was, so the words name the CI check
- *    not finishing, which is true of all of them (BACKLOG 1362 asks the server for the field);
+ *    when the gate settles, and this gate never settled, so the item is muted and does not count
+ *    as a check that needs a person — the CI item beside it does. The row closes `undecided` for
+ *    endings that differ: the pipeline never finished (the CI timeout, a Retry on the same held
+ *    pipeline), the provider did not answer, the gate's checks ran out — and a pipeline that **did**
+ *    finish whose changed files the provider never listed, so the check could not be made. Only the
+ *    stop's `ci_ending` on this attempt (`ci_timed_out`, `ci_held_unchanged`) proves the pipeline
+ *    was unfinished, so only then is it *not checked: CI didn't finish*; otherwise *not checked
+ *    yet*, which is true of every ending (BACKLOG 1362 asks the server which it was);
  *  - any other escalation — the gate could not decide, which is what it says.
  *
  * A rebase row entered **before** the CI row belongs to an earlier round and is not read.
  */
-export const tamperValueText = (ci: StageRow | null, rebase: StageRow | null = null): string => {
+export const tamperValueText = (
+  ci: StageRow | null,
+  rebase: StageRow | null = null,
+  /** The task read's `stop`: its `ci_ending` says whether the pipeline was unfinished. */
+  stop: TaskStop | null = null,
+): string => {
   if (ci === null) {
     return 'not reached';
   }
@@ -430,13 +439,28 @@ export const tamperValueText = (ci: StageRow | null, rebase: StageRow | null = n
       return ci.state === 'returned'
         ? TAMPER_NOT_RECORDED
         : tamperNotChecked(ci)
-          ? TAMPER_NOT_CHECKED
+          ? ciUnfinished(ci, stop)
+            ? TAMPER_NOT_CHECKED
+            : TAMPER_NOT_CHECKED_YET
           : needsYouText(ci.outcome);
   }
 };
 
-/** The words for a tamper check its CI gate never got to make (S-25.15). */
+/** The words for a tamper check its CI gate never got to make, the pipeline unfinished (S-25.15). */
 export const TAMPER_NOT_CHECKED = 'not checked: CI didn’t finish';
+
+/** The same, when the row cannot say why the check was not made (BACKLOG 1362). */
+export const TAMPER_NOT_CHECKED_YET = 'not checked yet';
+
+/**
+ * The stop proves this CI attempt's pipeline never finished: it timed out waiting, or a Retry found
+ * the same held pipeline (`ci_ending`, recorded only for those two endings).
+ */
+const ciUnfinished = (ci: StageRow, stop: TaskStop | null): boolean =>
+  stop !== null &&
+  stop.stage === 'ci_gate' &&
+  stop.attempt === ci.attempt &&
+  (stop.ci_ending === 'ci_timed_out' || stop.ci_ending === 'ci_held_unchanged');
 
 /**
  * The CI gate escalated without settling (`failed`, closed `undecided`): the tamper check is made in

@@ -20,6 +20,7 @@ import {
   dependencyStatus,
   gateStatus,
   TAMPER_NOT_CHECKED,
+  TAMPER_NOT_CHECKED_YET,
   tamperStatus,
   tamperValueText,
 } from './task-checks-text.js';
@@ -561,6 +562,21 @@ describe('one primary action per state', () => {
       taskPrimaryAction({ ...stopped, stopRetry: true, heldElsewhere: true, canTake: true }),
     ).toBe('take');
     expect(taskPrimaryAction({ ...stopped, heldElsewhere: true, canTake: false })).toBeNull();
+    // Review of #118: a pending approval comes before Retry. A reader who may decide it reviews
+    // it; anybody else keeps Resume (it re-enters the approval's wait), or nothing.
+    const pending = { ...stopped, stopRetry: true, pendingApprovals: 1 };
+    expect(taskPrimaryAction({ ...pending, canDecide: true })).toBe('approve');
+    expect(taskPrimaryAction({ ...pending, canDecide: false })).toBe('resume');
+    expect(taskPrimaryAction({ ...pending, canDecide: false, canResume: false })).toBeNull();
+  });
+
+  it('keeps Resume, not Retry stage…, for a stop beside an approval the reader may not decide (review of #118)', async () => {
+    start(ciTimedOut({ approvals: [APPROVAL_ROW], can_decide_approval: false }));
+    await screen.findByRole('region', { name: 'Needs you' });
+    await screen.findByText('Checks');
+    await waitFor(() => {
+      expect(primaries()).toEqual(['Resume']);
+    });
   });
 
   it('picks the holder, then the question, then the approval, then a resume', () => {
@@ -1519,6 +1535,31 @@ describe('the merge box', () => {
     );
   });
 
+  it('says Protected files was not checked yet when the row cannot say CI was unfinished (review of #118)', async () => {
+    start(
+      detail(
+        {
+          stages: [
+            stage('implementation', 1, 'completed', 'approve'),
+            stage('ci_gate', 1, 'failed', 'undecided'),
+          ],
+        },
+        { state: 'needs_human', current_stage: 'ci_gate' },
+      ),
+    );
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        '1 check needs you',
+      );
+    });
+    const tamper = document.querySelector('[data-check="tamper"]')?.textContent ?? '';
+    expect(tamper).toContain(TAMPER_NOT_CHECKED_YET);
+    expect(tamper).not.toContain('didn’t finish');
+    expect(document.querySelector('[data-check="tamper"]')?.getAttribute('data-check-status')).toBe(
+      'skipped',
+    );
+  });
+
   it('draws the cost against the cap as a meter, with no inline style', async () => {
     start(detail());
     await screen.findByText('Cost so far');
@@ -1539,7 +1580,32 @@ describe('the merge box', () => {
     // S-25.15: a CI gate that never settled made no tamper check — muted, never *needs you* — while
     // one the platform could not evaluate (`unsupported`, which the tamper check also answers) does.
     expect(tamperStatus(stage('ci_gate', 1, 'failed', 'undecided'))).toBe('skipped');
-    expect(tamperValueText(stage('ci_gate', 1, 'failed', 'undecided'))).toBe(TAMPER_NOT_CHECKED);
+    // Review of #118: only a stop whose `ci_ending` proves the pipeline unfinished, on this
+    // attempt, says CI didn't finish; any other `undecided` (a finished pipeline whose changed files
+    // were never listed, a silent provider) is *not checked yet*.
+    const undecided = stage('ci_gate', 2, 'failed', 'undecided');
+    const timedOut = {
+      stage: 'ci_gate',
+      attempt: 2,
+      cause: 'no_answer' as const,
+      loop: null,
+      ci_failure: null,
+      recorded: null,
+      recorded_cut: false,
+      ci_ending: 'ci_timed_out' as const,
+    };
+    expect(tamperValueText(undecided)).toBe(TAMPER_NOT_CHECKED_YET);
+    expect(tamperValueText(undecided, null, timedOut)).toBe(TAMPER_NOT_CHECKED);
+    expect(tamperValueText(undecided, null, { ...timedOut, ci_ending: 'ci_held_unchanged' })).toBe(
+      TAMPER_NOT_CHECKED,
+    );
+    expect(tamperValueText(undecided, null, { ...timedOut, ci_ending: null })).toBe(
+      TAMPER_NOT_CHECKED_YET,
+    );
+    // A stop recorded on an earlier attempt says nothing about this one.
+    expect(tamperValueText(undecided, null, { ...timedOut, attempt: 1 })).toBe(
+      TAMPER_NOT_CHECKED_YET,
+    );
     expect(tamperStatus(stage('ci_gate', 1, 'failed', 'unsupported'))).toBe('needs_you');
     expect(tamperValueText(stage('ci_gate', 1, 'failed', 'unsupported'))).toBe(
       'needs you: it cannot be checked here',

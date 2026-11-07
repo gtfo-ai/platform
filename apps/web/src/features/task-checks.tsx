@@ -331,7 +331,7 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
     {
       id: 'tamper',
       label: 'Protected files',
-      value: tamperValueText(ciGate, rebaseGate),
+      value: tamperValueText(ciGate, rebaseGate, detail.stop),
       status: tamperStatus(ciGate, rebaseGate),
       definition:
         'Whether the change edits, deletes or renames files this project protects (tests and CI or lint configuration by default). A change the plan declared is allowed once the code review confirms it; anything else sends the task back to the developer, naming the files. Adding a new file is never flagged. A check made before the platform kept its result is never shown as passed.',

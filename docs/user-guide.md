@@ -891,8 +891,8 @@ would have nowhere to run.
   task's own cap paused it and you may raise budgets, *Resume* when the task is paused or waiting
   for a person — and none when nothing waits on you. When the needs-you box below says how the task
   stopped and that the next step is to retry the stage (the rounds used up, the same failure again,
-  CI that never finished), the box's own **Retry stage…** is the page's one amber button and Resume
-  moves to the `···` menu; from a stop both re-run the stage as a new attempt, and Retry stage also
+  CI that never finished) and no approval is waiting, the box's own **Retry stage…** is the page's
+  one amber button and Resume moves to the `···` menu; from a stop both re-run the stage as a new attempt, and Retry stage also
   stops a run of it still going. Resume is never offered past an open question
   or a pending approval: answer or decide it instead. Everything else is in the **`···`**
   menu beside it: *Pause*, *Resume*, *Work on it yourself…*, *Retry stage…*, *Return to stage…*, *Rework…*,
@@ -1183,8 +1183,9 @@ The product defines eleven merge-readiness checks, and the box shows **all eleve
   review's confirmation, so neither review runs twice; then *declared changes confirmed by the code
   review*, or *declared changes not confirmed, sent back* (the developer is told which paths, as
   for an undeclared change); *no unapproved changes* when the check ran and found no protected file changed, or found only changes the plan declared and the code review confirmed; *checking*; or *not
-  reached*. While CI never finished (it timed out, a manual job was never started, or the git host
-  stopped answering) the check was not made and reads *not checked: CI didn't finish*, muted and not
+  reached*. When the CI check stopped without a verdict the protected-files check was not made: it
+  reads *not checked: CI didn't finish* when the pipeline is known to be unfinished (CI timed out, or
+  a Retry found the same held pipeline) and *not checked yet* otherwise, muted either way and not
   counted among the checks that need you — the CI status beside it is the one that does.
   A CI gate whose row carries no record of the check reads *not recorded*: one that
   settled before WP-105 recorded what its check found (before WP-81 no check was made at all, and
