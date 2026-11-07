@@ -106,6 +106,9 @@ export const IDS = {
   taskFleetQueued: id(25),
   worker: id(100),
   workerPaused: id(101),
+  // S-26.8a: a machine of another person, served only after `POST /__test__/workers-others`.
+  workerOthers: id(102),
+  otherUser: id(103),
   // S-25.11: a task CI sent back that the Developer is fixing, and one whose CI check timed out.
   taskCiFixing: id(26),
   taskCiTimedOut: id(27),
@@ -1478,6 +1481,9 @@ export const workers = workersResponseSchema.parse({
       claim_blockers: ['offline'],
       can_claim: false,
       last_claimed_at: null,
+      // S-26.4's fields, which the Workers screen's card reads (S-26.8a).
+      claim_policy: 'mine_and_unassigned',
+      policy_skipped_offers: 0,
     },
     {
       id: IDS.workerPaused,
@@ -1501,10 +1507,34 @@ export const workers = workersResponseSchema.parse({
       claim_blockers: ['usage_limited'],
       can_claim: false,
       last_claimed_at: null,
+      claim_policy: 'everything',
+      policy_skipped_offers: 0,
     },
   ],
   scope: 'all',
   timezone: 'UTC',
+});
+
+/**
+ * S-26.8a: the same list with a machine of **another person** in it — what an administrator reads
+ * (`scope: all`). Its policy is *Only my tasks*, and it leaves three runs for others. Served only
+ * after `POST /__test__/workers-others`, so the Agents map and every other screen that reads the
+ * workers keep {@link workers}' two.
+ */
+export const workersWithOthers = workersResponseSchema.parse({
+  ...workers,
+  items: [
+    ...workers.items,
+    {
+      ...workers.items[0],
+      id: IDS.workerOthers,
+      name: 'vojta-mbp',
+      user: { id: IDS.otherUser, email: 'vojtech@example.invalid', name: 'Vojtěch' },
+      running: [],
+      claim_policy: 'mine',
+      policy_skipped_offers: 3,
+    },
+  ],
 });
 
 /**
@@ -1527,6 +1557,20 @@ export const projectExecution = projectExecutionResponseSchema.parse({
     open: 0,
     closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
   },
+  // S-26.5: the server claimant runs and the mode lets it claim, so it takes unassigned tasks.
+  others_take_unassigned: true,
+});
+
+/**
+ * S-26.8a: the same project with no server claimant and no other person's machine taking its
+ * unassigned tasks — served with {@link workersWithOthers}, so the Workers screen's consequence
+ * line names the project once an owner chooses *Only my tasks*. (`vojta-mbp` takes only its
+ * owner's tasks, so it is not such a machine.)
+ */
+export const projectExecutionNoTaker = projectExecutionResponseSchema.parse({
+  ...projectExecution,
+  server_claimant: 'none',
+  others_take_unassigned: false,
 });
 
 /** The fleet's two other runs have no transcript yet. */

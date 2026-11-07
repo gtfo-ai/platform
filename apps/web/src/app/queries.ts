@@ -259,6 +259,25 @@ export const useProjectExecution = (projectId: string | null) => {
   });
 };
 
+/**
+ * {@link useProjectExecution} for several projects at once, asked only while `enabled` — the
+ * Workers screen's consequence line (S-26.8a, the M26 UX spec § 1) reads each project's
+ * `others_take_unassigned` once its owner opens *Change*, never on the page's load. The keys are
+ * {@link useProjectExecution}'s, so a project already read elsewhere is answered from the cache
+ * (a disabled query still returns what is cached) and none is read twice.
+ */
+export const useProjectsExecution = (projectIds: readonly string[], enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQueries({
+    queries: projectIds.map((projectId) => ({
+      queryKey: queryKeys.projectExecution(projectId),
+      queryFn: () => endpoints.projectExecution(projectId),
+      enabled,
+      ...FOREVER,
+    })),
+  });
+};
+
 export const useProjectBudgets = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -1749,6 +1768,21 @@ export const useSettingsCommands = (mint?: MintKey) => {
         endpoints.decideWorkerDevice(body),
       // `exact`: the list only. The decided code's own read would answer 404 now, which is not news.
       onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
+      },
+    }),
+    /**
+     * `PUT /api/workers/:id/claim-policy` (S-26.4): what the machine takes, from the Workers
+     * screen's card (S-26.8a). Not keyed: it is a state assertion, and a repeat of the stored pair
+     * answers `performed: false`. The list is read again **before** the call resolves, so the card's
+     * sentence — built from the stored setting only — says the new one once it says *Saved*.
+     */
+    setWorkerClaimPolicy: useMutation({
+      mutationFn: (input: {
+        workerId: string;
+        body: Parameters<typeof endpoints.setWorkerClaimPolicy>[1];
+      }) => endpoints.setWorkerClaimPolicy(input.workerId, input.body),
+      onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
       },
     }),

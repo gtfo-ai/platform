@@ -635,6 +635,79 @@ describe('status_mapping superseded (WP-181’s flag, TD-029 decision 3)', () =>
   });
 });
 
+describe('Assign the owner in the tracker (S-26.8a, product/06’s M26 amendment)', () => {
+  const assignOwner = (card: HTMLElement): HTMLInputElement =>
+    within(card).getByRole('checkbox', {
+      name: 'Assign the owner in the tracker',
+    }) as HTMLInputElement;
+
+  it('is off by default, says what it does, and saving it on writes assign_owner: true', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const box = assignOwner(card);
+    expect(box.checked).toBe(false);
+    // Beside the lifecycle's two switches, with its one line of help as the box's description.
+    expect(
+      within(card).getAllByRole('checkbox', {
+        name: /Claim the ticket|Also start|Assign the owner/,
+      }),
+    ).toHaveLength(3);
+    const help = document.getElementById(box.getAttribute('aria-describedby') ?? '');
+    expect(help?.textContent).toBe(
+      'When someone takes or is assigned a task here, also assign the ticket to them in Jira. Only people who linked their Jira account are assigned there.',
+    );
+    const user = userEvent.setup();
+    await user.click(box);
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(trackerConfigOf(state.puts[0])).toEqual({
+      lifecycle: { claim: true, take_assigned_tickets: false, assign_owner: true },
+    });
+  });
+
+  it('shows a stored true as on, and saving it off writes assign_owner: false', async () => {
+    const state = world({
+      bindings: bindingsWith({ lifecycle: { claim: true, assign_owner: true } }),
+    });
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const box = assignOwner(card);
+    expect(box.checked).toBe(true);
+    const user = userEvent.setup();
+    await user.click(box);
+    expect(box.checked).toBe(false);
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(trackerConfigOf(state.puts[0])).toEqual({
+      lifecycle: { claim: true, take_assigned_tickets: false, assign_owner: false },
+    });
+  });
+
+  it('is not offered below a maintainer: the statuses the form waits for are refused, and it says so', async () => {
+    const state = world({
+      statuses: () =>
+        json({ error: { code: 'forbidden', message: 'needs project.settings.write' } }, 403),
+    });
+    renderSettings(state);
+    expect(
+      await screen.findByText('Reading the tracker’s statuses needs a maintainer.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: 'Assign the owner in the tracker' })).toBeNull();
+    expect(state.puts).toEqual([]);
+  });
+
+  it('leaves it out of a save that never touched it, so off stays the reader’s default', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect('assign_owner' in (trackerConfigOf(state.puts[0]).lifecycle as object)).toBe(false);
+  });
+});
+
 describe('the lifecycle helpers', () => {
   it('matches stored names case-insensitively onto the loaded spelling', () => {
     const { draft, dropped } = lifecycleDraftOf(

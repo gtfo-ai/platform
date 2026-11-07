@@ -147,6 +147,8 @@ import {
   ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
   versionResponseSchema,
+  workerClaimPolicyRequestSchema,
+  workerClaimPolicyResponseSchema,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
   workerDeviceLookupRequestSchema,
@@ -255,6 +257,15 @@ export interface Endpoints {
   readonly decideWorkerDevice: (
     body: z.input<typeof workerDeviceDecisionRequestSchema>,
   ) => Promise<z.output<typeof workerDeviceDecisionResponseSchema>>;
+  /**
+   * `PUT /api/workers/:id/claim-policy` — what the machine takes (S-26.4, the M26 UX spec § 1):
+   * its own user only (`403 claim_policy_owner_only` for an administrator, `404` for anybody
+   * else); `422 claim_scope_empty` / `project_not_eligible`. A repeat answers `performed: false`.
+   */
+  readonly setWorkerClaimPolicy: (
+    workerId: string,
+    body: z.input<typeof workerClaimPolicyRequestSchema>,
+  ) => Promise<z.output<typeof workerClaimPolicyResponseSchema>>;
   /** `DELETE /api/workers/:id` — revoke; a repeat answers `performed: false`. */
   readonly revokeWorker: (workerId: string) => Promise<z.output<typeof revokeWorkerResponseSchema>>;
   /** The newest refused or ignored inbound deliveries of one integration (WP-44, backlog 198). */
@@ -796,6 +807,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.command('/api/workers/device/approve', {
         schema: workerDeviceDecisionResponseSchema,
         body: workerDeviceDecisionRequestSchema.parse(body),
+      }),
+    setWorkerClaimPolicy: (workerId, body) =>
+      client.command(`/api/workers/${seg(workerId)}/claim-policy`, {
+        method: 'PUT',
+        schema: workerClaimPolicyResponseSchema,
+        body: workerClaimPolicyRequestSchema.parse(body),
       }),
     revokeWorker: (workerId) =>
       client.command(`/api/workers/${seg(workerId)}`, {

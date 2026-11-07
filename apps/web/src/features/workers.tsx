@@ -17,6 +17,20 @@
  * its slots are busy; its version, image digests and dates are behind *Details*. *Revoke* opens a
  * dialog that says what it does before the press.
  *
+ * **What this machine takes** (S-26.8a, the M26 UX spec § 1): every active row draws the shared
+ * card (`ui/claim-policy-card.tsx`, unframed, `surface: 'workers'`) — its sentence built from the
+ * **stored** policy and project list the list read carries (`claim_policy`, `claim_projects`) — and,
+ * under it, a muted *Skipped 3 runs this machine doesn’t take* when `policy_skipped_offers` is above
+ * zero. **Only the machine's owner gets *Change*** (`PUT /api/workers/:id/claim-policy`); anybody
+ * else — an administrator reading every machine — reads the sentence with the owner's name
+ * ("Vojtěch’s tasks"), and the server refuses them regardless. A refused save is said in words:
+ * `422 claim_scope_empty` here, `403`/`404`/`project_not_eligible` by the card's own words. The
+ * card's consequence line ("Unassigned tasks in Autix have nowhere to run.") reads each project's
+ * `others_take_unassigned` from its execution read, which is one read per project: they are asked
+ * only once the owner presses *Change* — never on the page's load — and a project already read
+ * elsewhere is answered from the cache. Until then, and for a read-only card, the line is unknown
+ * and says nothing.
+ *
  * **It refreshes by itself**: no event announces a heartbeat, a handshake or a new worker, so the
  * list is asked again every {@link WORKERS_REFRESH_MS} while the page is open (and in the
  * foreground), and the `org` topic's events that carry a `worker_id` refresh it at once.
@@ -46,12 +60,26 @@ import type { WorkerClaimBlocker, WorkerSummary } from '@platform/contracts';
 import { WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
 import { ServerIcon } from '@primer/octicons-react/ServerIcon';
 import { Link } from '@tanstack/react-router';
-import { type ReactElement, useEffect, useState } from 'react';
-import { useSession, useSettingsCommands, useWorkerDevice, useWorkers } from '../app/queries.js';
+import { type ReactElement, useEffect, useRef, useState } from 'react';
+import { ApiError } from '../api/http.js';
+import {
+  useProjects,
+  useProjectsExecution,
+  useSession,
+  useSettingsCommands,
+  useWorkerDevice,
+  useWorkers,
+} from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
+import {
+  ClaimPolicyCard,
+  type ClaimPolicyProject,
+  type ClaimPolicyValue,
+  claimPolicyRefusalWords,
+} from '../ui/claim-policy-card.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Dialog } from '../ui/dialog.js';
 import { Flash } from '../ui/flash.js';
@@ -60,6 +88,7 @@ import {
   leadingClaimBlocker,
   UPDATING_WORDS,
   WORKER_CLAIM_BLOCKER_WORDS,
+  WORKERS_POLICY_WORDS,
 } from '../ui/humanize.js';
 import {
   Button,
@@ -206,15 +235,114 @@ export const slotsText = (worker: WorkerSummary): string =>
   `${formatInteger(worker.running.length)} of ${formatInteger(worker.concurrency)} busy`;
 
 /**
- * The worker's claim scope, read only (WP-293): what its owner set on the worker's local page for
- * its **automatic** claims. A pick from that page ignores it; an administrator's levers are the
- * project's execution mode and *Revoke*.
+ * The setting a row's card shows, as it is **stored** (S-26.4): `claim_policy`, or what a `null`
+ * reads as when the server sent none — `pick_only` for a legacy `[]` scope, `everything` otherwise —
+ * over `claim_projects`, whose legacy `[]` narrows nothing and so reads as every project.
  */
-export const claimScopeWords = (worker: WorkerSummary): string => {
+export const storedClaimPolicyOf = (worker: WorkerSummary): ClaimPolicyValue => {
   const projects = worker.claim_projects;
-  if (projects === null) return 'Takes runs of every project';
-  if (projects.length === 0) return 'Takes only runs its owner picks';
-  return `Takes runs of ${projects.map((project) => project.key ?? 'a removed project').join(', ')}`;
+  const legacyPickOnly = projects !== null && projects.length === 0;
+  return {
+    policy: worker.claim_policy ?? (legacyPickOnly ? 'pick_only' : 'everything'),
+    projectIds: projects === null || legacyPickOnly ? null : projects.map((project) => project.id),
+  };
+};
+
+/**
+ * A refused save of what a machine takes, in words (the card shows the thrown error's message):
+ * `422 claim_scope_empty` here, the card's own words for `403 claim_policy_owner_only`, `404` and
+ * `422 project_not_eligible`, and one platform sentence for anything else — never the server's
+ * text, which names ids.
+ */
+export const claimPolicySaveRefusal = (error: unknown): string => {
+  if (error instanceof ApiError && error.code === 'claim_scope_empty') {
+    return WORKERS_POLICY_WORDS.refusedEmpty;
+  }
+  return claimPolicyRefusalWords(error) ?? WORKERS_POLICY_WORDS.refusedOther;
+};
+
+/**
+ * The projects a row's card names. The owner's card offers what the project list answers and
+ * nothing else (a chip for a project they cannot see would be refused); a read-only card also
+ * names a stored project the reader cannot see by its key, so the sentence never calls a project
+ * somebody else still works in "a project you left".
+ */
+const cardProjectsOf = (
+  worker: WorkerSummary,
+  projects: readonly ClaimPolicyProject[],
+  editable: boolean,
+): readonly ClaimPolicyProject[] =>
+  editable
+    ? projects
+    : [
+        ...projects,
+        ...(worker.claim_projects ?? []).flatMap((stored) =>
+          stored.key === null || projects.some((project) => project.id === stored.id)
+            ? []
+            : [{ id: stored.id, name: '', key: stored.key }],
+        ),
+      ];
+
+/**
+ * A row's *What this machine takes*. The consequence line's evidence (`others_take_unassigned`, one
+ * execution read per project) is asked only once *Change* is pressed — the card is the shared one
+ * and says nothing about its disclosure, so the press is observed on the card's own *Change*
+ * button (`data-claim-policy-change`) — and a read already in the cache answers before that.
+ */
+const WorkerPolicy = ({
+  worker,
+  projects,
+  ownerName,
+  onSave,
+}: {
+  readonly worker: WorkerSummary;
+  readonly projects: readonly ClaimPolicyProject[];
+  /** Somebody else's machine: the card's sentence names them. */
+  readonly ownerName: string | null;
+  /** The machine's owner only. */
+  readonly onSave: ((next: ClaimPolicyValue) => Promise<void>) | null;
+}): ReactElement => {
+  const host = useRef<HTMLDivElement>(null);
+  const [asked, setAsked] = useState(false);
+  const editable = onSave !== null;
+  useEffect(() => {
+    const element = host.current;
+    if (element === null || !editable) return;
+    const listener = (event: Event): void => {
+      if (event.target instanceof Element && event.target.closest('[data-claim-policy-change]')) {
+        setAsked(true);
+      }
+    };
+    element.addEventListener('click', listener, true);
+    return () => element.removeEventListener('click', listener, true);
+  }, [editable]);
+  const ids = editable ? projects.map((project) => project.id) : [];
+  const executions = useProjectsExecution(ids, asked);
+  const unassignedHasTaker: Record<string, boolean> = {};
+  ids.forEach((id, index) => {
+    const known = executions[index]?.data?.others_take_unassigned;
+    if (known !== undefined) unassignedHasTaker[id] = known;
+  });
+  const skipped = worker.policy_skipped_offers ?? 0;
+  return (
+    <div ref={host} className="flex flex-col gap-1" data-worker-policy="">
+      <ClaimPolicyCard
+        stored={storedClaimPolicyOf(worker)}
+        projects={cardProjectsOf(worker, projects, editable)}
+        unassignedHasTaker={unassignedHasTaker}
+        surface="workers"
+        headingLevel="h2"
+        framed={false}
+        {...(onSave === null ? {} : { onSave })}
+        {...(ownerName === null ? {} : { ownerName })}
+      />
+      {skipped > 0 ? (
+        <p className="text-xs text-fg-muted" data-policy-skipped="">
+          {WORKERS_POLICY_WORDS.skipped(skipped, formatInteger(skipped))}
+        </p>
+      ) : null}
+    </div>
+  );
 };
 
 /** Every blocker the server named, each with what to do about it, in the vocabulary's order. */
@@ -254,9 +382,17 @@ const WorkerRow = ({
   timezone,
   pending,
   onRevoke,
+  projects,
+  readerId,
+  onSavePolicy,
 }: {
   readonly worker: WorkerSummary;
   readonly showUser: boolean;
+  /** The projects the reader can see: the card's chips and the names its sentence says. */
+  readonly projects: readonly ClaimPolicyProject[];
+  /** The signed-in person: only the machine's owner may change what it takes. */
+  readonly readerId: string | null;
+  readonly onSavePolicy: (next: ClaimPolicyValue) => Promise<void>;
   readonly nowMs: number;
   /** The organisation's timezone a usage pause is shown in (WP-285). */
   readonly timezone: string;
@@ -271,12 +407,13 @@ const WorkerRow = ({
   const takes = workerReadinessOf(worker).takes;
   // A pick-only worker's state already says what it takes, and it is not blocked: no Why?.
   const blocked = active && takes === 'no';
+  const mine = readerId !== null && worker.user.id === readerId;
   return (
     <ListRow
       leading={<StatusIcon status={state.status} label={state.word} />}
       title={<UntrustedText value={worker.name} />}
       meta={
-        <span className="flex flex-col gap-1" data-worker={worker.id}>
+        <div className="flex flex-col gap-1" data-worker={worker.id}>
           <span className="inline-flex flex-wrap items-center gap-1.5">
             <span data-worker-state={state.status}>
               {state.reason === null ? state.word : `${state.word}: ${state.reason}`}
@@ -291,14 +428,6 @@ const WorkerRow = ({
               <>
                 <span aria-hidden="true">·</span>
                 <span data-last-claimed="">{lastClaimedText(worker, nowMs)}</span>
-                {takes === 'picked_only' ? null : (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span data-claim-scope="">
-                      <UntrustedText value={claimScopeWords(worker)} />
-                    </span>
-                  </>
-                )}
               </>
             ) : null}
             {update === null ? null : (
@@ -308,6 +437,14 @@ const WorkerRow = ({
               </>
             )}
           </span>
+          {active ? (
+            <WorkerPolicy
+              worker={worker}
+              projects={projects}
+              ownerName={mine ? null : (worker.user.name ?? worker.user.email)}
+              onSave={mine ? onSavePolicy : null}
+            />
+          ) : null}
           {blocked ? <WhyList worker={worker} /> : null}
           <DetailsDisclosure summary="Details" className="text-xs">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
@@ -355,7 +492,7 @@ const WorkerRow = ({
               )}
             </dl>
           </DetailsDisclosure>
-        </span>
+        </div>
       }
       {...(active ? { trailing: <span>{slotsText(worker)}</span> } : {})}
       {...(active
@@ -419,9 +556,29 @@ export const WorkersScreen = (): ReactElement => {
   // An event that carries a `worker_id` refreshes the list at once (`realtime/query-bridge.ts`).
   useTopics(['org']);
   const commands = useSettingsCommands();
+  const session = useSession();
+  const projectList = useProjects();
   const { now } = useServices();
   const nowMs = now();
   const items = workers.data?.items ?? [];
+  const projects: readonly ClaimPolicyProject[] = (projectList.data?.items ?? []).map(
+    (project) => ({ id: project.id, name: project.name, key: project.key }),
+  );
+  const savePolicy =
+    (workerId: string) =>
+    async (next: ClaimPolicyValue): Promise<void> => {
+      try {
+        await commands.setWorkerClaimPolicy.mutateAsync({
+          workerId,
+          body: {
+            claim_policy: next.policy,
+            claim_project_ids: next.projectIds === null ? null : [...next.projectIds],
+          },
+        });
+      } catch (error) {
+        throw new Error(claimPolicySaveRefusal(error));
+      }
+    };
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
@@ -495,6 +652,9 @@ export const WorkersScreen = (): ReactElement => {
               onRevoke={() => {
                 commands.revokeWorker.mutate(worker.id);
               }}
+              projects={projects}
+              readerId={session.data?.user.id ?? null}
+              onSavePolicy={savePolicy(worker.id)}
             />
           ))}
         </ListBox>

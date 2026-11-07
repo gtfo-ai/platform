@@ -18,12 +18,15 @@
  *   (`overlayBindingConfig` is a shallow merge) and the slot the person emptied would not be empty.
  * - **`returned` is a checkbox list** (S-25.10: never a native multi-select, which needs Cmd/Ctrl-click),
  *   at most {@link MAX_LIFECYCLE_RETURNED_STATUSES} names, the next one refused at the press.
- * - **The `claim` and `take_assigned_tickets` switches** are the block's own keys. `claim` is seeded
+ * - **The `claim`, `take_assigned_tickets` and `assign_owner` switches** are the block's own keys. `claim` is seeded
  *   from the stored block, or **on** when there is none, because that is what the block means once
  *   it is saved (`ticketLifecycleSchema`'s docblock): the switch shows what saving puts in force.
- * - **`assign_owner` is kept as it is stored** (S-26.3, the owner write-back): this form has no
- *   control for it — S-26.8a's switch is its screen — so saving the slots carries the stored value
- *   through rather than dropping the person's opt-in.
+ * - **`assign_owner` is the third switch** (S-26.3's owner write-back; S-26.8a, product/06's M26
+ *   amendment): *Assign the owner in the tracker*, beside the other two and **off** unless the
+ *   block stores `true`. It is sent when on, or as `false` when the overlay already stored a value;
+ *   otherwise absent, which the reader takes as off. It sits inside the form, so it has the form's
+ *   role rule: the statuses read the form waits for is a maintainer's (a member is told so instead),
+ *   and the bindings write is refused to anybody below regardless.
  * - **Saving writes the block as the form shows it**, through `PUT …/bindings` with the **whole**
  *   stored set and every other binding's configuration unchanged (the notifications control's shape,
  *   `operating-mode.tsx`), so this button cannot lose a channel or unbind anything.
@@ -55,6 +58,7 @@ import {
 } from '../app/queries.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
 import { CheckboxList } from '../ui/checkbox-list.js';
+import { ASSIGN_OWNER_WORDS } from '../ui/humanize.js';
 import { Badge, Button, ErrorNotice, Loading } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -103,12 +107,14 @@ const CATEGORY_WORDS: Readonly<Record<TicketStatusCategory, string>> = {
   unknown: 'no category',
 };
 
-/** The form's state: one name per single slot (`''` is empty), the returned list, two switches. */
+/** The form's state: one name per single slot (`''` is empty), the returned list, three switches. */
 export interface LifecycleDraft {
   readonly names: Readonly<Record<SingleNameSlot, string>>;
   readonly returned: readonly string[];
   readonly claim: boolean;
   readonly takeAssignedTickets: boolean;
+  /** *Assign the owner in the tracker* (S-26.3's write-back, S-26.8a's switch): off by default. */
+  readonly assignOwner: boolean;
 }
 
 /** A stored name the loaded set does not hold, and the slot it was stored in. */
@@ -166,6 +172,7 @@ export const lifecycleDraftOf = (
       claim: typeof block?.claim === 'boolean' ? block.claim : true,
       takeAssignedTickets:
         typeof block?.take_assigned_tickets === 'boolean' ? block.take_assigned_tickets : false,
+      assignOwner: block?.assign_owner === true,
     },
     dropped,
   };
@@ -193,10 +200,11 @@ export const lifecycleOverlayOf = (
   }
   lifecycle.claim = draft.claim;
   lifecycle.take_assigned_tickets = draft.takeAssignedTickets;
-  // S-26.3: the write-back switch is not this form's; the stored value survives a save of the slots.
+  // S-26.8a: the write-back switch. Written when it is on, or when the overlay already stores a
+  // value (so switching it off writes `false`); otherwise absent, which reads as off.
   const storedBlock = storedLifecycle as Readonly<Record<string, unknown>> | null | undefined;
-  if (typeof storedBlock?.assign_owner === 'boolean') {
-    lifecycle.assign_owner = storedBlock.assign_owner;
+  if (draft.assignOwner || typeof storedBlock?.assign_owner === 'boolean') {
+    lifecycle.assign_owner = draft.assignOwner;
   }
   const pickup = draft.names.pick_up_from;
   return {
@@ -400,6 +408,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
   const tracker = trackers.length === 1 ? (trackers[0] ?? null) : null;
   const statuses = useTicketStatuses(projectId, tracker?.integration_id ?? null);
   const commands = useOnboardingCommands();
+  const assignOwnerId = useId();
   const [seeded, setSeeded] = useState<{
     /** The tracker binding this draft was seeded from: a different one is seeded afresh. */
     readonly integrationId: string;
@@ -559,6 +568,21 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
         />
         Also start tickets already assigned to a person (only while claiming)
       </label>
+      <div className="flex flex-col gap-0.5">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            data-lifecycle-assign-owner=""
+            aria-describedby={`${assignOwnerId}-help`}
+            checked={draft.assignOwner}
+            onChange={(event) => setDraft({ ...draft, assignOwner: event.target.checked })}
+          />
+          {ASSIGN_OWNER_WORDS.label}
+        </label>
+        <p id={`${assignOwnerId}-help`} className="ml-6 text-xs text-fg-muted">
+          {ASSIGN_OWNER_WORDS.help(tracker.provider)}
+        </p>
+      </div>
       <div>
         <Button
           tone={actionTone}
