@@ -202,12 +202,8 @@ export const createLocalClient = (
     claimScope: () => call('GET', CLAIM_SCOPE_POLICY_READ, readClaimScope),
     setClaimScope: (policy, projectIds) =>
       call('POST', 'claim-scope', readClaimScope, {
-        body: {
-          // `[]` is not a scope at protocol 4: an empty list is every project.
-          claim_project_ids:
-            projectIds === null || projectIds.length === 0 ? null : [...projectIds],
-          claim_policy: policy,
-        },
+        // The card never hands over `[]` (*Only these:* with none chosen cannot be saved).
+        body: { claim_project_ids: projectIds && [...projectIds], claim_policy: policy },
       }),
     offers: () => call('GET', 'offers', readOffers),
     take: (runId, asOf) =>

@@ -28,7 +28,7 @@ import { type ReactElement, useCallback, useEffect, useRef, useState } from 'rea
 import { Button } from '../ui/button.js';
 import { ClaimPolicyCard, type ClaimPolicyValue } from '../ui/claim-policy-card.js';
 import { Flash } from '../ui/flash.js';
-import { PICK_WORDS as P, ROLE_LABEL, stageLabel } from '../ui/humanize.js';
+import { MACHINE_TAKES_WORDS, PICK_WORDS as P, ROLE_LABEL, stageLabel } from '../ui/humanize.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
@@ -66,16 +66,16 @@ export const offerActionOf = (offer: WorkerOffer): OfferAction => {
   if (offer.kind === 'ask') return { kind: 'take', assigns: false };
   if (offer.owner === undefined) return { kind: 'take', assigns: false };
   if (offer.owner === null) return { kind: 'take', assigns: true };
-  return { kind: 'someones', name: offer.owner.name.trim() === '' ? null : offer.owner.name };
+  return { kind: 'someones', name: offer.owner.name.trim() || null };
 };
 
 /**
- * What a pick's answer leaves on the page: a starting line (`started`), a refusal that names the
+ * What a pick's answer leaves on the page: a starting line (`success`), a refusal that names the
  * task's owner in the spec's words (`warning`), or any other refusal (`danger`). The text may carry
  * a person's name or a ticket key, so it is rendered through `UntrustedText`.
  */
 interface Outcome {
-  readonly tone: 'started' | 'warning' | 'danger';
+  readonly tone: 'success' | 'warning' | 'danger';
   readonly text: string;
 }
 
@@ -205,7 +205,7 @@ export const PickWork = ({
       await client.take(offer.run_id, asOf);
       setError(null);
       setOutcome({
-        tone: 'started',
+        tone: 'success',
         text: action.kind === 'take' && action.assigns ? P.takenAssigned : P.taken,
       });
       onTaken();
@@ -238,7 +238,7 @@ export const PickWork = ({
         </Flash>
       )}
       {scope === null ? (
-        <Skeleton label="Asking the platform what this machine takes…" lines={2} />
+        <Skeleton label={MACHINE_TAKES_WORDS.title} lines={2} />
       ) : (
         <ClaimPolicyCard
           stored={storedClaimPolicyOf(scope)}
@@ -249,18 +249,13 @@ export const PickWork = ({
 
       <section aria-label={P.heading} className="flex flex-col gap-3">
         <h2 className="text-base font-semibold text-fg">{P.heading}</h2>
-        <p className="text-xs text-fg-muted">{P.explain}</p>
         {takeBlocked === null ? null : (
           <p data-take-blocked="" className="text-sm text-fg-muted">
             {takeBlocked}
           </p>
         )}
-        {outcome === null ? null : outcome.tone === 'started' ? (
-          <p role="status" className="text-sm text-fg">
-            {outcome.text}
-          </p>
-        ) : (
-          <Flash tone={outcome.tone} live="status" data-testid="pick-refused">
+        {outcome === null ? null : (
+          <Flash tone={outcome.tone} live="status">
             <UntrustedText value={outcome.text} />
           </Flash>
         )}
@@ -278,7 +273,6 @@ export const PickWork = ({
                 <li
                   key={offer.run_id}
                   data-offer={offer.run_id}
-                  data-offer-action={action.kind}
                   className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface p-3"
                 >
                   <div className="flex min-w-0 flex-col gap-0.5">
@@ -295,7 +289,7 @@ export const PickWork = ({
                     </span>
                   </div>
                   {action.kind === 'someones' ? (
-                    <span data-offer-someones="" className="text-sm text-fg-muted">
+                    <span className="text-sm text-fg-muted">
                       <UntrustedText value={P.someones(action.name ?? P.namelessStart)} />
                     </span>
                   ) : (
@@ -305,14 +299,10 @@ export const PickWork = ({
                         disabled={takeBlocked !== null || taking !== null}
                         onClick={() => void take(offer, action)}
                       >
-                        {taking === offer.run_id
-                          ? P.starting
-                          : action.kind === 'run_here'
-                            ? P.runHere
-                            : P.take}
+                        {action.kind === 'run_here' ? P.runHere : P.take}
                       </Button>
                       {action.kind === 'take' && action.assigns ? (
-                        <span data-offer-assigns="" className="text-xs text-fg-muted">
+                        <span className="text-xs text-fg-muted">
                           <UntrustedText value={P.assigns(offer.ticket_key ?? P.thisTask)} />
                         </span>
                       ) : null}

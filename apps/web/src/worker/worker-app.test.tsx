@@ -1076,15 +1076,14 @@ describe('what this machine takes, in the page’s header (S-26.7, the M26 UX sp
     const sentence =
       'This machine takes nothing by itself. You pick runs on its page (Autix only).';
     await waitFor(() =>
-      expect(container.querySelector('[data-claim-policy-header]')?.textContent).toBe(sentence),
+      expect(
+        container.querySelector('main > header [data-claim-policy-sentence]')?.textContent,
+      ).toBe(sentence),
     );
-    expect(
-      container.querySelector('[data-claim-policy-card] [data-claim-policy-sentence]')?.textContent,
-    ).toBe(sentence);
+    const card = screen.getByRole('region', { name: 'What this machine takes' });
+    expect(card.querySelector('[data-claim-policy-sentence]')?.textContent).toBe(sentence);
     // The page's one primary stays its own (TD-033): the card adds none.
-    expect(
-      container.querySelectorAll('[data-claim-policy-card] [class~="border-primary-line"]'),
-    ).toHaveLength(0);
+    expect(card.querySelectorAll('[class~="border-primary-line"]')).toHaveLength(0);
   });
 });
 

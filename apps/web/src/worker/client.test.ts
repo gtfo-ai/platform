@@ -1,6 +1,7 @@
 /**
  * The local page's client on the wire (S-26.7): the claim-scope read asks in the policy's
- * vocabulary, a save **always** names the policy and sends `null` — never `[]` — for every project,
+ * vocabulary, a save **always** names the policy and sends `null` for every project (the card never
+ * produces `[]`: `claim-policy-card.test.tsx`),
  * a pick carries the list's `as_of`, and a refused pick's owner reaches the page on the error.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -34,15 +35,13 @@ describe('the local client (S-26.7)', () => {
     expect(calls[0]?.init.method).toBe('GET');
   });
 
-  it('saves the policy with null for every project, a list as it is, and never []', async () => {
+  it('saves the policy always, with null for every project and a list as it is', async () => {
     const { calls, client } = recording(200, SCOPE);
     await client.setClaimScope('mine', null);
     await client.setClaimScope('pick_only', [PROJECT]);
-    await client.setClaimScope('everything', []);
     expect(calls.map((call) => JSON.parse(String(call.init.body)))).toEqual([
       { claim_project_ids: null, claim_policy: 'mine' },
       { claim_project_ids: [PROJECT], claim_policy: 'pick_only' },
-      { claim_project_ids: null, claim_policy: 'everything' },
     ]);
     expect(calls.every((call) => call.url === '/api/local/claim-scope')).toBe(true);
   });

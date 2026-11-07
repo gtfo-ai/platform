@@ -92,7 +92,7 @@ export const ClaimPolicySentence = ({
     </strong>
   );
   return (
-    <span data-claim-policy-sentence={stored.policy}>
+    <span data-claim-policy-sentence="">
       {W.start}
       <strong className="font-semibold">{W.what[stored.policy]}</strong>
       {stored.policy === 'pick_only' ? (
@@ -188,7 +188,6 @@ export const ClaimPolicyCard = ({
         <input
           type="radio"
           name={id + group}
-          value={value}
           checked={checked}
           aria-describedby={help && id + value}
           onChange={onChange}
@@ -205,15 +204,12 @@ export const ClaimPolicyCard = ({
 
   return (
     <section
-      aria-labelledby={`${id}t`}
-      data-claim-policy-card=""
+      aria-label={W.title}
       className="flex flex-col gap-3 rounded-md border border-line bg-surface p-4"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <h2 id={`${id}t`} className="text-base font-semibold text-fg">
-            {W.title}
-          </h2>
+          <h2 className="text-base font-semibold text-fg">{W.title}</h2>
           <p className="text-sm text-fg">
             <ClaimPolicySentence stored={stored} projects={projects} />
           </p>
@@ -244,7 +240,7 @@ export const ClaimPolicyCard = ({
         ) : null}
       </div>
       {nowhere.length > 0 ? (
-        <p data-claim-policy-nowhere="" className="text-sm text-attention">
+        <p className="text-sm text-attention">
           <UntrustedText value={W.nowhere(projectListWords(nowhere))} />
         </p>
       ) : null}
@@ -283,7 +279,7 @@ export const ClaimPolicyCard = ({
               projects.length === 0 ? (
                 <p className="ml-6 text-sm text-fg-muted">{W.noProjects}</p>
               ) : (
-                <ul aria-label={W.whichProjects} className="ml-6 flex flex-wrap gap-2">
+                <ul className="ml-6 flex flex-wrap gap-2">
                   {projects.map((project) => (
                     <li key={project.id}>
                       <label className="flex items-center gap-1.5 rounded-full border border-line px-2 text-sm text-fg">

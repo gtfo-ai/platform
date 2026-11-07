@@ -982,10 +982,8 @@ export const MACHINE_TAKES_WORDS = {
  */
 export const PICK_WORDS = {
   heading: 'Runs waiting for a machine',
-  explain: 'A run that is not listed here is not this machine’s to take yet.',
   take: 'Take this one',
   runHere: 'Run it here',
-  starting: 'Starting…',
   assigns: (ticket: string): string => `Assigns ${ticket} to you.`,
   takenAssigned: 'Assigned to you · starting on this machine…',
   taken: 'Starting on this machine…',
@@ -1002,5 +1000,5 @@ export const PICK_WORDS = {
   namelessStart: 'Another person',
   nameless: 'another person',
   thisTask: 'this task',
-  noLonger: 'That run is no longer this machine’s to take. The list is refreshed.',
+  noLonger: 'That run is no longer this machine’s to take.',
 } as const;

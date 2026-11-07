@@ -439,7 +439,7 @@ export const WorkerApp = ({
             </span>
           </p>
           {scope === null ? null : (
-            <p data-claim-policy-header="" className="text-sm text-fg-muted">
+            <p className="text-sm text-fg-muted">
               <ClaimPolicySentence stored={storedClaimPolicyOf(scope)} projects={scope.projects} />
             </p>
           )}

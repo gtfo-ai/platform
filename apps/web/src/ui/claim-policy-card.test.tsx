@@ -100,11 +100,6 @@ describe('the sentence, per policy × projects, from the stored setting (S-26.7 
       it(`says ${policy} over ${projects.label}`, () => {
         const { container } = renderCard({ policy, projectIds: projects.ids });
         expect(sentenceOf(container)).toBe(expected(policy, projects.ids, projects.names));
-        expect(
-          container
-            .querySelector('[data-claim-policy-sentence]')
-            ?.getAttribute('data-claim-policy-sentence'),
-        ).toBe(policy);
       });
     }
   }
@@ -275,22 +270,22 @@ describe('Change and Save (the M26 UX spec § 1)', () => {
 
 describe('the consequence line (the M26 UX spec § 1)', () => {
   it('says it only for Only my tasks, and only where it is known that nobody else takes unassigned tasks', () => {
-    const unknown = renderCard({ policy: 'mine', projectIds: null });
-    expect(unknown.container.querySelector('[data-claim-policy-nowhere]')).toBeNull();
+    renderCard({ policy: 'mine', projectIds: null });
+    expect(screen.queryByText(/have nowhere to run/)).toBeNull();
     cleanup();
-    const known = renderCard(
+    renderCard(
       { policy: 'mine', projectIds: [AUTIX, FONTAI, KIWI] },
       { unassignedHasTaker: { [AUTIX]: false, [FONTAI]: true } },
     );
-    expect(known.container.querySelector('[data-claim-policy-nowhere]')?.textContent).toBe(
+    expect(screen.getByText(/have nowhere to run/).textContent).toBe(
       'Unassigned tasks in Autix have nowhere to run.',
     );
     cleanup();
-    const other = renderCard(
+    renderCard(
       { policy: 'mine_and_unassigned', projectIds: [AUTIX] },
       { unassignedHasTaker: { [AUTIX]: false } },
     );
-    expect(other.container.querySelector('[data-claim-policy-nowhere]')).toBeNull();
+    expect(screen.queryByText(/have nowhere to run/)).toBeNull();
   });
 
   it('reads every project the person can see when the scope is every project', () => {

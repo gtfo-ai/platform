@@ -602,15 +602,14 @@ export const coreRunUrl = (coreUrl: string | null, runId: string): string =>
   `${(coreUrl ?? '').replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}`;
 
 /**
- * The stored setting as *What this machine takes* reads it (S-26.7). A worker always answers the
- * policy; one that did not (a core below protocol 4) reads as S-26.4 stores it: `[]` is *pick only*
- * over every project, anything else *everything* over it.
+ * The stored setting as *What this machine takes* reads it (S-26.7). This worker always answers the
+ * policy (its core speaks protocol 4); an answer without one reads as S-26.4 stores it — `[]` is
+ * *pick only* over every project — so the page never says a policy nobody stored.
  */
 export const storedClaimPolicyOf = (scope: WorkerLocalClaimScope): ClaimPolicyValue => {
-  const ids = scope.claim_project_ids;
-  const empty = ids?.length === 0;
+  const empty = scope.claim_project_ids?.length === 0;
   return {
     policy: scope.claim_policy ?? (empty ? 'pick_only' : 'everything'),
-    projectIds: empty ? null : ids,
+    projectIds: empty ? null : scope.claim_project_ids,
   };
 };

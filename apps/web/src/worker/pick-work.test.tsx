@@ -285,14 +285,16 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     const client = fakeClient({ offers: [offer()] });
     const { container } = renderPick(client, { onTaken });
     const row = await rowOf(container, RUN_A);
-    expect(row.querySelector('[data-offer-assigns]')?.textContent).toBe('Assigns ACME-7 to you.');
+    expect(row.textContent).toContain('Assigns ACME-7 to you.');
     await userEvent.click(screen.getByRole('button', { name: 'Take this one' }));
     await waitFor(() => expect(client.take).toHaveBeenCalledWith(RUN_A, AS_OF));
     expect(client.take).toHaveBeenCalledOnce();
     expect(onTaken).toHaveBeenCalledOnce();
     expect(
-      (await screen.findByText('Assigned to you · starting on this machine…')).getAttribute('role'),
-    ).toBe('status');
+      (await screen.findByText('Assigned to you · starting on this machine…')).closest(
+        '[role="status"]',
+      ),
+    ).not.toBeNull();
     await waitFor(() => expect(container.querySelector(`[data-offer="${RUN_A}"]`)).toBeNull());
     expect(screen.getByText('Nothing is waiting.')).toBeTruthy();
   });
@@ -303,7 +305,7 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     });
     const { container } = renderPick(client);
     const row = await rowOf(container, RUN_A);
-    expect(row.querySelector('[data-offer-assigns]')).toBeNull();
+    expect(row.textContent).not.toContain('Assigns');
     expect(screen.queryByRole('button', { name: 'Take this one' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Run it here' }));
     await waitFor(() => expect(client.take).toHaveBeenCalledWith(RUN_A, AS_OF));
@@ -318,10 +320,9 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     });
     const { container } = renderPick(client);
     const row = await rowOf(container, RUN_A);
-    expect(row.getAttribute('data-offer-action')).toBe('someones');
-    expect(row.querySelector('[data-offer-someones]')?.textContent).toBe(`${hostile}’s task`);
+    expect(row.textContent).toContain(`${hostile}’s task`);
     expect(row.querySelectorAll('button')).toHaveLength(0);
-    expect(row.querySelector('[data-offer-assigns]')).toBeNull();
+    expect(row.textContent).not.toContain('Assigns');
     expect(container.querySelector('img')).toBeNull();
   });
 
@@ -352,7 +353,7 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     expect(theirs.textContent).not.toContain('Vojtěch');
     expect(theirs.textContent).toContain('this machine would take it by itself');
     expect(theirs.querySelector('button')?.textContent).toBe('Take this one');
-    expect(theirs.querySelector('[data-offer-assigns]')).toBeNull();
+    expect(theirs.textContent).not.toContain('Assigns');
     const mine = await rowOf(container, RUN_B);
     expect(mine.textContent).toContain('Your question');
     expect(mine.querySelector('button')?.textContent).toBe('Run it here');
@@ -368,7 +369,7 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     );
     renderPick(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Take this one' }));
-    const flash = await screen.findByTestId('pick-refused');
+    const flash = await screen.findByRole('status');
     expect(flash.textContent).toBe('Vojtěch took ACME-7 a moment ago. Pick another.');
     expect(screen.queryByText('Assigned to you · starting on this machine…')).toBeNull();
   });
@@ -383,7 +384,7 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     );
     renderPick(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Take this one' }));
-    expect((await screen.findByTestId('pick-refused')).textContent).toBe(
+    expect((await screen.findByRole('status')).textContent).toBe(
       'ACME-7 is Vojtěch’s. A maintainer can reassign it on the task page.',
     );
   });
@@ -395,7 +396,7 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     );
     renderPick(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Take this one' }));
-    expect((await screen.findByTestId('pick-refused')).textContent).toBe(
+    expect((await screen.findByRole('status')).textContent).toBe(
       'Another person took this task a moment ago. Pick another.',
     );
   });
