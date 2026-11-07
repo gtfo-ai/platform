@@ -140,6 +140,7 @@ import {
   findTaskPosition,
   listRunMessages,
   listTaskEvents,
+  ownerWriteBackFor,
 } from './queries/pipeline-queries.js';
 import {
   findBindingAccountIsAPerson,
@@ -1058,6 +1059,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         // function, bound below for the ask routes — never a second reading of `human_actions`.
         taskAudit: async (taskId, limit) => options.asks.queries.taskAudit(taskId, limit),
         taskEvents: async (taskId, limit) => listTaskEvents(options.database, taskId, limit),
+        // S-26.3: the per-caller `take_writes_back`, over the write-back duty's own predicate.
+        ownerWriteBack: async (task, userIds) => ownerWriteBackFor(options.database, task, userIds),
       },
       // TD-012 step 2 over the export's event payloads, which no route had published before.
       redactor: redactionAdapters.patternRedactor(),

@@ -56,6 +56,7 @@ import {
   isTerminalTaskState,
   type OwnershipDecision,
   ownerChangeWritesBack,
+  ownerWriteBackBlocker,
   ownerWriteBackStillDue,
   presetTicketAssignee,
   restoreTicketAssignee,
@@ -246,9 +247,6 @@ export const runTicketOwnerAssign = async (
     if (isTerminalTaskState(stored.task.state)) {
       return { kind: 'skip', reason: 'task_finished' } as const;
     }
-    if (!namesAProviderTicket(stored.task.ticket)) {
-      return { kind: 'skip', reason: 'no_provider_ticket' } as const;
-    }
     const due = ownerWriteBackStillDue(
       await options.store.tasks.ownership(scope.tx, taskId),
       event,
@@ -267,11 +265,14 @@ export const runTicketOwnerAssign = async (
   }
   const { stored, identity } = read;
   const settings = await options.settings.forProject(stored.task.projectId);
-  if (!assignsOwner(settings)) {
-    return skip('switch_off');
-  }
-  if (identity === null) {
-    return skip('owner_has_no_identity');
+  // The one predicate every read that promises this write asks (`ownerWriteBackBlocker`).
+  const blocker = ownerWriteBackBlocker({
+    assignOwner: assignsOwner(settings),
+    providerTicket: namesAProviderTicket(stored.task.ticket),
+    hasPersonIdentity: identity !== null,
+  });
+  if (blocker !== null || identity === null) {
+    return skip(blocker ?? 'owner_has_no_identity');
   }
   const integrations = await integrationsForProject(
     options.integrations,

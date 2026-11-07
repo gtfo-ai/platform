@@ -36,6 +36,41 @@ export const ownerChangeWritesBack = (change: {
   readonly source: TaskOwnerSource;
 }): boolean => change.source === 'platform' && change.ownerUserId !== null;
 
+/**
+ * Why an owner assignment would **not** be written back to the tracker, or `null` when it would —
+ * **the one predicate** the duty decides with (it skips with this reason) and every read that
+ * promises the write asks: the task DTO's `owner_writes_back` (for the current owner), the task
+ * read's `take_writes_back` (for the caller's own *Take it*) and the owner candidates' `writes_back`
+ * (for an *Assign…* to each). The binding's `lifecycle.assign_owner`, whether the task names a
+ * provider ticket, and whether the person has a `person` identity for that provider.
+ */
+export type OwnerWriteBackBlocker = 'switch_off' | 'no_provider_ticket' | 'owner_has_no_identity';
+
+export const ownerWriteBackBlocker = (facts: {
+  readonly assignOwner: boolean;
+  readonly providerTicket: boolean;
+  readonly hasPersonIdentity: boolean;
+}): OwnerWriteBackBlocker | null =>
+  !facts.assignOwner
+    ? 'switch_off'
+    : !facts.providerTicket
+      ? 'no_provider_ticket'
+      : !facts.hasPersonIdentity
+        ? 'owner_has_no_identity'
+        : null;
+
+/**
+ * Whether an assignment of `person` **reaches the tracker** — {@link ownerWriteBackBlocker} with
+ * nothing in the way, and not a shadow task (whose call is a `would_have` that writes nothing). What
+ * a confirmation may promise (*"also assigns AUT-6639 in Jira"*).
+ */
+export const ownerWriteBackReachesTracker = (facts: {
+  readonly assignOwner: boolean;
+  readonly providerTicket: boolean;
+  readonly hasPersonIdentity: boolean;
+  readonly shadow: boolean;
+}): boolean => ownerWriteBackBlocker(facts) === null && !facts.shadow;
+
 /** Two instants are the same instant, whatever their spelling (a row reads back at milliseconds). */
 const sameInstant = (left: string, right: string): boolean => {
   const a = Date.parse(left);

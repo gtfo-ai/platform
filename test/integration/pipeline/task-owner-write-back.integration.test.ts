@@ -24,7 +24,10 @@ import { db, pipeline } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { listProjectTasks } from '../../../apps/server/src/queries/pipeline-queries.js';
+import {
+  listProjectTasks,
+  ownerWriteBackFor,
+} from '../../../apps/server/src/queries/pipeline-queries.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
@@ -245,5 +248,47 @@ describe('the task DTO’s owner_writes_back (criterion 4)', () => {
       platformTicket: false,
     });
     expect((await writesBack(optedOut))[elsewhere]).toBe(false);
+  });
+});
+
+describe('whether a Take or an Assign… would write back, per person (take_writes_back, review of #97)', () => {
+  it('is true for a linked caller and false for an unlinked one, on a task nobody owns', async () => {
+    const drizzled = drizzle(pool, { schema: db.schema });
+    const ask = (
+      projectId: Id,
+      task: { readonly ticketProvider?: string; readonly mode?: TaskMode } = {},
+    ) =>
+      ownerWriteBackFor(
+        drizzled,
+        {
+          projectId,
+          ticketProvider: task.ticketProvider ?? 'jira-cloud',
+          mode: task.mode ?? 'normal',
+        },
+        [users.bob, users.dora],
+      );
+    // The task's current owner plays no part: the question is about the person who would take it.
+    const unowned = await ownedTask(optedIn, null);
+    const published = (await listProjectTasks(drizzled, optedIn, { limit: 200 }))?.items.find(
+      (item) => item.id === unowned,
+    );
+    expect(published?.owner_writes_back).toBe(false);
+
+    expect(Object.fromEntries(await ask(optedIn))).toEqual({
+      [users.bob]: true,
+      [users.dora]: false,
+    });
+    // Dora's GitLab account answers for a GitLab-provider ticket: the identity is per provider.
+    expect(Object.fromEntries(await ask(optedIn, { ticketProvider: 'gitlab' }))).toEqual({
+      [users.bob]: true,
+      [users.dora]: true,
+    });
+    for (const nobody of [
+      await ask(optedIn, { mode: 'shadow' }),
+      await ask(optedIn, { ticketProvider: 'platform' }),
+      await ask(optedOut),
+    ]) {
+      expect(Object.fromEntries(nobody)).toEqual({ [users.bob]: false, [users.dora]: false });
+    }
   });
 });

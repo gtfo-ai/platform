@@ -1869,6 +1869,16 @@ export const taskOwnerCallerFactsShape = {
   can_take: z.boolean().optional(),
   can_assign: z.boolean().optional(),
   can_unassign: z.boolean().optional(),
+  /**
+   * Whether *Take it* by **this caller** would also assign the ticket in the tracker (S-26.3, the
+   * owner write-back): the binding sets `lifecycle.assign_owner`, the task names a provider ticket
+   * and is not shadow, and the caller has a `person` identity for the ticket's provider —
+   * `ownerWriteBackReachesTracker` over the caller, the predicate the `ticket_owner_assign` duty
+   * decides with. Independent of `owner_writes_back`, which is about the current owner: a task held
+   * only by an unlinked tracker assignee has no owner, yet a linked caller's *Take it* replaces that
+   * assignee in the tracker, which is what a confirmation must say.
+   */
+  take_writes_back: z.boolean().optional(),
 } as const;
 
 /** The keys of {@link taskOwnerCallerFactsShape}, which the export omits too. */

@@ -89,6 +89,15 @@ export interface TaskQueries {
   readonly taskAudit: (taskId: string, limit: number) => Promise<readonly TaskAuditEntry[]>;
   /** The task's events, oldest first, at most `limit` (`listTaskEvents`, WP-112). */
   readonly taskEvents: (taskId: string, limit: number) => Promise<readonly TaskEventRow[]>;
+  /**
+   * Whether assigning each user to the task would reach the tracker (S-26.3,
+   * `ownerWriteBackFor` — the `ticket_owner_assign` duty's own predicate): the per-caller
+   * `take_writes_back`.
+   */
+  readonly ownerWriteBack: (
+    task: { readonly projectId: string; readonly ticketProvider: string; readonly mode: string },
+    userIds: readonly string[],
+  ) => Promise<ReadonlyMap<string, boolean>>;
 }
 
 export interface TaskRoutesOptions {
@@ -188,10 +197,27 @@ export const registerTaskRoutes = async (
         // two reads are separate statements and a task deleted between them is a 404, not a 500.
         throw new NotFoundError(`task ${request.params.task_id}`);
       }
+      const callerId = request.actor?.userId;
+      // S-26.3: whether this caller's *Take it* would also assign the ticket in the tracker —
+      // asked of the duty's predicate, never of the current owner (`owner_writes_back`).
+      const takeWritesBack =
+        callerId === undefined
+          ? false
+          : (
+              await options.queries.ownerWriteBack(
+                {
+                  projectId: detail.task.project_id,
+                  ticketProvider: detail.task.ticket.provider,
+                  mode: detail.task.mode,
+                },
+                [callerId],
+              )
+            ).get(callerId) === true;
       return {
         ...detail,
         ...taskCallerFacts(request.effectiveRole),
-        ...taskOwnerCallerFacts(request.actor?.userId, request.effectiveRole, detail.task),
+        ...taskOwnerCallerFacts(callerId, request.effectiveRole, detail.task),
+        take_writes_back: takeWritesBack,
       };
     },
   );

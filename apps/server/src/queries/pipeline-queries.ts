@@ -102,6 +102,7 @@ import {
   DEFAULT_TASK_BUDGET_USD,
   estimateAccuracy,
   handBackStages,
+  ownerWriteBackReachesTracker,
   resumeCommands,
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
@@ -1343,6 +1344,47 @@ interface OwnerView {
 
 const HELD_ELSEWHERE = sql.raw(pipelineAdapters.taskHeldElsewhereSql('t'));
 
+/**
+ * **Whether assigning each of `userIds` to one task would reach the tracker** (S-26.3): the
+ * domain's `ownerWriteBackReachesTracker` — the predicate the `ticket_owner_assign` duty decides
+ * with — over the project's switch, the task's ticket and mode, and each user's `person` identity
+ * for the ticket's provider. What the task read's per-caller `take_writes_back` and the owner
+ * candidates' `writes_back` answer, so neither can promise a write the duty would not make.
+ */
+export const ownerWriteBackFor = async (
+  database: Database,
+  task: { readonly projectId: string; readonly ticketProvider: string; readonly mode: string },
+  userIds: readonly string[],
+): Promise<ReadonlyMap<string, boolean>> => {
+  const unique = [...new Set(userIds)];
+  if (unique.length === 0) {
+    return new Map();
+  }
+  const [assigning, { rows }] = await Promise.all([
+    projectsAssigningOwners(database, [task.projectId]),
+    database.execute<{ user_id: string }>(sql`
+      select distinct ui.user_id from user_identities ui
+       where ui.provider = ${task.ticketProvider}
+         and ui.kind = 'person'
+         and ui.user_id in (${sql.join(
+           unique.map((userId) => sql`${userId}::uuid`),
+           sql`, `,
+         )})`),
+  ]);
+  const identified = new Set(rows.map((row) => row.user_id));
+  return new Map(
+    unique.map((userId) => [
+      userId,
+      ownerWriteBackReachesTracker({
+        assignOwner: assigning.has(task.projectId),
+        providerTicket: task.ticketProvider !== PLATFORM_TICKET_PROVIDER,
+        hasPersonIdentity: identified.has(userId),
+        shadow: task.mode === 'shadow',
+      }),
+    ]),
+  );
+};
+
 /** Which of `projectIds` have a task-management binding that sets `lifecycle.assign_owner`. */
 const projectsAssigningOwners = async (
   database: Database,
@@ -1398,11 +1440,13 @@ const ownerViewsFor = async (
       {
         ownerName: row.owner_name,
         heldElsewhere: row.held_elsewhere === true,
-        writesBack:
-          row.owner_has_identity === true &&
-          row.mode !== 'shadow' &&
-          row.ticket_provider !== PLATFORM_TICKET_PROVIDER &&
-          assigning.has(row.project_id),
+        // The duty's own predicate over the current owner (`ownerWriteBackFor`'s, per row).
+        writesBack: ownerWriteBackReachesTracker({
+          assignOwner: assigning.has(row.project_id),
+          providerTicket: row.ticket_provider !== PLATFORM_TICKET_PROVIDER,
+          hasPersonIdentity: row.owner_has_identity === true,
+          shadow: row.mode === 'shadow',
+        }),
       },
     ]),
   );

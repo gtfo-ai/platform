@@ -9,6 +9,8 @@ import { syncOwnerFromTracker, type TaskOwnership, UNOWNED } from './owner.js';
 import {
   intendedTicketAssignee,
   ownerChangeWritesBack,
+  ownerWriteBackBlocker,
+  ownerWriteBackReachesTracker,
   ownerWriteBackStillDue,
   presetTicketAssignee,
   restoreTicketAssignee,
@@ -166,5 +168,28 @@ describe('the stored assignee before and after the call (criterion 2)', () => {
       display_name: null,
       platform: false,
     });
+  });
+});
+
+describe('the one predicate every promise of the write asks (review of #97)', () => {
+  const all = { assignOwner: true, providerTicket: true, hasPersonIdentity: true };
+
+  it('names the first thing in the way, or nothing', () => {
+    expect(ownerWriteBackBlocker(all)).toBeNull();
+    expect(ownerWriteBackBlocker({ ...all, assignOwner: false })).toBe('switch_off');
+    expect(ownerWriteBackBlocker({ ...all, providerTicket: false })).toBe('no_provider_ticket');
+    expect(ownerWriteBackBlocker({ ...all, hasPersonIdentity: false })).toBe(
+      'owner_has_no_identity',
+    );
+  });
+
+  it('reaches the tracker only with nothing in the way and not in shadow mode', () => {
+    expect(ownerWriteBackReachesTracker({ ...all, shadow: false })).toBe(true);
+    expect(ownerWriteBackReachesTracker({ ...all, shadow: true })).toBe(false);
+    for (const key of ['assignOwner', 'providerTicket', 'hasPersonIdentity'] as const) {
+      expect(ownerWriteBackReachesTracker({ ...all, [key]: false, shadow: false }), key).toBe(
+        false,
+      );
+    }
   });
 });

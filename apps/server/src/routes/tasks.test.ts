@@ -83,6 +83,10 @@ interface World {
   events: TaskEventRow[];
   /** Every `(read, limit)` the export asked for — so "it read nothing" is assertable. */
   readonly exportReads: string[];
+  /** S-26.3: the users whose assignment to the task would reach the tracker. */
+  writesBack: ReadonlySet<string>;
+  /** Every write-back question the read asked: the task's facts and the users. */
+  readonly writeBackAsked: { task: unknown; userIds: readonly string[] }[];
 }
 
 const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
@@ -99,6 +103,8 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     audit: [],
     events: [],
     exportReads: [],
+    writesBack: new Set(),
+    writeBackAsked: [],
   };
 
   const app = fastify();
@@ -148,6 +154,10 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     artifactBody: async (artifactId) => {
       world.asked.push(artifactId);
       return world.body;
+    },
+    ownerWriteBack: async (task, userIds) => {
+      world.writeBackAsked.push({ task, userIds });
+      return new Map(userIds.map((userId) => [userId, world.writesBack.has(userId)]));
     },
   };
   await registerTaskRoutes(app, {
@@ -777,14 +787,53 @@ describe('GET /api/tasks/:task_id — the owner control (S-26.1)', () => {
     expect(member).toMatchObject({ can_take: true, can_assign: false });
   });
 
+  it('answers take_writes_back for the caller from the write-back predicate (S-26.3)', async () => {
+    world.orgRole = 'viewer';
+    world.role = 'member';
+    // A task held only by an unlinked assignee: no owner, so `owner_writes_back` is false…
+    world.detail = {
+      ...DETAIL,
+      task: {
+        ...DETAIL.task,
+        owner: null,
+        unlinked_assignee: { display_name: 'Jan Novák' },
+        owner_writes_back: false,
+      },
+    };
+    const read = async () =>
+      (await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` })).json() as {
+        take_writes_back: boolean;
+      };
+    // …and a linked caller's Take would still write: the field says so.
+    world.writesBack = new Set([USER]);
+    expect((await read()).take_writes_back).toBe(true);
+    expect(world.writeBackAsked.at(-1)).toEqual({
+      task: {
+        projectId: DETAIL.task.project_id,
+        ticketProvider: DETAIL.task.ticket.provider,
+        mode: DETAIL.task.mode,
+      },
+      userIds: [USER],
+    });
+    // An unlinked caller's Take writes nothing.
+    world.writesBack = new Set();
+    expect((await read()).take_writes_back).toBe(false);
+  });
+
   it('keeps the owner control out of the export', async () => {
     world.orgRole = 'viewer';
     world.role = 'maintainer';
-    // A read that carried the three flags: the export must drop them, or its strict schema fails.
-    world.detail = { ...DETAIL, can_take: true, can_assign: true, can_unassign: true };
+    // A read that carried the four flags: the export must drop them, or its strict schema fails.
+    world.detail = {
+      ...DETAIL,
+      can_take: true,
+      can_assign: true,
+      can_unassign: true,
+      take_writes_back: true,
+    };
     const exported = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}/export` });
     expect(exported.statusCode, exported.body).toBe(200);
-    for (const key of ['can_take', 'can_assign', 'can_unassign']) {
+    for (const key of ['can_take', 'can_assign', 'can_unassign', 'take_writes_back']) {
       expect(Object.hasOwn(exported.json() as object, key), key).toBe(false);
     }
   });
