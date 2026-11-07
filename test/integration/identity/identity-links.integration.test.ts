@@ -25,6 +25,7 @@ import {
   eagerInboundLoader,
   exactSecretRedactor,
   type IdentityLinks,
+  type InboundNormaliser,
   noSecretsRedactor,
   type ResolvedInboundIntegration,
   readLinkThread,
@@ -96,13 +97,13 @@ const ingress = () => {
       type: 'task_management',
       host: null,
     },
-    inbound: jira.port.inbound,
+    inbound: jira.port.inbound as InboundNormaliser,
     bindings: [
       {
         bindingId: randomUUID() as Id,
         projectId,
         defaultBranch: 'main',
-        inbound: jira.port.inbound,
+        inbound: jira.port.inbound as InboundNormaliser,
       },
     ],
     redactor: noSecretsRedactor(),
