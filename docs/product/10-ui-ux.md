@@ -100,6 +100,14 @@ callout's slot carry one sentence. It names the cause, who acts, and how many tr
 - **A timed-out wait says it timed out**, with the last read: "CI did not finish within 60 minutes: pipeline *n* was
   still held at the manual job *sentry-release-commit*." The next step is *Start the job in GitLab, then Retry*. The
   task page never reads as a failed check when nothing failed.
+- **A Retry on a pipeline that is still held does not wait again.** It stops at once and says why: "The pipeline is
+  still held at the manual job *sentry-release-commit*, so Retry did not wait again. Start the job in GitLab, or change
+  its rule, then Retry." This is the worker session's #89, `ci_held_unchanged`.
+- *Amended 2026-11-07 (S-25.12).* All of the above is built from the gate's **structured read**, never from its
+  recorded sentence: the pipeline and its link, the held job and its link, the draft flag, minutes waited, the
+  timeout. That means `gate_wait` while the wait is open, and `last_gate_wait` on the attempt an escalation came from.
+  A task whose read was never recorded (any attempt before #89) falls back to the recorded sentence, introduced as
+  "What the platform saw last:".
 
 *S-25.11's wording (2026-11-07).* The examples above say **round**, not *try*: the vocabulary census retires "try N" for
 *Attempt N* (S-23.23), and the board's loop badge already calls this counter a round ("CI fix round 2 of 3"). The
