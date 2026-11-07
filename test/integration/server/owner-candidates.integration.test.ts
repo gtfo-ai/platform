@@ -10,6 +10,7 @@
  *     `setTaskOwnerCommand` on the real store, asked by a maintainer, accepts that user as a new
  *     owner exactly when the list names them, and refuses everyone else `owner_not_project_member`.
  */
+import { createRequire } from 'node:module';
 import {
   INITIAL_TASK_VERSION,
   OwnerChangeRefusedError,
@@ -22,8 +23,6 @@ import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
 import { db, eventing, pipeline } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { type FastifyInstance, fastify } from 'fastify';
-import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Actor } from '../../../apps/server/src/auth/rbac.js';
@@ -35,6 +34,20 @@ import { createMigratedDatabase, type MigratedDatabase } from '../support/migrat
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
 const NOW = '2026-11-07T09:00:00.000Z' as IsoDateTime;
+
+/**
+ * Fastify and its zod compilers, resolved **from `apps/server`**, which is the package that depends
+ * on them — the reason and the shape are `read-api.integration.test.ts`'s (WP-85 review round 1).
+ */
+type ServerApp = Parameters<typeof registerOwnerCandidateRoutes>[0];
+const fromServer = createRequire(new URL('../../../apps/server/package.json', import.meta.url));
+const fastify = fromServer('fastify') as () => ServerApp;
+const { serializerCompiler, validatorCompiler } = fromServer('fastify-type-provider-zod') as {
+  // biome-ignore lint/suspicious/noExplicitAny: the compilers' own types live in apps/server's graph.
+  readonly serializerCompiler: any;
+  // biome-ignore lint/suspicious/noExplicitAny: as above.
+  readonly validatorCompiler: any;
+};
 
 /**
  * Every way a user can stand towards the project, and whether the owner command takes them. Names
@@ -59,7 +72,7 @@ type FixtureKey = (typeof FIXTURES)[number]['key'];
 let database: MigratedDatabase;
 let pool: pg.Pool;
 let store: PipelineStore;
-let app: FastifyInstance;
+let app: ServerApp;
 let projectId: Id;
 let actor: Actor | undefined;
 const users = new Map<FixtureKey, { readonly id: Id; readonly name: string }>();
@@ -128,7 +141,7 @@ beforeAll(async () => {
   app = fastify();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
-  app.setErrorHandler(async (error, _request, reply) => {
+  app.setErrorHandler(async (error: unknown, _request, reply) => {
     const mapped = toApiError(error, 'test-request');
     return reply.status(mapped.statusCode).send(mapped.body);
   });
