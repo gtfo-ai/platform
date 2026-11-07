@@ -86,6 +86,8 @@ export const CONNECTIONS = [
 ] as const;
 /** Whether the launcher answered (backlog 980) — held to its zod enum by the test. */
 export const LAUNCHERS = ['unknown', 'ok', 'unreachable'] as const;
+/** `workerClaimPolicySchema`'s members (S-26.4) — the guard's mirror only; the words are S-26.7's. */
+export const CLAIM_POLICIES = ['everything', 'mine_and_unassigned', 'mine', 'pick_only'] as const;
 /** The first-run wizard's enums (WP-294) — each held to its zod enum by the test. */
 export const SOURCES = ['environment', 'file'] as const;
 export const CORE_FAILURES = [
@@ -292,6 +294,8 @@ export const STATE: Spec = object({
     of: { t: 'enum', values: CLAIM_BLOCKERS },
     max: CLAIM_BLOCKERS.length,
   },
+  claim_policy: nullish({ t: 'enum', values: CLAIM_POLICIES }),
+  policy_skipped_offers: nullish(count),
   error_reporting: object({
     source: nullable({ t: 'enum', values: SOURCES }),
     host: nullable(str({ max: 253 })),
@@ -324,6 +328,8 @@ export const CLAIM_SCOPE: Spec = object({
     of: object({ id: uuid, key: str({ min: 1, max: 64 }), name: str({ max: 200 }) }),
     max: 500,
   },
+  claim_policy: { t: 'optional', of: { t: 'enum', values: CLAIM_POLICIES } },
+  policy_skipped_offers: nullish(count),
 });
 
 /** One offer of `GET /api/local/offers` — `workerOfferSchema` (WP-293). */
@@ -337,10 +343,16 @@ export const OFFER: Spec = object({
   role: { t: 'enum', values: ROLES },
   offered_at: datetime,
   automatic: { t: 'boolean' },
+  owner: nullish(object({ user_id: uuid, name: str() })),
+  mine: { t: 'optional', of: { t: 'boolean' } },
 });
 
-/** `GET /api/local/offers` — `workerLocalOffersSchema` (WP-293). */
-export const OFFERS: Spec = object({ offers: { t: 'array', of: OFFER, max: 50 } });
+/** `GET /api/local/offers` — `workerLocalOffersSchema` (WP-293; S-26.4's keys). */
+export const OFFERS: Spec = object({
+  offers: { t: 'array', of: OFFER, max: 50 },
+  as_of: { t: 'optional', of: datetime },
+  policy_skipped_offers: nullish(count),
+});
 
 /** `POST /api/local/offers/:id/take` — `workerLocalTakeResponseSchema` (WP-293). */
 export const TAKE: Spec = object({ run_id: uuid });

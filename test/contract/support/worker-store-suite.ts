@@ -333,10 +333,11 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       await world.setProjectMode(ops, 'workers_only');
       await world.refuseRemoteCredential(acme);
       expect((await facts())?.eligibleProjects).toBe(1);
-      // The scope narrows; pick only counts every project, since a pick ignores it.
+      // The scope narrows; pick only counts every project, since a pick ignores it — and since
+      // S-26.4 it is the policy, over every project.
       await world.store.setClaimScope({ workerId: worker, projectIds: [acme] });
       expect((await facts())?.eligibleProjects).toBe(0);
-      await world.store.setClaimScope({ workerId: worker, projectIds: [] });
+      await world.store.setClaimScope({ workerId: worker, projectIds: null, policy: 'pick_only' });
       expect((await facts())?.eligibleProjects).toBe(1);
 
       const hold = async (paused: boolean, via: 'worker_ui' | 'worker_internal_drain') =>
@@ -536,7 +537,7 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       const listed = (await world.store.listWorkers(owner)).find((row) => row.id === worker);
       expect(listed?.manuallyPausedAt).toEqual(at(5_000));
       // A connected, manually paused worker is counted paused.
-      await world.store.recordContact({ workerId: worker, protocolVersion: 2, imageDigests: null });
+      await world.store.recordContact({ workerId: worker, protocolVersion: 3, imageDigests: null });
       expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 1 });
       expect(
         await world.store.setManualPause({
@@ -585,21 +586,26 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
           { id: alpha, key: 'alpha', name: 'Project alpha' },
           { id: beta, key: 'beta', name: 'Project beta' },
         ],
+        // S-26.4: a new worker takes its owner's tasks and unassigned ones; nothing counted here.
+        claimPolicy: 'mine_and_unassigned',
+        policySkippedOffers: null,
       });
+      const policy = 'mine_and_unassigned' as const;
       // Every project already: nothing written.
       expect(await world.store.setClaimScope({ workerId: worker, projectIds: null })).toEqual({
         status: 'set',
         claimProjectIds: null,
+        claimPolicy: policy,
         performed: false,
       });
       const sorted = [alpha, beta].sort();
       expect(
         await world.store.setClaimScope({ workerId: worker, projectIds: [beta, alpha, beta] }),
-      ).toEqual({ status: 'set', claimProjectIds: sorted, performed: true });
+      ).toEqual({ status: 'set', claimProjectIds: sorted, claimPolicy: policy, performed: true });
       // The same set in another order is a repeat.
       expect(
         await world.store.setClaimScope({ workerId: worker, projectIds: [alpha, beta] }),
-      ).toEqual({ status: 'set', claimProjectIds: sorted, performed: false });
+      ).toEqual({ status: 'set', claimProjectIds: sorted, claimPolicy: policy, performed: false });
       // A project the user may not take a run of, or none at all: refused, nothing written.
       const missing = '00000000-0000-4000-8000-00000029eeee';
       expect(
@@ -612,32 +618,112 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       expect(listed?.claimProjects).toEqual(
         sorted.map((id) => ({ id, key: id === alpha ? 'alpha' : 'beta' })),
       );
+      // S-26.4: `[]` is no longer *pick only* — refused, nothing written; the policy says it.
       expect(await world.store.setClaimScope({ workerId: worker, projectIds: [] })).toEqual({
-        status: 'set',
-        claimProjectIds: [],
-        performed: true,
+        status: 'empty_scope',
       });
       expect(
-        (await world.store.listWorkers(owner)).find((row) => row.id === worker)?.claimProjects,
-      ).toEqual([]);
-      expect(await world.store.claimScope(worker)).toMatchObject({ claimProjectIds: [] });
+        await world.store.setClaimScope({
+          workerId: worker,
+          projectIds: null,
+          policy: 'pick_only',
+        }),
+      ).toEqual({
+        status: 'set',
+        claimProjectIds: null,
+        claimPolicy: 'pick_only',
+        performed: true,
+      });
+      expect((await world.store.listWorkers(owner)).find((row) => row.id === worker)).toMatchObject(
+        { claimProjects: null, claimPolicy: 'pick_only' },
+      );
+      expect(await world.store.claimScope(worker)).toMatchObject({
+        claimProjectIds: null,
+        claimPolicy: 'pick_only',
+      });
       expect(await scopeAudit()).toEqual([
         {
           action: 'worker.claim_scope',
           userId: owner,
           params: { worker_id: worker, project_ids: sorted, via: 'worker_ui' },
         },
+      ]);
+      expect((await world.audit()).filter((row) => row.action === 'worker.claim_policy')).toEqual([
         {
-          action: 'worker.claim_scope',
+          action: 'worker.claim_policy',
           userId: owner,
-          params: { worker_id: worker, project_ids: [], via: 'worker_ui' },
+          params: {
+            worker_id: worker,
+            claim_policy: 'pick_only',
+            project_ids: null,
+            via: 'worker_ui',
+          },
         },
       ]);
       const unknown = '00000000-0000-4000-8000-00000029fffe';
       expect(await world.store.claimScope(unknown)).toEqual({ status: 'not_found' });
-      expect(await world.store.setClaimScope({ workerId: unknown, projectIds: [] })).toEqual({
+      expect(await world.store.setClaimScope({ workerId: unknown, projectIds: null })).toEqual({
         status: 'not_found',
       });
+    });
+
+    it('holds the claim policy: its own user only, one worker.claim_policy row per change, the policy never moved by a scope-only write (S-26.4)', async () => {
+      const world = await harness.create();
+      const owner = await world.addViewer('claim-policy@example.test');
+      const other = await world.addViewer('claim-policy-other@example.test');
+      const alpha = await world.addProject('alpha', [owner]);
+      const worker = await registerWorker(world, owner);
+      const policyAudit = async () =>
+        (await world.audit()).filter((row) => row.action === 'worker.claim_policy');
+      const write = (actorUserId: string, canSeeAll: boolean, projectIds: string[] | null) =>
+        world.store.setClaimPolicy({
+          workerId: worker,
+          actorUserId,
+          canSeeAll,
+          projectIds,
+          policy: 'mine',
+        });
+      // Somebody else: absent to a member, refused to an administrator; nothing written.
+      expect(await write(other, false, null)).toEqual({ status: 'not_found' });
+      expect(await write(other, true, null)).toEqual({ status: 'not_owner' });
+      expect(await policyAudit()).toEqual([]);
+      expect(await write(owner, false, [alpha])).toEqual({
+        status: 'set',
+        claimProjectIds: [alpha],
+        claimPolicy: 'mine',
+        performed: true,
+      });
+      expect(await write(owner, false, [alpha])).toMatchObject({ performed: false });
+      expect(await policyAudit()).toEqual([
+        {
+          action: 'worker.claim_policy',
+          userId: owner,
+          params: {
+            worker_id: worker,
+            claim_policy: 'mine',
+            project_ids: [alpha],
+            via: 'workers_screen',
+          },
+        },
+      ]);
+      // A scope-only write from the page leaves the policy as it was.
+      expect(await world.store.setClaimScope({ workerId: worker, projectIds: null })).toEqual({
+        status: 'set',
+        claimProjectIds: null,
+        claimPolicy: 'mine',
+        performed: true,
+      });
+      expect(await world.store.claimScope(worker)).toMatchObject({ claimPolicy: 'mine' });
+      expect(
+        await world.store.setClaimPolicy({
+          workerId: worker,
+          actorUserId: owner,
+          canSeeAll: false,
+          projectIds: [],
+          policy: 'pick_only',
+        }),
+      ).toEqual({ status: 'empty_scope' });
+      expect(await policyAudit()).toHaveLength(1);
     });
 
     it('answers a repeated decision with the recorded one, writes nothing, and refuses a different one', async () => {

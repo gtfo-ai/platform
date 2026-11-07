@@ -19,7 +19,7 @@
  *
  * **A version-1 request is `426`** on both: the verbs do not exist at protocol 1, and a worker that
  * reaches them speaking 1 is a worker that cannot read their answers' context. Since protocol 3
- * (WP-293, accepted `[2, 3]`) protocol 1 is refused at the protocol check before it reaches them.
+ * (WP-293; accepted `[3, 4]` since S-26.4) protocol 1 is refused at the protocol check before it reaches them.
  */
 import type { RunTokenSubject } from '@platform/application';
 import {

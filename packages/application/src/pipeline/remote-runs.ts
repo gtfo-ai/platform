@@ -9,8 +9,8 @@
  *
  * | command | what it writes | refused as |
  * |---|---|---|
- * | {@link RemoteRuns.claim} | the one claim (`RunOfferRepository.claim`, worker eligibility in the statement), `run.claimed`, the run token's hash — and for a pick (WP-293) one `human_actions` row `worker.take_offer`; **after the commit** the package — the stored plan opened, the git credential minted | — (`none`) |
- * | {@link RemoteRuns.offers} | nothing: the claim's eligibility read as a list, the scope ignored (WP-293) | — |
+ * | {@link RemoteRuns.claim} | the one claim (`RunOfferRepository.claim`, worker eligibility in the statement), `run.claimed`, the run token's hash — and for a pick (WP-293) one `human_actions` row `worker.take_offer`, and for a pick of an unassigned stage offer (S-26.4) the task's owner (`task.owner.changed`, `via: pick`) with a second row `task.owner`; **after the commit** the package — the stored plan opened, the git credential minted | — (`none`); a pick of another person's task `owned_by_another` |
+ * | {@link RemoteRuns.offers} | nothing: the claim's eligibility read as a list, narrowed by the project list, the policy read (WP-293, S-26.4) | — |
  * | {@link RemoteRuns.heartbeat} | the lease renewed (`now + 10 min`), acks stamped; answers pending commands | `lease_lost` |
  * | {@link RemoteRuns.release} | the claim undone (offer `claimed → open`, run `starting → created`), `run.offer.released`; the minted credential revoked after the commit | `run_started`, `lease_lost` |
  * | {@link RemoteRuns.spawn} | the CLI spawn marker and `run.started` (WP-275b's transaction) | `lease_lost` |
@@ -61,6 +61,8 @@ import {
   type CommandContext,
   isActiveRunStatus,
   markRunning,
+  type PickRefusal,
+  pickRefusalOf,
   releaseRunClaim,
 } from '@platform/domain';
 import type * as z from 'zod';
@@ -79,12 +81,14 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { type ClaimAdmission, ClaimAdmissionRefused } from './claim-admission.js';
 import { leaseExpiryAt } from './lease.js';
 import { claimRunOffer, RUN_OFFERS_TOPIC, recordClaim, workerLeaseOwner } from './offers.js';
+import { assignOwnerOnPick, PickOwnedByAnotherError } from './owner-sync.js';
 import { toRunAggregate } from './run-aggregate.js';
 import { openRunPlan } from './run-package.js';
 import type { SettleRunRequest, SettleRunResult } from './settle.js';
 import {
   type ClaimableRunOffer,
   LeaseLostError,
+  type OfferOwner,
   type PendingRunCommand,
   type PipelineStore,
   type RunCommandRefusal,
@@ -184,11 +188,20 @@ export interface RemoteRunsOptions {
   readonly logger?: Logger;
 }
 
-/** The audit of a pick (WP-293): one `human_actions` row `worker.take_offer`, the worker's user. */
+/**
+ * The audit of a pick (WP-293): one `human_actions` row `worker.take_offer`, the worker's user —
+ * and, when the pick assigned (S-26.4), a second row `task.owner` `{via: pick}` naming the owner
+ * it set (`assignedOwner`), in the same transaction.
+ */
 export interface WorkerTakeAudit {
   record(
     tx: Transaction,
-    entry: { readonly workerId: Id; readonly runId: Id; readonly taskId: Id },
+    entry: {
+      readonly workerId: Id;
+      readonly runId: Id;
+      readonly taskId: Id;
+      readonly assignedOwner?: Id | null;
+    },
   ): Promise<void>;
 }
 
@@ -222,7 +235,18 @@ export type RemoteClaimAnswer =
    * An offer was claimed and could not be packaged — settled `not_started`, its retry (if any)
    * Q59(a)'s. The caller ends its hold rather than claiming again at once.
    */
-  | { readonly kind: 'not_packaged'; readonly runId: Id };
+  | { readonly kind: 'not_packaged'; readonly runId: Id }
+  /**
+   * A **pick** of a stage offer whose task another person owns (S-26.4): nothing was claimed. The
+   * refusal is `task_taken_by_another` when the owner changed after the pick's `asOf`, else
+   * `task_owned_by_another` — and it is answered only to a worker the claim's eligibility admits
+   * now, so it names the owner to no one the board would not.
+   */
+  | {
+      readonly kind: 'owned_by_another';
+      readonly owner: OfferOwner;
+      readonly refusal: PickRefusal;
+    };
 
 export type RemoteHeartbeatAnswer =
   | {
@@ -269,8 +293,10 @@ export interface RemoteLateSpend {
 export interface RemoteRuns {
   /**
    * The one claim (TD-031 §2). With `pick` — *take this one* (WP-293) — it is narrowed to that run,
-   * ignores the worker's claim scope and nothing else, and records `worker.take_offer` in the
-   * claim's transaction; `none` is then every reason it claimed nothing.
+   * ignores the worker's claim scope and claim policy and nothing else, records `worker.take_offer`
+   * in the claim's transaction and, for an unassigned stage offer, makes the picker the task's owner
+   * there (S-26.4); `owned_by_another` when the task is another person's, and `none` for every
+   * other reason it claimed nothing. `asOf` is the list's instant the pick was made from.
    */
   claim(input: {
     readonly workerId: Id;
@@ -278,10 +304,12 @@ export interface RemoteRuns {
     readonly images: RemoteRunImages;
     readonly now: IsoDateTime;
     readonly pick?: Id;
+    readonly asOf?: IsoDateTime;
   }): Promise<RemoteClaimAnswer>;
   /**
    * What the worker could claim now (WP-293, TD-031's claim-scope amendment §4): the claim's own
-   * eligibility, its scope ignored, at most `limit`, oldest first. Claims nothing.
+   * eligibility narrowed by the worker's project list (S-26.4), at most `limit`, oldest first, each
+   * with its owner, `mine` and whether the policy takes it automatically. Claims nothing.
    */
   offers(input: {
     readonly workerId: Id;
@@ -575,14 +603,33 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
             // Rolls the claim back: the offer is open again for `refuse` to withdraw.
             throw new ClaimAdmissionRefused(forAdmission, refusal);
           }
-          const recorded = recordClaim(offered, offer, options.context(row.taskId), input.workerId);
+          const context = options.context(row.taskId);
+          const recorded = recordClaim(offered, offer, context, input.workerId);
           await scope.events.append(recorded.events);
           if (pick !== undefined) {
+            // S-26.4: a pick of a stage offer assigns an unassigned task to the picker, here — the
+            // task's row lock is the third of the one order — and refuses another person's (the
+            // claim rolls back). An ask assigns nothing.
+            const pickerUserId = offer.workerUserId ?? null;
+            const assignedOwner =
+              offer.kind === 'stage' && pickerUserId !== null
+                ? await assignOwnerOnPick(
+                    {
+                      store,
+                      ids: context.ids,
+                      clock: context.clock,
+                      ...(options.logger === undefined ? {} : { logger: options.logger }),
+                    },
+                    scope,
+                    { taskId: row.taskId, pickerUserId },
+                  )
+                : null;
             // A person's act: audited with the claim, so a rolled-back claim leaves no row.
             await takeAudit?.record(scope.tx, {
               workerId: input.workerId,
               runId: row.id,
               taskId: row.taskId,
+              assignedOwner,
             });
           }
           return {
@@ -592,10 +639,39 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
             images: offer.images ?? input.images,
           };
         });
+      /**
+       * S-26.4: why a pick claimed nothing, when it is ownership — read after the claim's own
+       * transaction ended, so a pick racing an owner change reads the owner that won.
+       */
+      const ownershipRefusal = async (): Promise<RemoteClaimAnswer> => {
+        if (pick === undefined) return { kind: 'none' };
+        const found = await unitOfWork.transaction(async (scope) =>
+          store.offers.pickOwnerRefusal(scope.tx, {
+            runId: pick,
+            worker: {
+              workerId: input.workerId,
+              heldImageDigests: input.heldImageDigests,
+              images: input.images,
+            },
+            now: input.now,
+          }),
+        );
+        return found === null
+          ? { kind: 'none' }
+          : {
+              kind: 'owned_by_another',
+              owner: found.owner,
+              refusal: pickRefusalOf(found.ownerChangedAt, input.asOf ?? null),
+            };
+      };
       let claimed: Awaited<ReturnType<typeof claimOnce>>;
       try {
         claimed = await claimOnce();
       } catch (error) {
+        if (error instanceof PickOwnedByAnotherError) {
+          // The owner moved between the claim's statement and the task's row lock: rolled back.
+          return ownershipRefusal();
+        }
         if (!(error instanceof ClaimAdmissionRefused) || options.admission === undefined) {
           throw error;
         }
@@ -620,7 +696,7 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
         return { kind: 'none' };
       }
       if (claimed === null) {
-        return { kind: 'none' };
+        return ownershipRefusal();
       }
       let answer: RemotePackageAnswer;
       try {

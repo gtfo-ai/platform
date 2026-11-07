@@ -7,10 +7,12 @@ import {
   isAcceptedWorkerProtocol,
   parseWorkerProtocolHeader,
   runPackageSchema,
+  WORKER_CLAIM_POLICIES,
   WORKER_CLAIM_SCOPE_MAX_PROJECTS,
   WORKER_OFFERS_LIST_MAX,
   WORKER_PACKAGE_MAX_BYTES,
   WORKER_PATHS,
+  WORKER_PROTOCOL_CLAIM_POLICY,
   WORKER_PROTOCOL_CLAIM_SCOPE,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
@@ -18,6 +20,7 @@ import {
   WORKER_USER_CODE_ALPHABET,
   workerApprovalRequestSchema,
   workerApprovalResponseSchema,
+  workerClaimPolicySchema,
   workerClaimRequestSchema,
   workerClaimScopeRequestSchema,
   workerClaimScopeResponseSchema,
@@ -193,12 +196,14 @@ const refusals = (value: unknown): string[] => {
 const SCOPE_PROJECT = '00000000-0000-4000-8000-000000029301';
 
 describe('protocol versions (TD-032 decision 7)', () => {
-  it('ships N = 3, accepting [N-1, N] without a 0 (WP-293 bumped it)', () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(3);
-    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([2, 3]);
-    // The local UI's verbs and keys are protocol 2's; the claim scope's are 3's, the version N.
+  it('ships N = 4, accepting [N-1, N] without a 0 (S-26.4 bumped it)', () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(4);
+    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([3, 4]);
+    // The local UI's verbs and keys are protocol 2's, the claim scope's 3's, and the claim
+    // policy's 4's — the version N.
     expect(WORKER_PROTOCOL_LOCAL_UI).toBe(2);
     expect(WORKER_PROTOCOL_CLAIM_SCOPE).toBe(3);
+    expect(WORKER_PROTOCOL_CLAIM_POLICY).toBe(4);
     expect(ACCEPTED_WORKER_PROTOCOLS).toContain(WORKER_PROTOCOL_VERSION);
     for (const version of ACCEPTED_WORKER_PROTOCOLS) {
       expect([WORKER_PROTOCOL_VERSION - 1, WORKER_PROTOCOL_VERSION]).toContain(version);
@@ -207,11 +212,11 @@ describe('protocol versions (TD-032 decision 7)', () => {
   });
 
   it('accepts exactly the listed versions', () => {
-    expect(isAcceptedWorkerProtocol(2)).toBe(true);
     expect(isAcceptedWorkerProtocol(3)).toBe(true);
+    expect(isAcceptedWorkerProtocol(4)).toBe(true);
     expect(isAcceptedWorkerProtocol(0)).toBe(false);
-    expect(isAcceptedWorkerProtocol(1)).toBe(false);
-    expect(isAcceptedWorkerProtocol(4)).toBe(false);
+    expect(isAcceptedWorkerProtocol(2)).toBe(false);
+    expect(isAcceptedWorkerProtocol(5)).toBe(false);
   });
 
   it('reads the X-Worker-Protocol header strictly; anything else is no protocol (426)', () => {
@@ -806,7 +811,82 @@ const DTO_SAMPLES: ReadonlyArray<readonly [string, z.ZodType, Record<string, unk
     },
   ],
   ['offer claim request', workerOfferClaimRequestSchema, { image_digests: [] }],
+  // S-26.4 (protocol 4): the claim policy's keys.
+  [
+    'claim-scope response at protocol 4',
+    workerClaimScopeResponseSchema,
+    {
+      claim_project_ids: null,
+      projects: [],
+      claim_policy: 'mine_and_unassigned',
+      policy_skipped_offers: 2,
+    },
+  ],
+  [
+    'claim-scope request at protocol 4',
+    workerClaimScopeRequestSchema,
+    { claim_project_ids: null, claim_policy: 'pick_only' },
+  ],
+  [
+    'offers response at protocol 4',
+    workerOffersResponseSchema,
+    {
+      offers: [
+        {
+          run_id: SCOPE_PROJECT,
+          kind: 'stage',
+          project_key: 'ACME',
+          ticket_key: 'ACME-1',
+          title: null,
+          stage: 'implementation',
+          role: 'developer',
+          offered_at: '2026-11-05T10:00:00.000Z',
+          automatic: false,
+          owner: { user_id: SCOPE_PROJECT, name: 'Vojtěch' },
+          mine: false,
+        },
+      ],
+      as_of: '2026-11-05T10:00:01.000Z',
+      policy_skipped_offers: null,
+    },
+  ],
+  [
+    'offer claim request at protocol 4',
+    workerOfferClaimRequestSchema,
+    { image_digests: [], as_of: '2026-11-05T10:00:01.000Z' },
+  ],
 ];
+
+describe('the claim policy (S-26.4)', () => {
+  it('names exactly four policies, refuses any other, and keeps every new key optional', () => {
+    expect([...WORKER_CLAIM_POLICIES]).toEqual([
+      'everything',
+      'mine_and_unassigned',
+      'mine',
+      'pick_only',
+    ]);
+    expect(workerClaimPolicySchema.safeParse('assigned').success).toBe(false);
+    expect(
+      workerClaimScopeRequestSchema.safeParse({ claim_project_ids: null, claim_policy: 'mine' })
+        .success,
+    ).toBe(true);
+    expect(
+      workerClaimScopeRequestSchema.safeParse({ claim_project_ids: null, claim_policy: 'any' })
+        .success,
+    ).toBe(false);
+    // A version-3 answer carries none of them; a negative count is refused.
+    expect(
+      workerClaimScopeResponseSchema.safeParse({ claim_project_ids: null, projects: [] }).success,
+    ).toBe(true);
+    expect(
+      workerClaimScopeResponseSchema.safeParse({
+        claim_project_ids: null,
+        projects: [],
+        policy_skipped_offers: -1,
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe('the claim scope and the offers (WP-293)', () => {
   it('bounds the scope and the list, and carries an ask with no question text', () => {

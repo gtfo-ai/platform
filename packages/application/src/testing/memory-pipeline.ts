@@ -23,6 +23,7 @@
  * | 12 | `tasks.ticketStatusChangesSinceEntry` (WP-178) reads the **committed** log through {@link MemoryPipelineStoreOptions.committedLog}, ordered by `position`; PostgreSQL's query also sees the calling transaction's own staged appends. Unwired, it answers `[]`. | **same, when wired** | Its one caller, the human-return window, asks in a job's own transaction about events earlier transactions committed (the task's entry into `qa`, a webhook's status change); the predicate — the newest entry, the project stream, the ticket by id or key — is the SQL's, and the contract suite drives it against both stores. |
  * | 14 | The **owner directory** (S-26.1, `owners`) answers from {@link MemoryPipelineStore.seedIdentity}, {@link MemoryPipelineStore.seedProjectMember} and {@link MemoryPipelineStore.seedBindingAccount} where PostgreSQL joins `user_identities`, `users`, `project_members` and `bindings.account_identity`. Unseeded, every assignee is a `person` and nobody may own a task. | **same** on the predicate, **stricter** unseeded | The SQL's order — a linked member first, then a machine, then a binding's account — is the one {@link classify} applies; that the effective role is the higher of the organisation role and a membership, and that a disabled user (`users.status`) may own nothing, is the SQL's alone, asserted by `test/integration/pipeline/task-owner.integration.test.ts`. |
  * | 13 | A **remote worker's claim** (WP-281) asks {@link MemoryPipelineStoreOptions.remoteWorkers} and {@link MemoryPipelineStoreOptions.runCredentialSource} where the SQL claim joins `workers`, `users`, `project_members`, `bindings` and `integrations` in its one statement; the same callback fences `finish`, `renewLease` and the spawn marker of a run a worker holds (backlog 714's `runHolderUsableSql`). Unwired, no worker is eligible and a worker-held run's fence never holds. | **same** on the predicates, **stricter** unwired | That the predicates are asked **in the committing statement** — a revoke that commits between a request's authentication and its write is seen — is PostgreSQL's isolation, asserted by `test/integration/pipeline/remote-claim.integration.test.ts`; divergence 4 is why it cannot be shown here. |
+ * | 15 | A worker's **claim policy** (S-26.4) is the domain's `claimPolicyTakes` over this store's ownership map and directory, as the SQL's `workerPolicyTakesSql`; an **ask's** "mine" is read off the offer's assignee — the asker, which the ask executor always writes there — where the SQL reads `task_asks.asked_by_user_id`, and the offers list and the pick refusal name an owner with an empty `name` (no `users` here). | **same** on the predicate, **kinder** on an ask whose offer named no assignee | The policy × task matrix, the ask's asker and the owner's name are asserted against PostgreSQL in `test/integration/pipeline/claim-policy.integration.test.ts`. |
  */
 import type {
   AgentRole,
@@ -39,6 +40,7 @@ import type {
   Slug,
   StoredTicketClaim,
   TaskStageState,
+  WorkerClaimPolicy,
 } from '@platform/contracts';
 import {
   mergeRequestRefSchema,
@@ -62,10 +64,15 @@ import type {
   TaskOwnership,
 } from '@platform/domain';
 import {
+  claimPolicyTakes,
   countsAsActive,
   countsInPipeline,
+  effectiveClaimPolicy,
   isActiveRunStatus,
   isTerminalTaskState,
+  projectListTakes,
+  taskHeldElsewhere,
+  taskIsUnassigned,
   UNOWNED,
 } from '@platform/domain';
 import { holdOf } from '../cost/pending.js';
@@ -366,10 +373,16 @@ export interface MemoryRemoteWorker {
   /** The owner's hold from the worker's local page (WP-292); absent reads as not held. */
   readonly manuallyPaused?: boolean;
   /**
-   * The worker's claim scope (WP-293): `null`/absent every project, `[]` pick only, otherwise those
-   * projects — a conjunct of an automatic claim, ignored by a pick.
+   * The worker's claim scope (WP-293): `null`/absent every project, otherwise those projects — a
+   * conjunct of an automatic claim, ignored by a pick. A legacy `[]` narrows nothing and makes an
+   * absent policy read `pick_only` (S-26.4, `effectiveClaimPolicy`).
    */
   readonly claimProjectIds?: readonly Id[] | null;
+  /**
+   * The worker's claim policy (S-26.4, migration 0106): `null`/absent reads as the SQL's `null` —
+   * `pick_only` over a `[]` scope, `everything` otherwise.
+   */
+  readonly claimPolicy?: WorkerClaimPolicy | null;
   /**
    * Whether the user's effective project role — the higher of the organisation role and a
    * membership (backlog 886) — is `member` or above.
@@ -1808,10 +1821,57 @@ export const createMemoryPipelineStore = (
     );
   }
 
-  /** The SQL's `workerScopeTakesSql` (WP-293): `null`/absent every project, else those named. */
+  /** The SQL's `workerScopeTakesSql` (WP-293; S-26.4: a legacy `[]` narrows nothing). */
   function scopeTakes(candidate: StoredRunOffer, workerId: Id): boolean {
     const scope = options.remoteWorkers?.(workerId)?.claimProjectIds ?? null;
-    return scope === null || scope.includes(candidate.projectId);
+    return projectListTakes(scope, candidate.projectId);
+  }
+
+  /**
+   * The SQL's `offerIsMineSql` (S-26.4): a stage offer's task owned by `userId`, or an ask they
+   * asked. **Divergence 15**: this store keeps no `task_asks`, so an ask's asker is read off the
+   * offer's assignee — which the ask executor always sets to the asker (`assigneeUserId:
+   * ask.askedByUserId`), the SQL reading `task_asks.asked_by_user_id` itself.
+   */
+  function offerIsMine(candidate: StoredRunOffer, userId: Id): boolean {
+    return candidate.kind === 'ask'
+      ? candidate.routing.assigneeUserId === userId
+      : (ownerships.get(candidate.taskId) ?? UNOWNED).ownerUserId === userId;
+  }
+
+  /** The SQL's `taskHeldElsewhereSql` over the directory, live (S-26.1, divergence 14). */
+  function heldElsewhereOf(taskId: Id, projectId: Id): boolean {
+    const assignee = (ownerships.get(taskId) ?? UNOWNED).ticketAssignee;
+    return taskHeldElsewhere({
+      ticketAssignee: assignee,
+      assigneeIsLinkedMember:
+        assignee !== null &&
+        classify(projectId, assignee.provider, assignee.external_id).kind === 'member',
+    });
+  }
+
+  /** The SQL's `workerPolicyTakesSql` (S-26.4): the domain's `claimPolicyTakes`, read live. */
+  function policyTakes(candidate: StoredRunOffer, workerId: Id): boolean {
+    const known = options.remoteWorkers?.(workerId);
+    if (known === undefined) return false;
+    const policy = effectiveClaimPolicy(known.claimPolicy ?? null, known.claimProjectIds ?? null);
+    const owner = (ownerships.get(candidate.taskId) ?? UNOWNED).ownerUserId;
+    return claimPolicyTakes(policy, {
+      mine: offerIsMine(candidate, known.userId),
+      unassigned:
+        candidate.kind === 'stage' &&
+        taskIsUnassigned({
+          ownerUserId: owner,
+          heldElsewhere: heldElsewhereOf(candidate.taskId, candidate.projectId),
+        }),
+    });
+  }
+
+  /** The SQL's `pickOwnershipAdmitsSql` (S-26.4): an ask, or a stage task nobody's or the picker's. */
+  function pickOwnershipAdmits(candidate: StoredRunOffer, workerId: Id): boolean {
+    if (candidate.kind !== 'stage') return true;
+    const owner = (ownerships.get(candidate.taskId) ?? UNOWNED).ownerUserId;
+    return owner === null || owner === options.remoteWorkers?.(workerId)?.userId;
   }
 
   /** An open offer of a live run — the claim's and the list's first two conjuncts. */
@@ -1828,17 +1888,42 @@ export const createMemoryPipelineStore = (
             workerEligible(candidate, { worker: input.worker, now: input.now }),
         )
         .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))
+        .filter((candidate) => scopeTakes(candidate, input.worker.workerId))
         .slice(0, input.limit)
-        .map((candidate) => ({
-          runId: candidate.runId,
-          taskId: candidate.taskId,
-          projectId: candidate.projectId,
-          kind: candidate.kind,
-          stage: candidate.stage,
-          role: (runs.get(candidate.runId)?.role ?? 'developer') as AgentRole,
-          offeredAt: candidate.offeredAt,
-          automatic: scopeTakes(candidate, input.worker.workerId),
-        })),
+        .map((candidate) => {
+          const owner = (ownerships.get(candidate.taskId) ?? UNOWNED).ownerUserId;
+          const userId = options.remoteWorkers?.(input.worker.workerId)?.userId;
+          return {
+            runId: candidate.runId,
+            taskId: candidate.taskId,
+            projectId: candidate.projectId,
+            kind: candidate.kind,
+            stage: candidate.stage,
+            role: (runs.get(candidate.runId)?.role ?? 'developer') as AgentRole,
+            offeredAt: candidate.offeredAt,
+            automatic: policyTakes(candidate, input.worker.workerId),
+            // Divergence 15: no `users` here, so the owner's name is not known.
+            owner: owner === null ? null : { userId: owner, name: '' },
+            mine: userId !== undefined && offerIsMine(candidate, userId),
+          };
+        }),
+    pickOwnerRefusal: async (_tx, input) => {
+      const candidate = offers.get(input.runId);
+      if (
+        candidate === undefined ||
+        candidate.kind !== 'stage' ||
+        !openLive(candidate) ||
+        !workerEligible(candidate, { worker: input.worker, now: input.now })
+      ) {
+        return null;
+      }
+      const ownership = ownerships.get(candidate.taskId) ?? UNOWNED;
+      const owner = ownership.ownerUserId;
+      if (owner === null || owner === options.remoteWorkers?.(input.worker.workerId)?.userId) {
+        return null;
+      }
+      return { owner: { userId: owner, name: '' }, ownerChangedAt: ownership.ownerChangedAt };
+    },
     insert: async (_tx, offer) => {
       if (offers.has(offer.runId)) {
         throw new PipelineStoreError(
@@ -1893,10 +1978,14 @@ export const createMemoryPipelineStore = (
               (candidate.routing.serverFrom === null && candidate.routing.workersFrom === null)) &&
             // WP-281: a remote worker's, as the SQL's `WORKER_ELIGIBLE` spells it.
             (claim.claimantKind !== 'worker' || workerEligible(candidate, claim)) &&
-            // WP-293: an automatic claim asks the scope; a pick ignores it.
+            // WP-293, S-26.4: an automatic claim asks the scope and the policy; a pick ignores
+            // both, and takes no stage task another person owns.
             (claim.claimantKind !== 'worker' ||
-              claim.worker?.pick === true ||
-              (claim.worker !== undefined && scopeTakes(candidate, claim.worker.workerId))),
+              claim.worker === undefined ||
+              (claim.worker.pick === true
+                ? pickOwnershipAdmits(candidate, claim.worker.workerId)
+                : scopeTakes(candidate, claim.worker.workerId) &&
+                  policyTakes(candidate, claim.worker.workerId))),
         )
         .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))[0];
       if (offer === undefined) {
@@ -1946,6 +2035,9 @@ export const createMemoryPipelineStore = (
         epoch,
         owner: claim.owner,
         images: claimedImages === null ? null : { ...claimedImages },
+        ...(worker === undefined
+          ? {}
+          : { workerUserId: options.remoteWorkers?.(worker.workerId)?.userId ?? null }),
       };
     },
     /** WP-281: the SQL adapter's release, its decision the shared `decideRelease`. */

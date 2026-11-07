@@ -433,13 +433,22 @@ user).
   ticket key is a field of an event; the residual is the core's: a library's error message that
   quotes untrusted text carries up to 1 KiB of it, redacted for secrets but not for meaning.
   The DSN names a host the developer chose: the worker sends its errors there and nowhere else.
-- *What this worker takes by itself* and *Take this one* (WP-293, protocol 3 — a core accepts `[2, 3]`,
-  so a worker image older than protocol 2 must be updated first): the owner's **claim scope** (every
-  project, named projects, or pick only) is stored on the core in `workers.claim_project_ids` and only
-  narrows the claim; a pick claims one listed run and never jumps a project's routing — the
-  administrator's levers stay the execution mode and *Revoke*. Each change and each pick is one
-  `human_actions` row (`worker.claim_scope`, `worker.take_offer`, `via: worker_ui`). If every worker of a
-  `workers_only` instance is *pick only*, runs wait for a person to pick them, up to `offer_timeout`.
+- *What this worker takes by itself* and *Take this one* (WP-293, protocol 3; S-26.4, protocol 4 — a
+  core accepts `[3, 4]`, so a worker image older than protocol 3 must be updated first): the owner's
+  **claim scope** (every project or named projects) is stored on the core in `workers.claim_project_ids`
+  and its **claim policy** (*my tasks and unassigned ones* — the default for a new machine —, *only my
+  tasks*, *everything*, *only what I pick*) in `workers.claim_policy` (migration 0106); both only narrow
+  the claim. A worker approved before 0106 has no policy and keeps its meaning: *everything*, or *only
+  what I pick* if its scope was the old pick-only `[]`. A pick claims one listed run, never jumps a
+  project's routing and never takes a task another person owns; picking an unowned task makes the
+  picker its owner — the administrator's levers stay the execution mode and *Revoke* (an administrator
+  can read a machine's policy on the Workers screen and cannot change it). Each change and each pick is
+  one `human_actions` row (`worker.claim_policy`/`worker.claim_scope`, `worker.take_offer`, and a pick
+  that assigned `task.owner` with `via: pick`). If every worker of a `workers_only` instance takes only
+  its owner's tasks or only what it picks, an unowned task waits for a person to pick it, up to
+  `offer_timeout`; the server claimant, when there is one, still takes anything its execution mode
+  allows. **Rollback:** a build before 0106 never reads `claim_policy`, so during a rollback every
+  machine takes everything its scope allows (BACKLOG 1082).
 
 **The worker updates itself** (WP-287, TD-032 decisions 3, 4 and 6). The `updater` service follows the
 core: when it starts, then every minute (`APP_UPDATE_POLL_SECONDS`, default `60`), and at once when the

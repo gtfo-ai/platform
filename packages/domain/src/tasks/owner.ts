@@ -413,3 +413,82 @@ export const ownerCapabilities = (input: {
     can_unassign: input.ownerUserId !== null && permitted('nobody'),
   };
 };
+
+/**
+ * Why a pick of a **stage** offer was refused (S-26.4, TD-031's amendment item 7): another person
+ * owns the task. A pick never takes another person's task — a maintainer's included; reassigning
+ * is the task page's (`decideOwnerCommand`).
+ *
+ * - `task_taken_by_another` — the owner changed after the list the person picked from was read
+ *   (`asOf`): *they took it a moment ago*;
+ * - `task_owned_by_another` — it was already theirs when the list was read, or no list instant was
+ *   given.
+ */
+export type PickRefusal = 'task_taken_by_another' | 'task_owned_by_another';
+
+/** Which of the two refusals, by the owner's last change against the list's `asOf`. */
+export const pickRefusalOf = (
+  ownerChangedAt: IsoDateTime | null,
+  asOf: IsoDateTime | null,
+): PickRefusal =>
+  asOf !== null && ownerChangedAt !== null && Date.parse(ownerChangedAt) > Date.parse(asOf)
+    ? 'task_taken_by_another'
+    : 'task_owned_by_another';
+
+export type PickOwnerDecision =
+  | { readonly kind: 'refused'; readonly ownerUserId: Id }
+  | OwnershipDecision;
+
+/**
+ * **A pick assigns** (S-26.4, TD-031's amendment item 7, BD-032's amendment 3), decided in the
+ * claim's transaction over the row it locked:
+ *
+ * - a task another person owns is **refused** (the claim rolls back);
+ * - a task the picker owns already changes nothing;
+ * - an **unassigned** task ({@link taskIsUnassigned}) gets the picker as its owner — `source:
+ *   platform`, `via: pick` — with `ticket_assignee` left as it was read (rule 1: the next sync keeps
+ *   it until somebody changes the tracker);
+ * - a task **held elsewhere** (an unlinked or non-member assignee, admitted by
+ *   `take_assigned_tickets`) is claimed **without assigning**: the platform cannot map that
+ *   assignee, and a platform owner over them would make the two records disagree silently.
+ *
+ * `pickerMayOwn` is the caller's live answer (`userMayOwnInProjectSql`); the claim's eligibility
+ * already asked the same of the worker's user, so `false` here is a defence, and it claims without
+ * assigning rather than refusing.
+ */
+export const decidePickOwner = (
+  current: TaskOwnership,
+  input: {
+    readonly pickerUserId: Id;
+    readonly heldElsewhere: boolean;
+    readonly pickerMayOwn: boolean;
+    readonly at: IsoDateTime;
+  },
+): PickOwnerDecision => {
+  if (current.ownerUserId !== null && current.ownerUserId !== input.pickerUserId) {
+    return { kind: 'refused', ownerUserId: current.ownerUserId };
+  }
+  if (
+    current.ownerUserId === input.pickerUserId ||
+    input.heldElsewhere ||
+    !input.pickerMayOwn ||
+    !taskIsUnassigned({ ownerUserId: current.ownerUserId, heldElsewhere: input.heldElsewhere })
+  ) {
+    return { kind: 'unchanged' };
+  }
+  return {
+    kind: 'write',
+    next: {
+      ...current,
+      ownerUserId: input.pickerUserId,
+      ownerSource: 'platform',
+      ownerChangedAt: input.at,
+    },
+    change: {
+      ownerUserId: input.pickerUserId,
+      previousOwnerUserId: null,
+      source: 'platform',
+      via: 'pick',
+    },
+  };
+};

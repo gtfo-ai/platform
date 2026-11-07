@@ -544,12 +544,160 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
         .claim_blockers;
     };
     // Pick only claims nothing by itself: not "no project gives it work", and not "can claim".
-    await store.setClaimScope({ workerId: alice.workerId, projectIds: [] });
+    // Since S-26.4 it is the policy, over every project.
+    await store.setClaimScope({ workerId: alice.workerId, projectIds: null, policy: 'pick_only' });
     expect(await blockers()).toEqual(['pick_only']);
-    await store.setClaimScope({ workerId: alice.workerId, projectIds: [OTHER] });
+    await store.setClaimScope({
+      workerId: alice.workerId,
+      projectIds: [OTHER],
+      policy: 'everything',
+    });
     expect(await blockers()).toEqual(['no_eligible_project']);
     await store.setClaimScope({ workerId: alice.workerId, projectIds: [OTHER, PROJECT] });
     expect(await blockers()).toEqual([]);
+    // A policy narrower than everything is no blocker: a *mine* machine is idle by choice (S-26.4).
+    for (const policy of ['mine', 'mine_and_unassigned'] as const) {
+      await store.setClaimScope({ workerId: alice.workerId, projectIds: null, policy });
+      expect(await blockers()).toEqual([]);
+    }
+    // A worker row a build before migration 0106 wrote (no policy, every project): everything.
+    store.clearClaimPolicy(alice.workerId);
+    expect(await blockers()).toEqual([]);
+  });
+
+  describe('what a machine takes: PUT /api/workers/:id/claim-policy (S-26.4)', () => {
+    const OTHER_PROJECT = '00000000-0000-4000-8000-0000002315b3';
+    const put = (instance: FastifyInstance, workerId: string, payload: unknown) =>
+      instance.inject({ method: 'PUT', url: `/api/workers/${workerId}/claim-policy`, payload });
+    const policyAudits = (store: MemoryWorkerStore) =>
+      store.audit.filter((row) => row.action === 'worker.claim_policy');
+
+    it('lists every worker’s policy as it reads, and the offers its policy leaves for others', async () => {
+      const digests = { run: `sha256:${'a'.repeat(64)}`, egress: `sha256:${'b'.repeat(64)}` };
+      let core: typeof digests | null = digests;
+      const { app: instance, store, world } = await build({ coreDigests: () => core });
+      const alice = await register(instance, world, ALICE);
+      const read = async () => {
+        world.actor = { userId: ALICE, role: 'member' };
+        return (await instance.inject({ method: 'GET', url: '/api/workers' })).json().items[0] as {
+          claim_policy: string;
+          policy_skipped_offers: number | null;
+        };
+      };
+      // A new worker takes its owner's tasks and unassigned ones; nothing counted yet.
+      expect(await read()).toMatchObject({
+        claim_policy: 'mine_and_unassigned',
+        policy_skipped_offers: null,
+      });
+      store.seedPolicySkippedOffers(alice.workerId, 3);
+      expect((await read()).policy_skipped_offers).toBe(3);
+      // A core that cannot name its images counts nothing.
+      core = null;
+      expect((await read()).policy_skipped_offers).toBeNull();
+      // A row before migration 0106 reads as `everything`.
+      store.clearClaimPolicy(alice.workerId);
+      expect((await read()).claim_policy).toBe('everything');
+    });
+
+    it('is a state assertion by the worker’s own user: one audit row per change, none for a repeat', async () => {
+      const { app: instance, store, world } = await build();
+      store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
+      const alice = await register(instance, world, ALICE);
+      world.actor = { userId: ALICE, role: 'member' };
+      const first = await put(instance, alice.workerId, {
+        claim_policy: 'mine',
+        claim_project_ids: [PROJECT],
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json()).toEqual({
+        worker_id: alice.workerId,
+        claim_policy: 'mine',
+        claim_project_ids: [PROJECT],
+        performed: true,
+      });
+      expect(policyAudits(store)).toEqual([
+        {
+          userId: ALICE,
+          action: 'worker.claim_policy',
+          params: {
+            worker_id: alice.workerId,
+            claim_policy: 'mine',
+            project_ids: [PROJECT],
+            via: 'workers_screen',
+          },
+        },
+      ]);
+      // The same pair again: nothing written.
+      const again = await put(instance, alice.workerId, {
+        claim_policy: 'mine',
+        claim_project_ids: [PROJECT],
+      });
+      expect(again.json()).toMatchObject({ performed: false });
+      expect(policyAudits(store)).toHaveLength(1);
+      // The policy alone moves: one more row.
+      const everything = await put(instance, alice.workerId, {
+        claim_policy: 'everything',
+        claim_project_ids: [PROJECT],
+      });
+      expect(everything.json()).toMatchObject({ claim_policy: 'everything', performed: true });
+      expect(policyAudits(store)).toHaveLength(2);
+      expect(store.worker(alice.workerId)?.claimPolicy).toBe('everything');
+    });
+
+    it('refuses an administrator 403 and anybody else 404, writing nothing', async () => {
+      const { app: instance, store, world } = await build();
+      const alice = await register(instance, world, ALICE);
+      const body = { claim_policy: 'everything', claim_project_ids: null };
+      world.actor = { userId: ADMIN, role: 'admin' };
+      const admin = await put(instance, alice.workerId, body);
+      expect(admin.statusCode).toBe(403);
+      expect(admin.json().error.code).toBe('claim_policy_owner_only');
+      world.actor = { userId: BOB, role: 'member' };
+      expect((await put(instance, alice.workerId, body)).statusCode).toBe(404);
+      expect((await put(instance, '00000000-0000-4000-8000-0000002315ff', body)).statusCode).toBe(
+        404,
+      );
+      expect(policyAudits(store)).toEqual([]);
+      expect(store.worker(alice.workerId)?.claimPolicy).toBe('mine_and_unassigned');
+      // The administrator still reads it.
+      world.actor = { userId: ADMIN, role: 'admin' };
+      const listed = (await instance.inject({ method: 'GET', url: '/api/workers' })).json().items;
+      expect(listed.find((item: { id: string }) => item.id === alice.workerId)?.claim_policy).toBe(
+        'mine_and_unassigned',
+      );
+    });
+
+    it('refuses [] (pick only is a policy) and a project the user may not run, writing nothing', async () => {
+      const { app: instance, store, world } = await build();
+      store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
+      store.addProject({ id: OTHER_PROJECT, key: 'OPS', name: 'Ops' }, [BOB]);
+      const alice = await register(instance, world, ALICE);
+      world.actor = { userId: ALICE, role: 'member' };
+      const empty = await put(instance, alice.workerId, {
+        claim_policy: 'pick_only',
+        claim_project_ids: [],
+      });
+      expect(empty.statusCode).toBe(422);
+      expect(empty.json().error.code).toBe('claim_scope_empty');
+      const foreign = await put(instance, alice.workerId, {
+        claim_policy: 'mine',
+        claim_project_ids: [PROJECT, OTHER_PROJECT],
+      });
+      expect(foreign.statusCode).toBe(422);
+      expect(foreign.json().error.code).toBe('project_not_eligible');
+      expect(foreign.json().error.message).toContain(OTHER_PROJECT);
+      expect(policyAudits(store)).toEqual([]);
+      expect(store.worker(alice.workerId)).toMatchObject({
+        claimPolicy: 'mine_and_unassigned',
+        claimProjects: null,
+      });
+      // Pick only over every project is the spelling that is admitted.
+      const pickOnly = await put(instance, alice.workerId, {
+        claim_policy: 'pick_only',
+        claim_project_ids: null,
+      });
+      expect(pickOnly.json()).toMatchObject({ claim_policy: 'pick_only', performed: true });
+    });
   });
 
   it('revokes: the credential stops authenticating and the live runs’ leases expire, once', async () => {

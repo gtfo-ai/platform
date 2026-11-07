@@ -27,6 +27,11 @@
  * The claim's pre-read (`ticket-claim.ts`) is S-26.2's, with the claim's own `assignToSelf`
  * writing `ticket_assignee` in its transaction.
  *
+ * ## A pick (S-26.4)
+ *
+ * {@link assignOwnerOnPick} is the fifth writer: a person's *take this one* on their machine's page
+ * makes them the owner of an unassigned task, in the run claim's own transaction.
+ *
  * ## The stream
  *
  * Outside the task's own transactions (the duty, a stage's re-read, the command, the adoption) the
@@ -46,6 +51,7 @@ import {
   type AssigneeClass,
   adoptOwnerOnLink,
   decideOwnerCommand,
+  decidePickOwner,
   isTerminalTaskState,
   type OwnerChange,
   type OwnerCommandRefusal,
@@ -604,4 +610,66 @@ export const adoptOwnersOnLink = async (
     }
   }
   return adopted;
+};
+
+/**
+ * A pick of a **stage** offer whose task another person owns (S-26.4, TD-031's amendment item 7):
+ * thrown inside the claim's transaction, so the claim rolls back. `RemoteRuns.claim` answers it as
+ * the pick's ownership refusal, naming the owner.
+ */
+export class PickOwnedByAnotherError extends Error {
+  override readonly name = 'PickOwnedByAnotherError';
+  readonly taskId: Id;
+  readonly ownerUserId: Id;
+
+  constructor(taskId: Id, ownerUserId: Id) {
+    super(`task ${taskId} is owned by another person, so a pick does not take it`);
+    this.taskId = taskId;
+    this.ownerUserId = ownerUserId;
+  }
+}
+
+/**
+ * **A pick assigns** (S-26.4, TD-031's amendment item 7, BD-032's amendment 3), in the **claim's**
+ * transaction — after the claim moved the offer and the run, so the task's row lock is the third
+ * of the one order (`run_offers` → `runs` → `tasks`). The decision is the domain's
+ * `decidePickOwner`, asked over a plain read and again under the row lock (`applyOnTaskStream`):
+ * an unassigned task gets the picker as its owner (`source: platform`, `via: pick`, with
+ * `task.owner.changed` on its stream), a task the picker owns or one held elsewhere is claimed
+ * without assigning, and a task another person owns throws {@link PickOwnedByAnotherError}.
+ * `ticket_assignee` is not touched. Answers the owner it set, or `null`.
+ */
+export const assignOwnerOnPick = async (
+  options: OwnerSyncOptions,
+  scope: Pick<TransactionScope, 'tx' | 'events'>,
+  input: { readonly taskId: Id; readonly pickerUserId: Id },
+): Promise<Id | null> => {
+  const stored = await options.store.tasks.load(scope.tx, input.taskId);
+  if (stored === null) {
+    throw new TaskOwnerConflictError(input.taskId);
+  }
+  const projectId = stored.task.projectId;
+  const pickerMayOwn = await options.store.owners.mayOwn(scope.tx, {
+    projectId,
+    userId: input.pickerUserId,
+  });
+  const change = await applyOnTaskStream(options, scope, {
+    projectId,
+    taskId: input.taskId,
+    actor: { kind: 'user', user_id: input.pickerUserId },
+    causeEventId: null,
+    decide: async (current) => {
+      const decision = decidePickOwner(current, {
+        pickerUserId: input.pickerUserId,
+        heldElsewhere: await heldElsewhereNow(options.store, scope.tx, projectId, current),
+        pickerMayOwn,
+        at: options.clock.now() as IsoDateTime,
+      });
+      if (decision.kind === 'refused') {
+        throw new PickOwnedByAnotherError(input.taskId, decision.ownerUserId);
+      }
+      return decision;
+    },
+  });
+  return change?.ownerUserId ?? null;
 };

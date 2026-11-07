@@ -24,6 +24,8 @@ import * as z from 'zod';
 import { agentRoleSchema, idSchema, isoDateTimeSchema } from './common.js';
 import { transcriptEventSchema } from './transcript.js';
 import {
+  policySkippedOffersSchema,
+  workerClaimPolicySchema,
   workerClaimScopeResponseSchema,
   workerClaimScopeSchema,
   workerOffersResponseSchema,
@@ -285,6 +287,18 @@ export const workerLocalStateSchema = z.strictObject({
    * the page's guard checks members and bound only). Empty: *Taking work*.
    */
   claim_blockers: z.array(workerClaimBlockerSchema).max(WORKER_CLAIM_BLOCKERS.length),
+  /**
+   * What this machine takes by itself, as its core last said (S-26.4: the handshake, or a read or
+   * write of the claim scope); `null` before the core said it. This build's worker always sends
+   * it; it is optional so the page's fixtures written before it still read (S-26.7 shows it).
+   */
+  claim_policy: workerClaimPolicySchema.nullable().optional(),
+  /**
+   * Open offers this machine's policy leaves for others, as its core last counted them (the claim
+   * scope's read, or the offers list); `null` before the core counted them. Not a blocker: a
+   * machine that takes only its owner's tasks is idle by choice. Always sent, optional as above.
+   */
+  policy_skipped_offers: policySkippedOffersSchema.optional(),
   /** The *Error reporting* setting (WP-295). */
   error_reporting: workerLocalErrorReportingSchema,
   /**
@@ -326,17 +340,28 @@ export type WorkerLocalCancelResponse = z.infer<typeof workerLocalCancelResponse
 export const workerLocalClaimScopeSchema = workerClaimScopeResponseSchema;
 export type WorkerLocalClaimScope = z.infer<typeof workerLocalClaimScopeSchema>;
 
-/** `POST /api/local/claim-scope` `{ claim_project_ids }`: `null` every project, `[]` pick only. */
+/**
+ * `POST /api/local/claim-scope` `{ claim_project_ids, claim_policy? }`: `null` every project,
+ * otherwise those; the policy (S-26.4) is the core's `claim_policy`, absent leaving it as it was.
+ * The core refuses `[]` at protocol 4 (*pick only* is the policy `pick_only`).
+ */
 export const workerLocalClaimScopeRequestSchema = z.strictObject({
   claim_project_ids: workerClaimScopeSchema,
+  claim_policy: workerClaimPolicySchema.optional(),
 });
 
 /** `GET /api/local/offers` — the core's `GET offers`, after this worker's exact-value redactor. */
 export const workerLocalOffersSchema = workerOffersResponseSchema;
 export type WorkerLocalOffers = z.infer<typeof workerLocalOffersSchema>;
 
-/** `POST /api/local/offers/:id/take` takes no field. */
-export const workerLocalTakeRequestSchema = z.strictObject({});
+/**
+ * `POST /api/local/offers/:id/take` `{ as_of? }`: the list's `as_of` (S-26.4), carried to the
+ * core's pick so a refusal can say *taken a moment ago* (`task_taken_by_another`) rather than
+ * *already someone's* (`task_owned_by_another`).
+ */
+export const workerLocalTakeRequestSchema = z.strictObject({
+  as_of: isoDateTimeSchema.optional(),
+});
 
 /** `POST /api/local/offers/:id/take` → the run this worker claimed and now runs. */
 export const workerLocalTakeResponseSchema = z.strictObject({ run_id: idSchema });

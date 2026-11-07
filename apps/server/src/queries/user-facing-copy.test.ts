@@ -25,8 +25,12 @@
  * **What it cannot see, stated**: a sentence assembled out of another module's words (a provider's
  * reason, a secret store's) is that module's; a producer of an escalation that names neither marker;
  * an id or an API path inside a run-time sentence (the source half reads spec references only —
- * `run <id>: …` in a lease sweep's escalation reason is the known instance); and the worker's
- * `state.reason`, which belongs to the worker session and is not listed here.
+ * `run <id>: …` in a lease sweep's escalation reason is the known instance).
+ *
+ * **The worker's own sentences** (BACKLOG 1265, closed at S-26.4): research/21 § 4's worker
+ * `state.reason` is the refusal a machine's local page shows as it is — every `LocalUiError`'s
+ * message (`{ error: { code, message } }`), written in `apps/server/src/remote-worker/local-ui.ts`
+ * and `runtime.ts` — so both modules are named writers below, held to the same spec-reference rule.
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,6 +176,17 @@ const NAMED_WRITERS: readonly {
     field: 'history refusal reason',
     path: 'packages/domain/src/knowledge/history.ts',
     marker: /\brefuse\(\s*proposal,/,
+  },
+  // S-26.4, BACKLOG 1265: the worker's local page shows a refusal's `message` as it is.
+  {
+    field: 'worker state.reason',
+    path: 'apps/server/src/remote-worker/local-ui.ts',
+    marker: /\bnew LocalUiError\(/,
+  },
+  {
+    field: 'worker state.reason',
+    path: 'apps/server/src/remote-worker/runtime.ts',
+    marker: /\bnew LocalUiError\(/,
   },
 ];
 

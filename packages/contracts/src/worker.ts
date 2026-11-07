@@ -29,7 +29,7 @@
  * ## Protocol versions (TD-032 decision 7)
  *
  * {@link WORKER_PROTOCOL_VERSION} is an integer independent of the build. The core accepts
- * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 3` is `[2, 3]` (WP-293) — and answers anything
+ * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 4` is `[3, 4]` (S-26.4) — and answers anything
  * else `426`. A change ships expand → contract: the release that adds a field or a verb accepts both
  * shapes, and the release that removes the old one bumps `N`. `pnpm protocol:check`
  * (`scripts/check-protocol.ts`, a `verify:static` step) refuses a bump that is not `base + 1`, one
@@ -55,7 +55,12 @@ import {
   tokenCountSchema,
   tokenUsageSchema,
 } from './common.js';
-import { jsonObjectSchema, jsonValueSchema, sha256HexSchema } from './records.js';
+import {
+  jsonObjectSchema,
+  jsonValueSchema,
+  sha256HexSchema,
+  taskOwnerViewSchema,
+} from './records.js';
 import {
   platformSkillNameSchema,
   runCredentialIssues,
@@ -68,13 +73,13 @@ import {
 // ── Versions ─────────────────────────────────────────────────────────────────
 
 /** The protocol this build speaks (TD-032 decision 7). A literal: `protocol:check` reads it as text. */
-export const WORKER_PROTOCOL_VERSION = 3;
+export const WORKER_PROTOCOL_VERSION = 4;
 
 /**
  * The protocols this build's core serves: `[N-1, N]`, without a `0`. A literal for the same reason as
  * {@link WORKER_PROTOCOL_VERSION}; `worker.test.ts` holds it to the shape.
  */
-export const ACCEPTED_WORKER_PROTOCOLS = [2, 3] as const;
+export const ACCEPTED_WORKER_PROTOCOLS = [3, 4] as const;
 
 /**
  * The first protocol that carries the worker's local UI (TD-031's 2026-11-04 worker-UI amendment §5,
@@ -92,6 +97,18 @@ export const WORKER_PROTOCOL_LOCAL_UI = 2;
  * version is refused the four verbs with `426` and is sent a handshake without the key.
  */
 export const WORKER_PROTOCOL_CLAIM_SCOPE = 3;
+
+/**
+ * The first protocol that carries the claim **policy** and a pick that assigns (S-26.4, TD-031's
+ * 2026-11-06 amendment items 6–7): the handshake's `worker.claim_policy`, `claim-scope`'s
+ * `claim_policy` (read and written) and `policy_skipped_offers`, `offers`' `as_of`, `owner`, `mine`
+ * and `policy_skipped_offers`, and the pick body's `as_of` with its two refusals
+ * `task_taken_by_another` and `task_owned_by_another`. A version-3 worker is sent none of the keys
+ * (every schema here is strict), its `PUT claim-scope` with `[]` is stored as `pick_only` over every
+ * project and leaves the policy as it was otherwise, and both pick refusals reach it as
+ * `offer_not_claimable`.
+ */
+export const WORKER_PROTOCOL_CLAIM_POLICY = 4;
 
 /** Whether a worker announcing `version` is served by this build (else `426 upgrade_required`). */
 export const isAcceptedWorkerProtocol = (version: number): boolean =>
@@ -576,6 +593,38 @@ export const workerDeviceTokenErrorSchema = z.strictObject({
   error_description: z.string().max(500).optional(),
 });
 
+// ── The claim policy (S-26.4, protocol 4) ────────────────────────────────────
+
+/**
+ * **What a worker's automatic claims take** (S-26.4, TD-031's 2026-11-06 amendment item 6, BD-032's
+ * 2026-11-06 amendment 2) — `workers.claim_policy`, migration 0106, set by the worker's owner only:
+ *
+ * - `everything` — any task of the projects it may take (what a worker connected before the policy
+ *   keeps, unless it was *pick only*);
+ * - `mine_and_unassigned` — the tasks its user owns, and the tasks nobody owns that are not held
+ *   elsewhere (the default for a new worker);
+ * - `mine` — only the tasks its user owns; an ask is its user's when they asked it;
+ * - `pick_only` — nothing by itself: a run starts only when its owner picks it.
+ *
+ * Orthogonal to the claim scope (`claim_project_ids`), which stays the project axis and narrows
+ * each of them.
+ */
+export const WORKER_CLAIM_POLICIES = [
+  'everything',
+  'mine_and_unassigned',
+  'mine',
+  'pick_only',
+] as const;
+export const workerClaimPolicySchema = z.enum(WORKER_CLAIM_POLICIES);
+export type WorkerClaimPolicy = z.infer<typeof workerClaimPolicySchema>;
+
+/**
+ * Open offers the worker's eligibility and claim scope admit and its **policy** refuses — what a
+ * `mine` machine is idle by choice over (TD-031's amendment item 6: not a blocker). `null`: not
+ * counted (the core could not name its images).
+ */
+export const policySkippedOffersSchema = z.int().nonnegative().nullable();
+
 // ── Handshake, claim, pause ──────────────────────────────────────────────────
 
 /** `POST handshake`: what the worker holds and which build it is. */
@@ -602,11 +651,17 @@ export const workerSettingsSchema = z.strictObject({
    */
   manually_paused_at: isoDateTimeSchema.nullable().optional(),
   /**
-   * The worker's claim scope (WP-293): `null` every project, `[]` pick only, otherwise those
-   * projects. **Absent** below protocol 3: the core sends it only when `X-Worker-Protocol ≥ 3`
-   * (TD-031's 2026-11-05 claim-scope amendment, decision 6).
+   * The worker's claim scope (WP-293): `null` every project, otherwise those projects. **Absent**
+   * below protocol 3: the core sends it only when `X-Worker-Protocol ≥ 3` (TD-031's 2026-11-05
+   * claim-scope amendment, decision 6). Since S-26.4 a version-3 worker is sent `[]` — its *pick
+   * only* — for a worker whose policy reads `pick_only`, and a version-4 worker is never sent `[]`.
    */
   claim_project_ids: z.array(idSchema).max(WORKER_CLAIM_SCOPE_MAX_PROJECTS).nullable().optional(),
+  /**
+   * The worker's claim policy as it reads (S-26.4): the stored value, or what a `null` reads as.
+   * **Absent** below protocol 4 ({@link WORKER_PROTOCOL_CLAIM_POLICY}).
+   */
+  claim_policy: workerClaimPolicySchema.optional(),
 });
 
 /**
@@ -675,8 +730,10 @@ export type WorkerManualPauseResponse = z.infer<typeof workerManualPauseResponse
 
 /**
  * A worker's claim scope (TD-031's 2026-11-05 claim-scope amendment, decision 2): `null` — every
- * project its eligibility admits (the default); `[]` — *pick only*, no automatic claim; otherwise
- * those projects. A conjunct of an **automatic** claim only, and it only narrows.
+ * project its eligibility admits (the default); otherwise those projects. A conjunct of an
+ * **automatic** claim only, and it only narrows. `[]` was *pick only* before the claim policy
+ * (S-26.4): a version-3 worker still sends it, and it is stored as the policy `pick_only` over
+ * every project; at protocol 4 it is refused.
  */
 export const workerClaimScopeSchema = z
   .array(idSchema)
@@ -699,6 +756,10 @@ export type WorkerScopeProject = z.infer<typeof workerScopeProjectSchema>;
 export const workerClaimScopeResponseSchema = z.strictObject({
   claim_project_ids: workerClaimScopeSchema,
   projects: z.array(workerScopeProjectSchema).max(WORKER_SCOPE_PROJECTS_MAX),
+  /** The policy as it reads (S-26.4). **Absent** below protocol 4. */
+  claim_policy: workerClaimPolicySchema.optional(),
+  /** Open offers its policy leaves for others (S-26.4). **Absent** below protocol 4. */
+  policy_skipped_offers: policySkippedOffersSchema.optional(),
 });
 export type WorkerClaimScopeResponse = z.infer<typeof workerClaimScopeResponseSchema>;
 
@@ -709,6 +770,12 @@ export type WorkerClaimScopeResponse = z.infer<typeof workerClaimScopeResponseSc
  */
 export const workerClaimScopeRequestSchema = z.strictObject({
   claim_project_ids: workerClaimScopeSchema,
+  /**
+   * The policy to store (S-26.4, protocol 4); absent leaves it as it was. At protocol 4 a
+   * `claim_project_ids` of `[]` is `422 claim_scope_empty` — *pick only* is `claim_policy:
+   * 'pick_only'` — while a version-3 worker's `[]` is stored as `pick_only` over every project.
+   */
+  claim_policy: workerClaimPolicySchema.optional(),
 });
 
 /**
@@ -717,6 +784,8 @@ export const workerClaimScopeRequestSchema = z.strictObject({
  */
 export const workerClaimScopeSetResponseSchema = z.strictObject({
   claim_project_ids: workerClaimScopeSchema,
+  /** The policy as stored now (S-26.4). **Absent** below protocol 4. */
+  claim_policy: workerClaimPolicySchema.optional(),
   performed: z.boolean(),
 });
 export type WorkerClaimScopeSetResponse = z.infer<typeof workerClaimScopeSetResponseSchema>;
@@ -737,13 +806,32 @@ export const workerOfferSchema = z.strictObject({
   stage: z.string().max(128).nullable(),
   role: agentRoleSchema,
   offered_at: isoDateTimeSchema,
+  /** The worker's claim scope **and** policy take it by themselves (the policy since S-26.4). */
   automatic: z.boolean(),
+  /**
+   * The task's owner (S-26.4), `null` for nobody — whatever the offer's kind. **Absent** below
+   * protocol 4. A pick of a **stage** offer whose task another person owns is refused, so the page
+   * offers none; an ask is never refused for its task's owner, and a pick of one assigns nothing.
+   */
+  owner: taskOwnerViewSchema.nullable().optional(),
+  /**
+   * The run is this worker's user's (TD-031's amendment item 6): a stage offer of a task they own,
+   * or an ask they asked — an ask's "mine" is its asker, never the task's owner. Absent below 4.
+   */
+  mine: z.boolean().optional(),
 });
 export type WorkerOffer = z.infer<typeof workerOfferSchema>;
 
 /** `GET offers` → at most {@link WORKER_OFFERS_LIST_MAX}, oldest first. */
 export const workerOffersResponseSchema = z.strictObject({
   offers: z.array(workerOfferSchema).max(WORKER_OFFERS_LIST_MAX),
+  /**
+   * The instant the list was read (S-26.4) — what the pick body carries back, so a refusal can tell
+   * *taken a moment ago* from *already someone's*. **Absent** below protocol 4.
+   */
+  as_of: isoDateTimeSchema.optional(),
+  /** Open offers its policy leaves for others (S-26.4). **Absent** below protocol 4. */
+  policy_skipped_offers: policySkippedOffersSchema.optional(),
 });
 export type WorkerOffersResponse = z.infer<typeof workerOffersResponseSchema>;
 
@@ -754,6 +842,13 @@ export type WorkerOffersResponse = z.infer<typeof workerOffersResponseSchema>;
  */
 export const workerOfferClaimRequestSchema = z.strictObject({
   image_digests: heldDigestsSchema,
+  /**
+   * The list's `as_of` (S-26.4, protocol 4). A task another person owns is refused `409
+   * task_taken_by_another` when its owner changed after it, and `409 task_owned_by_another`
+   * otherwise (absent included); both name the owner. A version-3 worker is answered
+   * `offer_not_claimable` for either.
+   */
+  as_of: isoDateTimeSchema.optional(),
 });
 
 // ── Run-scoped calls (authenticated by the run token) ────────────────────────

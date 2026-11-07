@@ -8,20 +8,26 @@
  * test seeds (`seedRun`) rather than a table — a seeded run is held through its `workerId` alone, with no offer, and
  * `listWorkers`' `running` lists it in seed order (PostgreSQL: by `created_at`) — and the users' ability to act is a set the test
  * flips (`setUserMayAct`, `banUser`) rather than `users.status`/`banned`, judged by the same
- * `userMayAct` the session hook uses.
+ * `userMayAct` the session hook uses. **The claim policy's offer count** (`policySkippedOffers`,
+ * S-26.4) is a number the test seeds (`seedPolicySkippedOffers`) — this store has no offers — and
+ * `null` when nothing was seeded or no core digests were given, as PostgreSQL answers without them.
  */
-import type { ExecutionMode, JsonObject, RunStatus } from '@platform/contracts';
+import type { ExecutionMode, JsonObject, RunStatus, WorkerClaimPolicy } from '@platform/contracts';
 import {
   checkDeviceDecision,
   DEFAULT_EXECUTION_MODE,
   type DeviceCodeState,
   decideDevicePoll,
   deviceCodeLimitExceeded,
+  effectiveClaimPolicy,
   isDeviceCodeStale,
+  NEW_WORKER_CLAIM_POLICY,
   repeatedDeviceDecision,
 } from '@platform/domain';
 import { userMayAct } from './identity-queries.js';
 import {
+  type ClaimPolicyVia,
+  type ClaimScopeResult,
   type CredentialSubject,
   holdOf,
   type NewDeviceCode,
@@ -62,6 +68,8 @@ interface WorkerRowMemory {
   pausedUntilEstimated?: boolean;
   manuallyPausedAt: Date | null;
   claimProjectIds?: readonly string[] | null;
+  /** `workers.claim_policy` (migration 0106); absent or `null` reads as the SQL's `null`. */
+  claimPolicy?: WorkerClaimPolicy | null;
 }
 
 export interface MemoryUser {
@@ -113,6 +121,10 @@ export interface MemoryWorkerStore extends WorkerStore {
   refuseRemoteCredential(projectId: string): void;
   /** A claim of a run by this worker at `at` (`run_offers.claimed_at`, S-22.19). */
   recordClaim(workerId: string, at: Date): void;
+  /** The open offers the worker's policy leaves for others, as PostgreSQL would count them (S-26.4). */
+  seedPolicySkippedOffers(workerId: string, count: number | null): void;
+  /** A worker row as a build before migration 0106 left it: its policy `null` (S-26.4). */
+  clearClaimPolicy(workerId: string): void;
 }
 
 const stateOf = (row: CodeRow): DeviceCodeState => ({
@@ -160,6 +172,7 @@ export const createMemoryWorkerStore = (
   const modes = new Map<string, ExecutionMode>();
   const refused = new Set<string>();
   const claims = new Map<string, Date>();
+  const skipped = new Map<string, number | null>();
 
   /** The SQL store's `CLAIM_FACTS_OF_WORKER`, over this double's maps (S-22.19). */
   const claimFactsOf = (worker: WorkerRowMemory): WorkerClaimRowFacts => {
@@ -220,6 +233,7 @@ export const createMemoryWorkerStore = (
       pausedReason: worker.pausedUntil === null ? null : 'usage_limited',
       pausedUntilEstimated: worker.pausedUntil !== null && worker.pausedUntilEstimated === true,
       manuallyPausedAt: worker.manuallyPausedAt,
+      claimPolicy: effectiveClaimPolicy(worker.claimPolicy ?? null, worker.claimProjectIds ?? null),
       claimProjects:
         worker.claimProjectIds === undefined || worker.claimProjectIds === null
           ? null
@@ -251,6 +265,50 @@ export const createMemoryWorkerStore = (
     return null;
   };
 
+  /** The SQL store's `writeClaimSettings`, over this double's row (S-26.4). */
+  const writeClaimSettings = (input: {
+    readonly workerId: string;
+    readonly owner: { readonly userId: string; readonly canSeeAll: boolean } | null;
+    readonly projectIds: readonly string[] | null;
+    readonly policy?: WorkerClaimPolicy;
+    readonly via: ClaimPolicyVia;
+  }): ClaimScopeResult => {
+    const worker = workers.get(input.workerId);
+    if (worker === undefined) {
+      return { status: 'not_found' };
+    }
+    if (input.owner !== null && worker.userId !== input.owner.userId) {
+      return { status: input.owner.canSeeAll ? 'not_owner' : 'not_found' };
+    }
+    const next = normaliseScope(input.projectIds);
+    if (next !== null && next.length === 0) {
+      return { status: 'empty_scope' };
+    }
+    const invalid = (next ?? []).filter((id) => !mayRunIn(worker.userId, id));
+    if (invalid.length > 0) {
+      return { status: 'invalid', projectIds: invalid };
+    }
+    const before = effectiveClaimPolicy(worker.claimPolicy ?? null, worker.claimProjectIds ?? null);
+    const storedPolicy = input.policy ?? worker.claimPolicy ?? null;
+    const after = effectiveClaimPolicy(storedPolicy, next);
+    const stored = normaliseScope(worker.claimProjectIds ?? null);
+    const storedList = stored !== null && stored.length === 0 ? null : stored;
+    if (JSON.stringify(storedList) === JSON.stringify(next) && before === after) {
+      return { status: 'set', claimProjectIds: next, claimPolicy: after, performed: false };
+    }
+    worker.claimProjectIds = next;
+    worker.claimPolicy = storedPolicy;
+    const policyAudit = before !== after || input.via === 'workers_screen';
+    audit.push({
+      userId: worker.userId,
+      action: policyAudit ? 'worker.claim_policy' : 'worker.claim_scope',
+      params: policyAudit
+        ? { worker_id: input.workerId, claim_policy: after, project_ids: next, via: input.via }
+        : { worker_id: input.workerId, project_ids: next, via: input.via },
+    });
+    return { status: 'set', claimProjectIds: next, claimPolicy: after, performed: true };
+  };
+
   return {
     runs,
     audit,
@@ -272,6 +330,11 @@ export const createMemoryWorkerStore = (
     recordClaim: (workerId, at) => {
       const previous = claims.get(workerId);
       if (previous === undefined || previous < at) claims.set(workerId, at);
+    },
+    seedPolicySkippedOffers: (workerId, count) => skipped.set(workerId, count),
+    clearClaimPolicy: (workerId) => {
+      const worker = workers.get(workerId);
+      if (worker !== undefined) worker.claimPolicy = null;
     },
     setUserMayAct: (userId, mayAct) => {
       if (mayAct) disabled.delete(userId);
@@ -347,6 +410,7 @@ export const createMemoryWorkerStore = (
         imageDigests: [],
         pausedUntil: null,
         manuallyPausedAt: null,
+        claimPolicy: NEW_WORKER_CLAIM_POLICY,
       });
       row.consumedAt = now;
       row.workerId = mint.workerId;
@@ -421,7 +485,7 @@ export const createMemoryWorkerStore = (
       return { status: 'decided', decidedAt: input.now, performed: true };
     },
 
-    async listWorkers(userId) {
+    async listWorkers(userId, coreDigests = null) {
       return [...workers.values()]
         .filter((worker) => userId === null || worker.userId === userId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
@@ -429,7 +493,12 @@ export const createMemoryWorkerStore = (
           ...listRowOf(worker),
           lastUpdate: lastUpdateOf(worker.id),
           claimFacts: claimFactsOf(worker),
+          policySkippedOffers: coreDigests === null ? null : (skipped.get(worker.id) ?? null),
         }));
+    },
+
+    async policySkippedOffers(workerId) {
+      return workers.has(workerId) ? (skipped.get(workerId) ?? null) : null;
     },
 
     async listWorkersForProject(projectId, userId): Promise<ProjectWorkerRow[]> {
@@ -510,13 +579,18 @@ export const createMemoryWorkerStore = (
       return { status: 'set', manuallyPausedAt: worker.manuallyPausedAt, performed: true };
     },
 
-    async claimScope(workerId) {
+    async claimScope(workerId, coreDigests = null) {
       const worker = workers.get(workerId);
       if (worker === undefined) {
         return { status: 'not_found' };
       }
       return {
         status: 'found',
+        claimPolicy: effectiveClaimPolicy(
+          worker.claimPolicy ?? null,
+          worker.claimProjectIds ?? null,
+        ),
+        policySkippedOffers: coreDigests === null ? null : (skipped.get(workerId) ?? null),
         claimProjectIds: worker.claimProjectIds ?? null,
         projects: [...projects.values()]
           .filter((entry) => mayRunIn(worker.userId, entry.project.id))
@@ -524,27 +598,24 @@ export const createMemoryWorkerStore = (
           .sort((a, b) => a.key.localeCompare(b.key) || a.id.localeCompare(b.id)),
       };
     },
-    async setClaimScope({ workerId, projectIds }) {
-      const worker = workers.get(workerId);
-      if (worker === undefined) {
-        return { status: 'not_found' };
-      }
-      const next = normaliseScope(projectIds);
-      const invalid = (next ?? []).filter((id) => !mayRunIn(worker.userId, id));
-      if (invalid.length > 0) {
-        return { status: 'invalid', projectIds: invalid };
-      }
-      const stored = normaliseScope(worker.claimProjectIds ?? null);
-      if (JSON.stringify(stored) === JSON.stringify(next)) {
-        return { status: 'set', claimProjectIds: next, performed: false };
-      }
-      worker.claimProjectIds = next;
-      audit.push({
-        userId: worker.userId,
-        action: 'worker.claim_scope',
-        params: { worker_id: workerId, project_ids: next, via: 'worker_ui' },
+    async setClaimScope({ workerId, projectIds, policy }) {
+      return writeClaimSettings({
+        workerId,
+        owner: null,
+        projectIds,
+        ...(policy === undefined ? {} : { policy }),
+        via: 'worker_ui',
       });
-      return { status: 'set', claimProjectIds: next, performed: true };
+    },
+
+    async setClaimPolicy({ workerId, actorUserId, canSeeAll, projectIds, policy }) {
+      return writeClaimSettings({
+        workerId,
+        owner: { userId: actorUserId, canSeeAll },
+        projectIds,
+        policy,
+        via: 'workers_screen',
+      });
     },
 
     async expireUserWorkerLeases(userId) {

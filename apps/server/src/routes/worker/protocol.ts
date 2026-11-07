@@ -21,6 +21,9 @@
  *   GET  /api/worker/v1/offers                  worker credential, protocol ≥ 3 (WP-293)
  *   POST /api/worker/v1/offers/:id/claim        worker credential, protocol ≥ 3 (WP-293)
  *
+ * Protocol 4 (S-26.4) adds no verb: the claim policy's fields on the handshake, `claim-scope`,
+ * `offers` and the pick (`pick-verbs.ts`), accepted beside protocol 3 (`[3, 4]`).
+ *
  * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
  * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
  * approvals beside its commands, and is held only while neither is pending.
@@ -76,6 +79,7 @@ import {
   WORKER_CLAIM_HOLD_MS,
   WORKER_HEARTBEAT_HOLD_MS,
   WORKER_PATHS,
+  WORKER_PROTOCOL_CLAIM_POLICY,
   WORKER_PROTOCOL_CLAIM_SCOPE,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
@@ -560,13 +564,21 @@ export const registerWorkerProtocolRoutes = async (
               }
             : {}),
           // TD-031's claim-scope amendment §6: a version-2 worker's strict schema refuses the key.
+          // S-26.4: a version-3 worker is told its *pick only* the way it spells it, `[]`.
           ...(protocolOf(request) >= WORKER_PROTOCOL_CLAIM_SCOPE
             ? {
                 claim_project_ids:
-                  row.claimProjects === null
-                    ? null
-                    : row.claimProjects.map((project) => project.id),
+                  protocolOf(request) < WORKER_PROTOCOL_CLAIM_POLICY &&
+                  row.claimPolicy === 'pick_only'
+                    ? []
+                    : row.claimProjects === null
+                      ? null
+                      : row.claimProjects.map((project) => project.id),
               }
+            : {}),
+          // S-26.4 (TD-031's 2026-11-06 amendment item 7): a version-3 worker refuses the key.
+          ...(protocolOf(request) >= WORKER_PROTOCOL_CLAIM_POLICY
+            ? { claim_policy: row.claimPolicy }
             : {}),
         },
         server_time: isoNow(now),

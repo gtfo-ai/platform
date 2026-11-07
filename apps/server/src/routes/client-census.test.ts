@@ -1049,6 +1049,19 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   }, 15_000);
 
+  it('serves the claim policy S-26.4 added and refuses an anonymous caller (its card is S-26.8a’s)', async () => {
+    // Named positively (standing rule 10). No screen calls it yet: the Workers screen's card is
+    // S-26.8a and the worker page writes through its own `claim-scope` — so it is asked here.
+    const url = `/api/workers/${PROBE_ID}/claim-policy`;
+    const response = await app.inject({
+      method: 'PUT',
+      url,
+      payload: { claim_policy: 'mine', claim_project_ids: null },
+    });
+    const body = response.json() as ApiErrorBody;
+    expect(`PUT ${response.statusCode} ${body.error?.code ?? ''}`).toBe('PUT 401 unauthenticated');
+  }, 15_000);
+
   it('serves the execution setting WP-278 added, the client calls it, and both methods refuse an anonymous caller', async () => {
     // Named positively (standing rule 10): TD-031 decision 8's read and its administrator's write.
     const paths = clientPaths(

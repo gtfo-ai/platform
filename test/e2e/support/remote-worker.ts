@@ -25,7 +25,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { JsonObject, RunPackage } from '@platform/contracts';
+import { type JsonObject, type RunPackage, WORKER_PROTOCOL_HEADER } from '@platform/contracts';
 import {
   launcher as launcherAdapters,
   runner as runnerAdapters,
@@ -113,6 +113,13 @@ export interface WorkerUnderTestOptions {
    * absent, disabled — what every case before WP-292 ran with.
    */
   readonly ui?: boolean;
+  /**
+   * The worker protocol this worker **announces** (S-26.4): absent, its own build's. A lower value
+   * rewrites the `X-Worker-Protocol` header of every request it sends — what a worker one release
+   * behind looks like to the core — while its parsing stays this build's, whose new keys are all
+   * optional, so a core that honours the older shapes is what the case can tell apart.
+   */
+  readonly protocol?: number;
 }
 
 /** The host port the e2e worker's page claims to be published on — what its `Host` must name. */
@@ -158,8 +165,22 @@ const readBody = async (request: IncomingMessage): Promise<Buffer> => {
 
 /** A fetch that answers what the core answers and records what the worker sent. */
 const recordingFetch =
-  (worker: string, captured: CapturedCoreRequest[], sequence?: string[]): CoreFetch =>
+  (
+    worker: string,
+    captured: CapturedCoreRequest[],
+    sequence?: string[],
+    protocol?: number,
+  ): CoreFetch =>
   async (url, init) => {
+    if (protocol !== undefined) {
+      init = {
+        ...init,
+        headers: {
+          ...(init.headers as Record<string, string>),
+          [WORKER_PROTOCOL_HEADER]: String(protocol),
+        },
+      };
+    }
     const verb = new URL(url).pathname.replace('/api/worker/v1/', '');
     const finished = /^runs\/([0-9a-f-]{36})\/finish$/.exec(verb);
     if (finished !== null) sequence?.push(`finish:${finished[1]}`);
@@ -261,7 +282,12 @@ export const startWorkerUnderTest = async (
 
   const packages: RunPackage[] = [];
   const clis = new Map<string, runnerAdapters.FakeCli>();
-  const coreFetch = recordingFetch(options.name, options.captured, options.sequence);
+  const coreFetch = recordingFetch(
+    options.name,
+    options.captured,
+    options.sequence,
+    options.protocol,
+  );
   const runtime = await startRemoteWorker({
     config: {
       coreUrl: options.coreUrl,

@@ -1712,6 +1712,30 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       expect(workerLocalClaimScopeSchema.parse(JSON.parse(set.text)).claim_project_ids).toEqual([]);
       const put = core.captured.find((call) => call.verb === 'claim-scope' && call.body !== '');
       expect(JSON.parse(put?.body ?? '{}')).toEqual({ claim_project_ids: [] });
+      // S-26.4: the page's policy reaches the core's PUT as `claim_policy`, and the state carries
+      // the policy and the count as the core last said them (nothing said yet: null).
+      const withPolicy = await request(port, {
+        method: 'POST',
+        path: '/api/local/claim-scope',
+        headers: { ...auth, ...origin },
+        body: { claim_project_ids: null, claim_policy: 'pick_only' },
+      });
+      expect(withPolicy.status).toBe(200);
+      const puts = core.captured.filter((call) => call.verb === 'claim-scope' && call.body !== '');
+      expect(JSON.parse(puts.at(-1)?.body ?? '{}')).toEqual({
+        claim_project_ids: null,
+        claim_policy: 'pick_only',
+      });
+      expect(
+        (
+          await request(port, {
+            method: 'POST',
+            path: '/api/local/claim-scope',
+            headers: { ...auth, ...origin },
+            body: { claim_project_ids: null, claim_policy: 'sometimes' },
+          })
+        ).status,
+      ).toBe(400);
 
       // A take the core refuses: its code, nothing started.
       const lost = await request(port, {

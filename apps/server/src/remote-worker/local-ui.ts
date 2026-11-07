@@ -31,6 +31,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import {
   WORKER_LOCAL_API_PREFIX,
   WORKER_LOCAL_PATHS,
+  type WorkerClaimPolicy,
   workerLocalCancelRequestSchema,
   workerLocalClaimScopeRequestSchema,
   workerLocalClaudeCodeRequestSchema,
@@ -82,12 +83,15 @@ export interface LocalUiApi {
   }): Promise<unknown>;
   /** The claim scope and the projects it may name — the core's `GET claim-scope` (WP-293). */
   claimScope(): Promise<unknown>;
-  /** Set the claim scope — the core's `PUT claim-scope` — and answer it read back (WP-293). */
-  setClaimScope(projectIds: readonly string[] | null): Promise<unknown>;
+  /**
+   * Set the claim scope — the core's `PUT claim-scope` — and answer it read back (WP-293); since
+   * S-26.4 with the claim policy, absent leaving it as it was.
+   */
+  setClaimScope(projectIds: readonly string[] | null, policy?: WorkerClaimPolicy): Promise<unknown>;
   /** The offers this worker could take now — the core's `GET offers` (WP-293). */
   offers(): Promise<unknown>;
-  /** *Take this one* — the core's pick, then the run starts here (WP-293). */
-  take(runId: string): Promise<unknown>;
+  /** *Take this one* — the core's pick (the list's `as_of`, S-26.4), then the run starts here (WP-293). */
+  take(runId: string, asOf?: string): Promise<unknown>;
   // The first-run wizard's verbs (WP-294, TD-031's first-run amendment §8): each answers the state,
   // except `checkCore`, which answers only the fields the worker parsed. None answers a secret.
   checkCore(url: string): Promise<unknown>;
@@ -340,17 +344,26 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
     if (verb === WORKER_LOCAL_PATHS.claimScope) {
       const parsed = workerLocalClaimScopeRequestSchema.safeParse(body);
       if (!parsed.success) {
-        throw new LocalUiError(400, 'invalid_body', 'expected { claim_project_ids: null | [ids] }');
+        throw new LocalUiError(
+          400,
+          'invalid_body',
+          'expected { claim_project_ids: null | [ids], claim_policy? }',
+        );
       }
-      send(response, 200, await options.api.setClaimScope(parsed.data.claim_project_ids));
+      send(
+        response,
+        200,
+        await options.api.setClaimScope(parsed.data.claim_project_ids, parsed.data.claim_policy),
+      );
       return;
     }
     const take = /^offers\/([0-9a-f-]{36})\/take$/.exec(verb);
     if (take !== null) {
-      if (!workerLocalTakeRequestSchema.safeParse(body).success) {
-        throw new LocalUiError(400, 'invalid_body', 'a take carries no field');
+      const parsed = workerLocalTakeRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new LocalUiError(400, 'invalid_body', 'a take carries at most { as_of }');
       }
-      send(response, 200, await options.api.take(take[1] as string));
+      send(response, 200, await options.api.take(take[1] as string, parsed.data.as_of));
       return;
     }
     const cancel = /^runs\/([0-9a-f-]{36})\/cancel$/.exec(verb);

@@ -86,6 +86,7 @@ import {
   WORKER_LOCAL_LOG_LINE_MAX_CHARS,
   WORKER_LOCAL_LOG_TAIL,
   WORKER_PROTOCOL_VERSION,
+  type WorkerClaimPolicy,
   type WorkerLocalClaimScope,
   type WorkerLocalCoreFailure,
   type WorkerLocalErrorReportingTestResponse,
@@ -499,6 +500,10 @@ export const startRemoteWorker = async (
   let taking = false;
   /** The claim scope as the core last said (handshake ≥ 3, or a write from the page), WP-293. */
   let claimScope: readonly string[] | null | undefined;
+  /** The claim policy as the core last said (handshake ≥ 4, or the scope's read or write), S-26.4. */
+  let claimPolicy: WorkerClaimPolicy | null = null;
+  /** The open offers the policy leaves for others, as the core last counted them (S-26.4). */
+  let policySkippedOffers: number | null = null;
   let slotFreed: (() => void) | null = null;
   const drainMarker = path.join(config.stateDir, DRAIN_MARKER_FILE);
 
@@ -650,6 +655,7 @@ export const startRemoteWorker = async (
         workerName = answer.worker.name;
         manuallyPausedAt = answer.worker.manually_paused_at ?? null;
         claimScope = answer.worker.claim_project_ids;
+        claimPolicy = answer.worker.claim_policy ?? claimPolicy;
         // The core's record wins only when it is later than a pause this worker already holds.
         if (
           answer.worker.paused_until !== null &&
@@ -1087,6 +1093,10 @@ export const startRemoteWorker = async (
     try {
       const answer = await connectedCore().claimScope(held);
       claimScope = answer.claim_project_ids;
+      claimPolicy = answer.claim_policy ?? claimPolicy;
+      if (answer.policy_skipped_offers !== undefined) {
+        policySkippedOffers = answer.policy_skipped_offers;
+      }
       return workerLocalClaimScopeSchema.parse(redactKeysAndValues(pageRedactor(), answer));
     } catch (error) {
       throw asLocalError(error, 'read the claim scope');
@@ -1096,17 +1106,21 @@ export const startRemoteWorker = async (
   /** The owner sets what the automatic claims take (WP-293): the core first, then read back. */
   const writeClaimScope = async (
     projectIds: readonly string[] | null,
+    policy?: WorkerClaimPolicy,
   ): Promise<WorkerLocalClaimScope> => {
     const held = connectedCredential();
     try {
       const answer = await connectedCore().setClaimScope(held, {
         claim_project_ids: projectIds === null ? null : [...projectIds],
+        ...(policy === undefined ? {} : { claim_policy: policy }),
       });
       claimScope = answer.claim_project_ids;
+      claimPolicy = answer.claim_policy ?? claimPolicy;
       loggerPort.info(
         {
           claim_scope:
             answer.claim_project_ids === null ? 'every project' : answer.claim_project_ids,
+          claim_policy: answer.claim_policy ?? 'unknown',
           performed: answer.performed,
         },
         'this worker’s owner set what it takes by itself',
@@ -1124,6 +1138,9 @@ export const startRemoteWorker = async (
     const held = connectedCredential();
     try {
       const answer = await connectedCore().offers(held);
+      if (answer.policy_skipped_offers !== undefined) {
+        policySkippedOffers = answer.policy_skipped_offers;
+      }
       return workerLocalOffersSchema.parse(redactKeysAndValues(pageRedactor(), answer));
     } catch (error) {
       throw asLocalError(error, 'list the offers');
@@ -1138,7 +1155,7 @@ export const startRemoteWorker = async (
    * called off is released by the core, not sent nowhere (BACKLOG 960, `protocol.ts`'s
    * `deliverClaimed`); only a close landing while the answer is being written is left to the sweep.
    */
-  const takeOffer = async (runId: string): Promise<{ readonly run_id: string }> => {
+  const takeOffer = async (runId: string, asOf?: string): Promise<{ readonly run_id: string }> => {
     const held = connectedCredential();
     if (draining || manuallyPausedAt !== null) {
       throw new LocalUiError(
@@ -1178,7 +1195,11 @@ export const startRemoteWorker = async (
       await refreshHeldDigests();
       let pkg: RunPackage;
       try {
-        pkg = await connectedCore().takeOffer(held, runId, { image_digests: heldDigests });
+        // S-26.4: the list's `as_of`, so a refusal can tell *taken a moment ago* from *someone's*.
+        pkg = await connectedCore().takeOffer(held, runId, {
+          image_digests: heldDigests,
+          ...(asOf === undefined ? {} : { as_of: asOf }),
+        });
       } catch (error) {
         throw asLocalError(error, 'hand over that run');
       }
@@ -1535,6 +1556,8 @@ export const startRemoteWorker = async (
             ? null
             : { run: coreDigests.platform_runtime, egress: coreDigests.platform_egress },
       }),
+      claim_policy: claimPolicy,
+      policy_skipped_offers: policySkippedOffers,
       // What the reporter sends to now, not what was stored: a client that failed to build is *Off*.
       error_reporting: ((dsn: string | null) => ({
         source: dsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',

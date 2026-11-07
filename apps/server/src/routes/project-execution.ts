@@ -43,6 +43,7 @@ import {
   type ExecutionSettings,
   effectiveFallbackAfterSeconds,
   executionNotice,
+  projectListTakes,
   type RunImageDigests,
 } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -104,8 +105,11 @@ export interface ExecutionAudience {
  * One worker against one project (S-22.19, N2). The project's reason comes first in the order the
  * claim would refuse it — the project's mode, its run credential, the worker's user's role — then
  * the claim scope, which keeps the worker from taking the runs **by itself** only: its owner may
- * still pick one, so a scope that leaves the project out is `picked_only` (and *pick only*, `[]`,
- * leaves every project out). Any blocker of the worker's own is `no`, whatever the project says.
+ * still pick one, so a scope that leaves the project out is `picked_only` — and so is a claim
+ * policy of `pick_only` (S-26.4; a legacy `[]` scope reads as it and narrows no project), reported
+ * under the same `scope_excludes`. A `mine` or `mine_and_unassigned` policy takes the project
+ * automatically: which of its tasks it takes is per task (S-26.5's waiting read). Any blocker of
+ * the worker's own is `no`, whatever the project says.
  */
 export const projectWorkerOf = (
   row: ProjectWorkerRow,
@@ -124,6 +128,10 @@ export const projectWorkerOf = (
     pickOnly: false,
   });
   const scope = row.claimProjects;
+  const listTakes = projectListTakes(
+    scope === null ? null : scope.map((project) => project.id),
+    input.projectId,
+  );
   const reason: ProjectExecutionWorker['project_reason'] =
     input.settings.mode === 'server_only'
       ? 'server_only'
@@ -131,7 +139,7 @@ export const projectWorkerOf = (
         ? 'credential_refused'
         : !row.mayRunInProject
           ? 'role'
-          : scope !== null && !scope.some((project) => project.id === input.projectId)
+          : !listTakes || row.claimPolicy === 'pick_only'
             ? 'scope_excludes'
             : null;
   const takes: ProjectExecutionWorker['takes'] =

@@ -12,9 +12,14 @@
  *   and the user's **effective** project role — the higher of the organisation role and a project
  *   membership, `rbac.ts`'s rule (backlog 886) — `member` or above, on an account that is not
  *   disabled (`userMayOwnInProjectSql`, S-26.1: an owner's window is never held for a user the claim
- *   would refuse) — and whose **claim scope takes
- *   the project automatically** (`null`, or naming it; WP-293, TD-031's claim-scope amendment §5),
- *   so a pick-only worker holds no offer for `assignee_window` for nothing. `last_seen_at` is written by every
+ *   would refuse) — whose **claim scope takes
+ *   the project** (`null`, the legacy `'{}'`, or naming it; WP-293, TD-031's claim-scope amendment §5)
+ *   and whose **claim policy is not `pick_only`** (S-26.4, TD-031's 2026-11-06 amendment item 6:
+ *   `effectiveClaimPolicySql`, so a legacy `'{}'` is still pick only), so a pick-only worker holds no
+ *   offer for `assignee_window` for nothing. The domain's `mayHoldHeadStart`. The assignee of a stage
+ *   offer is the task's owner (S-26.1); the head start is fixed at offer time and a reassignment does
+ *   not re-route an open offer — the old owner's window runs out, and inside it their machine still
+ *   claims only what its policy admits. `last_seen_at` is written by every
  *   authenticated worker protocol call (WP-281, `WorkerStore.recordContact`).
  * - **Server claimant liveness**, both halves on the database's clock (`held_connection_liveness`'s
  *   shape, migration 0054): the writer sets `expires_at = now() + ttl`, the reader compares with
@@ -26,6 +31,7 @@ import type { ExecutionRoutingRepository, Transaction } from '@platform/applicat
 import type { ExecutionMode, ExecutionPreference } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { effectiveClaimPolicySql, projectListTakesSql } from './postgres-run-offers.js';
 import { userMayOwnInProjectSql } from './running-role.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
@@ -66,7 +72,8 @@ export const createPostgresExecutionRoutingRepository = (): ExecutionRoutingRepo
             and w.state = 'active'
             and (w.paused_until is null or w.paused_until <= $3::timestamptz)
             and w.manually_paused_at is null
-            and (w.claim_project_ids is null or $1::uuid = any(w.claim_project_ids))
+            and ${projectListTakesSql('w', '$1::uuid')}
+            and ${effectiveClaimPolicySql('w')} <> 'pick_only'
             and w.last_seen_at > now() - make_interval(secs => $4::float8)
             and ${userMayOwnInProjectSql('w.user_id', '$1::uuid')}
        ) as online`,

@@ -32,6 +32,7 @@ import {
   type JsonObject,
   PROJECT_EXECUTION_WORKERS_MAX,
   WORKER_SCOPE_PROJECTS_MAX,
+  type WorkerClaimPolicy,
   type WorkerManualPauseVia,
   type WorkerUpdateResult,
 } from '@platform/contracts';
@@ -42,7 +43,10 @@ import {
   type DevicePollDecision,
   decideDevicePoll,
   deviceCodeLimitExceeded,
+  effectiveClaimPolicy,
   isDeviceCodeStale,
+  NEW_WORKER_CLAIM_POLICY,
+  type RunImageDigests,
   repeatedDeviceDecision,
 } from '@platform/domain';
 import { pipeline as pipelineAdapters } from '@platform/infrastructure';
@@ -127,6 +131,17 @@ export interface WorkerListRow {
    * projects with their keys — `null` for a project that no longer exists.
    */
   readonly claimProjects: readonly { readonly id: string; readonly key: string | null }[] | null;
+  /**
+   * The claim policy as it reads (migration 0106, S-26.4): the stored value, or what a `null`
+   * reads as (`effectiveClaimPolicy`: `pick_only` over a legacy `[]` scope, else `everything`).
+   */
+  readonly claimPolicy: WorkerClaimPolicy;
+  /**
+   * Open offers its eligibility and scope admit now and its policy refuses (S-26.4) — read by
+   * {@link WorkerStore.listWorkers} only, against the core's digests; `null` when they were not
+   * given (the core cannot name its images) or the read does not count them.
+   */
+  readonly policySkippedOffers?: number | null;
   readonly concurrency: number;
   /**
    * The live runs (`created`/`starting`/`running`) this worker **holds**, oldest first (S-23.15):
@@ -226,20 +241,36 @@ export type ClaimScopeRead =
       readonly status: 'found';
       readonly claimProjectIds: readonly string[] | null;
       readonly projects: readonly ScopeProject[];
+      /** The policy as it reads (S-26.4). */
+      readonly claimPolicy: WorkerClaimPolicy;
+      /** {@link WorkerListRow.policySkippedOffers}: `null` without the core's digests. */
+      readonly policySkippedOffers: number | null;
     };
 
-/** What {@link WorkerStore.setClaimScope} answers. */
+/** What {@link WorkerStore.setClaimScope} and {@link WorkerStore.setClaimPolicy} answer. */
 export type ClaimScopeResult =
   | { readonly status: 'not_found' }
+  /**
+   * `setClaimPolicy` only: the worker is not the caller's, and the caller may see it (an
+   * administrator, `403`); nothing written.
+   */
+  | { readonly status: 'not_owner' }
+  /** `[]`: *pick only* is the policy `pick_only` since S-26.4 (`422`); nothing written. */
+  | { readonly status: 'empty_scope' }
   /** Ids that are not a project where the user is `member`+ now (`422`); nothing written. */
   | { readonly status: 'invalid'; readonly projectIds: readonly string[] }
   | {
       readonly status: 'set';
       /** Distinct and sorted, as stored. */
       readonly claimProjectIds: readonly string[] | null;
-      /** `false`: the row already held this scope (as a set) — nothing written, no audit row. */
+      /** The policy as stored now, or as a `null` reads (S-26.4). */
+      readonly claimPolicy: WorkerClaimPolicy;
+      /** `false`: the row already held this scope (as a set) and policy — nothing written, no audit row. */
       readonly performed: boolean;
     };
+
+/** Who wrote a claim policy — the audit row's `via`. */
+export type ClaimPolicyVia = 'worker_ui' | 'workers_screen';
 
 export type RevokeWorkerResult =
   | { readonly status: 'not_found' }
@@ -270,8 +301,14 @@ export interface WorkerStore {
   /** A **pending** code (unexpired, undecided), or `null`. */
   findPendingDeviceCode(userCodeHash: string, now: Date): Promise<DeviceCodeView | null>;
   decideDeviceCode(input: DeviceDecisionInput): Promise<DeviceDecisionResult>;
-  /** Every worker when `userId` is `null`; the user's own otherwise. Newest first. */
-  listWorkers(userId: string | null): Promise<WorkerListRow[]>;
+  /**
+   * Every worker when `userId` is `null`; the user's own otherwise. Newest first. With the core's
+   * run and egress digests, each row counts its `policySkippedOffers` (S-26.4); without, `null`.
+   */
+  listWorkers(
+    userId: string | null,
+    coreDigests?: RunImageDigests | null,
+  ): Promise<WorkerListRow[]>;
   /**
    * {@link listWorkers}' rows — **not revoked** — with whether each worker's user may run in
    * `projectId` now (the claim's effective-role predicate): a project's execution read (S-22.19).
@@ -302,18 +339,42 @@ export interface WorkerStore {
    * role is `member` or above now (`running-role.ts`, the claim's own predicate), by key, at most
    * {@link WORKER_SCOPE_PROJECTS_MAX} (WP-293).
    */
-  claimScope(workerId: string): Promise<ClaimScopeRead>;
+  claimScope(workerId: string, coreDigests?: RunImageDigests | null): Promise<ClaimScopeRead>;
   /**
-   * The owner's claim scope (WP-293, TD-031's claim-scope amendment §2) — a **state assertion**:
-   * `null` every project, `[]` pick only, otherwise those projects (stored distinct and sorted). An
-   * id that is not a project where the user is `member`+ now is `invalid` and nothing is written.
-   * **One** `human_actions` row `worker.claim_scope` `{worker_id, project_ids, via: 'worker_ui'}` per
-   * change, the worker's user; a repeat of the stored value, as a set, writes nothing.
+   * The owner's claim scope (WP-293, TD-031's claim-scope amendment §2) — a **state assertion**
+   * from the worker's own page: `null` every project, otherwise those projects (stored distinct and
+   * sorted), and since S-26.4 the claim policy (`policy`; absent leaves it as it was). `[]` is
+   * `empty_scope` (the route maps a version-3 worker's `[]` to `pick_only` over every project before
+   * it asks), an id that is not a project where the user is `member`+ now `invalid`; nothing is
+   * written for either. **One** `human_actions` row per change under the worker's user —
+   * `worker.claim_policy` `{worker_id, claim_policy, project_ids, via: 'worker_ui'}` when the policy
+   * moved, else `worker.claim_scope` `{worker_id, project_ids, via: 'worker_ui'}`; a repeat of the
+   * stored pair (the scope as a set, the policy as it reads) writes nothing.
    */
   setClaimScope(input: {
     readonly workerId: string;
     readonly projectIds: readonly string[] | null;
+    readonly policy?: WorkerClaimPolicy;
   }): Promise<ClaimScopeResult>;
+  /**
+   * `PUT /api/workers/:id/claim-policy` (S-26.4, TD-031's 2026-11-06 amendment item 6) — the same
+   * state assertion of both of the card's controls, from a **session**: only the worker's own user
+   * may write it. Somebody else's worker is `not_found` to a non-administrator and `not_owner` to
+   * an administrator (`canSeeAll`), who reads it and may not change it. One `human_actions` row
+   * `worker.claim_policy` `{worker_id, claim_policy, project_ids, via: 'workers_screen'}` per change.
+   */
+  setClaimPolicy(input: {
+    readonly workerId: string;
+    readonly actorUserId: string;
+    readonly canSeeAll: boolean;
+    readonly projectIds: readonly string[] | null;
+    readonly policy: WorkerClaimPolicy;
+  }): Promise<ClaimScopeResult>;
+  /**
+   * What `GET offers` says beside its list (S-26.4): the open offers the worker's eligibility and
+   * scope admit now and its policy refuses, against the core's digests. `null` for no such worker.
+   */
+  policySkippedOffers(workerId: string, coreDigests: RunImageDigests): Promise<number | null>;
   /**
    * **A usage limit's pause** (`POST pause`, WP-285, TD-031 decision 11): `paused_until`,
    * `paused_reason = 'usage_limited'` and whether the instant is the default pause. A repeat stores
@@ -420,6 +481,25 @@ const USER_MAY_ACT = sql.raw(pipelineAdapters.USER_MAY_ACT_SQL);
  */
 const MAY_RUN_IN_P = sql.raw(pipelineAdapters.userMayRunInProjectSql('q.uid', 'p.id'));
 
+/**
+ * **Open offers a worker's policy leaves for others** (S-26.4) — the claim's own fragments
+ * (`policySkippedOffersSql`), over a lateral of the listed row (`wk`: its id and the digests it
+ * holds) and the core's digests (`cd`), never over `w` itself, which the eligibility's own `workers
+ * w` shadows. Only the alias names are inlined; the digests are bound parameters.
+ */
+const POLICY_SKIPPED = sql.raw(
+  pipelineAdapters.policySkippedOffersSql({
+    worker: 'wk.wid',
+    held: 'wk.held',
+    run: 'cd.run',
+    egress: 'cd.egress',
+  }),
+);
+const policySkippedJoins = (digests: RunImageDigests) => sql`
+  cross join lateral (select w.id as wid,
+                             array(select jsonb_array_elements_text(w.image_digests)) as held) wk
+  cross join (select ${digests.run}::text as run, ${digests.egress}::text as egress) cd`;
+
 /** A scope as stored: distinct and sorted, so a repeat is recognised as a set (WP-293). */
 export const normaliseScope = (ids: readonly string[] | null): string[] | null =>
   ids === null ? null : [...new Set(ids.map((id) => id.toLowerCase()))].sort();
@@ -439,6 +519,10 @@ const expireLeasesSql = (workerFilter: ReturnType<typeof sql>) => sql`
 /** A `workers` row joined with its user, as {@link WorkerStore.listWorkers} reads it. */
 type WorkerRowSql = {
   claim_projects: { id: string; key: string | null }[] | null;
+  claim_project_ids: string[] | null;
+  claim_policy: WorkerClaimPolicy | null;
+  /** Present only where the statement counted it (`listWorkers` with the core's digests). */
+  policy_skipped_offers?: number | null;
   id: string;
   name: string;
   user_id: string;
@@ -589,6 +673,13 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
     row.claim_projects === null
       ? null
       : row.claim_projects.map((project) => ({ id: project.id, key: project.key })),
+  claimPolicy: effectiveClaimPolicy(row.claim_policy, row.claim_project_ids),
+  ...(row.policy_skipped_offers === undefined
+    ? {}
+    : {
+        policySkippedOffers:
+          row.policy_skipped_offers === null ? null : Number(row.policy_skipped_offers),
+      }),
   concurrency: row.concurrency,
   running: row.running.map((run) => ({
     runId: run.run_id,
@@ -596,6 +687,96 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
     projectId: run.project_id,
   })),
 });
+
+type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/** {@link POLICY_SKIPPED} for one worker; `null` for no such worker. */
+const countPolicySkipped = async (
+  database: Database,
+  workerId: string,
+  coreDigests: RunImageDigests,
+): Promise<number | null> => {
+  const { rows } = await database.execute<{ skipped: number }>(sql`
+    select ${POLICY_SKIPPED} as skipped
+      from workers w ${policySkippedJoins(coreDigests)}
+     where w.id = ${workerId}`);
+  const row = rows[0];
+  return row === undefined ? null : Number(row.skipped);
+};
+
+/**
+ * **The one writer of a worker's claim settings** (WP-293; S-26.4) — both `setClaimScope` (the
+ * worker's page) and `setClaimPolicy` (a session): the row locked, the owner checked when a session
+ * asks, `[]` refused, the projects asked of the claim's own role predicate, and a repeat of the
+ * stored pair — the scope as a set (a legacy `'{}'` reading as every project), the policy as it
+ * reads — writing nothing. One audit row per change: `worker.claim_policy` when the policy moved or
+ * a session wrote, `worker.claim_scope` (its WP-293 shape) when only the projects did.
+ */
+const writeClaimSettings = async (
+  tx: DatabaseTransaction,
+  input: {
+    readonly workerId: string;
+    readonly owner: { readonly userId: string; readonly canSeeAll: boolean } | null;
+    readonly projectIds: readonly string[] | null;
+    readonly policy?: WorkerClaimPolicy;
+    readonly via: ClaimPolicyVia;
+  },
+): Promise<ClaimScopeResult> => {
+  const { rows } = await tx.execute<{
+    user_id: string;
+    claim_project_ids: string[] | null;
+    claim_policy: WorkerClaimPolicy | null;
+  }>(sql`select user_id, claim_project_ids, claim_policy
+           from workers where id = ${input.workerId} for update`);
+  const row = rows[0];
+  if (row === undefined) {
+    return { status: 'not_found' };
+  }
+  if (input.owner !== null && row.user_id !== input.owner.userId) {
+    // Somebody else's worker: absent to whoever may not see it, refused to an administrator.
+    return { status: input.owner.canSeeAll ? 'not_owner' : 'not_found' };
+  }
+  const next = normaliseScope(input.projectIds);
+  if (next !== null && next.length === 0) {
+    return { status: 'empty_scope' };
+  }
+  if (next !== null) {
+    const admitted = await tx.execute<{ id: string }>(sql`
+      select p.id from projects p cross join (select ${row.user_id}::uuid as uid) q
+       where p.id = any(${`{${next.join(',')}}`}::uuid[])
+         and ${MAY_RUN_IN_P}`);
+    const known = new Set(admitted.rows.map((project) => project.id));
+    const invalid = next.filter((id) => !known.has(id));
+    if (invalid.length > 0) {
+      return { status: 'invalid', projectIds: invalid };
+    }
+  }
+  const before = effectiveClaimPolicy(row.claim_policy, row.claim_project_ids);
+  const storedPolicy = input.policy ?? row.claim_policy;
+  const after = effectiveClaimPolicy(storedPolicy, next);
+  const storedList = normaliseScope(row.claim_project_ids);
+  const sameList = sameScope(
+    storedList !== null && storedList.length === 0 ? null : storedList,
+    next,
+  );
+  if (sameList && before === after) {
+    return { status: 'set', claimProjectIds: next, claimPolicy: after, performed: false };
+  }
+  await tx.execute(sql`
+    update workers
+       set claim_project_ids = ${next === null ? null : `{${next.join(',')}}`}::uuid[],
+           claim_policy = ${storedPolicy}
+     where id = ${input.workerId}`);
+  const policyAudit = before !== after || input.via === 'workers_screen';
+  const params: JsonObject = policyAudit
+    ? { worker_id: input.workerId, claim_policy: after, project_ids: next, via: input.via }
+    : { worker_id: input.workerId, project_ids: next, via: input.via };
+  await tx.execute(sql`
+    insert into human_actions (user_id, action, params)
+    values (${row.user_id}, ${policyAudit ? 'worker.claim_policy' : 'worker.claim_scope'},
+            ${JSON.stringify(params)}::jsonb)`);
+  return { status: 'set', claimProjectIds: next, claimPolicy: after, performed: true };
+};
 
 export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
   async createDeviceCode(input, now) {
@@ -650,9 +831,12 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       if (approver.rows[0]?.may_act !== true) {
         return { outcome: 'access_denied' };
       }
+      // S-26.4: a new worker takes its owner's tasks and unassigned ones (TD-031's 2026-11-06
+      // amendment item 6) — the one writer that names the policy at the insert.
       await tx.execute(sql`
-        insert into workers (id, user_id, name, credential_hash, created_at)
-        values (${mint.workerId}, ${row.approved_by}, ${row.worker_name}, ${mint.credentialHash}, ${now})`);
+        insert into workers (id, user_id, name, credential_hash, created_at, claim_policy)
+        values (${mint.workerId}, ${row.approved_by}, ${row.worker_name}, ${mint.credentialHash}, ${now},
+                ${NEW_WORKER_CLAIM_POLICY})`);
       await tx.execute(sql`
         update worker_device_codes set consumed_at = ${now}, worker_id = ${mint.workerId}
          where id = ${row.id}`);
@@ -735,10 +919,13 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
     });
   },
 
-  async listWorkers(userId) {
+  async listWorkers(userId, coreDigests = null) {
+    const counted = coreDigests ?? null;
     const { rows } = await database.execute<WorkerRowSql & ClaimFactsSql>(sql`
-      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}, ${CLAIM_FACTS_OF_WORKER}
+      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}, ${CLAIM_FACTS_OF_WORKER},
+             ${counted === null ? sql`null::int` : POLICY_SKIPPED} as policy_skipped_offers
         from workers w join users u on u.id = w.user_id
+        ${counted === null ? sql`` : policySkippedJoins(counted)}
        where ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
        order by w.created_at desc, w.id desc`);
     const listed = rows.map((row) => ({ ...toWorkerListRow(row), claimFacts: toClaimFacts(row) }));
@@ -856,15 +1043,18 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
     });
   },
 
-  async claimScope(workerId) {
+  async claimScope(workerId, coreDigests = null) {
     const { rows } = await database.execute<{
       user_id: string;
       claim_project_ids: string[] | null;
-    }>(sql`select user_id, claim_project_ids from workers where id = ${workerId}`);
+      claim_policy: WorkerClaimPolicy | null;
+    }>(sql`select user_id, claim_project_ids, claim_policy from workers where id = ${workerId}`);
     const row = rows[0];
     if (row === undefined) {
       return { status: 'not_found' };
     }
+    const skipped =
+      coreDigests === null ? null : await countPolicySkipped(database, workerId, coreDigests);
     const projects = await database.execute<{ id: string; key: string; name: string }>(sql`
       select p.id, p.key, left(p.name, 200) as name
         from projects p cross join (select ${row.user_id}::uuid as uid) q
@@ -879,44 +1069,37 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
         key: project.key,
         name: project.name,
       })),
+      claimPolicy: effectiveClaimPolicy(row.claim_policy, row.claim_project_ids),
+      policySkippedOffers: skipped,
     };
   },
 
-  async setClaimScope({ workerId, projectIds }) {
-    return database.transaction(async (tx): Promise<ClaimScopeResult> => {
-      const { rows } = await tx.execute<{
-        user_id: string;
-        claim_project_ids: string[] | null;
-      }>(sql`select user_id, claim_project_ids from workers where id = ${workerId} for update`);
-      const row = rows[0];
-      if (row === undefined) {
-        return { status: 'not_found' };
-      }
-      const next = normaliseScope(projectIds);
-      if (next !== null && next.length > 0) {
-        const admitted = await tx.execute<{ id: string }>(sql`
-          select p.id from projects p cross join (select ${row.user_id}::uuid as uid) q
-           where p.id = any(${`{${next.join(',')}}`}::uuid[])
-             and ${MAY_RUN_IN_P}`);
-        const known = new Set(admitted.rows.map((project) => project.id));
-        const invalid = next.filter((id) => !known.has(id));
-        if (invalid.length > 0) {
-          return { status: 'invalid', projectIds: invalid };
-        }
-      }
-      if (sameScope(normaliseScope(row.claim_project_ids), next)) {
-        return { status: 'set', claimProjectIds: next, performed: false };
-      }
-      await tx.execute(sql`
-        update workers
-           set claim_project_ids = ${next === null ? null : `{${next.join(',')}}`}::uuid[]
-         where id = ${workerId}`);
-      const params: JsonObject = { worker_id: workerId, project_ids: next, via: 'worker_ui' };
-      await tx.execute(sql`
-        insert into human_actions (user_id, action, params)
-        values (${row.user_id}, 'worker.claim_scope', ${JSON.stringify(params)}::jsonb)`);
-      return { status: 'set', claimProjectIds: next, performed: true };
-    });
+  async policySkippedOffers(workerId, coreDigests) {
+    return countPolicySkipped(database, workerId, coreDigests);
+  },
+
+  async setClaimScope({ workerId, projectIds, policy }) {
+    return database.transaction(async (tx) =>
+      writeClaimSettings(tx, {
+        workerId,
+        owner: null,
+        projectIds,
+        ...(policy === undefined ? {} : { policy }),
+        via: 'worker_ui',
+      }),
+    );
+  },
+
+  async setClaimPolicy({ workerId, actorUserId, canSeeAll, projectIds, policy }) {
+    return database.transaction(async (tx) =>
+      writeClaimSettings(tx, {
+        workerId,
+        owner: { userId: actorUserId, canSeeAll },
+        projectIds,
+        policy,
+        via: 'workers_screen',
+      }),
+    );
   },
 
   async organisationTimezone() {

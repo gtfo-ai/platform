@@ -44,7 +44,11 @@ import type {
 import { ACTIVE_RUN_STATUSES } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
-import { remoteRunCredentialRefusedSql, userMayRunInProjectSql } from './running-role.js';
+import {
+  remoteRunCredentialRefusedSql,
+  taskHeldElsewhereSql,
+  userMayRunInProjectSql,
+} from './running-role.js';
 import { USER_MAY_ACT_SQL, workerUsableSql } from './worker-holder.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
@@ -151,16 +155,120 @@ const workerEligibleSql = (p: {
      and not ${remoteRunCredentialRefusedSql('o.project_id')})`;
 
 /**
+ * **The project list of the `workers` row `w` takes the project `project`** (WP-293; S-26.4,
+ * TD-031's 2026-11-06 amendment item 6): `claim_project_ids` is `null` (every project), the
+ * legacy `'{}'` — which since the claim policy narrows **nothing** (its *pick only* moved into
+ * {@link effectiveClaimPolicySql}) — or names the project. The domain's `projectListTakes`.
+ */
+export const projectListTakesSql = (w: string, project: string): string => `(
+       ${w}.claim_project_ids is null
+    or cardinality(${w}.claim_project_ids) = 0
+    or ${project} = any(${w}.claim_project_ids))`;
+
+/**
+ * **The claim policy the `workers` row `w` reads as** (S-26.4, migration 0106): the stored value,
+ * or — for a `null`, every row before 0106 — `pick_only` when the scope is the legacy `'{}'` and
+ * `everything` otherwise. The domain's `effectiveClaimPolicy`.
+ */
+export const effectiveClaimPolicySql = (w: string): string =>
+  `coalesce(${w}.claim_policy, case when ${w}.claim_project_ids = '{}'::uuid[] then 'pick_only' else 'everything' end)`;
+
+/**
+ * **Offer `o` is the user `user`'s** (TD-031's amendment item 6): a **stage** offer's task is owned
+ * by them (`tasks.owner_user_id`, read live, so a reassignment applies to an open offer at once); an
+ * **ask** offer was asked by them (`task_asks.asked_by_user_id`, through `runs.ask_id` — or the ask
+ * whose `run_id` is this run, for an ask run older than migration 0082) — an ask's "mine" is its
+ * asker, never the task's owner.
+ */
+export const offerIsMineSql = (user: string): string => `(case when o.kind = 'ask'
+       then exists (select 1 from task_asks ma
+                     where ma.asked_by_user_id = ${user}
+                       and (ma.id = (select ar.ask_id from runs ar where ar.id = o.run_id)
+                            or ma.run_id = o.run_id))
+       else exists (select 1 from tasks mt
+                     where mt.id = o.task_id and mt.owner_user_id = ${user}) end)`;
+
+/**
+ * **Offer `o`'s task is unassigned** (TD-031's amendment item 6): a **stage** offer whose task has no
+ * owner and is **not held elsewhere** — `taskHeldElsewhereSql`, the one fragment the owner command,
+ * the pick and the waiting read share. An ask is never unassigned: it always has its asker.
+ */
+export const offerIsUnassignedSql = `(o.kind = 'stage'
+   and exists (select 1 from tasks ut
+                where ut.id = o.task_id and ut.owner_user_id is null
+                  and not ${taskHeldElsewhereSql('ut')}))`;
+
+/**
+ * **A worker's claim policy takes offer `o`** (S-26.4, TD-031's amendment item 6) — the domain's
+ * `claimPolicyTakes` over {@link offerIsMineSql} and {@link offerIsUnassignedSql}: `everything`
+ * true; `mine_and_unassigned` mine or unassigned; `mine` mine; `pick_only` false. A conjunct of an
+ * **automatic** claim only, asked beside {@link workerScopeTakesSql} and {@link workerEligibleSql},
+ * never instead of either, so no policy admits an offer the eligibility refuses. Read live from the
+ * offer's task: a reassignment applies to an open offer at once.
+ */
+export const workerPolicyTakesSql = (worker: string): string => `exists (
+           select 1 from workers wp
+            where wp.id = ${worker}::uuid
+              and (case ${effectiveClaimPolicySql('wp')}
+                     when 'everything' then true
+                     when 'mine' then ${offerIsMineSql('wp.user_id')}
+                     when 'mine_and_unassigned'
+                       then (${offerIsMineSql('wp.user_id')} or ${offerIsUnassignedSql})
+                     else false end))`;
+
+/**
  * **A worker's claim scope takes offer `o`** (WP-293, TD-031's 2026-11-05 claim-scope amendment,
- * decision 2): `workers.claim_project_ids` is `null` (every project) or names `o`'s project. A
- * conjunct of an **automatic** claim only — a pick ignores it — and it only narrows: it is asked
- * beside {@link workerEligibleSql}, never instead of any part of it, so no value admits an offer the
- * eligibility refuses. `'{}'` (*pick only*) matches nothing.
+ * decision 2): {@link projectListTakesSql} over the worker's row. A conjunct of an **automatic**
+ * claim only — a pick ignores it — and it only narrows: it is asked beside
+ * {@link workerEligibleSql}, never instead of any part of it, so no value admits an offer the
+ * eligibility refuses. Since S-26.4 the legacy `'{}'` matches every project here; its *pick only*
+ * is {@link workerPolicyTakesSql}'s.
  */
 const workerScopeTakesSql = (worker: string): string => `exists (
            select 1 from workers ws
             where ws.id = ${worker}::uuid
-              and (ws.claim_project_ids is null or o.project_id = any(ws.claim_project_ids)))`;
+              and ${projectListTakesSql('ws', 'o.project_id')})`;
+
+/**
+ * **A pick never takes another person's task** (S-26.4, TD-031's amendment item 7): offer `o` is an
+ * ask, or its task has no owner or is owned by the worker's user. The pick's own conjunct; the
+ * assignment itself is decided in the claim's transaction (`decidePickOwner`), which re-reads the
+ * owner under the task's row lock and rolls the claim back if it moved.
+ */
+const pickOwnershipAdmitsSql = (worker: string): string => `(o.kind <> 'stage'
+    or exists (select 1 from tasks pt, workers pw
+                where pt.id = o.task_id and pw.id = ${worker}::uuid
+                  and (pt.owner_user_id is null or pt.owner_user_id = pw.user_id)))`;
+
+/** The live run statuses as a literal array — a closed set of enum literals, so no injection surface. */
+const ACTIVE_STATUS_ARRAY = `array[${ACTIVE_RUN_STATUSES.map((status) => `'${status}'`).join(', ')}]::run_status[]`;
+
+/**
+ * **Open offers a worker's policy leaves for others** (S-26.4, TD-031's amendment item 6:
+ * `policy_skipped_offers`, *not* a blocker) — a scalar subquery: the open offers of live runs that
+ * the worker's eligibility ({@link workerEligibleSql}, on the database's clock) **and** its claim
+ * scope admit and its claim policy ({@link workerPolicyTakesSql}) refuses. The same fragments the
+ * claim asks, so the count is the claim's own answer.
+ *
+ * Each parameter is an SQL expression of the enclosing statement, and **none may name the aliases
+ * the fragments bind** (`w`, `u`, `ws`, `wp`, `o`, `r`, …): a statement over `workers w` passes a
+ * lateral's columns (`worker-queries.ts`), never `w.id`, which the eligibility's own `workers w`
+ * would shadow.
+ */
+export const policySkippedOffersSql = (p: {
+  readonly worker: string;
+  readonly held: string;
+  readonly run: string;
+  readonly egress: string;
+}): string => `(
+  select count(*)::int
+    from run_offers o
+    join runs r on r.id = o.run_id
+   where o.state = 'open'
+     and r.status = any(${ACTIVE_STATUS_ARRAY})
+     and ${workerEligibleSql({ now: 'now()', worker: p.worker, held: p.held, run: p.run, egress: p.egress })}
+     and ${workerScopeTakesSql(p.worker)}
+     and not ${workerPolicyTakesSql(p.worker)})`;
 
 /** The claim's parameters, as {@link CLAIM_SQL} numbers them. */
 const WORKER_ELIGIBLE_CLAIM = workerEligibleSql({
@@ -180,7 +288,10 @@ const WORKER_ELIGIBLE_CLAIM = workerEligibleSql({
  * neither `*_from` and is the server's at once. **A remote worker's** (WP-281, {@link workerEligibleSql}):
  * `$7` the worker, `$8` the digests it holds, `$9`/`$10` the core's run and egress digests, `$11` the
  * run token's hash — and `$12`, **a pick** (WP-293): `true` skips the worker's claim scope
- * ({@link workerScopeTakesSql}) and nothing else, `false` (an automatic claim) asks it. The outer update is the run's `created → starting` (WP-275b); a row a previous
+ * ({@link workerScopeTakesSql}) and its claim policy ({@link workerPolicyTakesSql}, S-26.4) and
+ * asks instead that the task is nobody's or the picker's ({@link pickOwnershipAdmitsSql}); `false`
+ * (an automatic claim) asks the scope **and** the policy. The claim answers the worker's user
+ * (`worker_user_id`) — the person a pick assigns. The outer update is the run's `created → starting` (WP-275b); a row a previous
  * build inserted live in another status keeps it. `for update of o, r skip locked` takes the offer and
  * then its run (the one lock order, WP-276) and skips a run a terminal writer holds.
  */
@@ -195,7 +306,9 @@ const CLAIM_SQL = `with candidate as (
             or o.server_from <= $4::timestamptz
             or (o.server_from is null and o.workers_from is null))
        and ($3 <> 'worker' or ${WORKER_ELIGIBLE_CLAIM})
-       and ($3 <> 'worker' or $12::boolean or ${workerScopeTakesSql('$7')})
+       and ($3 <> 'worker' or $12::boolean
+            or (${workerScopeTakesSql('$7')} and ${workerPolicyTakesSql('$7')}))
+       and ($3 <> 'worker' or not $12::boolean or ${pickOwnershipAdmitsSql('$7')})
      order by o.offered_at, o.id
      for update of o, r skip locked
      limit 1
@@ -212,7 +325,8 @@ const CLAIM_SQL = `with candidate as (
                            end
       from candidate
      where o.id = candidate.id
-    returning o.id, o.run_id, o.task_id, o.kind, o.lease_epoch, o.image_digests
+    returning o.id, o.run_id, o.task_id, o.kind, o.lease_epoch, o.image_digests,
+              (select cw.user_id from workers cw where cw.id = $7::uuid) as worker_user_id
   )
   update runs r
      set lease_owner = $5, lease_expires_at = $6::timestamptz, lease_epoch = c.lease_epoch,
@@ -220,7 +334,7 @@ const CLAIM_SQL = `with candidate as (
          status = case r.status when 'created' then 'starting'::run_status else r.status end
     from claimed c
    where r.id = c.run_id
-  returning c.id, c.run_id, c.task_id, c.kind, c.lease_epoch, c.image_digests`;
+  returning c.id, c.run_id, c.task_id, c.kind, c.lease_epoch, c.image_digests, c.worker_user_id`;
 
 /**
  * Closes the run's offer — `RunRepository.finish`'s second statement, only for the writer that won
@@ -322,6 +436,7 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       kind: RunOfferKind;
       lease_epoch: number;
       image_digests: { run?: unknown; egress?: unknown } | null;
+      worker_user_id: string | null;
     }>(CLAIM_SQL, [
       claim.eligibility.runId ?? null,
       [...ACTIVE_RUN_STATUSES],
@@ -348,6 +463,7 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       kind: row.kind,
       epoch: row.lease_epoch,
       owner: claim.owner,
+      ...(worker === undefined ? {} : { workerUserId: (row.worker_user_id ?? null) as Id | null }),
       images:
         digests !== null && typeof digests.run === 'string' && typeof digests.egress === 'string'
           ? { run: digests.run, egress: digests.egress }
@@ -356,9 +472,11 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
   },
   /**
    * WP-293's list: the claim's own candidate predicate and {@link workerEligibleSql} — the same text,
-   * numbered for this statement — with the claim scope **read** (`automatic`) rather than asked. No
-   * lock: a row another claim holds is listed and then refused at the pick, which is the claim's own
-   * answer to a race.
+   * numbered for this statement — **narrowed by the project list** (S-26.4, TD-031's amendment item
+   * 7: a legacy `'{}'` narrows nothing), with the claim policy **read** (`automatic`) rather than
+   * asked, the task's owner and whether the run is the worker's user's (`mine`). No lock: a row
+   * another claim holds is listed and then refused at the pick, which is the claim's own answer to a
+   * race.
    */
   claimable: async (tx, input): Promise<readonly ClaimableRunOffer[]> => {
     const { rows } = await sqlOf(tx).query<{
@@ -370,14 +488,22 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       role: AgentRole;
       offered_at: Date | string;
       automatic: boolean;
+      owner_user_id: string | null;
+      owner_name: string | null;
+      mine: boolean;
     }>(
       `select o.run_id, o.task_id, o.project_id, o.kind, o.stage, r.role, o.offered_at,
-              ${workerScopeTakesSql('$2')} as automatic
+              ${workerPolicyTakesSql('$2')} as automatic,
+              t.owner_user_id, coalesce(ou.name, '') as owner_name,
+              ${offerIsMineSql('(select mw.user_id from workers mw where mw.id = $2::uuid)')} as mine
          from run_offers o
          join runs r on r.id = o.run_id
+         join tasks t on t.id = o.task_id
+         left join users ou on ou.id = t.owner_user_id
         where o.state = 'open'
           and r.status = any($1::run_status[])
           and ${workerEligibleSql({ now: '$3', worker: '$2', held: '$4', run: '$5', egress: '$6' })}
+          and ${workerScopeTakesSql('$2')}
         order by o.offered_at, o.id
         limit $7`,
       [
@@ -399,7 +525,55 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       role: row.role,
       offeredAt: iso(row.offered_at) as IsoDateTime,
       automatic: row.automatic,
+      owner:
+        row.owner_user_id === null
+          ? null
+          : { userId: row.owner_user_id as Id, name: row.owner_name ?? '' },
+      mine: row.mine === true,
     }));
+  },
+  /**
+   * S-26.4's refusal read, after a pick claimed nothing: the offer's task is owned by **another**
+   * person, and every other conjunct of the pick admits this worker now — the claim's own
+   * {@link workerEligibleSql} over an open **stage** offer of a live run. So the owner is named only
+   * to a worker whose user the eligibility admits (a member of the project, to whom the board
+   * already shows the owner), and every other reason still reads as nothing claimable. No lock.
+   */
+  pickOwnerRefusal: async (tx, input) => {
+    const { rows } = await sqlOf(tx).query<{
+      owner_user_id: string;
+      owner_name: string | null;
+      owner_changed_at: Date | string | null;
+    }>(
+      `select t.owner_user_id, coalesce(ou.name, '') as owner_name, t.owner_changed_at
+         from run_offers o
+         join runs r on r.id = o.run_id
+         join tasks t on t.id = o.task_id
+         join users ou on ou.id = t.owner_user_id
+        where o.run_id = $7
+          and o.state = 'open'
+          and o.kind = 'stage'
+          and r.status = any($1::run_status[])
+          and ${workerEligibleSql({ now: '$3', worker: '$2', held: '$4', run: '$5', egress: '$6' })}
+          and t.owner_user_id is distinct from
+              (select pw.user_id from workers pw where pw.id = $2::uuid)`,
+      [
+        [...ACTIVE_RUN_STATUSES],
+        input.worker.workerId,
+        input.now,
+        [...input.worker.heldImageDigests],
+        input.worker.images.run,
+        input.worker.images.egress,
+        input.runId,
+      ],
+    );
+    const row = rows[0];
+    return row === undefined
+      ? null
+      : {
+          owner: { userId: row.owner_user_id as Id, name: row.owner_name ?? '' },
+          ownerChangedAt: iso(row.owner_changed_at),
+        };
   },
   /**
    * WP-281's release — the port's docblock has the rule. The offer, then the run, locked (§5's
