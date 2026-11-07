@@ -1817,6 +1817,8 @@ export const composePipeline = async (
           eventStore: options.eventing.store,
           jobs,
           calendar: options.calendar,
+          // An approval reminder's pace, read when the recovery reminds it (S-27.1).
+          settings,
           ids,
           // The expiry commands store no free text, so this is the type's requirement rather than
           // a sink; the pattern rules are the composition `maintenance` below is given.

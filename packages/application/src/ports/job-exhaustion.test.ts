@@ -141,6 +141,15 @@ describe('the job exhaustion census (backlog 325)', () => {
     expect(PROVIDER_CALL_BOUND_SECONDS * 5).toBeLessThan(BOUND_AND_ESCALATE_EXPIRE_SECONDS);
   });
 
+  it('states deadline.sweep’s loss since approvals stopped expiring (S-27.1)', () => {
+    const row = JOB_EXHAUSTION['deadline.sweep'];
+    expect(row?.shape).toBe('recovery_row');
+    expect(row?.recoveredBy).toBe('deadline, deadline_reminder');
+    expect(row?.loss).toContain('one of an approval’s at most five reminders');
+    expect(row?.loss).toContain('never an approval’s expiry');
+    expect(row?.loss).not.toMatch(/expiry or reminder of a question, approval/);
+  });
+
   it('names, for every recovery row, a site the recovery pass really reports', () => {
     const recovery = path.resolve(import.meta.dirname, '../recovery');
     const sources = [

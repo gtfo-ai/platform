@@ -698,6 +698,39 @@ describe('a run that waits for a machine (S-26.8b part 2, the M26 UX spec § 4)'
 });
 
 describe('the needs-you callout', () => {
+  /**
+   * S-27.1 (review of #113): a cancelled task's pending approval is withdrawn, which the server
+   * stores as `expired` with the reason "the task was cancelled". A cancelled task is not
+   * Needs you: the page offers no callout for it, and never says an approval expired undecided.
+   */
+  it('says nothing about an expired approval for a cancelled task whose approval was withdrawn', async () => {
+    start(
+      detail(
+        {
+          approvals: [
+            {
+              ...APPROVAL_ROW,
+              status: 'expired',
+              decided_at: AT,
+              reason: 'the task was cancelled',
+            },
+          ],
+          stages: [
+            stage('refinement', 1, 'completed', 'approve'),
+            stage('architecture', 1, 'completed', 'cancelled'),
+          ],
+        },
+        { state: 'cancelled' },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    const text = document.body.textContent ?? '';
+    expect(text).not.toContain('an approval expired undecided');
+    expect(text).not.toContain('Needs you: an approval');
+    expect(text).not.toMatch(/\bExpired\b/);
+  });
+
   it('answers a question inline, and the header’s Answer moves focus into its box', async () => {
     const user = userEvent.setup();
     const { sent } = start(detail({ questions: [QUESTION_ROW] }, { state: 'waiting_answers' }));

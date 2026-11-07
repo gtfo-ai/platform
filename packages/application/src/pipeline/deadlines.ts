@@ -1,33 +1,35 @@
 /**
- * Three deadlines, one mechanism (WP-56) — PROGRESS backlog **74**, **76** and **69**.
+ * Two deadlines and the reminders, one mechanism (WP-56) — PROGRESS backlog **74** and **69**; and,
+ * since S-27.1 (BD-006's 2026-11-07 amendment, BACKLOG 1470), **no approval deadline**.
  *
- * | deadline | set by | measured from | expires into |
+ * | timer | set by | measured from | ends in |
  * |---|---|---|---|
  * | a blocking question nobody answered | BD-006 (`pipeline.limits.question_timeout`, default `1 working day`) | `questions.asked_at` | `task.question.expired` → the saga escalates |
- * | a plan or budget approval nobody decided | BD-006's Q95 amendment: the same limit and calendar | `approvals.requested_at` | `task.approval.decided` (`expired`) → the saga escalates |
- * | a take-over nobody touched | product/19 §19: `5 working days` | the `task.taken_over` event | `task.escalated`, from here |
+ * | a take-over nobody touched | product/19 §19: `5 working days` | the holder's last activity | `task.escalated`, from here |
+ * | a question's one reminder | WP-84, halfway to its deadline | `questions.asked_at` | one `reminder` notification |
+ * | an approval's reminders | BD-006's 2026-11-07 amendment: the *n*-th at *(n − ½)* question timeouts, at most five | `approvals.requested_at` | one `reminder` notification each; the approval keeps waiting |
  *
- * …and, since WP-84, a **reminder** before each of the first two (BD-006's *"with a reminder before
- * escalation"*, PROGRESS backlog 165): two more kinds on the same queue, armed beside the expiry,
- * firing halfway through the working time to the deadline — `reminders.ts`.
- *
- * Until this module every piece of the first two existed except the one that starts them: no site
- * wrote a deadline, nothing armed a timer, `expireTaskQuestion` had only test callers and
- * `expireTaskApproval` had none. The third was not built at all.
+ * **An approval waits until a person decides it.** The Q95 amendment (WP-56) gave it the question's
+ * expiry; the 2026-11-07 amendment took it away, and — as Q95 asked of a reversal — the machinery
+ * went with it: approval creation writes no deadline, the expiry command is deleted, and so are the
+ * approval halves of the recovery row (the overdue sweep and the backfill). A queued
+ * `approval_timeout` an earlier build armed still **parses** and ends `settled` with a named log line
+ * ({@link settleDeadline}), so it does not spend its retries. An approval's stored `deadline_at`
+ * (from an earlier build) is history and is read by nothing here.
  *
  * ## The shape — decide in the transaction, arm after it, re-validate on fire
  *
- * 1. **The deadline is written where the aggregate is created.** A question and an approval carry
- *    `deadline_at`, computed by {@link questionDeadlineRule} from the instant the row stores, in
- *    the transaction that inserts the row — so the row and the event that announces it
- *    (`task.question.asked` carries the whole record) agree on it. A take-over has no row; its
- *    deadline is a function of the `task.taken_over` event's own instant and is recomputed from
- *    it, never stored.
+ * 1. **The deadline is written where the aggregate is created.** A question carries `deadline_at`,
+ *    computed by {@link questionDeadlineRule} from the instant the row stores, in the transaction
+ *    that inserts the row — so the row and the event that announces it (`task.question.asked`
+ *    carries the whole record) agree on it. A take-over has no row; its deadline is a function of
+ *    the holder's last activity and is recomputed, never stored.
  * 2. **The timer is armed by a handler, after commit** ({@link deadlineArmingHandler}):
  *    `Jobs.enqueue` does not join a transaction (TD-004's amendment), so a handler enqueues through
- *    `HandlerContext.afterCommit`, and a rolled-back dispatch arms nothing.
+ *    `HandlerContext.afterCommit`, and a rolled-back dispatch arms nothing. An approval's **first**
+ *    reminder is armed here; each later one by the reminder before it (`reminders.ts`).
  * 3. **The job re-validates on fire** ({@link deadlineSweepHandler}), because a timer cannot be
- *    cancelled: it asks the aggregate whether it is *still* waiting and whether the deadline has
+ *    cancelled: it asks the aggregate whether it is *still* waiting and whether the instant has
  *    passed on this process's clock. An answered question, a decided approval and a handed-back
  *    task are the normal case and do nothing; that is what "cancelled by hand-back" means here.
  *
@@ -36,18 +38,14 @@
  * `deadline.sweep` (`JOB_QUEUES.deadlineSweep`) carries `(aggregate, id, kind)`. One worker, one
  * pooled connection — `POOL_RESERVATIONS.pipeline` counts it — rather than one per timer, which is
  * the architect's ruling and TD-004's amendment. The residual is stated where it lives: a wake-up
- * lost between the commit and the enqueue leaves an aggregate waiting past its deadline with no
- * timer, the lost-wake-up class `recovery/stranded.ts` exists for — and since WP-56 round 2 it is
- * a row of that table (`recovery/deadline.ts`), which expires such a row through
- * {@link settleDeadline}, the job's own path, and gives a row written before WP-56 its first
- * deadline.
+ * lost between the commit and the enqueue leaves an aggregate waiting with no timer, the
+ * lost-wake-up class `recovery/stranded.ts` exists for — and since WP-56 round 2 it is a row of that
+ * table (`recovery/deadline.ts`), which acts on such a row through {@link settleDeadline} or
+ * `remindWaitingAggregate`, the job's own paths.
  */
-
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { idSchema } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
-import { escalateTask, isBefore } from '@platform/domain';
-import * as z from 'zod';
+import { APPROVAL_REMINDER_LIMIT, escalateTask, isBefore } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -58,14 +56,25 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { reminderTimeOf, type WorkingCalendar } from '../scheduling/working-calendar.js';
+import { approvalToResumeInto } from './approval-wait.js';
 import {
   type DeadlineOutcome,
-  expireTaskApproval,
   expireTaskQuestion,
   type TaskCommandDependencies,
 } from './commands.js';
 import { TAKE_OVER_INACTIVITY_TIMEOUT, takeOverDeadline } from './deadline-rules.js';
-import { remindWaitingAggregate } from './reminders.js';
+import {
+  type DeadlineSweepData,
+  deadlineSweepDataSchema,
+  enqueueDeadline,
+} from './deadline-timer.js';
+import {
+  approvalReminderAt,
+  approvalReminderDueAt,
+  approvalReminderTimeout,
+  remindWaitingAggregate,
+} from './reminders.js';
+import type { ProjectSettingsPort } from './settings.js';
 import type { PipelineStore } from './store.js';
 import { PIPELINE_ACTOR } from './store.js';
 import {
@@ -89,64 +98,12 @@ import { closeParkedStageRow } from './transitions.js';
  */
 export const DEADLINE_REARM_FLOOR_MS = 60_000;
 
-/**
- * One wake-up on `deadline.sweep`: which aggregate, which one, which of its deadlines.
- *
- * Exactly the triple the architect's ruling names and nothing else — in particular **no due
- * instant**: the job re-reads it from the row (a question, an approval) or recomputes it from the
- * event log (a take-over), so a wake-up that outlives a change of mind carries nothing stale.
- * Strict, like every boundary: a job enqueued by a newer build with a field this one does not know
- * is refused by name rather than half-understood.
- */
-export const deadlineSweepDataSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
-    aggregate: z.literal('question'),
-    id: idSchema,
-    kind: z.literal('question_timeout'),
-  }),
-  z.strictObject({
-    aggregate: z.literal('approval'),
-    id: idSchema,
-    kind: z.literal('approval_timeout'),
-  }),
-  z.strictObject({
-    aggregate: z.literal('task'),
-    id: idSchema,
-    kind: z.literal('take_over_inactivity'),
-  }),
-  // WP-84 (PROGRESS backlog 165): BD-006's reminder before escalation — one more kind on the same
-  // queue, the architect's ruling, for both aggregates Q95 put on the question's calendar.
-  z.strictObject({
-    aggregate: z.literal('question'),
-    id: idSchema,
-    kind: z.literal('question_reminder'),
-  }),
-  z.strictObject({
-    aggregate: z.literal('approval'),
-    id: idSchema,
-    kind: z.literal('approval_reminder'),
-  }),
-]);
-
-export type DeadlineSweepData = z.infer<typeof deadlineSweepDataSchema>;
-
-/** The singleton key: one queued timer per `(aggregate, id, kind)`. */
-export const deadlineKey = (data: DeadlineSweepData): string =>
-  `${data.aggregate}:${data.id}:${data.kind}`;
-
-/** Arms (or re-arms) one timer. */
-export const enqueueDeadline = async (
-  jobs: Jobs,
-  data: DeadlineSweepData,
-  dueAt: IsoDateTime,
-): Promise<void> => {
-  await jobs.enqueue<DeadlineSweepData>({
-    queue: JOB_QUEUES.deadlineSweep,
-    data,
-    singletonKey: deadlineKey(data),
-    startAfter: new Date(dueAt),
-  });
-};
+export {
+  type DeadlineSweepData,
+  deadlineKey,
+  deadlineSweepDataSchema,
+  enqueueDeadline,
+} from './deadline-timer.js';
 
 export const declareDeadlineQueue = async (jobs: Jobs): Promise<void> => {
   await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.deadlineSweep));
@@ -155,6 +112,10 @@ export const declareDeadlineQueue = async (jobs: Jobs): Promise<void> => {
 export interface DeadlineArmingOptions {
   readonly jobs: Jobs;
   readonly calendar: WorkingCalendar;
+  /** What the resume back into an approval wait reads its approval and pauses from (BACKLOG 1480). */
+  readonly store: PipelineStore;
+  /** Where an approval's first reminder reads its pace, the project's `question_timeout` (S-27.1). */
+  readonly settings: ProjectSettingsPort;
   readonly logger?: Logger;
 }
 
@@ -170,17 +131,27 @@ export interface DeadlineArmingOptions {
 export const DEADLINE_ARMING_PRIORITY = 15;
 
 /**
- * Arms the three timers — criterion (1)'s *"the enqueue goes through `HandlerContext.afterCommit`"*.
+ * Arms the timers — criterion (1)'s *"the enqueue goes through `HandlerContext.afterCommit`"*.
  *
- * It reads the deadline off the event rather than off the row: `task.question.asked` and
- * `task.approval.requested` carry the whole record, `deadline_at` included, and the record *is*
- * what the creating transaction stored. A record with no deadline — which nothing on this build
- * writes, and which a row created by an older build still carries — arms nothing, and says so.
+ * A question's deadline is read off the event rather than off the row: `task.question.asked`
+ * carries the whole record, `deadline_at` included, and the record *is* what the creating
+ * transaction stored. A question with no deadline — which nothing on this build writes, and which a
+ * row created by an older build still carries — arms nothing, and says so.
+ *
+ * An approval arms **only its first reminder** (BD-006's 2026-11-07 amendment): at half a question
+ * timeout after `requested_at`, the timeout read from the project's settings inside the handler's
+ * transaction. Whatever `deadline_at` the record carries is not read.
  */
 export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHandler => ({
   name: 'pipeline.deadlines',
   priority: DEADLINE_ARMING_PRIORITY,
-  eventTypes: ['task.question.asked', 'task.approval.requested', 'task.taken_over'],
+  eventTypes: [
+    'task.question.asked',
+    'task.approval.requested',
+    'task.taken_over',
+    // BACKLOG 1480: a resume back into an approval wait arms that approval's next reminder.
+    'task.resumed',
+  ],
   handle: async (context) => {
     const logger = options.logger ?? silentLogger;
     const event = context.event.event;
@@ -219,22 +190,24 @@ export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHand
       }
       case 'task.approval.requested': {
         const { approval } = event.payload;
-        if (approval.deadline_at === null || approval.deadline_at === undefined) {
+        const timeout = await approvalReminderTimeout(
+          options.settings,
+          event.payload.project_id,
+          context.scope.tx,
+        );
+        if (timeout === null) {
+          // The reminder row finds it once the configuration reads (`recovery/deadline.ts`).
           logger.warn(
             { approval_id: approval.id, task_id: event.payload.task_id },
-            'an approval was requested with no deadline, so nothing will expire it',
+            'an approval was requested and its first reminder was not armed: the project configuration could not be read',
           );
           return;
         }
-        arm(
-          { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' },
-          approval.deadline_at,
-        );
-        armReminder(
-          { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' },
-          approval.requested_at,
-          approval.deadline_at,
-        );
+        const at = approvalReminderAt(options.calendar, approval.requested_at, timeout, 1);
+        if (at === null) {
+          return;
+        }
+        arm({ aggregate: 'approval', id: approval.id, kind: 'approval_reminder' }, at);
         return;
       }
       case 'task.taken_over': {
@@ -242,6 +215,39 @@ export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHand
           { aggregate: 'task', id: event.payload.task_id, kind: 'take_over_inactivity' },
           takeOverDeadline(options.calendar, event.occurred_at),
         );
+        return;
+      }
+      case 'task.resumed': {
+        // Only a resume back into an approval wait (BACKLOG 1480): no reminder went out while the
+        // task was paused, so the next one is armed here, at its instant with the pause taken out.
+        const tx = context.scope.tx;
+        const stored = await options.store.tasks.load(tx, event.payload.task_id);
+        if (stored === null || stored.task.state !== 'waiting_approval') {
+          return;
+        }
+        const interrupted = await approvalToResumeInto(options.store, tx, stored.task.id);
+        const approval = interrupted?.approval ?? null;
+        if (
+          approval === null ||
+          approval.status !== 'pending' ||
+          approval.remindersSent >= APPROVAL_REMINDER_LIMIT
+        ) {
+          return;
+        }
+        const timeout = await approvalReminderTimeout(options.settings, approval.projectId, tx);
+        if (timeout === null) {
+          return;
+        }
+        const at = approvalReminderDueAt(
+          options.calendar,
+          approval,
+          timeout,
+          approval.remindersSent + 1,
+          await options.store.tasks.pauses(tx, stored.task.id),
+        );
+        if (at !== null) {
+          arm({ aggregate: 'approval', id: approval.id, kind: 'approval_reminder' }, at);
+        }
         return;
       }
       default:
@@ -255,6 +261,8 @@ export interface DeadlineSweepOptions {
   readonly store: PipelineStore;
   readonly jobs: Jobs;
   readonly calendar: WorkingCalendar;
+  /** An approval reminder's pace, the project's `question_timeout`, read when it fires (S-27.1). */
+  readonly settings: ProjectSettingsPort;
   readonly ids: { next(): Id };
   readonly clock: { now(): string };
   /** `TaskCommandDependencies.redactor`: the expiry commands store no free text, but share the type. */
@@ -355,11 +363,10 @@ const expireTakeOver = async (
  * The `deadline.sweep` worker — criterion (2): the job re-validates on fire.
  *
  * Every branch asks the aggregate, never the payload, whether anything is still owed. What it does
- * with the three answers is the same for all three kinds: `expired` is done, `settled` is done, and
- * `not_due` re-arms at the deadline (no earlier than {@link DEADLINE_REARM_FLOOR_MS} from now).
- * An expiry that meets a question or an approval the saga can no longer escalate — the task moved
- * meanwhile — is the saga's to ignore: `questionHandler` and `approvalHandler` act only on a task
- * still `waiting_answers` / `waiting_approval`.
+ * with the answers is the same for every kind: `expired`, `reminded` and `settled` are done, and
+ * `not_due` re-arms at the instant (no earlier than {@link DEADLINE_REARM_FLOOR_MS} from now).
+ * An expiry that meets a question the saga can no longer escalate — the task moved meanwhile — is
+ * the saga's to ignore: `questionHandler` acts only on a task still `waiting_answers`.
  */
 export const deadlineSweepHandler = (options: DeadlineSweepOptions): JobHandler => {
   const logger = options.logger ?? silentLogger;
@@ -399,14 +406,21 @@ export const settleDeadline = async (
   // (or decision) is serialised by the aggregate's own event stream rather than by a row lock:
   // both append at the same `stream_seq`, `events_enforce_stream_seq` refuses the second, and if
   // the second is this job it throws, is retried by the queue, and re-validates into `settled`.
+  if (data.kind === 'approval_timeout') {
+    // BD-006's 2026-11-07 amendment, item 4: no approval expires. A timer an earlier build armed
+    // finds nothing to do, and says so once, by name, rather than failing into its retries.
+    logger.info(
+      { ...data },
+      'deadline.sweep: an approval_timeout an earlier build armed was settled: approvals no longer expire',
+    );
+    return { kind: 'settled' };
+  }
   const outcome =
     data.kind === 'question_timeout'
       ? await expireTaskQuestion(commands, data.id)
-      : data.kind === 'approval_timeout'
-        ? await expireTaskApproval(commands, data.id)
-        : data.kind === 'question_reminder' || data.kind === 'approval_reminder'
-          ? await remindWaitingAggregate(options, data.aggregate, data.id)
-          : await expireTakeOver(options, data.id);
+      : data.kind === 'question_reminder' || data.kind === 'approval_reminder'
+        ? await remindWaitingAggregate(options, data.aggregate, data.id)
+        : await expireTakeOver(options, data.id);
   if (outcome.kind === 'not_due') {
     const floor = new Date(Date.parse(options.clock.now()) + DEADLINE_REARM_FLOOR_MS);
     const dueAt = isBefore(outcome.dueAt, floor.toISOString())

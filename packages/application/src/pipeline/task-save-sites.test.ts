@@ -98,7 +98,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * and ending and no `save` of its own; the two columns WP-79 writes (`ready_head_sha`,
  * `requested_by_user_id`'s fill) are narrow statements `save` does not name, held by
  * `tasks-column-ownership.test.ts` instead of here. The resume and hand-back into Ready now write
- * nothing but the hand-back's event, so `commands.ts` keeps its four.
+ * nothing but the hand-back's event, so `commands.ts` kept its four (five since S-27.1, above).
  *
  * `recovery/stranded-stage.ts` joined them at **WP-108** with **one** site: the ending of a task
  * left at an agent or gate stage nothing ever ran (backlog 320), escalated from the recovery pass in
@@ -113,7 +113,9 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * job's own failure, so the job still ends `failed` and listed.
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
-  ['packages/application/src/pipeline/commands.ts', 4],
+  // 5 since S-27.1 (BACKLOG 1480): the resume of a task paused out of an approval wait goes back
+  // to the wait (`resumeIntoApprovalWait`) inside `writeTask`, with the command's ending.
+  ['packages/application/src/pipeline/commands.ts', 5],
   ['packages/application/src/pipeline/dead-letter.ts', 1],
   ['packages/application/src/pipeline/deadlines.ts', 1],
   // The lease sweep's two escalations: a run not at its task's current entry (WP-47), and an
@@ -201,7 +203,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
-  it('counts forty-two, which is the number the change states', () => {
+  it('counts forty-three, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -248,7 +250,10 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-286**: the lease sweep's escalation of an entry's second lost run, in the
     // sweep's own transaction with its `retryOnTaskConflict` (WP-285's second usage limit escalates
     // through `settle.ts`'s existing `escalateOnRun`, so it adds none).
-    expect(total).toBe(42);
+    // **Plus one at S-27.1** (BACKLOG 1480): `resumeTaskCommand`'s resume of a stopped task back into
+    // its approval wait (`resumeIntoApprovalWait`) — a state change, so the versioned `save` and
+    // not a narrow write; it rides the human command's `writeTask` and its ending.
+    expect(total).toBe(43);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   }, 15_000);
 

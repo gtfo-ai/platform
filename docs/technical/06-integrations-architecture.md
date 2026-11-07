@@ -294,7 +294,12 @@ An answer or an approval is emitted **only** for an author who maps to a platfor
 > exactly one is open, and with several it answers nothing and is recorded as ambiguous. A question
 > is posted through `postQuestion` (buttons when a click and a reply can arrive, text naming the
 > task page otherwise), and the `question_settled` duty edits its message through `updateMessage`
-> once it is answered or expires, as WP-65's `approval_settled` does for an approval.
+> once it is answered or expires, as WP-65's `approval_settled` does for an approval once it is
+> decided. An approval never expires (S-27.1, BD-006's 2026-11-07 amendment): while it waits the
+> project's chat gets at most five **reminders** — text naming the task page, never buttons, through
+> the same notify duty (class `reminder`, quiet hours and the digest as for every reminder) — and
+> `approval_settled` edits a message an earlier build's expiry left only for an `expired` decision
+> dispatched now.
 
 > **As built at S-25.9 (BACKLOG 1200, TD-035 decision 6): a chat approval shows what it approves.**
 > `postApproval`'s `ApprovalPost` carries `subject_artifact_id` — the plan the message shows, read by

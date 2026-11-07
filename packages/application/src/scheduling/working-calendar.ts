@@ -326,8 +326,11 @@ export const workingMinutesBetween = (calendar: WorkingCalendar, from: Date, to:
 };
 
 /**
- * When a question or an approval that has waited since `askedAt` and expires at `deadlineAt` is
- * reminded about — BD-006's *"with a reminder before escalation"* (WP-84, PROGRESS backlog 165).
+ * When a question that has waited since `askedAt` and expires at `deadlineAt` is reminded about —
+ * BD-006's *"with a reminder before escalation"* (WP-84, PROGRESS backlog 165). An approval, which
+ * never expires since S-27.1, is reminded about through this function per question timeout
+ * (`approvalReminderAt` in `pipeline/reminders.ts`: the *n*-th between the (n−1)-th and the n-th
+ * timeout laid end to end from the request).
  *
  * **Halfway through the working time between the two**, on the same calendar the deadline was
  * computed on. A pure function of the two instants the row already stores, so it needs neither the
@@ -340,7 +343,8 @@ export const workingMinutesBetween = (calendar: WorkingCalendar, from: Date, to:
  * question — because a reminder that would arrive with the escalation is noise.
  *
  * technical/02 once said *"reminders at configurable offsets"*; the offsets are not configurable in
- * this build (one reminder, at this instant), and that page says so since WP-84.
+ * this build (a question's one reminder at this instant, an approval's five at *(n − ½)* timeouts),
+ * and that page says so.
  */
 export const reminderTimeOf = (
   calendar: WorkingCalendar,

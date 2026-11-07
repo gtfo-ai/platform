@@ -21,9 +21,9 @@
  * | ask-the-task | **84** | one question, pending for ever | **here** — `task_ask` below |
  * | a run nothing is driving | **109** | the run's row *and its budget reservation*, for ever | **here** — `run_lease`, in `./run-lease.ts` |
  * | intake, a matched ticket | **20** | one task never starts | `pipeline/intake-reconcile.ts`, and it stays there |
- * | a deadline's timer (WP-56) | **161** | a question, approval or take-over waits for ever | **here** — `deadline`, in `./deadline.ts`, which also backfills the rows **162** names |
+ * | a deadline's timer (WP-56) | **161** | a question or take-over waits for ever (an approval has no deadline since S-27.1) | **here** — `deadline`, in `./deadline.ts`, which also backfills the questions **162** names |
  * | a stage's `stage.execute` job (every `enqueueStage` site — WP-108 read all eighteen) | **320** | a task at an agent or gate stage with no job and no run, `active` for ever; a discovery task also blocks every re-evaluation | **here** — `stranded_stage`, in `./stranded-stage.ts`, which also finds a `stage.execute` job that spent every pg-boss retry (**325**) |
- * | a reminder's timer (WP-84) | **291** | BD-006's one reminder before the escalation | **here** — `deadline_reminder`, the fourth row of `./deadline.ts` (WP-108), which also reminds a backfilled row and one open before reminders existed |
+ * | a reminder's timer (WP-84) | **291** | BD-006's one reminder before a question's escalation, and an approval's next of five (S-27.1) | **here** — `deadline_reminder`, the fourth row of `./deadline.ts` (WP-108), which also reminds a backfilled question and one open before reminders existed |
  * | a rework's close (WP-59) | **178** | a rejected merge request stays open, detached from every task | **here** — `superseded_mr`, in `./superseded-mr.ts` |
  * | a deferred dependency-gate ending (WP-67) | **240** | a question nobody asks, or a block nobody applies, on an `active` task | **here** — `deferred_dependency`, in `./deferred-dependency.ts` (WP-84) |
  * | a knowledge apply that failed or never ran (WP-124) | **366** | a change a human accepted, never committed; the proposal reads approved for ever | **here** — `knowledge_apply`, in `./knowledge-apply.ts`: one apply per project under a mark, then `apply_failed` with a reason on the proposal queue |
@@ -387,7 +387,8 @@ export interface StrandedRecoveryOptions {
   readonly credentials?: RunCredentialRecoverySite;
   /**
    * The deadline site (WP-56 round 2, PROGRESS backlog **161** and **162**, `./deadline.ts`): a
-   * question, approval or take-over whose timer was lost, and a row written before deadlines existed.
+   * question or take-over whose timer was lost, a question written before deadlines existed, and an
+   * approval whose next reminder is a grace overdue (S-27.1).
    *
    * **Absent is "no deadline is recovered"** — a lost arm leaves its aggregate waiting for ever.
    * Optional for the reason `runs` is: it expires through the pipeline's own path, so a composition

@@ -6,7 +6,9 @@
  * pending approvals. A left NavList filters them — all, questions, approvals, or one project — with
  * a count on each; the list box has one row per item, the needs-you icon first, then the question's
  * first line (or what the approval approves — "Plan v2 · size L · 6 files", S-25.1), where it is
- * (`PROJ · KEY · Stage`), how old it is and when it is due. A question row **expands in place** to
+ * (`PROJ · KEY · Stage`), how old it is and — for a question — when it is due; an approval never
+ * expires (BD-006's 2026-11-07 amendment), so its row says it *waits for a maintainer* instead. A
+ * question row **expands in place** to
  * the whole question and its answer box; an approval row's verb is *Review plan* and it links to the
  * task, which is where it is decided with the plan on screen — no row approves in one click. product/10 is explicit that "all channels are
  * equivalent; first answer wins", so the rows link to the task rather than pretending to be the only
@@ -36,7 +38,7 @@ import { Blankslate } from '../ui/blankslate.js';
 import { Button, buttonClassName } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
-import { stageLabel } from '../ui/humanize.js';
+import { APPROVAL_WAIT_WORDS, stageLabel } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { NavList } from '../ui/nav-list.js';
@@ -114,14 +116,26 @@ const WhereLine = ({
   );
 };
 
-/** "asked 5 m ago · due 30 Sep 2026, 15:00" — an item with no deadline says none. */
-const timeLine = (verb: string, at: string, deadline: string | null | undefined, nowMs: number) => {
+/**
+ * "asked 5 m ago · due 30 Sep 2026, 15:00" for a question, "requested 3 h ago · waits for a
+ * maintainer" for an approval. A question expires (BD-006), so its row says when (backlog 166); an
+ * approval never does since S-27.1 (BD-006's 2026-11-07 amendment), so it is passed no deadline and
+ * says who it waits for — no *due*, *expires* or *until* clause. A question with no deadline (a row
+ * an older build wrote) says neither.
+ */
+export const timeLine = (
+  verb: string,
+  at: string,
+  deadline: string | null | undefined,
+  nowMs: number,
+  waits?: string,
+): string => {
   const ago = formatAgo(at, nowMs);
   const asked = ago === null ? `${verb} ${formatDateTime(at)}` : `${verb} ${ago}`;
-  // Questions and approvals both expire since WP-56 (Q95), so each row says when (backlog 166).
-  return deadline === null || deadline === undefined
-    ? asked
-    : `${asked} · due ${formatDateTime(deadline)}`;
+  if (deadline !== null && deadline !== undefined) {
+    return `${asked} · due ${formatDateTime(deadline)}`;
+  }
+  return waits === undefined ? asked : `${asked} · ${waits}`;
 };
 
 const QuestionRow = ({
@@ -275,7 +289,10 @@ const ApprovalRow = ({
       <span className="inline-flex flex-wrap items-center gap-1.5">
         <WhereLine where={where} stage={null} />
         {where.project === null && where.ticket === null ? null : <Dot />}
-        <span>{timeLine('requested', approval.requested_at, approval.deadline_at, nowMs)}</span>
+        {/* No deadline, whatever the read carries: an approval never expires (S-27.1). */}
+        <span>
+          {timeLine('requested', approval.requested_at, null, nowMs, APPROVAL_WAIT_WORDS)}
+        </span>
       </span>
     }
     actions={
@@ -330,20 +347,22 @@ const CiHeldRow = ({
 
 /**
  * PROGRESS backlog 163's inbox half, closed by decision at WP-95 rather than built: this list is
- * what a person can still act on **here**, and an expired question or approval can no longer be
- * answered or decided (`listInbox` serves `open` and `pending` only). Listing it would be a row whose
- * only control is refused. Its task is `needs_human`, under **Needs you** on the board, and the task
- * page lists the expired item beside the retry control (WP-56). The screen says so — one line, and
- * the rest behind *Learn more* (research/19 § 3 rule 6).
+ * what a person can still act on **here**, and an expired question can no longer be answered
+ * (`listInbox` serves `open` and `pending` only). Listing it would be a row whose only control is
+ * refused. Its task is `needs_human`, under **Needs you** on the board, and the task page lists the
+ * expired item beside the retry control (WP-56). **An approval never expires** (S-27.1, BD-006's
+ * 2026-11-07 amendment): it stays in this list until a maintainer decides it. The screen says so —
+ * one line, and the rest behind *Learn more* (research/19 § 3 rule 6).
  */
 const ExpiryNote = (): ReactElement => (
   <div className="flex flex-col gap-1 text-xs text-fg-muted" data-inbox-expiry-note="true">
     <p>Questions and approvals waiting for a person, across all projects.</p>
     <DetailsDisclosure summary="Learn more" className="text-xs">
       <p>
-        A question or approval that expires leaves this list: it can no longer be answered or
-        decided. Its task waits under Needs you on its project’s board, and the task page is where
-        it is retried or cancelled.
+        A question that expires leaves this list: it can no longer be answered. Its task waits under
+        Needs you on its project’s board, and the task page is where it is retried or cancelled. An
+        approval does not expire: it stays here, and its task under Needs you, until a maintainer
+        approves or rejects it.
       </p>
     </DetailsDisclosure>
   </div>

@@ -97,7 +97,6 @@ const harness = (
       taskId: TASK,
       projectId: PROJECT,
       kind: options.kind ?? 'plan',
-      deadlineFrom: () => null,
     },
     context(),
   );

@@ -42,6 +42,7 @@ import {
   ciPendingReadSchema,
   DefaultBranchChangedError,
   LeaseLostError,
+  PAUSE_ENDING_EVENTS,
   silentLogger,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
@@ -593,6 +594,29 @@ export const createPostgresPipelineStore = (
       }
     },
     /** One indexed read of the task's stream (WP-131 review round 2), `takenOver`'s shape. */
+    pauses: async (tx, taskId) => {
+      // Each `task.paused` and the first ending after it (`PAUSE_ENDING_EVENTS`), oldest first
+      // (S-27.1, BACKLOG 1480). The stream is the task's own, so `stream_seq` orders it.
+      const { rows } = await sqlOf(tx).query<{
+        paused_at: Date | string;
+        ended_at: Date | string | null;
+      }>(
+        `select e.occurred_at as paused_at,
+                (select n.occurred_at from events n
+                  where n.stream_type = 'task' and n.stream_id = e.stream_id
+                    and n.stream_seq > e.stream_seq and n.type = any($2::text[])
+                  order by n.stream_seq limit 1) as ended_at
+           from events e
+          where e.stream_type = 'task' and e.stream_id = $1 and e.type = 'task.paused'
+          order by e.stream_seq`,
+        [taskId, [...PAUSE_ENDING_EVENTS]],
+      );
+      return rows.map((row) => ({
+        pausedAt: new Date(row.paused_at).toISOString() as IsoDateTime,
+        endedAt:
+          row.ended_at === null ? null : (new Date(row.ended_at).toISOString() as IsoDateTime),
+      }));
+    },
     pausedBudgetScope: async (tx, taskId) => {
       const { rows } = await sqlOf(tx).query<{ reason: string | null; scope: string | null }>(
         `select e.payload ->> 'reason' as reason, e.payload ->> 'budget_scope' as scope

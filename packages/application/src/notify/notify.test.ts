@@ -13,6 +13,7 @@
  */
 import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
+import { APPROVAL_WITHDRAWN_REASON } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { markTransactions } from '../events/open-transaction.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -1032,6 +1033,42 @@ describe('an approval notification', () => {
       expect(harness.communication?.updates).toHaveLength(1);
     });
   }
+
+  /**
+   * S-27.1 (review of #113): a cancelled task's approval is withdrawn — stored `expired` with the
+   * reason "the task was cancelled" — and its message says so, never that a deadline ended it.
+   */
+  it('says a withdrawn approval was withdrawn because the task was cancelled, not that it expired', async () => {
+    const harness = harnessWith({ users: { [DECIDER]: DECIDER_NAME } });
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId);
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      approval_id: APPROVAL,
+    });
+    await harness.memory.transaction(async (scope) => {
+      const stored = await harness.store.approvals.load(scope.tx, APPROVAL);
+      if (stored === null) {
+        throw new Error('no approval to withdraw');
+      }
+      await harness.store.approvals.save(scope.tx, {
+        ...stored,
+        approval: {
+          ...stored.approval,
+          status: 'expired',
+          decidedByUserId: null,
+          decidedAt: '2026-06-01T10:00:00.000Z' as never,
+          reason: APPROVAL_WITHDRAWN_REASON,
+          sequence: stored.approval.sequence + 1,
+        },
+      });
+    });
+    await settled(harness, 'expired');
+    const markdown = harness.communication?.updates[0]?.markdown ?? '';
+    expect(markdown).toContain('Withdrawn: the task was cancelled');
+    expect(markdown).not.toContain('deadline');
+  });
 
   it('keeps the role wording for a decider the store cannot name, and bounds a hostile name (backlog 234)', async () => {
     for (const [users, expected, absent] of [

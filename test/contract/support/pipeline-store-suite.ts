@@ -4991,6 +4991,31 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.pausedBudgetScope(tx, never.task.id)).toBeNull();
       });
 
+      /**
+       * S-27.1, BACKLOG 1480: every pause and what ended it — the first `task.resumed` or
+       * `task.stage.entered` after it, and nothing else (an escalation does not end a pause) — and
+       * an open pause as `null`. What finds the approval wait a pause interrupted and what shifts an
+       * approval's reminders by the time its task spent paused.
+       */
+      it('reads every pause and what ended it, and an open pause as null (S-27.1)', async () => {
+        const { taskId } = await streamOf(
+          'task.created',
+          'task.paused',
+          'task.escalated',
+          'task.resumed',
+          'task.paused',
+          'task.stage.entered',
+          'task.paused',
+        );
+        expect(await store.tasks.pauses(tx, taskId)).toEqual([
+          { pausedAt: '2026-06-05T09:00:01.000Z', endedAt: '2026-06-05T09:00:03.000Z' },
+          { pausedAt: '2026-06-05T09:00:04.000Z', endedAt: '2026-06-05T09:00:05.000Z' },
+          { pausedAt: '2026-06-05T09:00:06.000Z', endedAt: null },
+        ]);
+        const never = await streamOf('task.created', 'task.stage.entered');
+        expect(await store.tasks.pauses(tx, never.taskId)).toEqual([]);
+      });
+
       it('answers null for a task nobody took over', async () => {
         const { taskId } = await streamOf('task.created', 'task.stage.entered');
         expect(await store.tasks.takenOver(tx, taskId)).toBeNull();

@@ -456,7 +456,7 @@ class RequestApproval implements TaskCommand {
     return true;
   }
   run(model: TaskModel, real: TaskReal): void {
-    transition(model, real, 'waiting_approval', () =>
+    const ask = (): TaskDecision =>
       requestApproval(
         real.task,
         {
@@ -473,8 +473,14 @@ class RequestApproval implements TaskCommand {
           },
         },
         context(real),
-      ),
-    );
+      );
+    // S-27.1: a gate asks only of an active task — the table's other ways into the wait
+    // (`paused`, `needs_human`) are `resumeIntoApprovalWait`'s alone.
+    if (model.state !== 'active') {
+      expect(ask).toThrow(IllegalTransitionError);
+      return;
+    }
+    transition(model, real, 'waiting_approval', ask);
   }
   toString(): string {
     return 'requestApproval()';

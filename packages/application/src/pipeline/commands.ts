@@ -32,13 +32,13 @@ import type {
 } from '@platform/domain';
 import {
   answerQuestion,
+  assertNoPendingApproval,
   assertRunTransition,
   cancelTask,
   canTransitionTask,
   compilePipeline,
   decideApproval,
   evaluateIteration,
-  expireApproval,
   expireQuestion,
   finishRun,
   handBackTask,
@@ -55,11 +55,13 @@ import {
   READY_FOR_MERGE_STAGE,
   recordFeedback,
   resetAgentIterations,
+  resumeIntoApprovalWait,
   stageOf,
   steerRun,
   TaskMergedError,
   takeOverTask,
   taskBranchName,
+  withdrawApproval,
 } from '@platform/domain';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -68,6 +70,7 @@ import type { Logger } from '../ports/logger.js';
 import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { approvalToResumeInto, pendingApproval } from './approval-wait.js';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE, stoppedBeforeCliSpawn } from './cli-spawn.js';
 import {
   enqueueOutbound,
@@ -348,40 +351,6 @@ export const decideTaskApproval = async (
     await scope.events.append(decision.events);
   });
 };
-
-/**
- * The `deadline.sweep` timer fired for an approval (WP-56, BD-006's Q95 amendment). The saga's
- * `approvalHandler` escalates on the `expired` decision this emits.
- *
- * Re-validates exactly as {@link expireTaskQuestion} does: a decided approval is `settled`, and one
- * whose deadline this process's clock has not reached is `not_due`. Until WP-56 this function had
- * **no caller at all**, production or test (PROGRESS backlog 76).
- */
-export const expireTaskApproval = async (
-  deps: TaskCommandDependencies,
-  approvalId: Id,
-): Promise<DeadlineOutcome> =>
-  deps.unitOfWork.transaction(async (scope) => {
-    const stored = await deps.store.approvals.load(scope.tx, approvalId);
-    if (
-      stored === null ||
-      stored.approval.status !== 'pending' ||
-      stored.approval.deadlineAt === null
-    ) {
-      return SETTLED;
-    }
-    if (await taskIsFinished(deps, scope.tx, stored.approval.taskId)) {
-      return SETTLED;
-    }
-    const context = deps.context(stored.approval.taskId);
-    if (isBefore(context.clock.now(), stored.approval.deadlineAt)) {
-      return { kind: 'not_due', dueAt: stored.approval.deadlineAt };
-    }
-    const decision = expireApproval(stored.approval, context);
-    await deps.store.approvals.save(scope.tx, { ...stored, approval: decision.aggregate });
-    await scope.events.append(decision.events);
-    return EXPIRED;
-  });
 
 // ── The human command surface (WP-15i) ───────────────────────────────────────
 
@@ -684,6 +653,17 @@ const writeTask = async <T>(
 };
 
 /**
+ * The task's **pending** approval, of whichever kind, or `null` — the newest of each kind, because a
+ * gate asks one approval at a time and a decided one is the history of an earlier wait.
+ */
+const pendingApprovalOf = async (
+  store: Pick<PipelineStore, 'approvals'>,
+  tx: Transaction,
+  taskId: Id,
+): Promise<StoredApproval['approval'] | null> =>
+  (await pendingApproval(store, tx, taskId))?.approval ?? null;
+
+/**
  * **The one way a human command enters a stage** (WP-79 review round 1) — and for
  * `ready_for_merge` it does not enter it at all.
  *
@@ -695,7 +675,8 @@ const writeTask = async <T>(
  * otherwise, so Ready is entered only by the rebase gate's settlement. Resume, retry-stage,
  * retry-run and hand-back all come through here; {@link applyHumanDecisionRecorded} refuses a Ready
  * entry that did not, so a new command that forgets is a 500 in its first test rather than a side
- * door.
+ * door. **Nor does any of them move a task past a pending approval, in any state** (S-27.1,
+ * BACKLOG 854 and 1480): `assertNoPendingApproval` refuses it, for every role, naming the approval.
  */
 const humanEnter = async (
   deps: HumanCommandDependencies,
@@ -709,6 +690,15 @@ const humanEnter = async (
     readonly cause: string | null;
   },
 ): Promise<ScheduledWork | null> => {
+  // BD-006's 2026-11-07 amendment, BACKLOG 854 and 1480: only an approval's own decision moves a
+  // task that has one pending — in **any** state, so a pause, a take-over or an escalation is no
+  // way round it, and asked before anything else, so no entry (Ready included) goes past it. The
+  // one way on is the resume back into the wait, which the resume command takes instead of this.
+  assertNoPendingApproval(
+    stored.task,
+    await pendingApprovalOf(deps.store, scope.tx, stored.task.id),
+    { stage: entry.stage, move: entry.via.replaceAll('_', '-') },
+  );
   if (entry.stage === READY_FOR_MERGE_STAGE) {
     markReadyForMerge(stored.task, context);
     return { readyCheck: readyHeadCheckFor(stored, entry) };
@@ -981,6 +971,24 @@ export const resumeTaskCommand = async (
     deps,
     { ...input, what: 'resuming the task' },
     async (scope, stored, context) => {
+      // BACKLOG 1480 (S-27.1): a task paused while it waited for an approval goes back to that
+      // wait — never past it. A decision made during the pause is applied by the saga on the
+      // `task.resumed` this appends (`approval-wait.ts`).
+      if (stored.task.state === 'paused' || stored.task.state === 'needs_human') {
+        // The wait a pause interrupted (pending, or decided while the task was away), else any
+        // approval still pending — a take-over that timed out into `needs_human` keeps one.
+        const interrupted = await approvalToResumeInto(deps.store, scope.tx, stored.task.id);
+        if (interrupted !== null) {
+          const decision = resumeIntoApprovalWait(
+            stored.task,
+            { approvalId: interrupted.approval.id },
+            context,
+          );
+          await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
+          await scope.events.append(decision.events);
+          return { result: undefined, work: null };
+        }
+      }
       const stage = resumeTargetOf(stored, currentStageOrThrow(stored, 'resume'));
       const work = await humanEnter(deps, scope, stored, context, {
         stage,
@@ -1089,7 +1097,19 @@ export const cancelTaskCommand = async (
       CANCELLED_OUTCOME,
       'the task was cancelled by a human',
     );
-    await scope.events.append([...closing.events, ...decision.events]);
+    // S-27.1 (review of #113): an approval the task still waited for is withdrawn — nobody can
+    // decide it now, and since an approval never expires it would stay in the Inbox for ever. The
+    // aggregate records it on the approval's stream, as a decision does (`withdrawApproval`).
+    const waiting = await pendingApproval(deps.store, scope.tx, stored.task.id);
+    const withdrawn = waiting === null ? null : withdrawApproval(waiting.approval, context);
+    if (waiting !== null && withdrawn !== null) {
+      await deps.store.approvals.save(scope.tx, { ...waiting, approval: withdrawn.aggregate });
+    }
+    await scope.events.append([
+      ...closing.events,
+      ...decision.events,
+      ...(withdrawn?.events ?? []),
+    ]);
     return { result: undefined, work: null };
   });
 
@@ -1401,6 +1421,13 @@ export const returnToStageCommand = async (
     deps,
     { ...input, what: 'returning the task to a stage' },
     async (scope, stored, context) => {
+      // BACKLOG 1481 (S-27.1): a return is no way round a pending approval either, for any role —
+      // a maintainer decides the approval itself, and a reject rewinds the task as it should.
+      assertNoPendingApproval(
+        stored.task,
+        await pendingApprovalOf(deps.store, scope.tx, stored.task.id),
+        { stage: input.stage, move: 'return-to-stage' },
+      );
       const from = currentStageOrThrow(stored, 'return');
       assertReturnTarget(stored, from, input.stage);
       assertNotBeforeTheMerge(stored, input.stage);
@@ -1476,6 +1503,13 @@ export const reworkStageCommand = async (
     deps,
     { ...input, what: 'reworking a stage' },
     async (scope, stored, context) => {
+      // BACKLOG 1481 (S-27.1): a rework is no way round a pending approval either, for any role —
+      // a maintainer decides the approval itself, and a reject rewinds the task as it should.
+      assertNoPendingApproval(
+        stored.task,
+        await pendingApprovalOf(deps.store, scope.tx, stored.task.id),
+        { stage: input.stage, move: 'rework' },
+      );
       const from = currentStageOrThrow(stored, 'rework');
       assertReturnTarget(stored, from, input.stage);
       assertNotBeforeTheMerge(stored, input.stage);

@@ -30,7 +30,9 @@
  * {@link settleApprovalMessage} itself when the approval is no longer pending. Both ends use the
  * same idempotency key, so whichever runs second replays instead of editing twice.
  */
+
 import type { Id, TaskMode } from '@platform/contracts';
+import { APPROVAL_WITHDRAWN_REASON } from '@platform/domain';
 import {
   communicationWrites,
   integrationsForProject,
@@ -133,7 +135,12 @@ export const settleApprovalMessage = async (
       message: messageRef,
       body: settledApprovalBody({
         subject: { name, url },
-        outcome: status as SettledApprovalOutcome,
+        // A cancelled task's withdrawn approval is stored `expired` (no migration); its reason
+        // tells it from an expiry, so the message never says a deadline ended it (S-27.1).
+        outcome:
+          status === 'expired' && read.approval.approval.reason === APPROVAL_WITHDRAWN_REASON
+            ? 'withdrawn'
+            : (status as SettledApprovalOutcome),
         decider: read.decider === null ? null : chat.redactor.redactText(read.decider).value,
       }),
       idempotencyKey: approvalSettledKey(approvalId),

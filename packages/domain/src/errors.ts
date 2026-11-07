@@ -76,6 +76,43 @@ export class TaskMergedError extends IllegalTransitionError {
   }
 }
 
+/**
+ * A human command would move a task past an approval that is still **pending** (BD-006's 2026-11-07
+ * amendment, S-27.1; closes BACKLOG 854). `waiting_approval → active` is an edge of the task's
+ * table, because the approval's own decision takes it, so the table cannot refuse a resume, a retry
+ * or a retry-run that takes the same edge; the approval can. Whatever the caller's role: a member
+ * may resume, only a maintainer may approve, and a maintainer decides on the approval rather than
+ * around it.
+ *
+ * An {@link IllegalTransitionError}, so a caller that already treats a refused move as one keeps
+ * doing so; the HTTP surface names it `approval_pending` and the approval, because the way on is a
+ * decision, not another state.
+ */
+export class ApprovalPendingError extends IllegalTransitionError {
+  readonly approvalId: string;
+  readonly approvalKind: string;
+
+  constructor(input: {
+    readonly approvalId: string;
+    readonly approvalKind: string;
+    readonly stage: string;
+    readonly move: string;
+    /** The task's state: `waiting_approval`, or `paused` out of that wait (BACKLOG 1480). */
+    readonly from?: string;
+  }) {
+    super(
+      'Task',
+      input.from ?? 'waiting_approval',
+      `${input.stage} (approval ${input.approvalId} is pending)`,
+    );
+    this.approvalId = input.approvalId;
+    this.approvalKind = input.approvalKind;
+    this.message =
+      `this task waits for its ${input.approvalKind} approval ${input.approvalId}, so a ${input.move} ` +
+      'cannot move it: only that approval’s decision does. Approve or reject it, or cancel the task';
+  }
+}
+
 /** A policy (iteration limit, WIP limit, budget, autonomy preset, command list) refused. */
 export class PolicyViolationError extends DomainError {
   readonly policy: string;

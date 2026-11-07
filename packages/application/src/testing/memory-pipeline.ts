@@ -112,16 +112,19 @@ import type {
 import {
   DefaultBranchChangedError,
   LeaseLostError,
+  PAUSE_ENDING_EVENTS,
   STOPPING_RUN_COMMAND_KINDS,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
+  type TaskPause,
 } from '../pipeline/store.js';
 import type { StoredEvent } from '../ports/event-store.js';
 import type {
   DeadlineRecoveryStore,
   HeldTask,
+  RemindableApproval,
   UnremindedAggregate,
-  WaitingAggregate,
+  WaitingQuestion,
 } from '../recovery/deadline.js';
 import type { SupersededMergeRequestRecoveryStore } from '../recovery/superseded-mr.js';
 
@@ -980,6 +983,20 @@ export const createMemoryPipelineStore = (
       );
     },
     /** The SQL store's read over the harness's log: the newest `task.paused` decides. */
+    pauses: async (_tx, taskId) => {
+      const events = options.taskEvents?.(taskId) ?? [];
+      const pauses: TaskPause[] = [];
+      for (const [index, event] of events.entries()) {
+        if (event.type !== 'task.paused') {
+          continue;
+        }
+        const ending = events
+          .slice(index + 1)
+          .find((later) => (PAUSE_ENDING_EVENTS as readonly string[]).includes(later.type));
+        pauses.push({ pausedAt: event.occurred_at, endedAt: ending?.occurred_at ?? null });
+      }
+      return pauses;
+    },
     pausedBudgetScope: async (_tx, taskId) => {
       const newest = (options.taskEvents?.(taskId) ?? [])
         .filter((event) => event.type === 'task.paused')
@@ -2672,8 +2689,11 @@ export const createMemoryPipelineStore = (
     const stored = tasks.get(taskId);
     return stored !== undefined && !isTerminalTaskState(stored.task.state);
   };
-  const waiting = (): (WaitingAggregate & { readonly deadlineAt: IsoDateTime | null })[] => [
-    ...[...questions.values()]
+  // Questions only: no approval expires or is given a deadline since S-27.1 (BD-006's 2026-11-07
+  // amendment), so the expiry and backfill reads never name one — an approval's old `deadline_at`
+  // is history here exactly as in the PostgreSQL store.
+  const waiting = (): (WaitingQuestion & { readonly deadlineAt: IsoDateTime | null })[] =>
+    [...questions.values()]
       .filter((question) => question.status === 'open' && unfinished(question.taskId))
       .map((question) => ({
         aggregate: 'question' as const,
@@ -2681,30 +2701,22 @@ export const createMemoryPipelineStore = (
         projectId: question.projectId,
         taskId: question.taskId,
         deadlineAt: question.deadlineAt,
-      })),
-    ...[...approvals.values()]
-      .filter(
-        (stored) => stored.approval.status === 'pending' && unfinished(stored.approval.taskId),
-      )
-      .map((stored) => ({
-        aggregate: 'approval' as const,
-        id: stored.approval.id,
-        projectId: stored.approval.projectId,
-        taskId: stored.approval.taskId,
-        deadlineAt: stored.approval.deadlineAt,
-      })),
-  ];
+      }));
   const strip = ({
     deadlineAt: _deadlineAt,
     ...row
-  }: WaitingAggregate & {
+  }: WaitingQuestion & {
     readonly deadlineAt: IsoDateTime | null;
-  }): WaitingAggregate => row;
+  }): WaitingQuestion => row;
   const deadlineRecovery: DeadlineRecoveryStore = {
     overdue: async (_tx, query) =>
       waiting()
         .filter((row) => row.deadlineAt !== null && row.deadlineAt < query.dueBefore)
-        .slice(0, query.limit * 2)
+        .sort(
+          (a, b) =>
+            (a.deadlineAt ?? '').localeCompare(b.deadlineAt ?? '') || a.id.localeCompare(b.id),
+        )
+        .slice(0, query.limit)
         .map(strip),
     heldTasks: async (tx, query) => {
       const held: HeldTask[] = [];
@@ -2727,7 +2739,8 @@ export const createMemoryPipelineStore = (
     undated: async (_tx, query) =>
       waiting()
         .filter((row) => row.deadlineAt === null)
-        .slice(0, query.limit * 2)
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .slice(0, query.limit)
         .map(strip),
     unreminded: async (_tx, query) => {
       const rows: UnremindedAggregate[] = [];
@@ -2750,54 +2763,41 @@ export const createMemoryPipelineStore = (
           });
         }
       }
+      // Nearest deadline first, at most `limit` — the PostgreSQL store's order, no kinder.
+      return rows
+        .sort((a, b) => a.deadlineAt.localeCompare(b.deadlineAt) || a.id.localeCompare(b.id))
+        .slice(0, query.limit);
+    },
+    remindableApprovals: async (_tx, query) => {
+      const rows: RemindableApproval[] = [];
       for (const { approval } of approvals.values()) {
         if (
           approval.status === 'pending' &&
-          approval.remindersSent === 0 &&
-          unfinished(approval.taskId) &&
-          approval.deadlineAt !== null &&
-          approval.deadlineAt > query.deadlineAfter &&
-          approval.requestedAt < query.sinceBefore
+          approval.remindersSent < query.limitSent &&
+          tasks.get(approval.taskId)?.task.state === 'waiting_approval' &&
+          approval.requestedAt < query.requestedBefore
         ) {
           rows.push({
             aggregate: 'approval',
             id: approval.id,
             projectId: approval.projectId,
             taskId: approval.taskId,
-            since: approval.requestedAt,
-            deadlineAt: approval.deadlineAt,
+            requestedAt: approval.requestedAt,
+            remindersSent: approval.remindersSent,
           });
         }
       }
-      // Nearest deadline first, `limit` of each kind — the PostgreSQL store's order, no kinder.
-      const nearest = (kind: 'question' | 'approval') =>
-        rows
-          .filter((row) => row.aggregate === kind)
-          .sort((a, b) => a.deadlineAt.localeCompare(b.deadlineAt) || a.id.localeCompare(b.id))
-          .slice(0, query.limit);
-      return [...nearest('question'), ...nearest('approval')];
+      // Oldest request first, at most `limit` — the PostgreSQL store's order, no kinder.
+      return rows
+        .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt) || a.id.localeCompare(b.id))
+        .slice(0, query.limit);
     },
     backfillDeadline: async (_tx, input) => {
-      if (input.aggregate === 'question') {
-        const question = questions.get(input.id);
-        if (question === undefined || question.status !== 'open' || question.deadlineAt !== null) {
-          return false;
-        }
-        questions.set(input.id, { ...question, deadlineAt: input.deadlineAt });
-        return true;
-      }
-      const stored = approvals.get(input.id);
-      if (
-        stored === undefined ||
-        stored.approval.status !== 'pending' ||
-        stored.approval.deadlineAt !== null
-      ) {
+      const question = questions.get(input.id);
+      if (question === undefined || question.status !== 'open' || question.deadlineAt !== null) {
         return false;
       }
-      approvals.set(input.id, {
-        ...stored,
-        approval: { ...stored.approval, deadlineAt: input.deadlineAt },
-      });
+      questions.set(input.id, { ...question, deadlineAt: input.deadlineAt });
       return true;
     },
   };

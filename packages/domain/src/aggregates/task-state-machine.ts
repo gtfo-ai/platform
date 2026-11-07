@@ -7,9 +7,9 @@
  *    │           │  └── returned(stage) ◄─┘ (human comments / rework)
  *    │           ├─► waiting_answers ─► active
  *    │           ├─► waiting_approval ─► active | needs_human
- *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
+ *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged | waiting_approval
  *    │           ├─► merged (a merge during the human `qa` stage, WP-178)
- *    │           └─► needs_human ─► active | cancelled | retro (a merged task, WP-152)
+ *    │           └─► needs_human ─► active | cancelled | retro (a merged task, WP-152) | waiting_approval
  *    └─► cancelled
  * ```
  *
@@ -95,8 +95,11 @@ export const TASK_TRANSITIONS = {
   returned: ['active', 'needs_human', 'paused', 'cancelled'],
   waiting_answers: ['active', 'paused', 'needs_human', 'cancelled'],
   waiting_approval: ['active', 'paused', 'needs_human', 'cancelled'],
-  paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled'],
-  needs_human: ['active', 'paused', 'cancelled', 'retro'],
+  // `waiting_approval` since S-27.1 (BACKLOG 1480): a task paused while it waited for an approval
+  // goes back to waiting for it when it is resumed (`resumeIntoApprovalWait`), and so does one in
+  // `needs_human` with its approval still pending (a take-over that timed out).
+  paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled', 'waiting_approval'],
+  needs_human: ['active', 'paused', 'cancelled', 'retro', 'waiting_approval'],
   ready_for_merge: ['merged', 'returned', 'paused', 'needs_human', 'cancelled'],
   merged: ['retro', 'needs_human'],
   retro: ['retro', 'done', 'needs_human'],

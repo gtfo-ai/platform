@@ -14,14 +14,24 @@
  */
 import type { DomainEvent, Id, IsoDateTime, Slug } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
-import { IllegalTransitionError, materialiseAutonomy } from '@platform/domain';
+import {
+  APPROVAL_REMINDER_LIMIT,
+  ApprovalPendingError,
+  IllegalTransitionError,
+  materialiseAutonomy,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { CommentRef, TicketRefInput } from '../ports/integrations/task-management.js';
-import { JOB_QUEUES, type JobData, type JobHandler } from '../ports/jobs.js';
+import { type EnqueueRequest, JOB_QUEUES, type JobData, type JobHandler } from '../ports/jobs.js';
+import type { Logger } from '../ports/logger.js';
 import { recoverDeadlines } from '../recovery/deadline.js';
 import { runStrandedRecovery } from '../recovery/stranded.js';
-import { createWorkingCalendar, questionTimeoutAt } from '../scheduling/working-calendar.js';
+import {
+  createWorkingCalendar,
+  questionTimeoutAt,
+  reminderTimeOf,
+} from '../scheduling/working-calendar.js';
 import {
   createPipelineHarness,
   type HarnessOptions,
@@ -33,8 +43,11 @@ import {
   cancelTaskCommand,
   decideTaskApproval,
   handBackTaskCommand,
+  pauseTaskCommand,
+  resumeTaskCommand,
   retryStageCommand,
   returnToStageCommand,
+  reworkStageCommand,
   takeOverTaskCommand,
 } from './commands.js';
 import { TAKE_OVER_INACTIVITY_TIMEOUT, takeOverDeadline } from './deadline-rules.js';
@@ -43,9 +56,10 @@ import {
   type DeadlineSweepData,
   deadlineArmingHandler,
   deadlineKey,
+  deadlineSweepDataSchema,
   deadlineSweepHandler,
 } from './deadlines.js';
-import { reminderCauseId } from './reminders.js';
+import { approvalReminderAt, reminderCauseId } from './reminders.js';
 import { staticProjectSettings } from './settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
@@ -340,6 +354,9 @@ describe('a question’s deadline (BD-006, PROGRESS backlog 74)', () => {
         },
       } as never,
       calendar: createWorkingCalendar(),
+      // A take-over reads no settings; only an approval's first reminder does (S-27.1).
+      settings: {} as never,
+      store: {} as never,
     });
     const deferred: (() => Promise<void>)[] = [];
     await handler.handle({
@@ -381,6 +398,8 @@ describe('a question’s deadline (BD-006, PROGRESS backlog 74)', () => {
     const handler = deadlineArmingHandler({
       jobs: {} as never,
       calendar: createWorkingCalendar(),
+      settings: {} as never,
+      store: {} as never,
       logger: {
         warn: (_fields: unknown, message: string) => {
           warnings.push(message);
@@ -506,24 +525,50 @@ describe('a question’s deadline (BD-006, PROGRESS backlog 74)', () => {
   });
 });
 
-describe('an approval’s deadline (BD-006’s Q95 amendment, PROGRESS backlog 76)', () => {
-  const planApprovalOnFriday = async () => {
-    const built = harnessWith({
-      runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
-    });
-    moveTo(built.harness, FRIDAY_1600);
-    await built.harness.publish([ticketMatched()]);
-    expect(taskOf(built.harness).task.state).toBe('waiting_approval');
-    const [requested] = eventsOf(built.harness, 'task.approval.requested');
-    const approval = (requested as NonNullable<typeof requested>).payload.approval;
-    return { ...built, approval };
+/** A capturing logger: what a case asserts a named log line with. */
+const capturingLogger = () => {
+  const lines: { level: string; message: string; fields: unknown }[] = [];
+  const at =
+    (level: string) =>
+    (fields: unknown, message?: string): void => {
+      lines.push({ level, message: message ?? '', fields });
+    };
+  const logger = {
+    debug: at('debug'),
+    info: at('info'),
+    warn: at('warn'),
+    error: at('error'),
+    child: () => logger,
   };
+  return { logger: logger as unknown as Logger, lines };
+};
 
-  it('writes a plan approval’s deadline on the question calendar and expires it on Monday, not Saturday', async () => {
-    const { harness, approval } = await planApprovalOnFriday();
+/** The S-27.1 cases' plan approval, requested at 16:00 on Friday. */
+const planApprovalRequestedOnFriday = async (options: HarnessOptions = {}) => {
+  const built = harnessWith({
+    ...options,
+    runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')), ...options.runs },
+  });
+  moveTo(built.harness, FRIDAY_1600);
+  await built.harness.publish([ticketMatched()]);
+  expect(taskOf(built.harness).task.state).toBe('waiting_approval');
+  const [requested] = eventsOf(built.harness, 'task.approval.requested');
+  const approval = (requested as NonNullable<typeof requested>).payload.approval;
+  return { ...built, approval };
+};
+
+/** Thursday 2026-06-11, 16:00 UTC: four working days after the Friday request — past three. */
+const THURSDAY_1600 = '2026-06-11T16:00:00.000Z';
+
+describe('an approval waits until a person decides it (BD-006’s 2026-11-07 amendment, S-27.1)', () => {
+  it('is requested with no deadline, and arms only its first reminder, at half a question timeout', async () => {
+    const { harness, approval } = await planApprovalRequestedOnFriday();
     expect(approval.kind).toBe('plan');
     expect(approval.requested_at).toBe(FRIDAY_1600);
-    expect(approval.deadline_at).toBe(MONDAY_1600);
+    expect(approval.deadline_at).toBeNull();
+    expect(
+      (await harness.store.approvals.load({} as never, approval.id))?.approval.deadlineAt,
+    ).toBeNull();
     expect(
       deadlineJobs(harness).map((request) => ({
         data: request.data,
@@ -531,61 +576,28 @@ describe('an approval’s deadline (BD-006’s Q95 amendment, PROGRESS backlog 7
       })),
     ).toEqual([
       {
-        data: { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' },
-        at: MONDAY_1600,
-      },
-      {
         data: { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' },
         at: MONDAY_1200,
       },
     ]);
-
-    moveTo(harness, SATURDAY_1600);
-    await fireNow(harness, { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' });
-    moveTo(harness, MONDAY_1559);
-    await fireNow(harness, { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' });
-    expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
-      'pending',
-    );
-    expect(taskOf(harness).task.state).toBe('waiting_approval');
-
-    moveTo(harness, MONDAY_1600);
-    await harness.drain();
-    const expired = await harness.store.approvals.load({} as never, approval.id);
-    expect(expired?.approval.status).toBe('expired');
-    expect(expired?.approval.reason).toBe('deadline passed');
-    // The `expired` decision value, produced for the first time, and the saga's third branch.
-    expect(
-      eventsOf(harness, 'task.approval.decided').map((event) => event.payload.decision),
-    ).toEqual(['expired']);
-    expect(taskOf(harness).task.state).toBe('needs_human');
-    expect(eventsOf(harness, 'task.escalated')[0]?.payload.reason).toBe('the approval expired');
   });
 
-  it('expires nothing when a maintainer decided first', async () => {
-    const { harness, approval } = await planApprovalOnFriday();
-    moveTo(harness, '2026-06-08T09:30:00.000Z');
-    await decideTaskApproval(harness.commands, {
-      approvalId: approval.id,
-      decision: 'approved',
-      userId: USER,
-      role: 'maintainer',
-      subjectArtifactId: await shownPlanOf(harness, approval.id),
-    });
-    await harness.drain();
-
-    moveTo(harness, MONDAY_1600);
-    await harness.drain();
-    expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
-      'approved',
-    );
-    expect(
-      eventsOf(harness, 'task.approval.decided').map((event) => event.payload.decision),
-    ).toEqual(['approved']);
+  it('is still pending past three working days, and its task still waits for it (criterion 1)', async () => {
+    const { harness, approval } = await planApprovalRequestedOnFriday();
+    // The old expiry instant, a day past it, and past three working days: nothing expires it.
+    for (const at of [MONDAY_1600, '2026-06-09T16:00:00.000Z', THURSDAY_1600]) {
+      moveTo(harness, at);
+      await harness.drain();
+      expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+        'pending',
+      );
+      expect(taskOf(harness).task.state, at).toBe('waiting_approval');
+    }
+    expect(eventsOf(harness, 'task.approval.decided')).toHaveLength(0);
     expect(eventsOf(harness, 'task.escalated')).toHaveLength(0);
   });
 
-  it('gives a budget approval the same deadline and the same ending', async () => {
+  it('gives a budget approval no deadline either', async () => {
     const shipped = materialiseAutonomy({
       level: 'autonomous',
       at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
@@ -606,14 +618,122 @@ describe('an approval’s deadline (BD-006’s Q95 amendment, PROGRESS backlog 7
     const [requested] = eventsOf(harness, 'task.approval.requested');
     const approval = (requested as NonNullable<typeof requested>).payload.approval;
     expect(approval.kind).toBe('budget');
-    expect(approval.deadline_at).toBe(MONDAY_1600);
+    expect(approval.deadline_at).toBeNull();
 
-    moveTo(harness, MONDAY_1600);
+    moveTo(harness, THURSDAY_1600);
     await harness.drain();
     expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
-      'expired',
+      'pending',
     );
-    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+  });
+
+  it('settles a queued approval_timeout an earlier build armed, with a named log line (criterion 2)', async () => {
+    const { harness, approval } = await planApprovalRequestedOnFriday();
+    const { logger, lines } = capturingLogger();
+    const sweep = deadlineSweepHandler({
+      unitOfWork: harness.memory,
+      store: harness.store,
+      eventStore: harness.memory.store,
+      jobs: harness.jobs,
+      calendar: harness.calendar,
+      settings: staticProjectSettings(() => harness.settings),
+      ids: harness.ids,
+      clock: harness.clock,
+      redactor: exactSecretRedactor([]),
+      logger,
+    });
+    const data = { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' } as const;
+    // It still parses: the strict schema kept the kind, so the job is not skipped as unreadable.
+    expect(deadlineSweepDataSchema.safeParse(data).success).toBe(true);
+    moveTo(harness, MONDAY_1600);
+    const before = deadlineJobs(harness).length;
+    await expect(
+      sweep({
+        id: 'job-old-build',
+        queue: JOB_QUEUES.deadlineSweep,
+        data,
+        signal: AbortSignal.abort(),
+      }),
+    ).resolves.toBeUndefined();
+    expect(lines.map((line) => line.message)).toContain(
+      'deadline.sweep: an approval_timeout an earlier build armed was settled: approvals no longer expire',
+    );
+    expect(lines.map((line) => line.message)).not.toContain(
+      'deadline.sweep: a wake-up this build cannot read was skipped',
+    );
+    // Settled: no re-arm, no event, the approval untouched.
+    expect(deadlineJobs(harness).length).toBe(before);
+    expect(eventsOf(harness, 'task.approval.decided')).toHaveLength(0);
+    expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+      'pending',
+    );
+  });
+
+  it('settles an approval_timeout even for an approval whose stored deadline an earlier build wrote', async () => {
+    const { harness, approval } = await planApprovalRequestedOnFriday();
+    const stored = await harness.store.approvals.load({} as never, approval.id);
+    // History, as BD-006's amendment item 3 keeps it: a deadline long past, never read as an expiry.
+    await harness.memory.transaction(async (scope) =>
+      harness.store.approvals.save(scope.tx, {
+        ...(stored as NonNullable<typeof stored>),
+        approval: { ...(stored as NonNullable<typeof stored>).approval, deadlineAt: MONDAY_1600 },
+      }),
+    );
+    moveTo(harness, THURSDAY_1600);
+    await fireNow(harness, { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' });
+    expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+      'pending',
+    );
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+  });
+});
+
+describe('approvalReminderAt — the n-th at (n − ½) question timeouts (S-27.1)', () => {
+  const calendar = createWorkingCalendar();
+
+  it('reminds a Friday-afternoon request at noon on the next five working days, and never a sixth', () => {
+    expect(
+      [0, 1, 2, 3, 4, 5, 6].map((n) =>
+        approvalReminderAt(calendar, FRIDAY_1600 as IsoDateTime, '1 working day', n),
+      ),
+    ).toEqual([
+      null,
+      '2026-06-08T12:00:00.000Z',
+      '2026-06-09T12:00:00.000Z',
+      '2026-06-10T12:00:00.000Z',
+      '2026-06-11T12:00:00.000Z',
+      '2026-06-12T12:00:00.000Z',
+      null,
+    ]);
+    expect(APPROVAL_REMINDER_LIMIT).toBe(5);
+  });
+
+  it('puts the first where the one reminder of WP-84 was, so nothing moves for it', () => {
+    const deadline = questionTimeoutAt(calendar, new Date(FRIDAY_1600));
+    expect(approvalReminderAt(calendar, FRIDAY_1600 as IsoDateTime, '1 working day', 1)).toBe(
+      reminderTimeOf(calendar, new Date(FRIDAY_1600), deadline)?.toISOString(),
+    );
+  });
+
+  it('follows the project’s question timeout', () => {
+    // Monday 09:00 and four working hours: 11:00, 15:00, Tuesday 11:00, 15:00, Wednesday 11:00.
+    expect(
+      [1, 2, 3, 4, 5].map((n) =>
+        approvalReminderAt(
+          calendar,
+          '2026-06-08T09:00:00.000Z' as IsoDateTime,
+          '4 working hours',
+          n,
+        ),
+      ),
+    ).toEqual([
+      '2026-06-08T11:00:00.000Z',
+      '2026-06-08T15:00:00.000Z',
+      '2026-06-09T11:00:00.000Z',
+      '2026-06-09T15:00:00.000Z',
+      '2026-06-10T11:00:00.000Z',
+    ]);
   });
 });
 
@@ -719,33 +839,316 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
     expect(reminders(harness)).toHaveLength(0);
   });
 
-  it('reminds about an approval once, on the question’s calendar (Q95), and counts it', async () => {
+  it('reminds about a waiting approval five times, at (n − ½) question timeouts, and then is quiet (S-27.1)', async () => {
     const { harness, approval } = await planApprovalOnFriday();
-
-    moveTo(harness, MONDAY_1159);
-    await harness.drain();
-    expect(reminderMessages(harness)).toHaveLength(0);
-
-    moveTo(harness, MONDAY_1200);
-    await harness.drain();
+    const sentOf = async () =>
+      (await harness.store.approvals.load({} as never, approval.id))?.approval.remindersSent;
+    const schedule = [
+      '2026-06-08T12:00:00.000Z',
+      '2026-06-09T12:00:00.000Z',
+      '2026-06-10T12:00:00.000Z',
+      '2026-06-11T12:00:00.000Z',
+      '2026-06-12T12:00:00.000Z',
+    ];
+    for (const [index, at] of schedule.entries()) {
+      // One millisecond before: the n-th is not due, and nothing moves (the boundary's near side).
+      moveTo(harness, new Date(Date.parse(at) - 1).toISOString());
+      await harness.drain();
+      expect(reminderMessages(harness), `before reminder ${index + 1}`).toHaveLength(index);
+      expect(await sentOf()).toBe(index);
+      moveTo(harness, at);
+      await harness.drain();
+      expect(reminderMessages(harness), `reminder ${index + 1}`).toHaveLength(index + 1);
+      expect(await sentOf()).toBe(index + 1);
+      // The first reminder's cause is unchanged since WP-84; each later one is its own.
+      expect(reminders(harness)[index]?.causeEventId).toBe(
+        reminderCauseId('approval', approval.id, index + 1),
+      );
+    }
+    expect(reminderCauseId('approval', approval.id, 1)).toBe(
+      reminderCauseId('approval', approval.id),
+    );
+    expect(new Set(reminders(harness).map((row) => row.causeEventId)).size).toBe(5);
     const posted = reminderMessages(harness);
-    expect(posted).toHaveLength(1);
     expect(posted[0]?.markdown).toContain('Still waiting for a decision');
     expect(posted[0]?.approval).toBeUndefined();
-    const stored = await harness.store.approvals.load({} as never, approval.id);
-    expect(stored?.approval.remindersSent).toBe(1);
-    expect(stored?.approval.status).toBe('pending');
-    expect(reminders(harness)[0]?.causeEventId).toBe(reminderCauseId('approval', approval.id));
     // The reminder row names its approval (what a re-post re-checks) and carries no message
     // address, so the settled-approval edit — which reads only rows with one — never picks it.
     expect(reminders(harness)[0]?.approvalId).toBe(approval.id);
     expect(reminders(harness)[0]?.messageRef).toBeNull();
 
+    // After the fifth: no timer is left, a redelivered one does nothing, and the approval waits.
+    expect(deadlineJobs(harness)).toEqual([]);
     await fireNow(harness, { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' });
-    expect(reminderMessages(harness)).toHaveLength(1);
+    moveTo(harness, '2026-06-19T16:00:00.000Z');
+    await harness.drain();
+    expect(reminderMessages(harness)).toHaveLength(5);
+    expect(await sentOf()).toBe(5);
+    expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+      'pending',
+    );
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+  });
+
+  it('arms the next reminder only after the current one’s count has committed (S-27.1)', async () => {
+    const { harness, approval } = await planApprovalOnFriday();
+    // What the store held when the next reminder was armed: the count must already read 1.
+    const countAtArm: number[] = [];
+    const jobs = harness.jobs as { enqueue: PipelineHarness['jobs']['enqueue'] };
+    const enqueue = jobs.enqueue.bind(harness.jobs);
+    jobs.enqueue = (async (request: EnqueueRequest) => {
+      const data = (request.data ?? {}) as unknown as Partial<DeadlineSweepData>;
+      if (request.queue === JOB_QUEUES.deadlineSweep && data.kind === 'approval_reminder') {
+        countAtArm.push(
+          (await harness.store.approvals.load({} as never, approval.id))?.approval
+            .remindersSent as number,
+        );
+      }
+      return enqueue(request);
+    }) as typeof jobs.enqueue;
+    moveTo(harness, MONDAY_1200);
+    await harness.drain();
+    expect(countAtArm).toEqual([1]);
+    const [next] = deadlineJobs(harness);
+    expect(next?.data).toEqual({
+      aggregate: 'approval',
+      id: approval.id,
+      kind: 'approval_reminder',
+    });
+    expect(next?.singletonKey).toBe(`approval:${approval.id}:approval_reminder`);
+    expect(next?.startAfter?.toISOString()).toBe('2026-06-09T12:00:00.000Z');
+  });
+
+  it('re-arms an approval reminder that fired early at its own instant, counting nothing', async () => {
+    const { harness, approval } = await planApprovalOnFriday();
+    moveTo(harness, MONDAY_1159);
+    await fireNow(harness, { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' });
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect(
+      (await harness.store.approvals.load({} as never, approval.id))?.approval.remindersSent,
+    ).toBe(0);
+  });
+
+  it('withholds an approval reminder when the decision lands after the timer fired and before the post', async () => {
+    const { harness, approval } = await planApprovalOnFriday();
+    moveTo(harness, MONDAY_1200);
+    const handler = harness.jobs.handlers.get(JOB_QUEUES.deadlineSweep);
+    await handler?.({
+      id: 'approval-reminder-fired',
+      queue: JOB_QUEUES.deadlineSweep,
+      data: { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' },
+      signal: AbortSignal.abort(),
+    });
+    await decideTaskApproval(harness.commands, {
+      approvalId: approval.id,
+      decision: 'approved',
+      userId: USER,
+      role: 'maintainer',
+      subjectArtifactId: await shownPlanOf(harness, approval.id),
+    });
+    await harness.drain();
+    // The timer counted what it raised; the duty re-checked the approval and posted nothing.
     expect(
       (await harness.store.approvals.load({} as never, approval.id))?.approval.remindersSent,
     ).toBe(1);
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect(reminders(harness)).toHaveLength(0);
+    // …and the second reminder, armed after the count, finds the approval decided.
+    moveTo(harness, '2026-06-09T12:00:00.000Z');
+    await harness.drain();
+    expect(reminderMessages(harness)).toHaveLength(0);
+  });
+
+  /**
+   * BACKLOG 1480, the coordinator's ruling: no reminder while the task is paused, a resume goes back
+   * to the wait (never past it), the schedule resumes with the pause taken out, and a decision made
+   * during the pause is followed when the task is resumed.
+   */
+  describe('while the task is paused (BACKLOG 1480)', () => {
+    const MONDAY_1000 = '2026-06-08T10:00:00.000Z';
+    const TUESDAY_1000 = '2026-06-09T10:00:00.000Z';
+    const TUESDAY_1200 = '2026-06-09T12:00:00.000Z';
+    const sentOf = async (harness: PipelineHarness, id: Id) =>
+      (await harness.store.approvals.load({} as never, id))?.approval.remindersSent;
+
+    it('sends no reminder while paused, resumes into the wait, and resumes the schedule with the pause taken out', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await pauseTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      expect(taskOf(harness).task.state).toBe('paused');
+
+      // The first reminder's instant passes while the task is paused: the timer settles, silent.
+      moveTo(harness, MONDAY_1200);
+      await harness.drain();
+      expect(reminderMessages(harness)).toHaveLength(0);
+      expect(await sentOf(harness, approval.id)).toBe(0);
+      expect(deadlineJobs(harness)).toEqual([]);
+
+      // A whole working day later, a resume: back to the wait, the stage not entered.
+      moveTo(harness, TUESDAY_1000);
+      const runsBefore = harness.specs.length;
+      await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+      expect(harness.specs.length).toBe(runsBefore);
+      expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+        'pending',
+      );
+      // Monday 12:00 plus the eight working hours the task spent paused (Mon 10–17, Tue 9–10).
+      expect(deadlineJobs(harness).map((job) => [job.data, job.startAfter?.toISOString()])).toEqual(
+        [[{ aggregate: 'approval', id: approval.id, kind: 'approval_reminder' }, TUESDAY_1200]],
+      );
+
+      moveTo(harness, '2026-06-09T11:59:59.999Z');
+      await harness.drain();
+      expect(reminderMessages(harness)).toHaveLength(0);
+      moveTo(harness, TUESDAY_1200);
+      await harness.drain();
+      expect(reminderMessages(harness)).toHaveLength(1);
+      expect(await sentOf(harness, approval.id)).toBe(1);
+      // The count is what was sent, so the cap is still five: the next is the second, a day on.
+      expect(deadlineJobs(harness)[0]?.startAfter?.toISOString()).toBe('2026-06-10T12:00:00.000Z');
+    });
+
+    it('withholds a reminder raised just before the pause, when it would be posted', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1200);
+      // The timer fires and enqueues the notification; the pause lands before the duty runs.
+      await harness.jobs.handlers.get(JOB_QUEUES.deadlineSweep)?.({
+        id: 'approval-reminder-before-pause',
+        queue: JOB_QUEUES.deadlineSweep,
+        data: { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' },
+        signal: AbortSignal.abort(),
+      });
+      await pauseTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(await sentOf(harness, approval.id)).toBe(1);
+      expect(reminderMessages(harness)).toHaveLength(0);
+      expect(reminders(harness)).toHaveLength(0);
+    });
+
+    it('follows a decision made while the task was paused, when it is resumed', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await pauseTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      moveTo(harness, '2026-06-08T11:00:00.000Z');
+      await decideTaskApproval(harness.commands, {
+        approvalId: approval.id,
+        decision: 'approved',
+        userId: USER,
+        role: 'maintainer',
+        subjectArtifactId: await shownPlanOf(harness, approval.id),
+      });
+      await harness.drain();
+      // Decided, but the task was not waiting: nothing moved yet.
+      expect(taskOf(harness).task.state).toBe('paused');
+      expect(harness.specs.some((spec) => spec.stage === 'implementation')).toBe(false);
+
+      moveTo(harness, '2026-06-08T11:30:00.000Z');
+      await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(taskOf(harness).task.state).not.toBe('waiting_approval');
+      expect(taskOf(harness).task.state).not.toBe('paused');
+      expect(harness.specs.some((spec) => spec.stage === 'implementation')).toBe(true);
+    });
+
+    /**
+     * The review of #113: a take-over of a waiting task and a hand-back at Implementation would
+     * have skipped the approval; so would a take-over left to time out into `needs_human`. Every
+     * human entry is refused while the approval is pending, and the resume goes back to the wait.
+     */
+    it('refuses a hand-back of a taken-over waiting task, naming the approval', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await takeOverTaskCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        authorName: 'Ada',
+        tarball: false,
+      });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('paused');
+      const runsBefore = harness.specs.length;
+      const handedBack = handBackTaskCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        summary: 'I wrote the plan myself',
+      });
+      await expect(handedBack).rejects.toThrow(ApprovalPendingError);
+      await expect(handedBack).rejects.toThrow(approval.id);
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('paused');
+      expect(harness.specs.length).toBe(runsBefore);
+    });
+
+    it('refuses a hand-back after the take-over timed out into needs_human, and resumes into the wait', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await takeOverTaskCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        authorName: 'Ada',
+        tarball: false,
+      });
+      await harness.drain();
+      // Five working days with no command from the holder: the take-over escalates.
+      moveTo(harness, '2026-06-15T10:00:00.000Z');
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+        'pending',
+      );
+      await expect(
+        handBackTaskCommand(harness.humanCommands, {
+          taskId,
+          userId: USER,
+          stage: 'implementation' as Slug,
+          summary: 'carry on',
+        }),
+      ).rejects.toThrow(ApprovalPendingError);
+      // BACKLOG 1481: a return or a rework is no way round it either.
+      await expect(
+        returnToStageCommand(harness.humanCommands, {
+          taskId,
+          userId: USER,
+          stage: 'refinement' as Slug,
+          reason: 'start again',
+        }),
+      ).rejects.toThrow(ApprovalPendingError);
+      await expect(
+        reworkStageCommand(harness.humanCommands, {
+          taskId,
+          userId: USER,
+          stage: 'refinement' as Slug,
+          instructions: 'start again',
+        }),
+      ).rejects.toThrow(ApprovalPendingError);
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+    });
+
+    it('refuses a retry of the stage while paused, naming the approval', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const task = taskOf(harness).task;
+      moveTo(harness, MONDAY_1000);
+      await pauseTaskCommand(harness.humanCommands, { taskId: task.id, userId: USER });
+      await expect(
+        retryStageCommand(harness.humanCommands, {
+          taskId: task.id,
+          userId: USER,
+          stage: task.currentStage as Slug,
+        }),
+      ).rejects.toThrow(approval.id);
+      expect(taskOf(harness).task.state).toBe('paused');
+    });
   });
 
   it('reminds nobody about an approval a maintainer decided first', async () => {
@@ -1301,6 +1704,7 @@ describe('deadline.sweep re-validation, directly', () => {
       eventStore: harness.memory.store,
       jobs: harness.jobs,
       calendar: harness.calendar,
+      settings: staticProjectSettings(() => harness.settings),
       ids: harness.ids,
       clock: harness.clock,
       redactor: exactSecretRedactor([]),
@@ -1418,7 +1822,46 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
     expect(eventsOf(harness, 'task.escalated')).toHaveLength(1);
   });
 
-  it('names a retry for an expired plan approval, which is accepted and asks for the plan again', async () => {
+  /**
+   * An `expired` decision is **history** since S-27.1 (BD-006's 2026-11-07 amendment, item 4):
+   * nothing on this build produces one, but an earlier build's may still be dispatched — queued at
+   * the upgrade, or replayed — and its task must still end where it said, with a brief that works.
+   * Planted here as that build left it: the row `expired`, the decision on the approval's stream.
+   */
+  const expireAsAnEarlierBuild = async (harness: PipelineHarness, approvalId: Id) => {
+    const stored = await harness.store.approvals.load({} as never, approvalId);
+    const approval = (stored as NonNullable<typeof stored>).approval;
+    const at = harness.clock.now();
+    await harness.memory.transaction(async (scope) =>
+      harness.store.approvals.save(scope.tx, {
+        ...(stored as NonNullable<typeof stored>),
+        approval: { ...approval, status: 'expired', decidedAt: at, reason: 'deadline passed' },
+      }),
+    );
+    await harness.publish([
+      domainEventSchemasByType['task.approval.decided'].parse({
+        id: '00000000-0000-4000-9000-0000000271e1',
+        stream_type: 'approval',
+        stream_id: approvalId,
+        stream_seq: approval.sequence,
+        correlation_id: approval.taskId,
+        cause_event_id: null,
+        actor: { kind: 'system', component: 'pipeline' },
+        occurred_at: at,
+        type: 'task.approval.decided',
+        payload: {
+          project_id: approval.projectId,
+          task_id: approval.taskId,
+          approval_id: approvalId,
+          decision: 'expired',
+          decided_by_user_id: null,
+          reason: 'deadline passed',
+        },
+      }) as DomainEvent,
+    ]);
+  };
+
+  it('names a retry for a plan approval an earlier build expired, which is accepted and asks again', async () => {
     const { harness } = harnessWith({
       runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
     });
@@ -1427,6 +1870,11 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
     const [requested] = eventsOf(harness, 'task.approval.requested');
     moveTo(harness, MONDAY_1600);
     await harness.drain();
+    // On this build Monday 16:00 expires nothing; the replayed decision is what escalates.
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+    await expireAsAnEarlierBuild(harness, requested?.payload.approval.id as Id);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(eventsOf(harness, 'task.escalated')[0]?.payload.reason).toBe('the approval expired');
     const brief = eventsOf(harness, 'task.escalated')[0]?.payload.blocker_brief ?? '';
     expect(brief).not.toContain('Approve or reject it in the UI');
     expect(brief).toContain('retry "architecture"');
@@ -1451,7 +1899,7 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
     expect(eventsOf(harness, 'task.approval.requested')).toHaveLength(2);
   });
 
-  it('says a budget retry carries on without asking again — and it does', async () => {
+  it('says a budget retry after an earlier build’s expiry carries on without asking again — and it does', async () => {
     const shipped = materialiseAutonomy({
       level: 'autonomous',
       at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
@@ -1469,8 +1917,9 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
     harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 6 }]);
     moveTo(harness, FRIDAY_1600);
     await harness.publish([ticketMatched()]);
+    const [requested] = eventsOf(harness, 'task.approval.requested');
     moveTo(harness, MONDAY_1600);
-    await harness.drain();
+    await expireAsAnEarlierBuild(harness, requested?.payload.approval.id as Id);
     const stage = taskOf(harness).task.currentStage as Slug;
     const brief = eventsOf(harness, 'task.escalated')[0]?.payload.blocker_brief ?? '';
     expect(brief).toContain(`retry "${stage}"`);
@@ -1502,24 +1951,42 @@ describe('a finished task owes nobody an answer (re-validation, round 2)', () =>
     expect(taskOf(harness).task.state).toBe('cancelled');
   });
 
-  it('expires no approval on a cancelled task either', async () => {
+  /**
+   * The review of #113: an approval the cancelled task still waited for is **withdrawn** — it can
+   * never be decided now, and since no approval expires it would sit in the Inbox for ever.
+   */
+  it('withdraws the approval of a task cancelled while it waited, so nothing is left pending', async () => {
     const { harness } = harnessWith({
+      communication: {},
       runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
     });
     moveTo(harness, FRIDAY_1600);
     await harness.publish([ticketMatched()]);
     const [requested] = eventsOf(harness, 'task.approval.requested');
+    const id = requested?.payload.approval.id as Id;
     await cancelTaskCommand(harness.humanCommands, {
       taskId: taskOf(harness).task.id,
       userId: USER,
     });
     moveTo(harness, MONDAY_1600);
     await harness.drain();
+    const stored = await harness.store.approvals.load({} as never, id);
+    expect(stored?.approval.status).toBe('expired');
+    expect(stored?.approval.reason).toBe('the task was cancelled');
+    expect(stored?.approval.decidedByUserId).toBeNull();
     expect(
-      (await harness.store.approvals.load({} as never, requested?.payload.approval.id as Id))
-        ?.approval.status,
-    ).toBe('pending');
-    expect(eventsOf(harness, 'task.approval.decided')).toHaveLength(0);
+      eventsOf(harness, 'task.approval.decided').map((event) => [
+        event.payload.approval_id,
+        event.payload.decision,
+        event.payload.reason,
+      ]),
+    ).toEqual([[id, 'expired', 'the task was cancelled']]);
+    // The task stays cancelled — the saga ignores a decision on a finished task — and nobody is
+    // reminded about it.
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect(
+      harness.notifications.rows.filter((row) => row.notificationClass === 'reminder'),
+    ).toHaveLength(0);
   });
 });
 
@@ -1534,6 +2001,7 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
       eventStore: harness.memory.store,
       jobs: harness.jobs,
       calendar: harness.calendar,
+      settings: staticProjectSettings(() => harness.settings),
       ids: harness.ids,
       redactor: exactSecretRedactor([]),
     },
@@ -1723,32 +2191,40 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
     );
   });
 
-  it('gives an approval written before deadlines its first one too', async () => {
-    const { harness } = harnessWith({
-      runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
+  /**
+   * Criterion 1 (S-27.1): the approval halves of the overdue sweep and of the backfill are deleted.
+   * A pending approval an earlier build gave a deadline — long past — and one with none both stay
+   * `pending` through a `deadline.sweep` fire and a recovery pass, and neither gains a deadline.
+   */
+  it('neither expires nor dates a pending approval, with an old past deadline or with none (criterion 1)', async () => {
+    const twoApprovals = async () => {
+      const { harness, approval } = await planApprovalRequestedOnFriday();
+      dropTimers(harness);
+      return { harness, id: approval.id };
+    };
+    const old = await twoApprovals();
+    const stored = await old.harness.store.approvals.load({} as never, old.id);
+    await old.harness.store.approvals.save({} as never, {
+      ...(stored as NonNullable<typeof stored>),
+      approval: { ...(stored as NonNullable<typeof stored>).approval, deadlineAt: MONDAY_1600 },
     });
-    moveTo(harness, FRIDAY_1600);
-    await harness.publish([ticketMatched()]);
-    dropTimers(harness);
-    const [requested] = eventsOf(harness, 'task.approval.requested');
-    const id = requested?.payload.approval.id as Id;
-    const stored = await harness.store.approvals.load({} as never, id);
-    const withoutDeadline = stored as NonNullable<typeof stored>;
-    await harness.store.approvals.save({} as never, {
-      ...withoutDeadline,
-      approval: { ...withoutDeadline.approval, deadlineAt: null },
-    });
-    moveTo(harness, '2026-06-10T10:00:00.000Z');
-    expect(await pass(harness)).toEqual({
-      found: 1,
-      expired: 0,
-      backfilled: 1,
-      reminderFound: 0,
-      reminded: 0,
-    });
-    expect((await harness.store.approvals.load({} as never, id))?.approval.deadlineAt).toBe(
-      '2026-06-11T10:00:00.000Z',
-    );
+    const fresh = await twoApprovals();
+
+    for (const { harness, id, deadlineAt } of [
+      { ...old, deadlineAt: MONDAY_1600 },
+      { ...fresh, deadlineAt: null },
+    ]) {
+      moveTo(harness, '2026-06-10T10:00:00.000Z');
+      await fireNow(harness, { aggregate: 'approval', id, kind: 'approval_timeout' });
+      const report = await pass(harness);
+      expect(report).toMatchObject({ found: 0, expired: 0, backfilled: 0 });
+      const after = await harness.store.approvals.load({} as never, id);
+      expect(after?.approval.status, String(deadlineAt)).toBe('pending');
+      expect(after?.approval.deadlineAt, String(deadlineAt)).toBe(deadlineAt);
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+      expect(eventsOf(harness, 'task.approval.decided')).toHaveLength(0);
+      expect(eventsOf(harness, 'task.escalated')).toHaveLength(0);
+    }
   });
 });
 
@@ -1766,6 +2242,7 @@ describe('the fourth deadline row: a reminder whose arm was lost (WP-108, PROGRE
       eventStore: harness.memory.store,
       jobs: harness.jobs,
       calendar: harness.calendar,
+      settings: staticProjectSettings(() => harness.settings),
       ids: harness.ids,
       redactor: exactSecretRedactor([]),
     },
@@ -1841,23 +2318,56 @@ describe('the fourth deadline row: a reminder whose arm was lost (WP-108, PROGRE
     expect(reminderMessages(harness)).toHaveLength(1);
   });
 
-  it('reminds a pending approval whose reminder arm was lost, once', async () => {
+  it('reminds a pending approval whose next reminder arm was lost — the first, and a later one (S-27.1)', async () => {
     const { harness } = harnessWith({
       ...WITH_CHAT,
       runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
     });
     moveTo(harness, FRIDAY_1600);
     await harness.publish([ticketMatched()]);
-    expect(dropTimers(harness)).toHaveLength(2);
+    expect(dropTimers(harness), 'the first reminder’s arm, lost').toHaveLength(1);
     const [requested] = eventsOf(harness, 'task.approval.requested');
     const id = requested?.payload.approval.id as Id;
+    const sentOf = async () =>
+      (await harness.store.approvals.load({} as never, id))?.approval.remindersSent;
 
+    moveTo(harness, '2026-06-08T12:00:30.000Z');
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
     moveTo(harness, PAST_REMINDER_AND_GRACE);
     expect(await pass(harness)).toMatchObject({ reminderFound: 1, reminded: 1 });
     expect(reminderMessages(harness)).toHaveLength(1);
-    expect((await harness.store.approvals.load({} as never, id))?.approval.remindersSent).toBe(1);
+    expect(await sentOf()).toBe(1);
+    // Its second is not due, so a pass finds nothing — and the reminder armed it.
     expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
-    expect(reminderMessages(harness)).toHaveLength(1);
+    expect(dropTimers(harness), 'the second reminder’s arm, lost too').toHaveLength(1);
+
+    moveTo(harness, '2026-06-09T12:00:30.000Z');
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+    moveTo(harness, '2026-06-09T12:01:00.001Z');
+    expect(await pass(harness)).toMatchObject({ reminderFound: 1, reminded: 1 });
+    expect(reminderMessages(harness)).toHaveLength(2);
+    expect(await sentOf()).toBe(2);
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+  });
+
+  it('reminds nobody about an approval whose five reminders went out', async () => {
+    const { harness } = harnessWith({
+      ...WITH_CHAT,
+      runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
+    });
+    moveTo(harness, FRIDAY_1600);
+    await harness.publish([ticketMatched()]);
+    dropTimers(harness);
+    const [requested] = eventsOf(harness, 'task.approval.requested');
+    const id = requested?.payload.approval.id as Id;
+    for (let sent = 0; sent < 5; sent += 1) {
+      await harness.memory.transaction(async (scope) =>
+        harness.store.approvals.recordReminder(scope.tx, { id, sent }),
+      );
+    }
+    moveTo(harness, '2026-06-19T16:00:00.000Z');
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+    expect(reminderMessages(harness)).toHaveLength(0);
   });
 
   it('reminds nobody about a question past its deadline: that row is the expiry’s', async () => {

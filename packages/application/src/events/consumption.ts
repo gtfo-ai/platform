@@ -106,8 +106,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // with no producer — a table that asks who *reads* an event cannot see that (PROGRESS backlog 74).
   'task.question.expired': 'handled',
   'task.approval.requested': 'handled',
-  // Its `decision: 'expired'` value gained its producer at WP-56 (`expireTaskApproval`, from the
-  // same timer), which is what makes `pipeline.approval`'s third branch reachable (backlog 76).
+  // Its `decision: 'expired'` value had a producer from WP-56 to S-27.1 (`expireTaskApproval`); since
+  // BD-006's 2026-11-07 amendment none, and `pipeline.approval`'s third branch serves an earlier
+  // build's decision dispatched now (an upgrade with one queued, or a replay).
   'task.approval.decided': 'handled',
   'task.escalated': 'handled',
   'task.paused': 'handled',

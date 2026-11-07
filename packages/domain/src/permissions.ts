@@ -224,7 +224,14 @@ export type PermissionSubject =
 /** Task states from which no further human action is possible. */
 const TERMINAL_TASK_STATES: ReadonlySet<TaskState> = new Set<TaskState>(['done', 'cancelled']);
 
-/** Task states a `task.resume` can act on (technical/02's task state machine). */
+/**
+ * Task states a `task.resume` can act on (technical/02's task state machine).
+ *
+ * `waiting_approval` is here for one case only: a task whose approval was **decided** but whose
+ * saga move was lost. A task with an approval still **pending** is refused by the command, for
+ * every role, by `assertNoPendingApproval` (`aggregates/approval.ts`) — BD-006's 2026-11-07
+ * amendment, BACKLOG 854: a member's resume must not skip a decision only a maintainer may take.
+ */
 const RESUMABLE_TASK_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
   'paused',
   'waiting_answers',

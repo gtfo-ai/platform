@@ -30,6 +30,7 @@ import {
   queueTask,
   recordMerge,
   requestApproval,
+  resumeIntoApprovalWait,
   returnEscalatedTask,
   returnToStage,
   startLibrarianCuration,
@@ -408,6 +409,78 @@ describe('waits', () => {
     );
     expect(aggregate.state).toBe('waiting_approval');
     expect(types(events)).toEqual(['task.approval.requested']);
+  });
+});
+
+/**
+ * S-27.1, BACKLOG 1480: a task paused while it waited for an approval goes back to that wait when
+ * it is resumed, and never past it — `paused → waiting_approval` is an edge for that command alone.
+ */
+describe('a resume back into the approval wait a pause interrupted (BACKLOG 1480)', () => {
+  const APPROVAL_ID = '00000000-0000-4000-8000-0000000000d1';
+  const pausedWhileWaiting = (reason: 'manual' | 'taken_over' | 'budget' = 'manual') =>
+    pauseTask(
+      requestApproval(activeTask('architecture'), { approval: approvalRecord }, context())
+        .aggregate,
+      { reason },
+      context(),
+    ).aggregate;
+
+  it('waits for the approval again, at the same stage and attempt, with a task.resumed naming it', () => {
+    for (const reason of ['manual', 'taken_over', 'budget'] as const) {
+      const paused = pausedWhileWaiting(reason);
+      const { aggregate, events } = resumeIntoApprovalWait(
+        paused,
+        { approvalId: APPROVAL_ID },
+        context(),
+      );
+      expect(aggregate.state, reason).toBe('waiting_approval');
+      expect(aggregate.currentStage).toBe(paused.currentStage);
+      expect(aggregate.stageAttempts).toEqual(paused.stageAttempts);
+      expect(types(events)).toEqual(['task.resumed']);
+      expect(events[0]?.payload).toMatchObject({
+        reason: `back to waiting for approval ${APPROVAL_ID}`,
+      });
+    }
+  });
+
+  it('waits again from needs_human, a take-over that timed out with the approval still pending', () => {
+    const escalated = escalateTask(
+      pausedWhileWaiting('taken_over'),
+      { reason: 'the take-over was inactive', blockerBrief: 'hand it back' },
+      context(),
+    ).aggregate;
+    const { aggregate } = resumeIntoApprovalWait(escalated, { approvalId: APPROVAL_ID }, context());
+    expect(aggregate.state).toBe('waiting_approval');
+  });
+
+  it('owns the edges into the wait from a stop: requestApproval asks only of an active task', () => {
+    const paused = pausedWhileWaiting();
+    expect(() => requestApproval(paused, { approval: approvalRecord }, context())).toThrow(
+      IllegalTransitionError,
+    );
+    const escalated = escalateTask(
+      activeTask('architecture'),
+      { reason: 'stuck', blockerBrief: 'look' },
+      context(),
+    ).aggregate;
+    expect(() => requestApproval(escalated, { approval: approvalRecord }, context())).toThrow(
+      IllegalTransitionError,
+    );
+  });
+
+  it('refuses a task that is not stopped', () => {
+    expect(() =>
+      resumeIntoApprovalWait(activeTask('architecture'), { approvalId: APPROVAL_ID }, context()),
+    ).toThrow(IllegalTransitionError);
+    const waiting = requestApproval(
+      activeTask('architecture'),
+      { approval: approvalRecord },
+      context(),
+    ).aggregate;
+    expect(() => resumeIntoApprovalWait(waiting, { approvalId: APPROVAL_ID }, context())).toThrow(
+      IllegalTransitionError,
+    );
   });
 });
 

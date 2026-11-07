@@ -41,6 +41,9 @@ const CODE_SENTENCE: Readonly<Record<string, string>> = {
     'This is not possible in the state it is in now. Reload to see where it stands.',
   task_conflict: 'The task changed while this was being done. Try again.',
   task_merged: 'The task is already merged, so this no longer applies.',
+  // S-27.1, BACKLOG 854: only the approval's own decision moves a task that waits for one.
+  approval_pending:
+    'This task is waiting for an approval. Approve or reject it to move the task on.',
   stage_not_reached: 'The task has not reached that stage yet.',
   stage_not_current: 'That stage is not the one the task is at now.',
   stage_not_in_template: 'That stage is not part of this task’s pipeline.',
