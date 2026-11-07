@@ -16,6 +16,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  adoptOwnersOnLink,
   allowAnyIntegrationHost,
   createIdentityLinks,
   createIntegrationActionExecutor,
@@ -25,21 +26,28 @@ import {
   eagerInboundLoader,
   exactSecretRedactor,
   type IdentityLinks,
+  INITIAL_TASK_VERSION,
   type InboundNormaliser,
   noSecretsRedactor,
   type ResolvedInboundIntegration,
   readLinkThread,
+  type StoredTask,
   staticPipelineIntegrations,
   type WebhookDelivery,
 } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, Slug } from '@platform/contracts';
+import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
 import {
+  db,
   eventing as eventingAdapters,
   integrations as integrationAdapters,
+  pipeline as pipelineAdapters,
 } from '@platform/infrastructure';
 import { createFakeGitProvider, createFakeTaskManagement } from '@platform/integrations';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { listIdentityCandidates } from '../../../apps/server/src/queries/identity-queries.js';
 import {
   createJiraBinding,
   JIRA_INTEGRATION_ID,
@@ -256,7 +264,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await pool.query(
     `truncate identity_link_matches, identity_link_codes, user_identities, bindings, inbox,
-              integration_actions, events, event_dispatch, event_streams cascade`,
+              integration_actions, events, event_dispatch, event_streams, tasks cascade`,
   );
   now = Date.now();
   tick = 0;
@@ -730,5 +738,163 @@ describe('I wrote it on … — the thread read through the executor (acceptance
       },
     );
     expect(outcome).toEqual({ kind: 'no_binding' });
+  });
+});
+
+/**
+ * Acceptance 5's first half and the candidates (S-26.1's columns, migration 0104): a confirmed link
+ * adopts the owner on the live tasks nobody owns whose stored tracker assignee is the account
+ * (`adoptOwnersOnLink`, `via: link`), and an unlinked assignee is offered to the admin mapping.
+ */
+describe('a confirmed link adopts the owner, and unlinked assignees are candidates (acceptance 5)', () => {
+  const pipelineStore = () =>
+    pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+  let tasks = 0;
+
+  /** A committed live task of the project, its tracker assignee set as S-26.1's sync stores it. */
+  const assignedTask = async (
+    assignee: { readonly externalId: string; readonly platform?: boolean },
+    state: 'active' | 'done' = 'active',
+  ): Promise<Id> => {
+    tasks += 1;
+    const taskId = randomUUID() as Id;
+    const stored = {
+      task: {
+        id: taskId,
+        projectId,
+        ticket: {
+          provider: 'jira-cloud',
+          key: `ACME-${900 + tasks}`,
+          url: `https://acme-example.atlassian.net/browse/ACME-${900 + tasks}`,
+        },
+        template: 'feature',
+        mode: 'normal',
+        state: 'active',
+        currentStage: 'implementation' as Slug,
+        stageAttempts: { implementation: 1 },
+        iterationCounters: {},
+        limits: {
+          code_review: 3,
+          business_review: 2,
+          ci_fix: 3,
+          human_rounds: 3,
+          refinement_questions: 2,
+          architecture_revisions: 2,
+          rebase: 2,
+          rebase_rechecks: 10,
+          dependency_policy: 2,
+        },
+        sequence: 1,
+      },
+      template: FEATURE_TEMPLATE,
+      pipelineDial: null,
+      qaStage: false,
+      priorityRank: 2,
+      createdAt: new Date(now).toISOString(),
+      branch: null,
+      mr: null,
+      workpad: null,
+      costActualUsd: 0,
+      estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
+      ticketSnapshot: null,
+      ticketSnapshotAt: null,
+      ticketSignalAt: null,
+      reviewSubject: null,
+      historySample: null,
+      riskClasses: [],
+      coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
+      reviewThreads: null,
+      readyHeadSha: null,
+      ciHeadSha: null,
+      ciExcusedPaths: [],
+      requestedByUserId: null,
+      version: INITIAL_TASK_VERSION,
+    } as unknown as StoredTask;
+    await eventing.unitOfWork.transaction(async ({ tx }) =>
+      pipelineStore().tasks.insert(tx, stored),
+    );
+    await pool.query(
+      `update tasks set ticket_assignee = $2::jsonb, state = $3::task_state where id = $1`,
+      [
+        taskId,
+        JSON.stringify({
+          provider: 'jira-cloud',
+          external_id: assignee.externalId,
+          display_name: 'Dev One',
+          platform: assignee.platform ?? false,
+        }),
+        state,
+      ],
+    );
+    return taskId;
+  };
+
+  it('makes the person the owner of the live, unowned tasks assigned to the account they confirmed', async () => {
+    const live = await assignedTask({ externalId: DEV_ONE });
+    const finished = await assignedTask({ externalId: DEV_ONE }, 'done');
+    const someoneElse = await assignedTask({ externalId: GUEST });
+    await issue();
+    await deliver(delivery('webhook-comment-link-code.json'));
+    const [match] = (await rows()).matches;
+    expect((await links.confirm(alice, match?.id as Id)).kind).toBe('linked');
+
+    const adopted = await adoptOwnersOnLink(
+      { unitOfWork: eventing.unitOfWork, store: pipelineStore(), ids, clock },
+      { userId: alice, provider: 'jira-cloud', externalId: DEV_ONE },
+    );
+    expect(adopted).toEqual([live]);
+    const owners = await pool.query<{ id: string; owner_user_id: string | null }>(
+      'select id, owner_user_id from tasks where id = any($1::uuid[])',
+      [[live, finished, someoneElse]],
+    );
+    const ownerOf = new Map(owners.rows.map((row) => [row.id, row.owner_user_id]));
+    expect(ownerOf.get(live)).toBe(alice);
+    expect(ownerOf.get(finished)).toBeNull();
+    expect(ownerOf.get(someoneElse)).toBeNull();
+    const changed = await pool.query<{ payload: { via: string; owner_user_id: string } }>(
+      "select payload from events where type = 'task.owner.changed' and stream_id = $1",
+      [live],
+    );
+    expect(changed.rows.map((row) => row.payload.via)).toEqual(['link']);
+  });
+
+  it('adopts nothing for an account that is not linked to that person', async () => {
+    const live = await assignedTask({ externalId: DEV_ONE });
+    expect(
+      await adoptOwnersOnLink(
+        { unitOfWork: eventing.unitOfWork, store: pipelineStore(), ids, clock },
+        { userId: alice, provider: 'jira-cloud', externalId: DEV_ONE },
+      ),
+    ).toEqual([]);
+    const owner = await pool.query('select owner_user_id from tasks where id = $1', [live]);
+    expect(owner.rows[0]?.owner_user_id).toBeNull();
+  });
+
+  it('offers unlinked live-task assignees as candidates, never the platform’s account or a finished task’s', async () => {
+    await assignedTask({ externalId: GUEST });
+    await assignedTask({ externalId: GUEST });
+    await assignedTask({ externalId: BOT, platform: true });
+    await assignedTask({ externalId: PM_TWO }, 'done');
+    const drizzled = drizzle(pool, { schema: db.schema });
+    const candidates = await listIdentityCandidates(drizzled);
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        provider: 'jira-cloud',
+        external_id: GUEST,
+        deliveries: 0,
+        assigned_tasks: 2,
+        display_name: 'Dev One',
+      }),
+    ]);
+    // Once linked, the account is no candidate.
+    await pool.query(
+      "insert into user_identities (provider, external_id, user_id, kind) values ('jira-cloud', $1, $2, 'person')",
+      [GUEST, bob],
+    );
+    expect(await listIdentityCandidates(drizzled)).toEqual([]);
   });
 });

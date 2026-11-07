@@ -2449,8 +2449,18 @@ export const identityMappingListSchema = z.strictObject({
 export const identityCandidateSchema = z.strictObject({
   provider: nonEmptyStringSchema,
   external_id: nonEmptyStringSchema,
-  /** How many refused deliveries named this account. */
-  deliveries: z.int().positive(),
+  /** How many refused deliveries named this account — `0` for an assignee seen only on tasks. */
+  deliveries: z.int().nonnegative(),
+  /**
+   * How many live tasks the tracker assigns to this unlinked account (S-26.6, read off S-26.1's
+   * `tasks.ticket_assignee`, never the platform's own account). Present only when it is at least 1.
+   */
+  assigned_tasks: z.int().positive().optional(),
+  /**
+   * The assignee's display name as the tracker last answered it, redacted and bounded at the write
+   * (untrusted, BD-022). Present only for an account seen as an assignee.
+   */
+  display_name: z.string().nullable().optional(),
   last_seen_at: isoDateTimeSchema,
 });
 
@@ -2542,6 +2552,12 @@ export const identityLinkConfirmedSchema = z.strictObject({
   user_id: idSchema,
   /** `false` for a retry of a confirmation already performed. */
   performed: z.boolean(),
+  /**
+   * The live tasks whose stored tracker assignee is this account and that nobody owned, which the
+   * link made the person's (`task.owner.changed`, `via: link`, S-26.1's `adoptOwnersOnLink`).
+   * Empty on a retry, and when adoption could not run (it is logged; the link stands).
+   */
+  adopted_task_ids: z.array(idSchema),
 });
 
 /** One of the caller's own linked accounts (`GET /api/me/identities`). */

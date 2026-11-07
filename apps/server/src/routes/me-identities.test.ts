@@ -45,6 +45,9 @@ interface World {
   read: LinkThreadOutcome | { kind: 'unavailable'; reason: string };
   reads: LinkThreadTarget[];
   mine: MyIdentityRow[];
+  adoptions: { userId: string; provider: string; externalId: string }[];
+  adopted: string[];
+  adoptFails: boolean;
   actions: { userId: string; action: string; params: JsonObject }[];
 }
 
@@ -111,6 +114,9 @@ const build = async (): Promise<World> => {
     read: { kind: 'read', comments: 3, claims: 1, recorded: { ...EMPTY_LINK_RECORD, matched: 1 } },
     reads: [],
     mine: [],
+    adoptions: [],
+    adopted: ['00000000-0000-4000-8000-0000000000f1'],
+    adoptFails: false,
     actions: [],
   } as unknown as World;
 
@@ -121,6 +127,13 @@ const build = async (): Promise<World> => {
       return world.confirm;
     },
     state: async () => world.state,
+    adoptOwners: async (input) => {
+      world.adoptions.push({ ...input });
+      if (world.adoptFails) {
+        throw new Error('the task stream is contended');
+      }
+      return world.adopted;
+    },
     readThread: async (_projectId, target) => {
       world.reads.push(target);
       return world.read;
@@ -341,7 +354,12 @@ describe('POST /api/me/identity-links/matches/:match_id/confirm — (a)', () => 
       display_name: 'Dev One',
       user_id: USER,
       performed: true,
+      adopted_task_ids: ['00000000-0000-4000-8000-0000000000f1'],
     });
+    // Acceptance 5: the link adopts the owner on live tasks naming the account, once, after it.
+    expect(world.adoptions).toEqual([
+      { userId: USER, provider: 'jira-cloud', externalId: '557058:dev-one' },
+    ]);
     expect(world.actions).toHaveLength(1);
     expect(world.actions[0]).toMatchObject({
       action: 'identity.link',
@@ -357,8 +375,13 @@ describe('POST /api/me/identity-links/matches/:match_id/confirm — (a)', () => 
 
     const retry = await confirm();
     expect(retry.statusCode).toBe(200);
-    expect(retry.json()).toMatchObject({ external_id: '557058:dev-one', performed: false });
+    expect(retry.json()).toMatchObject({
+      external_id: '557058:dev-one',
+      performed: false,
+      adopted_task_ids: [],
+    });
     expect(world.confirms).toBe(1);
+    expect(world.adoptions).toHaveLength(1);
     expect(world.actions).toHaveLength(1);
   });
 
@@ -394,6 +417,20 @@ describe('POST /api/me/identity-links/matches/:match_id/confirm — (a)', () => 
       expect((await confirm()).json().performed).toBe(true);
     },
   );
+
+  it('keeps the link when adoption fails, and answers no adopted task', async () => {
+    world.adoptFails = true;
+    const response = await confirm('confirm-adopt-fails');
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ performed: true, adopted_task_ids: [] });
+    expect(world.actions.map((action) => action.action)).toEqual(['identity.link']);
+  });
+
+  it('adopts nothing for a refused confirmation', async () => {
+    world.confirm = { kind: 'refused', reason: 'code_expired' };
+    expect((await confirm('confirm-refused')).statusCode).toBe(409);
+    expect(world.adoptions).toEqual([]);
+  });
 
   it('says which void it was: a second author is “someone else used this code”', async () => {
     world.confirm = { kind: 'refused', reason: 'code_voided', voidReason: 'second_author' };

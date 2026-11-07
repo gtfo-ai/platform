@@ -1652,8 +1652,10 @@ If somebody else writes your code too — anyone who can read the ticket can cop
 nobody, and you are told someone else used it: ask for a new one and post it where fewer people can
 see it. A comment written by the integration's own account, by an account an administrator declared
 a machine, or carrying the platform's own marker never links anybody, and an account already linked
-to another person is refused. You can unlink your own account at any time; you can delete the
-comment once you are linked.
+to another person is refused. Once linked, every task in progress that the tracker assigns to that
+account and that nobody owns becomes yours. You can unlink your own account at any time (tasks you
+own through it keep you as owner until the ticket's assignee changes); you can delete the comment
+once you are linked.
 - **Stuck events** (*Dead letters* before) — events the platform stopped retrying after their handler
   failed every attempt, each with a **Try again** button for once the fault is fixed (the operator
   guide's §9 says what a re-queue does and does not do). The newest come first, and **Show older**

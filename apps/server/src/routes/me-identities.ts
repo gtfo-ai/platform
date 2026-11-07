@@ -33,7 +33,9 @@
  * no thread on a person's say-so.
  *
  * Every write leaves one `human_actions` row and a refusal leaves none: `identity.link_code.issue`
- * (no code in it), `identity.link`, `identity.unlink`.
+ * (no code in it), `identity.link`, `identity.unlink`. A performed link then adopts the owner on
+ * live tasks naming the account (S-26.1's `adoptOwnersOnLink`, `via: link`), which records its own
+ * `task.owner.changed` events.
  */
 import type {
   LinkCodeIssue,
@@ -76,6 +78,15 @@ export interface IdentityLinkCommands {
   readonly issue: (userId: string) => Promise<LinkCodeIssue>;
   readonly confirm: (userId: string, matchId: string) => Promise<LinkConfirmation>;
   readonly state: (userId: string) => Promise<LinkCodeState>;
+  /**
+   * S-26.1's hook after a **performed** link (TD-031's amendment item 2): every live task nobody
+   * owns whose stored assignee is this account becomes the person's (`via: link`). No provider call.
+   */
+  readonly adoptOwners: (input: {
+    readonly userId: string;
+    readonly provider: string;
+    readonly externalId: string;
+  }) => Promise<readonly string[]>;
   /**
    * Reads the thread and records its matches; `unavailable` when the provider or the binding could
    * not be read (the reason in the platform's words, redacted by the adapter).
@@ -352,7 +363,7 @@ export const registerMeIdentityRoutes = async (
       schema: {
         summary: 'Confirm that a matched account is yours — the link',
         description:
-          'The only self-service writer of `user_identities` (`kind: person`). Needs an `Idempotency-Key`. Re-checks everything: the match must be of **your** live code (`404 link_match_not_found` otherwise), no second account may have used the code (`409 link_code_voided`, `void_reason: second_author` — the code is voided), and the account must not be linked to someone else (`409 identity_linked_elsewhere`), declared a machine (`409 identity_is_machine`) or an integration’s own account (`409 identity_is_binding_account`). `409 link_code_expired` after 30 minutes, `409 link_code_used` once another match was confirmed. One `human_actions` row `identity.link {provider, external_id, via: link_code}`.',
+          'The only self-service writer of `user_identities` (`kind: person`). Needs an `Idempotency-Key`. Re-checks everything: the match must be of **your** live code (`404 link_match_not_found` otherwise), no second account may have used the code (`409 link_code_voided`, `void_reason: second_author` — the code is voided), and the account must not be linked to someone else (`409 identity_linked_elsewhere`), declared a machine (`409 identity_is_machine`) or an integration’s own account (`409 identity_is_binding_account`). `409 link_code_expired` after 30 minutes, `409 link_code_used` once another match was confirmed. One `human_actions` row `identity.link {provider, external_id, via: link_code}`. A performed link then makes the person the owner of every live task nobody owns whose tracker assignee is that account (`adopted_task_ids`; `task.owner.changed` with `via: link`).',
         tags: ['identity'],
         params: matchParamsSchema,
         response: {
@@ -392,6 +403,7 @@ export const registerMeIdentityRoutes = async (
           display_name: null,
           user_id: actor.userId,
           performed: false,
+          adopted_task_ids: [],
         };
       }
       return claim.run(async (performed) => {
@@ -407,6 +419,7 @@ export const registerMeIdentityRoutes = async (
             display_name: outcome.displayName,
             user_id: actor.userId,
             performed: false,
+            adopted_task_ids: [],
           };
         }
         performed();
@@ -423,12 +436,32 @@ export const registerMeIdentityRoutes = async (
             ...(claim.digest === null ? {} : { body_digest: claim.digest }),
           },
         });
+        /**
+         * Acceptance 5: the link adopts the owner on live tasks naming the identity — **after** the
+         * link and its audit row, so the claim is complete whatever adoption does. A failure here
+         * is logged and the link stands: the tasks keep no owner until a sync or a person sets one
+         * (the person may also *Take it*), which is the state they were in before the link.
+         */
+        let adopted: readonly string[] = [];
+        try {
+          adopted = await commands.adoptOwners({
+            userId: actor.userId,
+            provider: outcome.provider,
+            externalId: outcome.externalId,
+          });
+        } catch (error) {
+          request.log.warn(
+            { err: error, provider: outcome.provider },
+            'a confirmed link could not adopt the owner on its live tasks; the link stands',
+          );
+        }
         return {
           provider: outcome.provider,
           external_id: outcome.externalId,
           display_name: outcome.displayName,
           user_id: actor.userId,
           performed: true,
+          adopted_task_ids: [...adopted],
         };
       });
     },

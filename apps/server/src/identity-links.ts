@@ -8,6 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  adoptOwnersOnLink,
   createIdentityLinkRecorder,
   createIdentityLinks,
   type IdentityLinkRecorder,
@@ -18,7 +19,11 @@ import {
   type UnitOfWork,
 } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { integrations as integrationAdapters } from '@platform/infrastructure';
+import { SHIPPED_TEMPLATES } from '@platform/domain';
+import {
+  integrations as integrationAdapters,
+  pipeline as pipelineAdapters,
+} from '@platform/infrastructure';
 import { BindingLoadError } from '@platform/integrations';
 import type pg from 'pg';
 import type { IdentityLinkCommands } from './routes/me-identities.js';
@@ -59,6 +64,18 @@ export const createIdentityLinkCommands = (options: {
     issue: async (userId) => links.issue(userId as Id),
     confirm: async (userId, matchId) => links.confirm(userId as Id, matchId as Id),
     state: async (userId) => store.readState(userId as Id),
+    // S-26.1's hook (acceptance 5): the same pipeline store and unit of work the owner command uses.
+    adoptOwners: async (input) =>
+      adoptOwnersOnLink(
+        {
+          unitOfWork: options.unitOfWork,
+          store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
+          ids,
+          clock: { now: nowIso },
+          logger: options.logger,
+        },
+        { userId: input.userId as Id, provider: input.provider, externalId: input.externalId },
+      ),
     readThread: async (projectId, target) => {
       if (options.integrations === null) {
         return {

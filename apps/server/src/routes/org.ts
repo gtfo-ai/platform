@@ -112,7 +112,8 @@ export interface IdentityQueries {
     readonly externalId: string;
   }) => Promise<{ readonly kind: 'person' | 'machine'; readonly user_id: string | null } | null>;
   /**
-   * Accounts refused as `unmapped_identity` that nobody has mapped since — the candidates the
+   * Accounts refused as `unmapped_identity`, and since S-26.6 the unlinked assignees of live tasks,
+   * that nobody has mapped since — the candidates the
    * identities screen offers (WP-44, PROGRESS backlog 198). A read, never a write.
    */
   readonly listCandidates: () => Promise<readonly IdentityCandidate[]>;
@@ -447,9 +448,9 @@ export const registerOrgRoutes = async (
       // tried to act on the platform, which is who somebody is on Slack.
       preHandler: requirePermission(guard, 'org.users.manage'),
       schema: {
-        summary: 'Provider accounts the platform refused because nobody has mapped them',
+        summary: 'Provider accounts nobody has mapped: refused deliveries and unlinked assignees',
         description:
-          'Read off the inbound deliveries refused as `unmapped_identity` since migration 0047, excluding every account already mapped or declared a machine; newest first. A **proposal** to fill the mapping form with — nothing here writes a mapping, and an admin still decides who the account is (WP-44, PROGRESS backlog 198). `external_id` is the provider’s own id: untrusted text (BD-022).',
+          'Since S-26.6 also the **unlinked tracker assignees of live tasks** (`tasks.ticket_assignee`, never the integration’s own account or a machine), with `assigned_tasks` and the tracker’s `display_name` (untrusted) for those; an account seen only as an assignee has `deliveries: 0`. Read off the inbound deliveries refused as `unmapped_identity` since migration 0047, excluding every account already mapped or declared a machine; newest first. A **proposal** to fill the mapping form with — nothing here writes a mapping, and an admin still decides who the account is (WP-44, PROGRESS backlog 198). `external_id` is the provider’s own id: untrusted text (BD-022).',
         tags: ['org'],
         response: { 200: identityCandidateListSchema },
       },
