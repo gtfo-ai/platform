@@ -890,7 +890,9 @@ describe('a pick-only worker and take this one (WP-293)', () => {
       claim_project_ids: null,
       claim_policy: 'pick_only',
     });
-    expect(laptop.runtime.state()).toMatchObject({ claim_policy: 'pick_only' });
+    // The page's state carries the policy as the core last said it.
+    const local = await page('GET', '/api/local/state');
+    expect(JSON.parse(local.body)).toMatchObject({ claim_policy: 'pick_only' });
 
     await pipeline.publish([ticketMatched(pipeline)]);
     const offeredRun = async (): Promise<string | null> => {
