@@ -24,7 +24,7 @@
  * its task — never the question's text, which the core does not send.
  */
 import type { WorkerClaimPolicy, WorkerLocalClaimScope, WorkerOffer } from '@platform/contracts';
-import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Button } from '../ui/button.js';
 import { ClaimPolicyCard, type ClaimPolicyValue } from '../ui/claim-policy-card.js';
 import { Flash } from '../ui/flash.js';
@@ -46,7 +46,7 @@ const subjectOf = (offer: WorkerOffer): string =>
 /** What the run would do: the stage, or — for an ask — a question on the task. */
 const workOf = (offer: WorkerOffer): string =>
   offer.kind === 'ask'
-    ? `A question to the ${ROLE_LABEL[offer.role]}`
+    ? P.question(ROLE_LABEL[offer.role])
     : `${offer.stage === null ? ROLE_LABEL[offer.role] : stageLabel(offer.stage)} · ${ROLE_LABEL[offer.role]}`;
 
 /**
@@ -128,6 +128,7 @@ export const PickWork = ({
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [taking, setTaking] = useState<string | null>(null);
+  const id = useId();
   // The caller's callback by reference: an inline arrow must not re-run the read on every render.
   const onScopeRef = useRef(onScope);
   onScopeRef.current = onScope;
@@ -240,7 +241,7 @@ export const PickWork = ({
   return (
     <>
       {error === null ? null : (
-        <Flash tone="danger" title="That did not work">
+        <Flash tone="danger" title={P.refused}>
           <UntrustedText value={error} />
         </Flash>
       )}
@@ -267,13 +268,13 @@ export const PickWork = ({
           </Flash>
         )}
         {offers === null ? (
-          <Skeleton label="Asking the platform which runs are waiting…" lines={2} />
+          <Skeleton label={P.loading} lines={2} />
         ) : offers.length === 0 ? (
           <p data-offers-empty="" className="text-sm text-fg-muted">
             {emptyWords}
           </p>
         ) : (
-          <ul aria-label="Waiting runs" className="flex flex-col gap-2">
+          <ul aria-label={P.listLabel} className="flex flex-col gap-2">
             {offers.map((offer) => {
               const action = offerActionOf(offer);
               return (
@@ -287,7 +288,7 @@ export const PickWork = ({
                       <UntrustedText value={subjectOf(offer)} />
                     </span>
                     <span className="min-w-0 truncate text-sm font-semibold text-fg">
-                      <UntrustedText value={offer.title ?? 'A task with no title'} />
+                      <UntrustedText value={offer.title ?? P.untitled} />
                     </span>
                     <span className="text-xs text-fg-muted">
                       {workOf(offer)}
@@ -304,12 +305,15 @@ export const PickWork = ({
                       <Button
                         size="sm"
                         disabled={takeBlocked !== null || taking !== null}
+                        aria-describedby={
+                          action.kind === 'take' && action.assigns ? id + offer.run_id : undefined
+                        }
                         onClick={() => void take(offer, action)}
                       >
                         {action.kind === 'run_here' ? P.runHere : P.take}
                       </Button>
                       {action.kind === 'take' && action.assigns ? (
-                        <span className="text-xs text-fg-muted">
+                        <span id={id + offer.run_id} className="text-xs text-fg-muted">
                           <UntrustedText value={P.assigns(offer.ticket_key ?? P.thisTask)} />
                         </span>
                       ) : null}

@@ -86,6 +86,6 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
   },
   pick_only: {
     word: 'Takes only runs its owner picks',
-    fix: 'Its owner chooses on the worker’s page which projects it takes by itself; a run picked there still starts.',
+    fix: 'Its owner set it to Only what I pick, under What this machine takes on the worker’s page; a run picked there still starts.',
   },
 };

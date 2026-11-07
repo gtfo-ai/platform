@@ -17,6 +17,16 @@
  *   while *Change* is open. A project the caller knows nothing about (no key, or no prop) says
  *   nothing.
  *
+ * - **Focus never falls to the top of the page** (the review of #106): *Change* stays mounted as a
+ *   disclosure (`aria-expanded`, `aria-controls`); opening it focuses the checked radio, and Save or
+ *   Cancel focus *Change* again. The *Saved* line is a `role="status"` region mounted while empty,
+ *   so its text is announced. A refused save says its `code`/`status` in words
+ *   ({@link claimPolicyRefusalWords}), never the core's text, which names ids.
+ * - **Reused on the Workers screen** (S-26.8a): `ownerName` makes the sentence somebody else's
+ *   ("Vojtěch’s tasks", "Vojtěch picks"), `surface: 'workers'` words *Only what I pick*'s help for a
+ *   page that is not the machine's own, `headingLevel` sets the heading, and `framed={false}` drops
+ *   the card's own frame so it can sit inside another card or a row.
+ *
  * **Presentational**: props in, callbacks out. It asks nobody anything; the draft and the
  * open/closed state are the only state it keeps. Every project name is untrusted text (BD-022) and
  * is rendered through `UntrustedText`, alone or inside the sentence it was put in; the words are
@@ -24,7 +34,7 @@
  * worker page's 120 kB entry imports it.
  */
 import type { WorkerClaimPolicy } from '@platform/contracts';
-import { type ReactElement, useId, useState } from 'react';
+import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import { Button } from './button.js';
 import { Flash } from './flash.js';
 import { UntrustedText } from './untrusted.js';
@@ -60,7 +70,39 @@ export interface ClaimPolicyCardProps {
    * **unassigned** tasks by itself. A missing key is unknown, and an unknown says nothing.
    */
   readonly unassignedHasTaker?: Readonly<Record<string, boolean>>;
+  /**
+   * The machine's person when the reader is somebody else (an administrator on the Workers
+   * screen): the sentence says "Vojtěch’s tasks" and "Vojtěch picks". Omitted: "your". Untrusted.
+   */
+  readonly ownerName?: string;
+  /**
+   * Where the card sits: `worker` — the machine's own page, whose *Only what I pick* help says "on
+   * this page" — or `workers`, the platform's Workers screen ("on its page"). Default `worker`.
+   */
+  readonly surface?: 'worker' | 'workers';
+  /** The heading's level where the card sits. Default `h2`. */
+  readonly headingLevel?: 'h2' | 'h3' | 'h4';
+  /**
+   * Draw the card's own frame (border, ground, padding). `false` draws none, so the card can sit
+   * inside a settings card or a row. Default `true`.
+   */
+  readonly framed?: boolean;
 }
+
+/**
+ * A refused save in words (the review of #106): the refusal's `code` or HTTP `status`, read off the
+ * error the caller's client threw (the worker page's `LocalCallError`, the SPA's API error) — never
+ * the core's own text, which names ids. `null` for a refusal these words do not cover.
+ */
+export const claimPolicyRefusalWords = (error: unknown): string | null => {
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  if (code === 'project_not_eligible') return W.refusedProject;
+  if (status === 403 || code === 'claim_policy_owner_only' || code === 'forbidden') {
+    return W.refusedOwner;
+  }
+  if (status === 404 || code === 'not_found') return W.refusedGone;
+  return null;
+};
 
 /** A project's display name: its name, else its key, else the words for a project gone. */
 const nameOf = (project: ClaimPolicyProject | undefined): string =>
@@ -82,9 +124,12 @@ export const projectNamesOf = (
 export const ClaimPolicySentence = ({
   stored,
   projects,
+  ownerName,
 }: {
   readonly stored: ClaimPolicyValue;
   readonly projects: readonly ClaimPolicyProject[];
+  /** Somebody else's machine: "Vojtěch’s tasks" (see the card's prop). */
+  readonly ownerName?: string;
 }): ReactElement => {
   const names = stored.projectIds && (
     <strong className="font-semibold">
@@ -94,10 +139,16 @@ export const ClaimPolicySentence = ({
   return (
     <span data-claim-policy-sentence="">
       {W.start}
-      <strong className="font-semibold">{W.what[stored.policy]}</strong>
+      <strong className="font-semibold">
+        {ownerName === undefined ? (
+          W.what[stored.policy]
+        ) : (
+          <UntrustedText value={W.whatFor(stored.policy, ownerName)} />
+        )}
+      </strong>
       {stored.policy === 'pick_only' ? (
         <>
-          {W.pick}
+          {ownerName === undefined ? W.pick : <UntrustedText value={W.pickBy(ownerName)} />}
           {names ? (
             <>
               {W.pickIn}
@@ -110,7 +161,11 @@ export const ClaimPolicySentence = ({
       ) : (
         <>
           {W.in}
-          {names || <strong className="font-semibold">{W.allProjects}</strong>}
+          {names || (
+            <strong className="font-semibold">
+              {ownerName === undefined ? W.allProjects : W.allTheirProjects}
+            </strong>
+          )}
           {W.end}
         </>
       )}
@@ -142,8 +197,26 @@ export const ClaimPolicyCard = ({
   projects,
   onSave,
   unassignedHasTaker,
+  ownerName,
+  surface = 'worker',
+  headingLevel: Heading = 'h2',
+  framed = true,
 }: ClaimPolicyCardProps): ReactElement => {
   const id = useId();
+  const section = useRef<HTMLElement>(null);
+  /**
+   * Where focus goes after the draft opens or closes (the review of #106): the checked radio once
+   * it opens, *Change* once Save or Cancel closes it — never the top of the page.
+   */
+  const focusNext = useRef<'draft' | 'change' | null>(null);
+  useEffect(() => {
+    const target = focusNext.current;
+    focusNext.current = null;
+    if (target === null) return;
+    const selector =
+      target === 'draft' ? 'input[type="radio"]:checked' : 'button[data-claim-policy-change]';
+    section.current?.querySelector<HTMLElement>(selector)?.focus();
+  });
   const [draft, setDraft] = useState<{
     readonly policy: WorkerClaimPolicy;
     readonly some: boolean;
@@ -164,11 +237,12 @@ export const ClaimPolicyCard = ({
     setBusy(true);
     try {
       await onSave?.(next);
+      focusNext.current = 'change';
       setDraft(null);
       setSaved(true);
       setError(null);
     } catch (caught) {
-      setError((caught as Error).message);
+      setError(claimPolicyRefusalWords(caught) ?? (caught as Error).message);
     } finally {
       setBusy(false);
     }
@@ -204,25 +278,43 @@ export const ClaimPolicyCard = ({
 
   return (
     <section
-      aria-label={W.title}
-      className="flex flex-col gap-3 rounded-md border border-line bg-surface p-4"
+      ref={section}
+      aria-labelledby={`${id}t`}
+      className={
+        framed
+          ? 'flex flex-col gap-3 rounded-md border border-line bg-surface p-4'
+          : 'flex flex-col gap-3'
+      }
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <h2 className="text-base font-semibold text-fg">{W.title}</h2>
+          <Heading id={`${id}t`} className="text-base font-semibold text-fg">
+            {W.title}
+          </Heading>
           <p className="text-sm text-fg">
-            <ClaimPolicySentence stored={stored} projects={projects} />
+            <ClaimPolicySentence
+              stored={stored}
+              projects={projects}
+              {...(ownerName === undefined ? {} : { ownerName })}
+            />
           </p>
-          {saved ? (
-            <p role="status" className="text-xs text-fg-muted">
-              {W.saved}
-            </p>
-          ) : null}
+          {/* Mounted while empty, so its text is announced when a save lands (review of #106). */}
+          <p role="status" className="text-xs text-fg-muted">
+            {saved ? W.saved : null}
+          </p>
         </div>
-        {onSave && !draft ? (
+        {onSave ? (
           <Button
             size="sm"
+            data-claim-policy-change=""
+            aria-expanded={draft !== null}
+            aria-controls={`${id}d`}
             onClick={() => {
+              if (draft) {
+                setDraft(null);
+                return;
+              }
+              focusNext.current = 'draft';
               setDraft({
                 policy: stored.policy,
                 some: stored.projectIds !== null,
@@ -245,7 +337,7 @@ export const ClaimPolicyCard = ({
         </p>
       ) : null}
       {draft && wanted ? (
-        <div className="flex flex-col gap-4">
+        <div id={`${id}d`} className="flex flex-col gap-4">
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-1 text-sm font-medium text-fg">{W.whichTasks}</legend>
             {(Object.keys(W.options) as WorkerClaimPolicy[]).map((policy) =>
@@ -255,7 +347,9 @@ export const ClaimPolicyCard = ({
                 draft.policy === policy,
                 () => setDraft({ ...draft, policy }),
                 W.options[policy].label,
-                W.options[policy].help,
+                policy === 'pick_only' && surface === 'workers'
+                  ? W.pickOnlyHelpElsewhere
+                  : W.options[policy].help,
               ),
             )}
           </fieldset>
@@ -316,7 +410,15 @@ export const ClaimPolicyCard = ({
             >
               {W.save}
             </Button>
-            <Button size="sm" tone="invisible" disabled={busy} onClick={() => setDraft(null)}>
+            <Button
+              size="sm"
+              tone="invisible"
+              disabled={busy}
+              onClick={() => {
+                focusNext.current = 'change';
+                setDraft(null);
+              }}
+            >
               {W.cancel}
             </Button>
             {incomplete ? <span className="text-xs text-fg-muted">{W.noneChosen}</span> : null}

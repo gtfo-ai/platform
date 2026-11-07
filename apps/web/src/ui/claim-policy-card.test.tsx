@@ -327,3 +327,171 @@ describe('the pure halves', () => {
     );
   });
 });
+
+describe('focus and announcements (the review of #106)', () => {
+  it('keeps Change mounted with aria-expanded, focuses the checked radio on open and Change on close', async () => {
+    const onSave = vi.fn(async (_next: ClaimPolicyValue) => undefined);
+    renderCard({ policy: 'mine', projectIds: null }, { onSave });
+    const change = screen.getByRole('button', { name: 'Change' });
+    expect(change.getAttribute('aria-expanded')).toBe('false');
+    await userEvent.click(change);
+    expect(screen.getByRole('button', { name: 'Change' })).toBe(change);
+    expect(change.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Only my tasks' }));
+    // Cancel: focus back on Change, not the top of the page.
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(change.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(change);
+    // Save: the same.
+    await userEvent.click(change);
+    await userEvent.click(screen.getByLabelText(/^Everything/));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    await waitFor(() => expect(document.activeElement).toBe(change));
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('keeps the status region mounted while empty, so the save is announced', async () => {
+    renderCard({ policy: 'mine', projectIds: null }, { onSave: async () => undefined });
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('');
+    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    await userEvent.click(screen.getByLabelText(/^Everything/));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(status.textContent).toBe('Saved · applies to the next run'));
+    expect(screen.getByRole('status')).toBe(status);
+  });
+
+  it('says a refused save by its code or status, never the core’s text', async () => {
+    const refusal = (status: number, code: string) =>
+      Object.assign(new Error(`claim-scope: refused ${AUTIX}`), { status, code });
+    for (const [error, words] of [
+      [
+        refusal(422, 'project_not_eligible'),
+        'One of those projects no longer gives you work. Choose the projects again.',
+      ],
+      [
+        refusal(403, 'claim_policy_owner_only'),
+        'Only this machine’s owner can change what it takes.',
+      ],
+      [refusal(404, 'not_found'), 'The platform no longer knows this machine. Reload the page.'],
+    ] as const) {
+      const onSave = vi.fn(async (_next: ClaimPolicyValue) => {
+        throw error;
+      });
+      renderCard({ policy: 'mine', projectIds: null }, { onSave });
+      await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+      await userEvent.click(screen.getByLabelText(/^Everything/));
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(await screen.findByText(words)).toBeTruthy();
+      expect(document.body.textContent).not.toContain(AUTIX);
+      cleanup();
+    }
+  });
+});
+
+describe('the card on the Workers screen (S-26.8a’s props)', () => {
+  it('ownerName: somebody else’s machine is theirs in the sentence, and the name is text', () => {
+    const hostile = 'Vojtěch <img src=x onerror="window.__pwned=1">';
+    const { container, rerender } = render(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine_and_unassigned', projectIds: null }}
+        projects={PROJECTS}
+        ownerName="Vojtěch"
+      />,
+    );
+    expect(sentenceOf(container)).toBe(
+      'This machine takes Vojtěch’s tasks and unassigned ones, in all their projects.',
+    );
+    rerender(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine', projectIds: [AUTIX] }}
+        projects={PROJECTS}
+        ownerName="Vojtěch"
+      />,
+    );
+    expect(sentenceOf(container)).toBe('This machine takes only Vojtěch’s tasks, in Autix.');
+    rerender(
+      <ClaimPolicyCard
+        stored={{ policy: 'pick_only', projectIds: null }}
+        projects={PROJECTS}
+        ownerName={hostile}
+      />,
+    );
+    expect(sentenceOf(container)).toBe(
+      `This machine takes nothing by itself. ${hostile} picks runs on its page.`,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    rerender(
+      <ClaimPolicyCard
+        stored={{ policy: 'everything', projectIds: null }}
+        projects={PROJECTS}
+        ownerName="Vojtěch"
+      />,
+    );
+    expect(sentenceOf(container)).toBe('This machine takes every task, in all their projects.');
+  });
+
+  it('surface: Only what I pick says “on this page” on the worker page and “on its page” elsewhere', async () => {
+    const helpOf = (): string | null | undefined => {
+      const radio = screen.getByRole('radio', { name: 'Only what I pick' });
+      return document.getElementById(radio.getAttribute('aria-describedby') ?? '')?.textContent;
+    };
+    render(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine', projectIds: null }}
+        projects={PROJECTS}
+        onSave={async () => undefined}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    expect(helpOf()).toContain('on this page');
+    cleanup();
+    render(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine', projectIds: null }}
+        projects={PROJECTS}
+        onSave={async () => undefined}
+        surface="workers"
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    expect(helpOf()).toBe(
+      'Takes nothing by itself. You choose each run on its page, and choosing one assigns the task to you.',
+    );
+  });
+
+  it('headingLevel: h2 by default, the level asked otherwise, and the region is named by it', () => {
+    render(<ClaimPolicyCard stored={{ policy: 'mine', projectIds: null }} projects={PROJECTS} />);
+    expect(screen.getByRole('heading', { level: 2, name: 'What this machine takes' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'What this machine takes' })).toBeTruthy();
+    cleanup();
+    render(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine', projectIds: null }}
+        projects={PROJECTS}
+        headingLevel="h3"
+      />,
+    );
+    expect(screen.getByRole('heading', { level: 3, name: 'What this machine takes' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+  });
+
+  it('framed: a card of its own by default, no frame when false', () => {
+    render(<ClaimPolicyCard stored={{ policy: 'mine', projectIds: null }} projects={PROJECTS} />);
+    const framed = screen.getByRole('region', { name: 'What this machine takes' });
+    expect(framed.className).toContain('border');
+    expect(framed.className).toContain('bg-surface');
+    cleanup();
+    render(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine', projectIds: null }}
+        projects={PROJECTS}
+        framed={false}
+      />,
+    );
+    const bare = screen.getByRole('region', { name: 'What this machine takes' });
+    expect(bare.className).not.toContain('border');
+    expect(bare.className).not.toContain('bg-surface');
+  });
+});

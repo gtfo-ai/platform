@@ -199,16 +199,25 @@ describe('what this machine takes, on its page (S-26.7)', () => {
     }
   });
 
-  it('says a refused save in the worker’s words, in the card', async () => {
+  it('says a refused save in words, never the core’s text naming ids (review of #106)', async () => {
     const client = fakeClient({});
     client.setClaimScope.mockRejectedValueOnce(
-      new LocalCallError(422, 'project_not_eligible', 'the core refused to set the claim scope'),
+      new LocalCallError(
+        422,
+        'project_not_eligible',
+        `the core refused to set the claim scope: claim-scope: not eligible: ${OPS}`,
+      ),
     );
     renderPick(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Change' }));
     await userEvent.click(screen.getByLabelText(/^Only my tasks/));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByText('the core refused to set the claim scope')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        'One of those projects no longer gives you work. Choose the projects again.',
+      ),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain(OPS);
   });
 
   it('reads the setting again when the polled state says another screen changed the policy', async () => {
@@ -295,6 +304,11 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     const { container } = renderPick(client, { onTaken });
     const row = await rowOf(container, RUN_A);
     expect(row.textContent).toContain('Assigns ACME-7 to you.');
+    // The line is the button's description (review of #106).
+    const button = screen.getByRole('button', { name: 'Take this one' });
+    expect(
+      document.getElementById(button.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toBe('Assigns ACME-7 to you.');
     await userEvent.click(screen.getByRole('button', { name: 'Take this one' }));
     await waitFor(() => expect(client.take).toHaveBeenCalledWith(RUN_A, AS_OF));
     expect(client.take).toHaveBeenCalledOnce();
@@ -389,8 +403,7 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     );
     renderPick(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Take this one' }));
-    const flash = await screen.findByRole('status');
-    expect(flash.textContent).toBe('Vojtěch took ACME-7 a moment ago. Pick another.');
+    expect(await screen.findByText('Vojtěch took ACME-7 a moment ago. Pick another.')).toBeTruthy();
     expect(screen.queryByText('Assigned to you · starting on this machine…')).toBeNull();
   });
 
@@ -404,9 +417,11 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     );
     renderPick(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Take this one' }));
-    expect((await screen.findByRole('status')).textContent).toBe(
-      'ACME-7 is Vojtěch’s. A maintainer can reassign it on the task page.',
-    );
+    expect(
+      await screen.findByText(
+        'ACME-7 is Vojtěch’s. A maintainer can reassign it on the task page.',
+      ),
+    ).toBeTruthy();
   });
 
   it('names nobody it does not know: an answer without its owner', async () => {
@@ -416,9 +431,9 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     );
     renderPick(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Take this one' }));
-    expect((await screen.findByRole('status')).textContent).toBe(
-      'Another person took this task a moment ago. Pick another.',
-    );
+    expect(
+      await screen.findByText('Another person took this task a moment ago. Pick another.'),
+    ).toBeTruthy();
   });
 
   it('says a lost race in its own words', async () => {

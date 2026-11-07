@@ -25,6 +25,14 @@ export const projectListWords = (names: readonly string[]): string =>
       ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
       : (names[0] ?? '');
 
+/** The sentence's emphasised half: what the machine takes, on its owner's own surfaces. */
+const WHAT = {
+  mine_and_unassigned: 'your tasks and unassigned ones',
+  mine: 'only your tasks',
+  everything: 'every task',
+  pick_only: 'nothing by itself',
+} satisfies Readonly<Record<WorkerClaimPolicy, string>>;
+
 /**
  * **What this machine takes** (the M26 UX spec § 1): the card's words, the four options in the
  * spec's order (the default first), and the sentence's pieces. The person-facing word is
@@ -39,6 +47,10 @@ export const MACHINE_TAKES_WORDS = {
   saved: 'Saved · applies to the next run',
   /** A refused save's title, the page's own words for a refusal. */
   refused: 'That did not work',
+  /** A refused save, by the refusal's code or status, instead of the core's own text. */
+  refusedProject: 'One of those projects no longer gives you work. Choose the projects again.',
+  refusedOwner: 'Only this machine’s owner can change what it takes.',
+  refusedGone: 'The platform no longer knows this machine. Reload the page.',
   whichTasks: 'Which tasks',
   whichProjects: 'In which projects',
   projectsAll: 'All projects you can see',
@@ -65,19 +77,31 @@ export const MACHINE_TAKES_WORDS = {
     },
   } satisfies Readonly<Record<WorkerClaimPolicy, ClaimPolicyOptionWords>>,
   /** The sentence's emphasised half: what the machine takes. */
-  what: {
-    mine_and_unassigned: 'your tasks and unassigned ones',
-    mine: 'only your tasks',
-    everything: 'every task',
-    pick_only: 'nothing by itself',
-  } satisfies Readonly<Record<WorkerClaimPolicy, string>>,
+  what: WHAT,
   /** "This machine takes **…**, in **…**." */
   start: 'This machine takes ',
   in: ', in ',
   allProjects: 'all your projects',
+  /** The same, on somebody else's machine (`ownerName`). */
+  allTheirProjects: 'all their projects',
   end: '.',
   /** *Only what I pick*: "… **nothing by itself**. You pick runs on its page (**Autix** only)." */
   pick: '. You pick runs on its page',
+  /**
+   * The sentence for somebody else's machine (the Workers screen, `ownerName`): "This machine takes
+   * **Vojtěch’s tasks and unassigned ones**, …" and "… **nothing by itself**. Vojtěch picks runs on
+   * its page". The name is untrusted: the caller renders the result through `UntrustedText`.
+   */
+  whatFor: (policy: WorkerClaimPolicy, owner: string): string =>
+    policy === 'mine_and_unassigned'
+      ? `${owner}’s tasks and unassigned ones`
+      : policy === 'mine'
+        ? `only ${owner}’s tasks`
+        : WHAT[policy],
+  pickBy: (owner: string): string => `. ${owner} picks runs on its page`,
+  /** *Only what I pick*'s help where the card is not on the machine's own page (the Workers screen). */
+  pickOnlyHelpElsewhere:
+    'Takes nothing by itself. You choose each run on its page, and choosing one assigns the task to you.',
   pickIn: ' (',
   pickOnly: ' only)',
   /** A stored project the person can no longer see. */
@@ -113,4 +137,13 @@ export const PICK_WORDS = {
   nameless: 'another person',
   thisTask: 'this task',
   noLonger: 'That run is no longer this machine’s to take.',
+  /** A refusal's title, the page's own words for one. */
+  refused: 'That did not work',
+  /** The list's accessible name, and what it says while the platform answers. */
+  listLabel: 'Waiting runs',
+  loading: 'Asking the platform which runs are waiting…',
+  /** A task whose ticket has no title the core could read. */
+  untitled: 'A task with no title',
+  /** What an ask would do: a question on the task, to its role ("A question to the Architect"). */
+  question: (role: string): string => `A question to the ${role}`,
 } as const;

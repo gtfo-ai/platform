@@ -248,6 +248,11 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     /** @default `POST` — a `GET` sends no body. */
     readonly method?: 'GET' | 'POST' | 'PUT';
     readonly verb: string;
+    /**
+     * A query for the URL only (S-26.7's `fields=held_elsewhere`): every message names the bare
+     * `verb`, so a refusal reads `offers: …`, never the query.
+     */
+    readonly query?: string;
     readonly bearer: string | null;
     readonly body: unknown;
     readonly runScoped: boolean;
@@ -261,21 +266,24 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     let response: Response;
     try {
       const method = input.method ?? 'POST';
-      response = await fetcher(url(input.verb), {
-        method,
-        headers: {
-          ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
-          [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
-          ...(input.bearer === null ? {} : { authorization: `Bearer ${input.bearer}` }),
-          ...(input.idempotencyKey === undefined
-            ? {}
-            : { 'idempotency-key': input.idempotencyKey }),
+      response = await fetcher(
+        input.query === undefined ? url(input.verb) : `${url(input.verb)}?${input.query}`,
+        {
+          method,
+          headers: {
+            ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
+            [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
+            ...(input.bearer === null ? {} : { authorization: `Bearer ${input.bearer}` }),
+            ...(input.idempotencyKey === undefined
+              ? {}
+              : { 'idempotency-key': input.idempotencyKey }),
+          },
+          ...(method === 'GET' ? {} : { body: JSON.stringify(input.body ?? {}) }),
+          signal: controller.signal,
+          // The request carries a credential: a redirect would hand it to wherever it points.
+          redirect: 'error',
         },
-        ...(method === 'GET' ? {} : { body: JSON.stringify(input.body ?? {}) }),
-        signal: controller.signal,
-        // The request carries a credential: a redirect would hand it to wherever it points.
-        redirect: 'error',
-      });
+      );
     } catch (error) {
       throw new CoreCallError(
         'transient',
@@ -484,8 +492,9 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
       expect(
         {
           method: 'GET',
+          verb: WORKER_PATHS.offers,
           // S-26.7: each entry's `held_elsewhere`, by name — a core before it ignores the query.
-          verb: `${WORKER_PATHS.offers}?${WORKER_OFFERS_HELD_ELSEWHERE_QUERY}`,
+          query: WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
           bearer: credential,
           body: null,
           runScoped: false,
