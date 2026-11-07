@@ -20,6 +20,7 @@ import {
   orgAuditQuerySchema,
   orgAuditResponseSchema,
   orgUsersResponseSchema,
+  ownerCandidatesResponseSchema,
   paginationQuerySchema,
   patchIntegrationRequestSchema,
   pipelineGraphSchema,
@@ -459,6 +460,29 @@ describe('SSE contract (TD-014)', () => {
     // A topic is still validated when present.
     expect(
       sseFrameSchema.safeParse({ frame: 'control', topic: 'nope', type: 'reset' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('the owner candidates (S-26.1 follow-up)', () => {
+  it('lists the people the Assign picker offers, snake_case and strict', () => {
+    const candidate = { user_id: uuid(1), name: 'Ada' };
+    expect(ownerCandidatesResponseSchema.parse({ items: [candidate] })).toEqual({
+      items: [candidate],
+    });
+    expect(ownerCandidatesResponseSchema.parse({ items: [] })).toEqual({ items: [] });
+    // Strict at both levels: no email, no role rides along, and the envelope takes no cursor.
+    expect(
+      ownerCandidatesResponseSchema.safeParse({
+        items: [{ ...candidate, email: 'ada@example.test' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ownerCandidatesResponseSchema.safeParse({ items: [candidate], next_cursor: null }).success,
+    ).toBe(false);
+    expect(
+      ownerCandidatesResponseSchema.safeParse({ items: [{ userId: uuid(1), name: 'Ada' }] })
+        .success,
     ).toBe(false);
   });
 });

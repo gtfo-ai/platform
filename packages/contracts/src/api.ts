@@ -79,6 +79,7 @@ import {
   questionRecordSchema,
   runRecordSchema,
   sha256HexSchema,
+  taskOwnerViewSchema,
   taskRecordSchema,
 } from './records.js';
 import { transcriptEventSchema } from './transcript.js';
@@ -2104,6 +2105,20 @@ export const cancelTaskRequestSchema = z.strictObject({ reason: commandTextSchem
 export const setTaskOwnerRequestSchema = z.strictObject({
   user_id: idSchema.nullable(),
 });
+
+/**
+ * `GET /api/projects/:id/owner-candidates` — the people the *Assign…* picker offers (S-26.1's
+ * follow-up, the M26 UX spec § 2): exactly the users `POST /api/tasks/:id/owner` accepts as a new
+ * owner of a task of that project — `member` or above in it (the higher of the organisation role
+ * and a membership) and not disabled, asked through the command's own predicate
+ * (`userMayOwnInProjectSql`). Sorted by `name`, then `user_id`. Each item is the task DTO's own
+ * `owner` shape, so a picked candidate is what the task then publishes. `name` is a person's own
+ * text, rendered as text.
+ */
+export const ownerCandidatesResponseSchema = z.strictObject({
+  items: z.array(taskOwnerViewSchema),
+});
+export type OwnerCandidatesResponse = z.infer<typeof ownerCandidatesResponseSchema>;
 
 /** The largest figure `numeric(12,6)` holds — the ceiling of a task's own cap (WP-131). */
 export const MAX_TASK_CAP_USD = 999_999.999999;
