@@ -78,6 +78,8 @@ const task = (overrides: Partial<TaskListItem>): TaskListItem =>
     open_questions: 0,
     pending_approvals: 0,
     loop_limits: null,
+    latest_return: null,
+    stop: null,
     ...overrides,
   }) as TaskListItem;
 

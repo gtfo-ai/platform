@@ -34,6 +34,7 @@ import type {
   QuestionStatus,
   RunStatus,
   RunTerminalReason,
+  TaskCiFailure,
   TaskStageState,
   TaskState,
   UserRole,
@@ -292,6 +293,16 @@ export const LOOP_LABEL: Readonly<Record<string, string>> = {
   rebase: 'Conflict fixes',
   rebase_rechecks: 'Up-to-date re-checks',
   dependency_policy: 'Dependency checks',
+};
+
+/**
+ * How a CI pipeline that sent a task back ended (S-25.11): `task_stages.signature`'s status, as the
+ * task page's return and stop sentences open — "CI failed on the merge request".
+ */
+export const CI_FAILURE_LABEL: Readonly<Record<TaskCiFailure['status'], string>> = {
+  failed: 'CI failed',
+  canceled: 'CI was cancelled',
+  skipped: 'CI was skipped',
 };
 
 /** What a loop is, one hover away (product/10's 2026-11-06 *Plain words* rule). */

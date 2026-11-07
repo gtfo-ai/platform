@@ -73,6 +73,42 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 - **Stages.** The stage timeline is the list mode of the Flow canvas, not a second section.
 - **Checks.** The panel counts checks; questions and approvals are the callout's.
 
+*Amended 2026-11-07 (product owner, after a CI failure on an agent's merge request, M25 S-25.11).* **A task that went
+back says why it went back, and what happens next.** A gate's failure (CI, the rebase, the dependency policy) or a
+reviewer's return sends the task to an earlier stage. Until that stage ends, the task header's *Now* line and the
+callout's slot carry one sentence. It names the cause, who acts, and how many tries are left:
+- **The agent is on it:** "CI failed on the merge request (job *unit*): the Developer is fixing it (round 2 of 3)." The failing job
+  is linked by name (through `safeHref`). There is no action, because nothing is asked of the reader.
+- **It stopped:** when the rounds are used up, or the same failure came back (three times in a row for CI, product/04
+  S4), the escalation says which one. "CI failed the same way three times in a row (job *unit*), so the agent stopped." The one next step follows it: look at the job,
+  then *Retry* or *Take over*.
+- **The board card** shows the same fact in short form ("CI failed · fixing, round 2/3"). The stage timeline draws the
+  return as a loop with its reason, as above.
+- A return whose reason was not recorded says so ("went back from CI; the reason was not recorded"). It never
+  guesses.
+- **While a gate waits, it says what it is waiting for, from the first read.** The case that prompted this is
+  AUT-6655. GitLab held its pipeline at a manual job, the platform waited 60 minutes twice, and the page showed only
+  "CI" and *Needs you*. The waiting gate's last read is shown on the task header, the callout and the board card while
+  it waits, not only after the timeout:
+  - a pipeline held at a manual job: "CI is waiting for someone to start the manual job *sentry-release-commit* in
+    GitLab. Start it there and the task continues." The job and pipeline are linked through `safeHref`. When the
+    platform keeps the merge request a draft and the project's CI rules hold jobs for drafts, it adds a link to the
+    readiness panel's CI-rules warning;
+  - a pipeline still running: "CI is running (pipeline *n*, 12 min so far; the task gives up after 60)".
+  This is *Needs you* the moment a person's action is the only way forward (a held manual job is that), with the one
+  next step. It is not *Needs you* after the timeout.
+- **A timed-out wait says it timed out**, with the last read: "CI did not finish within 60 minutes: pipeline *n* was
+  still held at the manual job *sentry-release-commit*." The next step is *Start the job in GitLab, then Retry*. The
+  task page never reads as a failed check when nothing failed.
+
+*S-25.11's wording (2026-11-07).* The examples above say **round**, not *try*: the vocabulary census retires "try N" for
+*Attempt N* (S-23.23), and the board's loop badge already calls this counter a round ("CI fix round 2 of 3"). The
+repeated failure is **three** identical CI failures in a row, which is what the pipeline counts (product/04 S4,
+`ciConvergence`), not two. Until the platform records the failing job's URL, the pipeline's id and the CI timeout apart
+from the return's prose, the page links the merge request, and a timed-out check says it "did not finish in the time the
+platform waits for it" followed by the sentence the platform recorded (BACKLOG 1295). The waiting gate's own sentence
+waits for its pending read to be recorded (BACKLOG 1293).
+
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.
 - *Amended 2026-11-06 (M25).* While a run is live, watching is the job: *Cancel run* is a danger secondary, never the

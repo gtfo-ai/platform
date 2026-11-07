@@ -143,6 +143,18 @@ The common flow is *backlog → in progress → waiting for review → approved 
 
 If someone else holds the ticket, the task stops in `Needs human` with the reason *assigned elsewhere*, a comment is posted on the ticket, and no run starts. Intake skips a ticket that is already assigned to a person, unless the project opts in. On cancel or rework the platform unassigns itself and moves the ticket back to `pick_up_from`, if that slot is mapped. A project whose tracker binding was set up before 2026-10-08 does not claim until its lifecycle is saved once (TD-029 decision 1).
 
+> **Amendment 2026-11-06 (BD-031's and BD-032's 2026-11-06 amendments, M26): the task's owner.**
+> - **Owner.** Every task may have an owner: a platform user who is a member of the project. The owner follows the
+>   ticket's assignee when that assignee is a linked member. A person can also take, assign or unassign the task on
+>   the platform, and the latest change wins.
+> - **Intake and the claim.** A ticket assigned to a linked member is taken at intake. The claim leaves it with that
+>   member (it still moves to `in_progress`); it is not re-assigned to the platform's account and not refused as
+>   *assigned elsewhere*. *Take tickets already assigned to someone* applies only to an assignee who is not a linked
+>   member.
+> - **Routing.** The owner's machine gets the run first. Each machine takes what its owner chose: *my tasks and
+>   unassigned ones*, *only my tasks*, *everything* or *only what I pick*. The server's runner takes anything its
+>   execution mode allows.
+
 ## Steering and taking over (any stage)
 - A maintainer or member can **steer** a running agent from the run page (a user turn injected into the session, audited).
 - A human can **take over** a task: the pipeline pauses, the branch and a resume command are posted to the ticket and UI, the workspace is exported; the human can hand the task back to any stage. See product/18.

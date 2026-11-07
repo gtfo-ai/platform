@@ -33,6 +33,11 @@ Repository, task-management binding (Jira project + pick-up rule), Slack channel
 
 It also offers a pick-up label instead of a pick-up status, and two switches: *claim tickets* (on) and *take tickets already assigned to someone* (off).
 
+> **Amendment 2026-11-06 (BD-031's 2026-11-06 amendment, M26).** *Take tickets already assigned to someone* now means
+> someone who is **not** a linked member of the project: a ticket assigned to a linked member is always taken and stays
+> with that member. A third switch is added, *assign the owner in the tracker* (off). When it is on, assigning a task on
+> the platform also sets the ticket's assignee, from that person's linked account.
+
 Every slot may be left empty. The pick lists contain only statuses the tracker returned, and the save is checked against that list again. The pick lists are also on the project settings page, so the step can be skipped and finished later. If the statuses cannot be loaded, the slots cannot be saved, and the step says so rather than accepting names it cannot check. product/04 § "Ticket lifecycle" says what each slot does.
 
 ### Step 2 — Technical discovery (automatic, ~minutes, cheap)

@@ -22,6 +22,7 @@ import type { ContextPackRecord, Id, IsoDateTime, TranscriptEvent } from '@platf
 import {
   acceptanceVerdictDataSchema,
   MAX_RUN_COMMANDS,
+  MAX_TASK_STOP_RECORDED_CHARS,
   runRecordSchema,
 } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
@@ -1064,6 +1065,173 @@ describe('the task projection', () => {
     for (const taskId of [atAgent, running, undecided]) {
       expect((await findTaskDetail(drizzled, taskId))?.gate_feedback, taskId).toBeNull();
     }
+  });
+
+  /**
+   * **A task that went back, and a task that stopped** (S-25.11): the task read and the board's page
+   * project `returns`/`latest_return` and `stop` off the `task_stages` columns the pipeline writes —
+   * `returned_to`, the CI `signature`, `outcome` and `return_reason` — and say nothing the rows do
+   * not hold. Both directions: a CI return with its signature names its jobs and its round's loop; a
+   * return with no signature names neither; a timed-out check publishes the sentence it recorded,
+   * bounded; a task not waiting for a person has no stop.
+   */
+  it('publishes a CI return with its jobs and loop, and the stop the rows record (S-25.11)', async () => {
+    const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
+      (await pool.query<T>(text, values)).rows[0] as T;
+    const org = await one<{ id: string }>(
+      "insert into organizations (name) values ('setback') returning id",
+    );
+    const project = await one<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'setback', 'Setback', 'https://git.example.test/acme/setback.git')
+       returning id`,
+      [org.id],
+    );
+    const taskAt = async (key: string, state: string, stage: string, counters = '{}') =>
+      (
+        await one<{ id: string }>(
+          `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                              current_stage, stage_attempts, iteration_counters)
+           values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', $3, $4,
+                   jsonb_build_object($4::text, 1), $5::jsonb) returning id`,
+          [project.id, key, state, stage, counters],
+        )
+      ).id;
+    const stageRow = async (
+      taskId: string,
+      row: {
+        stage: string;
+        attempt: number;
+        state: string;
+        outcome: string | null;
+        reason: string | null;
+        returnedTo: string | null;
+        signature: string | null;
+        exited: string | null;
+      },
+    ) => {
+      await pool.query(
+        `insert into task_stages (task_id, stage, attempt, state, entered_at, exited_at, outcome,
+                                  return_reason, returned_to, signature)
+         values ($1, $2, $3, $4, coalesce($8::timestamptz, now()) - interval '1 minute', $8::timestamptz,
+                 $5, $6, $7, $9)`,
+        [
+          taskId,
+          row.stage,
+          row.attempt,
+          row.state,
+          row.outcome,
+          row.reason,
+          row.returnedTo,
+          row.exited,
+          row.signature,
+        ],
+      );
+    };
+
+    // Fixing: CI attempt 2 failed on `unit` and sent the task back; implementation 3 is running.
+    const fixing = await taskAt('BACK-1', 'active', 'implementation', '{"ci_fix": 2}');
+    await stageRow(fixing, {
+      stage: 'ci_gate',
+      attempt: 2,
+      state: 'returned',
+      outcome: 'returned',
+      reason: 'pipeline p-2 failed: unit\nLog of the failing job unit, redacted:\nexpected 3',
+      returnedTo: 'implementation',
+      signature: 'ci:failed:unit@abc123',
+      exited: '2026-11-07T10:00:00.000Z',
+    });
+    // A return the dependency gate made from the CI gate: no signature, so no CI failure or loop.
+    await stageRow(fixing, {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'returned',
+      outcome: 'returned',
+      reason: 'the dependency policy blocks npm:left-pad',
+      returnedTo: 'implementation',
+      signature: null,
+      exited: '2026-11-07T09:00:00.000Z',
+    });
+    const detail = await findTaskDetail(drizzled, fixing);
+    expect(detail?.returns).toEqual([
+      {
+        from_stage: 'ci_gate',
+        attempt: 1,
+        to_stage: 'implementation',
+        to_role: 'developer',
+        at: '2026-11-07T09:00:00.000Z',
+        outcome: 'returned',
+        reason_recorded: true,
+        ci_failure: null,
+        loop: null,
+      },
+      {
+        from_stage: 'ci_gate',
+        attempt: 2,
+        to_stage: 'implementation',
+        to_role: 'developer',
+        at: '2026-11-07T10:00:00.000Z',
+        outcome: 'returned',
+        reason_recorded: true,
+        ci_failure: { status: 'failed', jobs: 'unit' },
+        loop: 'ci_fix',
+      },
+    ]);
+    expect(detail?.stop).toBeNull();
+    expect(detail?.loop_limits?.ci_fix).toBe(3);
+    const page = await listProjectTasks(drizzled, project.id, { limit: 50 });
+    const card = page?.items.find((item) => item.id === fixing);
+    expect(card?.latest_return?.attempt).toBe(2);
+    expect(card?.latest_return?.ci_failure).toEqual({ status: 'failed', jobs: 'unit' });
+    expect(card?.stop).toBeNull();
+
+    // What production writes on a red pipeline's return: the tamper check's word, not `returned`
+    // (gates.ts' settlement, WP-105). The CI failure rests on the signature, not on the word.
+    const clean = await taskAt('BACK-3', 'active', 'implementation', '{"ci_fix": 1}');
+    await stageRow(clean, {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'returned',
+      outcome: 'protected_paths_clean',
+      reason: 'pipeline p-9 failed: lint',
+      returnedTo: 'implementation',
+      signature: 'ci:failed:lint@def456',
+      exited: '2026-11-07T10:30:00.000Z',
+    });
+    const cleanReturn = (await findTaskDetail(drizzled, clean))?.returns[0];
+    expect(cleanReturn?.outcome).toBe('protected_paths_clean');
+    expect(cleanReturn?.ci_failure).toEqual({ status: 'failed', jobs: 'lint' });
+    expect(cleanReturn?.loop).toBe('ci_fix');
+
+    // Stopped: the CI check timed out (AUT-6655's shape) — `failed`/`undecided`, the sentence kept.
+    const LONG = `the CI gate on a poll-only gitlab binding timed out: ${'x'.repeat(2_100)}`;
+    const timedOut = await taskAt('BACK-2', 'needs_human', 'ci_gate');
+    await stageRow(timedOut, {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'failed',
+      outcome: 'undecided',
+      reason: LONG,
+      returnedTo: null,
+      signature: null,
+      exited: '2026-11-07T11:00:00.000Z',
+    });
+    const parked = await findTaskDetail(drizzled, timedOut);
+    expect(parked?.returns).toEqual([]);
+    expect(parked?.stop).toEqual({
+      stage: 'ci_gate',
+      attempt: 1,
+      cause: 'no_answer',
+      loop: null,
+      ci_failure: null,
+      recorded: LONG.slice(0, MAX_TASK_STOP_RECORDED_CHARS),
+      recorded_cut: true,
+    });
+    // The board's bounded read of the same column says the same.
+    const parkedCard = (await listProjectTasks(drizzled, project.id, { limit: 50 }))?.items.find(
+      (item) => item.id === timedOut,
+    );
+    expect(parkedCard?.stop).toEqual(parked?.stop);
   });
 
   /**

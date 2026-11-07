@@ -87,6 +87,8 @@ const task = (n: number, overrides: Partial<TaskListItem>): TaskListItem =>
     open_questions: 0,
     pending_approvals: 0,
     loop_limits: null,
+    latest_return: null,
+    stop: null,
     ...overrides,
   }) as TaskListItem;
 
@@ -108,6 +110,8 @@ const BUSY = task(1, {
   ],
   iteration_counters: { code_review: 2, ci_fix: 0 },
   loop_limits: { code_review: 3, ci_fix: 3 },
+  latest_return: null,
+  stop: null,
   mr_ref: {
     provider: 'gitlab',
     project_path: 'acme/api',

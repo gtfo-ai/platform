@@ -10,7 +10,10 @@
  *    activity's sub-label from the agents read; otherwise the state's word beside its status icon;
  *  - time in the current stage · the measured cost (and the runs it leaves out);
  *  - the needs-you ◆ and the count of what waits (open questions, pending approvals), the amber
- *    pulse while an agent is working, the loop badges (*Review round 2 of 3*), the conflict badge.
+ *    pulse while an agent is working, the loop badges (*Review round 2 of 3*), the conflict badge;
+ *  - for a task that went back, why and what happens next in short form (S-25.11, `./setback.ts`):
+ *    *CI failed · fixing, round 2/3* while the agent is on it — the loop badge of that round is then
+ *    not drawn a second time — or *CI did not finish* when it stopped.
  *
  * The menu's commands are the task page's, through the same `useTaskCommands` hook, so each sends
  * the same body with the same `Idempotency-Key` semantics: *Pause*, *Resume* and *Cancel* with the
@@ -67,6 +70,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 // read backwards (CVE-2021-42574). `ExternalLink`'s own refusal tooltip does the same.
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
+import { openReturn, setbackShort } from './setback.js';
 
 /** One live run of the agents read, as the card reads it. */
 export type AgentEntry = AgentsResponse['items'][number];
@@ -128,6 +132,26 @@ export const loopBadges = (task: TaskListItem): readonly { loop: string; text: s
       loop,
       text: loopRoundLabel(loop, count, task.loop_limits?.[loop]),
     }));
+
+/** The card's short form of a return or a stop (S-25.11), or `null`. */
+export const cardSetback = (task: TaskListItem): string | null =>
+  setbackShort(task, task.stages, task.latest_return, task.stop, task.loop_limits);
+
+/** The short form's line, or nothing. */
+export const SetbackLine = ({ task }: { readonly task: TaskListItem }): ReactElement | null => {
+  const text = cardSetback(task);
+  // The fixing line asks nothing of the reader, so it is muted; a stop keeps the attention tone.
+  const fixing = openReturn(task, task.stages, task.latest_return) !== null;
+  return text === null ? null : (
+    <span
+      data-card-setback={fixing ? 'fixing' : 'stopped'}
+      className={cx('text-xs', fixing ? 'text-fg-muted' : 'text-attention')}
+    >
+      {/* Platform words; a CI failure's job names are not in the short form. */}
+      {text}
+    </span>
+  );
+};
 
 /** The live run's newest entry, in `activityOf`'s words. */
 const latestOf = (agent: AgentEntry): LatestEntry | null =>
@@ -357,7 +381,9 @@ export const MetaLine = ({
 
 /** The loop badges and the conflict badge, or nothing. */
 const Badges = ({ task }: { readonly task: TaskListItem }): ReactElement | null => {
-  const loops = loopBadges(task);
+  // S-25.11: the round the setback line already says is not drawn a second time.
+  const said = openReturn(task, task.stages, task.latest_return)?.loop ?? null;
+  const loops = loopBadges(task).filter((badge) => badge.loop !== said);
   const conflict = task.conflict ?? null;
   if (loops.length === 0 && conflict === null) {
     return null;
@@ -720,6 +746,7 @@ export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: Tas
         <TitleLink task={task} projectKey={projectKey} />
       </p>
       <Phase task={task} agent={agent} nowMs={nowMs} />
+      <SetbackLine task={task} />
       <MetaLine task={task} nowMs={nowMs} />
       <Badges task={task} />
       <Refusal commands={commands} />
@@ -757,6 +784,7 @@ export const TaskRow = ({ task, projectKey, projectId, may, agent, nowMs }: Task
           </span>
           <MetaLine task={task} nowMs={nowMs} />
         </span>
+        <SetbackLine task={task} />
         <Refusal commands={commands} />
       </div>
       <span className="flex shrink-0 items-center gap-1.5">

@@ -15,6 +15,7 @@ import {
   kbHealthResponseSchema,
   lifecycleErrorCodeSchema,
   listTasksQuerySchema,
+  MAX_TASK_STOP_RECORDED_CHARS,
   MAX_TICKET_KEY_CHARS,
   orgAuditQuerySchema,
   orgAuditResponseSchema,
@@ -42,6 +43,8 @@ import {
   TASK_CALLER_FACT_KEYS,
   taskDetailResponseSchema,
   taskExportResponseSchema,
+  taskReturnSchema,
+  taskStopSchema,
   tasksResponseSchema,
   ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
@@ -772,6 +775,9 @@ describe('the list envelopes and the KB health report', () => {
       open_questions: 0,
       pending_approvals: 0,
       loop_limits: { code_review: 3 },
+      // S-25.11: the newest return and the stop, `null` when the rows record none.
+      latest_return: null,
+      stop: null,
     };
     expect(
       tasksResponseSchema.parse({
@@ -842,7 +848,14 @@ describe('the list envelopes and the KB health report', () => {
         can_pause_task: true,
         can_resume_task: true,
       });
-    for (const key of ['stages', 'open_questions', 'pending_approvals', 'loop_limits'] as const) {
+    for (const key of [
+      'stages',
+      'open_questions',
+      'pending_approvals',
+      'loop_limits',
+      'latest_return',
+      'stop',
+    ] as const) {
       const { [key]: _dropped, ...without } = task;
       expect(page(without).success, key).toBe(false);
     }
@@ -853,6 +866,56 @@ describe('the list envelopes and the KB health report', () => {
     );
     expect(page({ ...task, stages: [{ ...task.stages[0], exited_at: null }] }).success).toBe(false);
     expect(page({ ...task, extra: true }).success).toBe(false);
+  });
+
+  it('words a return and a stop only from what the rows hold, strictly and bounded (S-25.11)', () => {
+    const ret = {
+      from_stage: 'ci_gate',
+      attempt: 2,
+      to_stage: 'implementation',
+      to_role: 'developer',
+      at: AT,
+      outcome: 'returned',
+      reason_recorded: true,
+      ci_failure: { status: 'failed', jobs: 'unit' },
+      loop: 'ci_fix',
+    };
+    expect(taskReturnSchema.parse(ret)).toEqual(ret);
+    // Every fact a row may not hold is nullable, never optional: absent is not "not recorded".
+    for (const key of ['to_stage', 'to_role', 'outcome', 'ci_failure', 'loop'] as const) {
+      expect(taskReturnSchema.safeParse({ ...ret, [key]: null }).success, key).toBe(true);
+      const { [key]: _dropped, ...without } = ret;
+      expect(taskReturnSchema.safeParse(without).success, key).toBe(false);
+    }
+    // A pipeline status that is not a failure is not a CI failure.
+    expect(
+      taskReturnSchema.safeParse({ ...ret, ci_failure: { status: 'success', jobs: '' } }).success,
+    ).toBe(false);
+    expect(taskReturnSchema.safeParse({ ...ret, extra: true }).success).toBe(false);
+
+    const stop = {
+      stage: 'ci_gate',
+      attempt: 1,
+      cause: 'no_answer',
+      loop: null,
+      ci_failure: null,
+      recorded: 'the CI gate on a poll-only gitlab binding timed out',
+      recorded_cut: false,
+    };
+    expect(taskStopSchema.parse(stop)).toEqual(stop);
+    expect(taskStopSchema.safeParse({ ...stop, cause: 'failed' }).success).toBe(false);
+    expect(
+      taskStopSchema.safeParse({ ...stop, recorded: 'x'.repeat(MAX_TASK_STOP_RECORDED_CHARS) })
+        .success,
+    ).toBe(true);
+    expect(
+      taskStopSchema.safeParse({ ...stop, recorded: 'x'.repeat(MAX_TASK_STOP_RECORDED_CHARS + 1) })
+        .success,
+    ).toBe(false);
+    // The task read carries the returns, the stop and the limits, each required.
+    for (const key of ['returns', 'stop', 'loop_limits'] as const) {
+      expect(taskDetailResponseSchema.shape[key].safeParse(undefined).success, key).toBe(false);
+    }
   });
 
   it('publishes one health report, with its findings bounded to the kinds the domain computes', () => {

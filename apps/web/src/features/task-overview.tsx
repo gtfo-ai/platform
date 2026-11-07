@@ -11,11 +11,18 @@
  * **The stage timeline** lists the newest attempt first, each leading to its latest run (WP-154 (a)
  * and (b), `./stage-timeline.ts`), and says for each how long it took, what its runs cost and —
  * for an attempt that sent the task back — that it did, drawn with the loop glyph rather than as a
- * failure. The cost is the sum of the attempt's **measured** runs; an attempt whose runs nobody
+ * failure, with where it went and why (S-25.11: the CI failure's jobs, or *the reason was not
+ * recorded*, `./setback.ts`). The cost is the sum of the attempt's **measured** runs; an attempt whose runs nobody
  * measured says *not measured* rather than `$0.00` (standing rule 16), and one with no run says
  * nothing about money at all.
  */
-import type { RunRecord, TaskDetailResponse, TaskStageState } from '@platform/contracts';
+import type {
+  RunRecord,
+  TaskDetailResponse,
+  TaskReturn,
+  TaskStageState,
+  TaskStop,
+} from '@platform/contracts';
 import { UndoIcon } from '@primer/octicons-react/UndoIcon';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
@@ -38,6 +45,7 @@ import { AskThread } from './ask-thread.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { FeedbackForm } from './feedback.js';
 import { LiveStagePanel, liveStageRun } from './live-stage.js';
+import { timelineReturnLine } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { type TimelineLink, timelineEntries } from './stage-timeline.js';
 import { MERGED_NO_TAKE_OVER } from './take-over.js';
@@ -102,11 +110,17 @@ const TimelineRunLink = ({ link }: { readonly link: TimelineLink }): ReactElemen
 
 const StageTimeline = ({
   stages,
+  returns,
+  stop,
   runs,
   nowMs,
   openerFor,
 }: {
   readonly stages: TaskDetailResponse['stages'];
+  /** The task's returns (S-25.11): an attempt that sent the task back says where and why. */
+  readonly returns: readonly TaskReturn[];
+  /** The task's stop: a returned attempt whose rounds were used up never went anywhere. */
+  readonly stop: TaskStop | null;
   readonly runs: readonly RunRecord[];
   readonly nowMs: number;
   /** The stage dialog's opener for a stage the flow has a card for (`FlowListMode`). */
@@ -124,6 +138,12 @@ const StageTimeline = ({
         {timelineEntries(stages, runs).map(({ stage, link }) => {
           const cost = stageCostText(stage, runs);
           const open = openerFor(stage.stage);
+          const went =
+            stage.state === 'returned'
+              ? (returns.find(
+                  (entry) => entry.from_stage === stage.stage && entry.attempt === stage.attempt,
+                ) ?? null)
+              : null;
           return (
             <TimelineItem
               key={`${stage.stage}:${stage.attempt}`}
@@ -183,6 +203,12 @@ const StageTimeline = ({
                   <UntrustedText value={stageOutcomeSentence(stage.outcome)} />
                 </p>
               )}
+              {went === null ? null : (
+                <p className="text-xs text-fg-muted" data-timeline-return="">
+                  {/* Platform words around the job names the row recorded (provider text). */}
+                  <UntrustedText value={timelineReturnLine(went, stop)} />
+                </p>
+              )}
               <TimelineRunLink link={link} />
             </TimelineItem>
           );
@@ -221,7 +247,14 @@ export const TaskOverview = ({
       <TaskFlow
         taskId={task.id}
         listMode={(openerFor) => (
-          <StageTimeline stages={stages} runs={runs} nowMs={nowMs} openerFor={openerFor} />
+          <StageTimeline
+            stages={stages}
+            returns={detail.returns}
+            stop={detail.stop}
+            runs={runs}
+            nowMs={nowMs}
+            openerFor={openerFor}
+          />
         )}
       />
       {/* Backlogs 455 (1) and 496: the live stage, its elapsed time and its latest progress line. */}

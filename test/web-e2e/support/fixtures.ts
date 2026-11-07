@@ -101,6 +101,9 @@ export const IDS = {
   taskFleetQueued: id(25),
   worker: id(100),
   workerPaused: id(101),
+  // S-25.11: a task CI sent back that the Developer is fixing, and one whose CI check timed out.
+  taskCiFixing: id(26),
+  taskCiTimedOut: id(27),
 } as const;
 
 export const PROJECT_KEY = 'demo_service';
@@ -517,6 +520,9 @@ export const taskDetail = taskDetailResponseSchema.parse({
   can_rework: true,
   can_decide_approval: true,
   gate_feedback: null,
+  returns: [],
+  stop: null,
+  loop_limits: null,
   /**
    * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
    * is exactly why the corpus carries it: `by_user` is the one place the task screen renders a
@@ -591,6 +597,9 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   can_rework: true,
   can_decide_approval: true,
   gate_feedback: null,
+  returns: [],
+  stop: null,
+  loop_limits: null,
   // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
   // and an empty list are different answers, and this is the first.
   human_time: {
@@ -632,6 +641,9 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
   can_rework: true,
   can_decide_approval: true,
   gate_feedback: null,
+  returns: [],
+  stop: null,
+  loop_limits: null,
   taken_over: {
     at: now,
     branch: 'agentic/demo-3',
@@ -644,6 +656,109 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
     hand_back_stages: ['refinement', 'implementation', 'code_review'],
   },
   runs: [{ ...run, task_id: IDS.taskTaken }],
+});
+
+/**
+ * S-25.11: a task CI sent back — attempt 2 of the CI check failed with the job `unit`, and the
+ * Developer is on implementation attempt 3, round 2 of 3. The page says why it went back, who acts
+ * and the round, with no action; the timeline's returned attempt says where it went and why.
+ */
+export const ciFixingTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: {
+    ...featureTask,
+    id: IDS.taskCiFixing,
+    ticket: { provider: 'jira', key: 'DEMO-6', url: HOSTILE.safeUrl },
+    ticket_title: 'Round VAT once',
+    mr_ref: {
+      provider: 'gitlab',
+      project_path: 'demo/service',
+      iid: 9,
+      url: HOSTILE.safeUrl,
+    },
+    state: 'active',
+    current_stage: 'implementation',
+    iteration_counters: { ci_fix: 2 },
+  },
+  loop_limits: resolveIterationLimits(),
+  returns: [
+    {
+      from_stage: 'ci_gate',
+      attempt: 2,
+      to_stage: 'implementation',
+      to_role: 'developer',
+      at: '2026-06-01T10:40:00.000Z',
+      outcome: 'returned',
+      reason_recorded: true,
+      ci_failure: { status: 'failed', jobs: 'unit' },
+      loop: 'ci_fix',
+    },
+  ],
+  stages: [
+    {
+      stage: 'implementation',
+      attempt: 2,
+      state: 'completed',
+      entered_at: '2026-06-01T10:00:00.000Z',
+      exited_at: '2026-06-01T10:20:00.000Z',
+      outcome: null,
+    },
+    {
+      stage: 'ci_gate',
+      attempt: 2,
+      state: 'returned',
+      entered_at: '2026-06-01T10:20:00.000Z',
+      exited_at: '2026-06-01T10:40:00.000Z',
+      outcome: 'returned',
+    },
+    {
+      stage: 'implementation',
+      attempt: 3,
+      state: 'running',
+      entered_at: '2026-06-01T10:40:00.200Z',
+      exited_at: null,
+      outcome: null,
+    },
+  ],
+});
+
+/**
+ * S-25.11, AUT-6655's shape: GitLab held the pipeline at a manual job, the CI check waited its 60
+ * minutes and stopped. The row is `failed`/`undecided` with the sentence the platform wrote; the
+ * page says the check did not finish — never that it failed — and quotes what it saw last.
+ */
+export const ciTimedOutTaskDetail = taskDetailResponseSchema.parse({
+  ...ciFixingTaskDetail,
+  task: {
+    ...ciFixingTaskDetail.task,
+    id: IDS.taskCiTimedOut,
+    ticket: { provider: 'jira', key: 'DEMO-7', url: HOSTILE.safeUrl },
+    ticket_title: 'Release notes',
+    state: 'needs_human',
+    current_stage: 'ci_gate',
+    iteration_counters: {},
+  },
+  returns: [],
+  stop: {
+    stage: 'ci_gate',
+    attempt: 1,
+    cause: 'no_answer',
+    loop: null,
+    ci_failure: null,
+    recorded:
+      'the CI gate on a poll-only gitlab binding timed out: the merge request was still manual (pipeline 41) after 60 minutes (pipeline.limits.ci_timeout_minutes = 60); the last read: pipeline 41 is held at manual job "sentry-release-commit": nothing runs until somebody starts it on the provider',
+    recorded_cut: false,
+  },
+  stages: [
+    {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'failed',
+      entered_at: '2026-06-01T10:00:00.000Z',
+      exited_at: '2026-06-01T11:00:00.000Z',
+      outcome: 'undecided',
+    },
+  ],
 });
 
 /** An epic-split task with a queue of two proposed children (WP-44, PROGRESS backlog 108). */
@@ -1500,6 +1615,8 @@ export const featureListItem = taskListItemSchema.parse({
   open_questions: 1,
   pending_approvals: 1,
   loop_limits: null,
+  latest_return: null,
+  stop: null,
 });
 
 export const bugListItem = taskListItemSchema.parse({
@@ -1508,6 +1625,8 @@ export const bugListItem = taskListItemSchema.parse({
   open_questions: 0,
   pending_approvals: 0,
   loop_limits: null,
+  latest_return: null,
+  stop: null,
 });
 
 export const tasksPage = {
@@ -1667,6 +1786,8 @@ export const taskPipelines: Readonly<Record<string, unknown>> = {
   [IDS.taskEpic]: graphOf(epicTaskDetail.task.template, {}),
   [IDS.taskFleetWorker]: graphOf('bug', {}),
   [IDS.taskFleetQueued]: graphOf('bug', {}),
+  [IDS.taskCiFixing]: featurePipeline,
+  [IDS.taskCiTimedOut]: featurePipeline,
 };
 
 export const projectPipelines = { items: [featurePipeline, graphOf('bug', {})] };

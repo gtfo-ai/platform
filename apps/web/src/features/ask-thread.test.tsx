@@ -95,6 +95,9 @@ const TASK_DETAIL: TaskDetailResponse = {
   can_rework: true,
   can_decide_approval: true,
   gate_feedback: null,
+  returns: [],
+  stop: null,
+  loop_limits: null,
   // WP-29: required and always present, so a server that forgot to project it fails here rather
   // than rendering a task page with no human-time line.
   human_time: {

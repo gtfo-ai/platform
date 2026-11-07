@@ -296,3 +296,4 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - Kubernetes `WorkspaceProvider` (Jobs / agent-sandbox, Cilium FQDN policies) (TD-021).
 - Envoy credential injection at the egress proxy (phase 2 of TD-021).
 - Bun as host runtime once 1.4.x stability data exists (TD-001).
+- GitLab note edits: whether a note's `updated_at` differs from `created_at` exactly when it was edited, and who may edit another user's note (TD-031's 2026-11-06 amendment item 9 (c), S-26.6) `[unverified]`.
