@@ -12,8 +12,10 @@
  * brief under a collapsed *Details*; the ways out per role, both directions; *Take it* as the page's
  * one amber primary only when the reader may take it, and the header's *Resume* giving way; *Take
  * it* with `take_writes_back` confirming once, through the shared control; *Give it back to the
- * agent* once an owner is set and nobody else holds the ticket — and, until then, what must happen
- * first (the write-back landing, or a change in Jira); *Cancel task…* opening the existing confirmation.
+ * agent* as soon as an owner is set (S-25.15 part B: the claim keeps the ticket for a platform
+ * owner, TD-031 item 5) — with what Jira shows while it is still somebody else, and no warning that
+ * the agent stops again; one *Take it* on the page (the header's owner line draws none while the box
+ * does, and its `···` menu keeps the items); *Cancel task…* opening the existing confirmation.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
@@ -469,6 +471,12 @@ describe('the ways out, by role', () => {
     };
     expect(taskPrimaryAction(base)).toBe('resume');
     expect(taskPrimaryAction({ ...base, heldElsewhere: true })).toBeNull();
+    expect(taskPrimaryAction({ ...base, heldElsewhere: true, canTake: true })).toBe('take');
+    // S-25.15 part B: once an owner is set, the box's hand-back — for a reader who may resume.
+    expect(taskPrimaryAction({ ...base, heldElsewhere: true, owned: true })).toBe('give_back');
+    expect(
+      taskPrimaryAction({ ...base, heldElsewhere: true, owned: true, canResume: false }),
+    ).toBeNull();
     // A take-over to hand back still comes first.
     expect(taskPrimaryAction({ ...base, canHandBack: true, heldElsewhere: true })).toBe(
       'hand_back',
@@ -545,7 +553,8 @@ describe('taking it, and what follows', () => {
     const back = await within(held).findByRole('button', { name: 'Give it back to the agent' });
     expect(within(held).queryByRole('button', { name: 'Take it' })).toBeNull();
     expect(within(held).queryByRole('button', { name: 'Assign…' })).toBeNull();
-    expect(primaryLabels(screen.getByRole('main'))).toEqual([]);
+    // The page's one amber primary (S-25.15 part B), and the header's Resume gives way to it.
+    expect(primaryLabels(screen.getByRole('main'))).toEqual(['Give it back to the agent']);
     await user.click(back);
     await waitFor(() => {
       expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/resume`]);
@@ -556,14 +565,17 @@ describe('taking it, and what follows', () => {
     start(detail(AS.member, OWNED_AND_WRITTEN_BACK), 'member');
     const held = await box();
     await within(held).findByRole('link', { name: 'Open in Jira' });
+    // Nothing amber at all: the hand-back is the primary only for a reader who may resume.
+    expect(primaryLabels(screen.getByRole('main'))).toEqual([]);
     expect(held.querySelector('[data-held-owned="ready"]')).not.toBeNull();
     expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
   });
 
-  // Review of #115: a take does not change the tracker's assignee (`decideOwnerCommand` rule 1), so
-  // while `unlinked_assignee` is set the claim refuses again — a resume would only stop the task.
-  it('waits for the write-back before offering the hand-back, and says so', async () => {
-    start(
+  // S-25.15 part B: the claim keeps the ticket for an owner set on the platform (TD-031 item 5,
+  // #117), so the hand-back no longer waits for the tracker — and the box no longer warns it would.
+  it('offers the hand-back while the write-back is under way, and says only that', async () => {
+    const user = userEvent.setup();
+    const { sent } = start(
       detail(AS.maintainer, {
         owner: { user_id: ME, name: 'Fake Operator' },
         owner_writes_back: true,
@@ -571,25 +583,127 @@ describe('taking it, and what follows', () => {
       'maintainer',
     );
     const held = await box();
-    await within(held).findByRole('link', { name: 'Open in Jira' });
+    const back = await within(held).findByRole('button', { name: 'Give it back to the agent' });
     expect(held.querySelector('[data-held-owned="writing_back"]')?.textContent).toBe(
-      'Jira is being assigned to Fake Operator; give it back to the agent once it is.',
+      'It has an owner now. Give it back to the agent and it runs the stage it stopped at again. Jira is being assigned to Fake Operator.',
     );
-    expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+    expect(held.textContent).not.toContain('once it is');
+    await user.click(back);
+    await waitFor(() => {
+      expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/resume`]);
+    });
   });
 
-  it('says the ticket must change in Jira first when nothing writes the owner back', async () => {
-    start(
+  it('offers the hand-back while Jira still shows somebody else, without the old warning', async () => {
+    const user = userEvent.setup();
+    const { sent } = start(
       detail(AS.maintainer, { owner: { user_id: PETRA, name: 'Petra' }, owner_writes_back: false }),
       'maintainer',
     );
     const held = await box();
-    await within(held).findByRole('link', { name: 'Open in Jira' });
-    const said = held.querySelector('[data-held-owned="held"]');
-    expect(said?.textContent).toBe(
-      `Jira still shows ${VOJTECH}: assign or unassign the ticket there first, or the agent stops again.`,
+    const back = await within(held).findByRole('button', { name: 'Give it back to the agent' });
+    expect(held.querySelector('[data-held-owned="held"]')?.textContent).toBe(
+      `It has an owner now. Give it back to the agent and it runs the stage it stopped at again. Jira still shows ${VOJTECH}, which doesn’t stop the agent.`,
     );
-    expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+    expect(held.textContent).not.toContain('stops again');
+    expect(held.textContent).not.toContain('there first');
     expect(within(held).queryByRole('button', { name: 'Take it' })).toBeNull();
+    await user.click(back);
+    await waitFor(() => {
+      expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/resume`]);
+    });
+  });
+
+  // The coordinator's decision on #120: once an owner is set, the hand-back is the amber primary.
+  it.each([
+    ['the write-back is under way', { owner_writes_back: true }],
+    ['Jira still shows somebody else', { owner_writes_back: false }],
+    ['nobody else holds the ticket', OWNED_AND_WRITTEN_BACK],
+  ] as const)('draws exactly one amber button once the task is taken — %s', async (_name, over) => {
+    start(
+      detail(AS.maintainer, { owner: { user_id: ME, name: 'Fake Operator' }, ...over }),
+      'maintainer',
+    );
+    const held = await box();
+    const back = await within(held).findByRole('button', { name: 'Give it back to the agent' });
+    await waitFor(() => {
+      expect(primaryLabels(screen.getByRole('main'))).toEqual(['Give it back to the agent']);
+    });
+    expect(back.className).toContain('border-primary-line');
+    // The header draws no Resume beside it: it is in the ··· menu.
+    expect(within(screen.getByRole('main')).queryByRole('button', { name: 'Resume' })).toBeNull();
+  });
+
+  it('offers no hand-back before anybody owns the task', async () => {
+    start(detail(AS.maintainer), 'maintainer');
+    const held = await box();
+    await within(held).findByRole('button', { name: 'Take it' });
+    expect(held.querySelector('[data-held-owned]')).toBeNull();
+    expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+  });
+});
+
+/**
+ * S-25.15 part B: while the box offers *Take it* / *Assign…*, the header's owner line is
+ * *Unassigned* alone — one *Take it* on the page — and the `···` menu keeps the owner items.
+ */
+describe('one Take it on the page', () => {
+  const ownerLine = (): HTMLElement =>
+    document.querySelector<HTMLElement>('[data-task-owner]') as HTMLElement;
+
+  const menuOwnerItems = async (): Promise<string[]> => {
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Task actions' }));
+    const menu = await screen.findByRole('menu');
+    const items = within(menu)
+      .getAllByRole('menuitem')
+      .map((item) => (item.textContent ?? '').trim());
+    await userEvent.setup().keyboard('{Escape}');
+    return items.filter((label) => ['Take it', 'Assign…', 'Unassign'].includes(label));
+  };
+
+  it('draws the box’s Take it and Assign… only, with the owner line saying Unassigned', async () => {
+    start(detail(AS.admin), 'admin');
+    const held = await box();
+    await within(held).findByRole('button', { name: 'Take it' });
+    const main = screen.getByRole('main');
+    expect(within(main).getAllByRole('button', { name: 'Take it' })).toHaveLength(1);
+    expect(within(main).getAllByRole('button', { name: 'Assign…' })).toHaveLength(1);
+    // The box's Link account… is the only one too, for an administrator.
+    expect(within(main).getAllByRole('link', { name: 'Link account…' })).toHaveLength(1);
+    const line = ownerLine();
+    expect(line.getAttribute('data-owner-steps')).toBe('callout');
+    expect(line.getAttribute('data-task-owner')).toBe('unassigned');
+    expect(line.textContent).toBe('Unassigned');
+    expect(within(line).queryAllByRole('button')).toHaveLength(0);
+    expect(await menuOwnerItems()).toEqual(['Take it', 'Assign…']);
+  });
+
+  it('keeps the owner line’s own buttons once the box offers none (the control)', async () => {
+    start(
+      detail(
+        { ...AS.maintainer, can_take: false, can_assign: true, can_unassign: true },
+        { owner: { user_id: PETRA, name: 'Petra' } },
+      ),
+      'maintainer',
+    );
+    const held = await box();
+    await within(held).findByRole('button', { name: 'Give it back to the agent' });
+    const line = ownerLine();
+    await within(line).findByRole('button', { name: 'Unassign' });
+    expect(line.getAttribute('data-owner-steps')).toBe('line');
+    expect(within(line).getByRole('button', { name: 'Assign…' })).toBeTruthy();
+    expect(within(held).queryByRole('button', { name: 'Assign…' })).toBeNull();
+  });
+
+  it('keeps the owner line’s buttons on a task that is not stopped this way (the control)', async () => {
+    start(detail({ ...AS.maintainer, escalation: null }, { state: 'active' }), 'maintainer');
+    await screen.findByRole('heading', { level: 1 });
+    const line = await waitFor(() => {
+      const found = ownerLine();
+      expect(within(found).getByRole('button', { name: 'Take it' })).toBeTruthy();
+      return found;
+    });
+    expect(line.getAttribute('data-owner-steps')).toBe('line');
+    expect(line.textContent).toContain(`Assigned in Jira to ${VOJTECH}`);
   });
 });

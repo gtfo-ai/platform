@@ -1148,6 +1148,38 @@ export const heldElsewhereTaskDetail = taskDetailResponseSchema.parse({
   ],
 });
 
+/**
+ * S-25.15 part B: AUT-6676 on the board and in the Inbox, served after `POST /__test__/waiting` —
+ * stopped with `ticket_assigned_elsewhere`, so the card, Home's *Needs you* and the Inbox's
+ * *Stopped* row say "Waiting for: Vojtěch Kaizr’s Jira ticket".
+ */
+export const heldElsewhereListItem = taskListItemSchema.parse({
+  ...heldElsewhereTaskDetail.task,
+  stages: [{ stage: 'refinement', attempt: 1, state: 'failed', entered_at: now }],
+  open_questions: 0,
+  pending_approvals: 0,
+  loop_limits: null,
+  gate_wait: null,
+  latest_return: null,
+  stop: null,
+  escalation_reason: 'ticket_assigned_elsewhere',
+});
+
+/** The Inbox's `escalated` row for the same task (backlog 1360). */
+export const inboxEscalated = inboxResponseSchema.shape.escalated.parse([
+  {
+    task_id: IDS.taskHeldElsewhere,
+    project_id: heldElsewhereTaskDetail.task.project_id,
+    ticket: heldElsewhereTaskDetail.task.ticket,
+    ticket_title: heldElsewhereTaskDetail.task.ticket_title,
+    current_stage: 'refinement',
+    reason: 'ticket_assigned_elsewhere',
+    at: '2026-11-05T13:22:12.114Z',
+    tracker_assignee: heldElsewhereTaskDetail.task.tracker_assignee,
+    unlinked_assignee: heldElsewhereTaskDetail.task.unlinked_assignee,
+  },
+]);
+
 export const epicTaskDetail = taskDetailResponseSchema.parse({
   ...bugTaskDetail,
   task: {

@@ -51,7 +51,7 @@ server on every request — the browser only hides what you cannot do.
 
 **Home · Projects · Inbox · Agents · Statistics** — the row under the top bar, the five screens of
 every day, its current entry underlined in amber. **Projects** carries the number of projects,
-**Inbox** what waits for you (open questions plus pending approvals) and **Agents** the runs in
+**Inbox** what waits for you (open questions, pending approvals, held CI jobs and stopped tasks) and **Agents** the runs in
 flight; a count that is zero, or not loaded yet, is not drawn. On a narrow screen the last entries
 move into a **More navigation** (`···`) menu at the end of the row, and the running pill shows only
 its number. There is no *Onboarding* entry: a project is set up once, so the wizard is **New
@@ -259,11 +259,13 @@ else holds the ticket, the task stops in **Needs you** with the reason *assigned
 says whose ticket it is (*"AUT-6676 is assigned in Jira to Vojtěch Kaizr, so no agent started on it."*, and
 that they aren't a linked member of this project when the platform cannot hand them the task) and offers the ways out in the box:
 **Take it** or **Assign…** (the same confirmation as the header's, which says when Jira is assigned too),
-**Link account…** for an administrator, **Open in Jira** and **Cancel task…**. Taking or assigning the task does
-not change the Jira assignee by itself, so **Give it back to the agent** (which runs the stage again) appears only
-once Jira no longer shows the other person: until then the callout says the owner is being assigned in Jira (when
-the project writes owners back), or that the ticket must be assigned or unassigned there first. The platform's own account of the stop is under
-*Details* (since S-25.14). No run
+**Link account…** for an administrator, **Open in Jira** and **Cancel task…** — and the header's owner line then
+reads *Unassigned* with no buttons of its own, so there is one **Take it** on the page. Once the task has an owner,
+**Give it back to the agent** (then the page's amber button) runs the stage again: the claim keeps the ticket for that owner even while Jira still
+shows the other person, and the callout says so (*"Jira still shows Vojtěch Kaizr, which doesn't stop the agent."*,
+or that the owner is being assigned in Jira when the project writes owners back). The platform's own account of the
+stop is under *Details* (since S-25.14). On the board card, Home's *Needs you* and the Inbox the stop reads
+*"Waiting for: Vojtěch Kaizr's Jira ticket"*. No run
 starts, and the platform posts one comment on the ticket — *"The agent did not start work on this
 ticket: it is assigned to somebody else. A maintainer has been asked who should take it."* While
 claiming, a ticket already assigned to a person is not started at all, unless you tick **Also start
@@ -1416,7 +1418,7 @@ computed from whatever two samples the browser happened to see is a number with 
 
 **Inbox** in the top navigation: everything pending for you, across every project, answerable in
 place — laid out like GitHub's notifications. The left column filters the list: **All**,
-**Questions**, **Approvals**, or one project, each with its count. Each row starts with the
+**Questions**, **Approvals**, **Stopped**, or one project, each with its count. Each row starts with the
 *needs you* bell, then the question's first line (or what the approval is about — *Plan v2 · size L ·
 6 files*), and under it
 where it is — project · ticket · stage — how long ago it was asked and, for a question, when it is due. Click a
@@ -1427,11 +1429,13 @@ row too (*CI waits for someone to start the manual job deploy*), under **All** a
 **Open** takes you to the task, where *Start the job in GitLab* is the button. With nothing
 pending the page says *Nothing needs you*.
 
-The Inbox read also lists **every task waiting for a person** (`escalated` on `GET /api/org/inbox`:
-the task, its ticket and title, the stop's reason key — *assigned elsewhere* is
-`ticket_assigned_elsewhere` — and who holds the ticket in the tracker), and every board item carries
-the same key (`escalation_reason`), so the card, Home's *Needs you* and the Inbox can say why a task
-stopped; the screens word it from S-25.14.
+**A task stopped for a person** is a row of its own section, **Stopped, waiting for a person**, below
+the rest: why it waits — *Waiting for: Vojtěch Kaizr's Jira ticket* for a ticket someone else holds,
+*The same failure repeated* and the like for the other stops the platform words, or *Needs a person*
+— where it is and when it stopped. The whole row opens the task, where it is decided; nothing is done
+from the list. A stopped task that also has a question or an approval is listed once, as that row,
+and the Inbox count in the top navigation counts it once. The board card and Home's *Needs you* say
+the same short form (S-25.15).
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
 answer wins**. An approval arrives in Slack with what it is about: for a plan, its version, size,

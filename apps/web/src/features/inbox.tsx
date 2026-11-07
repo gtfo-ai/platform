@@ -24,8 +24,16 @@
  * *Needs you* says. Its row names the job, where it is (the read carries the project and the
  * ticket), how long it has waited, and opens the task, whose primary action starts the job.
  *
+ * **A task stopped for a person** (S-25.15 part B, backlog 1360, the read's `escalated`) is a row
+ * of its own section, *Stopped, waiting for a person*, below the rest: why it waits in short form
+ * (`./escalation-short.ts`: "Waiting for: Vojtěch Kaizr’s Jira ticket", a reason key's words, or
+ * "Needs a person"), where it is and when it stopped, and the whole row opens the task — nothing is
+ * decided from this list (M25: decide on the task page, with the evidence on screen). A stopped task
+ * that also has a question or an approval is listed once, as that row (`ui/task-status.ts`'
+ * `inboxRows`, which the frame's badge counts too).
+ *
  * Every string an agent or a provider wrote — the question, the ticket key, a project's name, a
- * job's name — renders through `ui/untrusted.tsx`.
+ * job's name, a tracker assignee's name — renders through `ui/untrusted.tsx`.
  */
 import { BellIcon } from '@primer/octicons-react/BellIcon';
 import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
@@ -47,23 +55,28 @@ import { formatAgo } from '../ui/relative-time.js';
 import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
+import { inboxRows } from '../ui/task-status.js';
 import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { APPROVAL_WAIT_WORDS } from '../ui/words/approvals.js';
 import { ApprovalSummary } from './approval-summary.js';
 import { reviewVerb } from './approval-text.js';
+import { escalationShort } from './escalation-short.js';
 import { ciHeldSentence } from './gate-wait-words.js';
+import { WaitingWords } from './waiting-words.js';
 
 type Inbox = NonNullable<ReturnType<typeof useInbox>['data']>;
 type Question = Inbox['questions'][number];
 type Approval = Inbox['approvals'][number];
 type CiHeld = Inbox['ci_held'][number];
+type Escalated = Inbox['escalated'][number];
 
 /** The filter the NavList holds: a kind, or one project by id. */
 type Filter =
   | { readonly kind: 'all' }
   | { readonly kind: 'questions' }
   | { readonly kind: 'approvals' }
+  | { readonly kind: 'stopped' }
   | { readonly kind: 'project'; readonly projectId: string };
 
 interface Where {
@@ -347,6 +360,50 @@ const CiHeldRow = ({
 );
 
 /**
+ * A task stopped for a person (S-25.15 part B): why it waits, where it is, when it stopped — and the
+ * whole row opens the task, where it is decided. No command here (M25).
+ */
+const EscalatedRow = ({
+  row,
+  where,
+  nowMs,
+}: {
+  readonly row: Escalated;
+  readonly where: Where;
+  readonly nowMs: number;
+}): ReactElement => {
+  // The meta line names the stage, so the generic form does not say it twice.
+  const stop = escalationShort(row, { stage: false });
+  return (
+    <ListRow
+      leading={<StatusIcon status="needs_you" label="Stopped" />}
+      title={
+        <span data-inbox-escalated={row.task_id} data-inbox-stop={stop.kind}>
+          <WaitingWords parts={stop.parts} />
+        </span>
+      }
+      meta={
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          <WhereLine where={where} stage={row.current_stage} />
+          <Dot />
+          <span>{timeLine('stopped', row.at, null, nowMs)}</span>
+        </span>
+      }
+      actions={
+        <Link
+          to="/tasks/$taskId"
+          params={{ taskId: row.task_id }}
+          {...rowLink(buttonClassName('default', 'sm'))}
+        >
+          Open
+          <span className="sr-only">{` ${sanitiseUntrusted(row.ticket.key)}`}</span>
+        </Link>
+      }
+    />
+  );
+};
+
+/**
  * PROGRESS backlog 163's inbox half, closed by decision at WP-95 rather than built: this list is
  * what a person can still act on **here**, and an expired question can no longer be answered
  * (`listInbox` serves `open` and `pending` only). Listing it would be a row whose only control is
@@ -357,7 +414,7 @@ const CiHeldRow = ({
  */
 const ExpiryNote = (): ReactElement => (
   <div className="flex flex-col gap-1 text-xs text-fg-muted" data-inbox-expiry-note="true">
-    <p>Questions and approvals waiting for a person, across all projects.</p>
+    <p>Questions, approvals and stopped tasks waiting for a person, across all projects.</p>
     <DetailsDisclosure summary="Learn more" className="text-xs">
       <p>
         A question that expires leaves this list: it can no longer be answered. Its task waits under
@@ -377,9 +434,12 @@ export const InboxScreen = (): ReactElement => {
   const nowMs = now();
   const [filter, setFilter] = useState<Filter>({ kind: 'all' });
 
-  const questions = inbox.data?.questions ?? [];
-  const approvals = inbox.data?.approvals ?? [];
-  const ciHeld = inbox.data?.ci_held ?? [];
+  // The one reading of what the Inbox lists, the frame's badge's too (`ui/task-status.ts`).
+  const rows = inbox.data === undefined ? null : inboxRows(inbox.data);
+  const questions = rows?.questions ?? [];
+  const approvals = rows?.approvals ?? [];
+  const ciHeld = rows?.ci_held ?? [];
+  const escalated = rows?.escalated ?? [];
   const taskIds = [...new Set([...questions, ...approvals].map((item) => item.task_id))];
   const reads = useTasks(taskIds);
   const whereOf = new Map<string, Where>();
@@ -394,8 +454,8 @@ export const InboxScreen = (): ReactElement => {
       });
     }
   });
-  // A held CI job's row carries its project and ticket itself.
-  for (const held of ciHeld) {
+  // A held CI job's row and a stopped task's carry their project and ticket themselves.
+  for (const held of [...ciHeld, ...escalated]) {
     whereOf.set(held.task_id, {
       projectId: held.project_id,
       project: projects.data?.items.find((entry) => entry.id === held.project_id)?.key ?? null,
@@ -429,10 +489,17 @@ export const InboxScreen = (): ReactElement => {
         ? held.project_id === filter.projectId
         : false,
   );
+  const shownEscalated = escalated.filter((row) =>
+    filter.kind === 'all' || filter.kind === 'stopped'
+      ? true
+      : filter.kind === 'project'
+        ? row.project_id === filter.projectId
+        : false,
+  );
 
   // A project is listed once one of its items is known to be in it.
   const projectCounts = new Map<string, number>();
-  for (const item of [...questions, ...approvals, ...ciHeld]) {
+  for (const item of [...questions, ...approvals, ...ciHeld, ...escalated]) {
     const projectId = where(item.task_id).projectId;
     if (projectId !== null) {
       projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
@@ -450,7 +517,8 @@ export const InboxScreen = (): ReactElement => {
     };
   });
 
-  const total = questions.length + approvals.length + ciHeld.length;
+  const total = rows?.total ?? 0;
+  // What waits on an answer, a decision or a job, above; the stopped tasks are their own section.
   const shown = shownQuestions.length + shownApprovals.length + shownCiHeld.length;
   const settled = inbox.isSuccess;
 
@@ -487,6 +555,13 @@ export const InboxScreen = (): ReactElement => {
                   current: filter.kind === 'approvals',
                   onSelect: () => setFilter({ kind: 'approvals' }),
                 },
+                {
+                  id: 'stopped',
+                  label: 'Stopped',
+                  ...(settled ? { counter: escalated.length } : {}),
+                  current: filter.kind === 'stopped',
+                  onSelect: () => setFilter({ kind: 'stopped' }),
+                },
               ],
             },
             ...(projectItems.length === 0 ? [] : [{ label: 'Projects', items: projectItems }]),
@@ -500,10 +575,10 @@ export const InboxScreen = (): ReactElement => {
               size="spacious"
               icon={<BellIcon size={24} />}
               title="Nothing needs you"
-              hint="Questions an agent cannot answer itself, and approvals a maintainer owes, land here — and in the ticket and in chat at the same time. The first answer anywhere wins."
+              hint="Questions an agent cannot answer itself, approvals a maintainer owes, CI jobs only a person can start and tasks stopped for a person land here. Questions and approvals reach the ticket and chat at the same time, and the first answer anywhere wins."
             />
           ) : null}
-          {settled && total > 0 ? (
+          {settled && total > 0 && (shown > 0 || shownEscalated.length === 0) ? (
             <ListBox
               label="Waiting for you"
               header={
@@ -539,6 +614,27 @@ export const InboxScreen = (): ReactElement => {
                   key={held.task_id}
                   held={held}
                   where={where(held.task_id)}
+                  nowMs={nowMs}
+                />
+              ))}
+            </ListBox>
+          ) : null}
+          {settled && shownEscalated.length > 0 ? (
+            <ListBox
+              label="Stopped, waiting for a person"
+              header={
+                <ListBoxHeader>
+                  <span className="font-semibold text-fg" data-inbox-section="stopped">
+                    {`${formatInteger(shownEscalated.length)} stopped, waiting for a person`}
+                  </span>
+                </ListBoxHeader>
+              }
+            >
+              {shownEscalated.map((row) => (
+                <EscalatedRow
+                  key={row.task_id}
+                  row={row}
+                  where={where(row.task_id)}
                   nowMs={nowMs}
                 />
               ))}

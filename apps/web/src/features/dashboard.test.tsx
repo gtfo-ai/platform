@@ -261,6 +261,10 @@ interface World {
   waiting?: Readonly<Record<string, NonNullable<AgentsResponse['items'][number]['waiting']>>>;
   /** Every project's tasks; the fake filters by `state` the way the server does. */
   tasks: TaskRecord[];
+  /** S-25.15 part B: the inbox read's `escalated`; absent, none. */
+  escalated?: InboxResponse['escalated'];
+  /** S-25.15 part B: each list item's `escalation_reason`, by task id; absent, `null`. */
+  escalationReasons?: Readonly<Record<string, string>>;
   runs: RunRecord[];
   /** `readiness` per project id: 200 when evaluated, 409 when not. */
   evaluated: Set<string>;
@@ -353,7 +357,7 @@ const fetchFor = (world: World) =>
         questions: world.questions,
         approvals: world.approvals,
         ci_held: world.ciHeld ?? [],
-        escalated: [],
+        escalated: world.escalated ?? [],
       });
     }
     // The server refuses both below admin (`org.dead_letters.manage`); the fake does too.
@@ -429,7 +433,7 @@ const fetchFor = (world: World) =>
               gate_wait: null,
               latest_return: null,
               stop: null,
-              escalation_reason: null,
+              escalation_reason: world.escalationReasons?.[item.id] ?? null,
             })),
           next_cursor: null,
           can_start_task: true,
@@ -688,6 +692,114 @@ describe('Home, needs you first', () => {
     expect(within(header).getByRole('link', { name: 'View inbox →' }).getAttribute('href')).toBe(
       '/inbox',
     );
+  });
+
+  // S-25.15 part B: why a stopped task waits, in short form, on its row — every reason's kind.
+  it('says why each stopped task waits: whose ticket it is, a key’s words, or Needs a person', async () => {
+    const VOJTECH = 'Vojtěch <b>Kaizr</b>';
+    const world = newWorld({
+      tasks: [
+        task(5, {
+          state: 'needs_human',
+          ticket: { provider: 'jira-cloud', key: 'ACME-5', url: 'https://jira.example.invalid/' },
+          updated_at: minutesAgo(50),
+          tracker_assignee: { display_name: VOJTECH, user_id: null },
+          unlinked_assignee: { display_name: VOJTECH },
+        }),
+        task(6, {
+          state: 'needs_human',
+          updated_at: minutesAgo(40),
+          tracker_assignee: null,
+          unlinked_assignee: { display_name: null },
+        }),
+        task(7, { state: 'needs_human', updated_at: minutesAgo(30) }),
+        task(8, { state: 'needs_human', updated_at: minutesAgo(20) }),
+      ],
+      escalationReasons: {
+        [TASK(5)]: 'ticket_assigned_elsewhere',
+        [TASK(6)]: 'ticket_assigned_elsewhere',
+        [TASK(7)]: 'write_conflict',
+        [TASK(8)]: 'stage "implementation" did not produce a verdict: error_max_turns',
+      },
+    });
+    start(world);
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(needs.querySelectorAll('[data-home-stop]')).toHaveLength(4);
+    });
+    const stops = [...needs.querySelectorAll('[data-home-stop]')].map((stop) => [
+      stop.getAttribute('data-home-stop'),
+      stop.textContent,
+    ]);
+    expect(stops).toEqual([
+      ['held_elsewhere', `Waiting for: ${VOJTECH}’s Jira ticket`],
+      ['held_nameless', 'Waiting for: a Jira ticket someone else holds'],
+      ['worded', 'A write lost to another writer'],
+      // The reason's own sentence is never the row; the meta line names the stage.
+      ['generic', 'Needs a person'],
+    ]);
+    // The name is text, never markup (BD-022).
+    expect(needs.querySelector('b')).toBeNull();
+    const generic = needs.querySelector('[data-home-stop="generic"]')?.closest('li');
+    expect(generic?.textContent).toContain('Implementation');
+    expect(generic?.textContent).not.toContain('error_max_turns');
+    // The title is still the ticket's, and the row still opens the task.
+    expect(generic?.textContent).toContain('Ticket 8');
+    expect(
+      within(generic as HTMLElement)
+        .getByRole('link')
+        .getAttribute('href'),
+    ).toBe(`/tasks/${TASK(8)}`);
+  });
+
+  it('dates a stopped task’s row by when it stopped, when the inbox read lists it', async () => {
+    const stoppedRow = (n: number, minutes: number): InboxResponse['escalated'][number] => ({
+      task_id: TASK(n),
+      project_id: PROJECT(1),
+      ticket: { provider: 'jira-cloud', key: `ACME-${n}`, url: 'https://jira.example.invalid/' },
+      ticket_title: `Ticket ${n}`,
+      current_stage: 'implementation',
+      reason: 'converged',
+      at: minutesAgo(minutes),
+      tracker_assignee: null,
+      unlinked_assignee: null,
+    });
+    const world = newWorld({
+      tasks: [
+        task(5, { state: 'needs_human', updated_at: minutesAgo(5) }),
+        // Not in the read (past its cap, say): its last update, as before.
+        task(6, { state: 'needs_human', updated_at: minutesAgo(10) }),
+      ],
+      escalated: [stoppedRow(5, 90)],
+      escalationReasons: { [TASK(5)]: 'converged', [TASK(6)]: 'converged' },
+    });
+    start(world);
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(needs.querySelectorAll('[data-home-stop]')).toHaveLength(2);
+    });
+    const rows = within(needs).getAllByRole('listitem');
+    // Oldest first by that time: ACME-5 stopped 90 minutes ago, though it was updated 5 ago.
+    expect(rows[0]?.textContent).toContain('ACME-5');
+    expect(rows[0]?.textContent).toContain('1h 30m ago');
+    expect(rows[0]?.textContent).not.toContain('5m 0s ago');
+    expect(rows[1]?.textContent).toContain('ACME-6');
+    expect(rows[1]?.textContent).toContain('10m 0s ago');
+  });
+
+  it('says no stop on a question’s row, nor on an approval’s (the control)', async () => {
+    const world = newWorld({
+      questions: [question(3, 'Which retry budget?', 30)],
+      approvals: [approval(4, 120)],
+      tasks: [task(3, { state: 'needs_human' })],
+      escalationReasons: { [TASK(3)]: 'ticket_assigned_elsewhere' },
+    });
+    start(world);
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(within(needs).getAllByRole('listitem')).toHaveLength(2);
+    });
+    expect(needs.querySelector('[data-home-stop]')).toBeNull();
   });
 
   it('says so calmly when nothing needs you', async () => {

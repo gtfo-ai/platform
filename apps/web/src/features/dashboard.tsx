@@ -3,7 +3,8 @@
  * 5, § 5.2 "Home").
  *
  * The page opens with **Needs you** — every open question and pending approval in the organisation,
- * and every task escalated to a person — then **Running now**, then the **Projects**; the rail on
+ * and every task escalated to a person, saying why it waits in short form ("Waiting for: Vojtěch
+ * Kaizr’s Jira ticket", S-25.15 part B, `./escalation-short.ts`) — then **Running now**, then the **Projects**; the rail on
  * the right holds the spend and the instance. For an administrator *Needs you* also carries the
  * **background failures** (S-25.6, product/10's 2026-11-06 amendment, research/21 F14): a row for the
  * stuck events and one for the failed background jobs, each only while its count is above zero —
@@ -78,6 +79,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { ApprovalSummary } from './approval-summary.js';
 import { reviewVerb } from './approval-text.js';
+import { type EscalationShort, escalationShort } from './escalation-short.js';
 import { ciHeldSentence } from './gate-wait-words.js';
 import {
   type BlockedWorker,
@@ -287,6 +289,8 @@ interface NeedsYouItem {
   /** Untrusted when it came from an agent or a ticket. */
   readonly text: string;
   readonly at: string;
+  /** For a stopped task's row: why it waits, in short form (S-25.15 part B). */
+  readonly stop?: EscalationShort;
 }
 
 /**
@@ -373,6 +377,11 @@ const NeedsYouBox = ({
     'needs_human',
   );
 
+  // When each stopped task stopped (the Inbox read's `escalated`, S-25.15 part B): the row's time,
+  // as the Inbox's is — the task's last update only for one the read does not list.
+  const stoppedAt = new Map(
+    (inbox.data?.escalated ?? []).map((row) => [row.task_id, row.at] as const),
+  );
   const inboxTasks = new Set([
     ...(inbox.data?.questions ?? []).map((question) => question.task_id),
     ...(inbox.data?.approvals ?? []).map((approval) => approval.task_id),
@@ -431,7 +440,9 @@ const NeedsYouBox = ({
             ticket: task.ticket.key,
             stage: task.current_stage ?? null,
             text: task.ticket_title ?? 'Waiting for a person to decide what happens next',
-            at: task.updated_at,
+            at: stoppedAt.get(task.id) ?? task.updated_at,
+            // The meta line names the stage, so the generic form does not say it twice.
+            stop: escalationShort({ ...task, reason: task.escalation_reason }, { stage: false }),
           }),
         ),
     ),
@@ -505,6 +516,14 @@ const NeedsYouBox = ({
               }
               meta={
                 <span className="inline-flex flex-wrap items-center gap-1.5">
+                  {item.stop === undefined ? null : (
+                    <>
+                      <span data-home-stop={item.stop.kind} className="text-attention">
+                        <WaitingWords parts={item.stop.parts} />
+                      </span>
+                      <Dot />
+                    </>
+                  )}
                   <Where project={projectKey} ticket={ticket} stage={item.stage} />
                   <Dot />
                   <span>{`${formatElapsed(item.at, now())} ago`}</span>

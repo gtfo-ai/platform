@@ -9,10 +9,15 @@
  * it, the column read the state alone, so a task with an open question sat under *Active* while its
  * card said "Needs you 2" and its header said "Active".
  *
+ * **And the Inbox's count** (S-25.15 part B): {@link inboxRows} is what the Inbox lists and the
+ * frame's badge counts — every open question, pending approval and held CI job, and every task
+ * stopped for a person (`needs_human`, the read's `escalated`) that is not already one of the
+ * first two: such a task waits on that question or approval, and is that row (Home's rule too).
+ *
  * Types only from the contracts, and the words from `humanize.ts` (which has no runtime dependency
  * either), so any surface can import it.
  */
-import type { GateWait, TaskRecord, TaskState } from '@platform/contracts';
+import type { GateWait, InboxResponse, TaskRecord, TaskState } from '@platform/contracts';
 import { TASK_STATE_LABEL } from './humanize.js';
 import type { Status } from './status.js';
 
@@ -101,3 +106,22 @@ export const taskStateLabel = (task: NeedsYouInput): string =>
   needsYou(task) && !WAITING_ON_A_PERSON.has(task.state) && task.state !== 'paused'
     ? NEEDS_YOU_LABEL
     : TASK_STATE_LABEL[task.state];
+
+/**
+ * The Inbox's rows (S-25.15 part B): its four lists, `escalated` without the tasks that already
+ * have a question or an approval row — a `needs_human` task needs you through the one rule
+ * ({@link needsYou}) once, whichever row says why.
+ */
+export const inboxRows = (inbox: InboxResponse): InboxResponse & { readonly total: number } => {
+  const asked = new Set([
+    ...inbox.questions.map((question) => question.task_id),
+    ...inbox.approvals.map((approval) => approval.task_id),
+  ]);
+  const escalated = inbox.escalated.filter((row) => !asked.has(row.task_id));
+  return {
+    ...inbox,
+    escalated,
+    total:
+      inbox.questions.length + inbox.approvals.length + inbox.ci_held.length + escalated.length,
+  };
+};

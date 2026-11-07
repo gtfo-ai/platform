@@ -1219,6 +1219,10 @@ test('a ticket someone else holds says whose it is, with the ways out in the box
   const primaries = page.locator('main [class~="border-primary-line"]');
   await expect(primaries).toHaveCount(1);
   await expect(primaries).toHaveText('Take it');
+  // S-25.15 part B: one Take it on the page — the header's owner line says Unassigned alone.
+  await expect(page.locator('main').getByRole('button', { name: 'Take it' })).toHaveCount(1);
+  await expect(page.locator('main').getByRole('button', { name: 'Assign…' })).toHaveCount(1);
+  await expect(page.locator('[data-task-owner]')).toHaveText('Unassigned');
   // The brief, collapsed.
   const details = needs.locator('details[data-escalation-details]');
   await expect(details.locator('summary')).toHaveText('Details');
@@ -1239,6 +1243,41 @@ test('a ticket someone else holds says whose it is, with the ways out in the box
   expect(taken).toEqual([
     { path: `/api/tasks/${IDS.taskHeldElsewhere}/owner`, body: { user_id: IDS.user } },
   ]);
+});
+
+/**
+ * S-25.15 part B: why a stopped task waits, on every surface — AUT-6676's card, its row on Home's
+ * *Needs you* and its row in the Inbox's *Stopped* section say whose ticket it is, the name as
+ * text, and the Inbox row opens the task.
+ */
+test('why a stopped task waits, on the board, Home and the Inbox (S-25.15 part B)', async ({
+  page,
+  request,
+}) => {
+  await openWaiting(request);
+  const words = `Waiting for: ${HELD_ELSEWHERE_ASSIGNEE}’s Jira ticket`;
+  await page.goto(`/projects/${PROJECT_KEY}`);
+  const held = page.getByRole('article', { name: 'AUT-6676' });
+  await expect(held.locator('[data-card-setback="escalated"]')).toHaveText(words);
+  await expect(held.locator('[data-needs-you]')).toHaveCount(1);
+
+  await page.goto('/');
+  const needs = page.getByRole('list', { name: 'Needs you' });
+  await expect(needs.locator('[data-home-stop="held_elsewhere"]')).toHaveText(words);
+
+  await page.goto('/inbox');
+  const stopped = page.getByRole('list', { name: 'Stopped, waiting for a person' });
+  const row = stopped.locator(`[data-inbox-escalated="${IDS.taskHeldElsewhere}"]`);
+  await expect(row).toHaveText(words);
+  // No command in the row: it opens the task, where it is decided (M25).
+  await expect(stopped.getByRole('button')).toHaveCount(0);
+  const open = stopped.getByRole('link', { name: 'Open AUT-6676' });
+  await expect(open).toHaveAttribute('data-row-link', '');
+  await open.click();
+  await expect(page).toHaveURL(`/tasks/${IDS.taskHeldElsewhere}`);
+  await expect(
+    page.getByRole('region', { name: 'Needs you' }).locator('[data-held-sentence]'),
+  ).toContainText(HELD_ELSEWHERE_ASSIGNEE);
 });
 
 test('the epic split’s breakdown panel accepts a chosen child with one request (WP-44)', async ({

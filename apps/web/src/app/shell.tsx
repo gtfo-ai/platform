@@ -68,6 +68,7 @@ import { type BadgeTone, Button, cx, formatInteger } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
 import type { NavItem, NavLinkProps } from '../ui/nav-item.js';
 import { StatusIcon } from '../ui/status.js';
+import { inboxRows } from '../ui/task-status.js';
 import { Tooltip } from '../ui/tooltip.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -82,10 +83,10 @@ import { useServices } from './services.js';
 export { isCurrentSection, NAV } from './nav.js';
 
 /**
- * The counts the frame shows: projects, what waits for a person (open questions plus pending
- * approvals, the inbox's two lists) and the runs in flight (the agents read, the Home screen's
- * "Agents running"). `undefined` while a read has no answer — the frame then draws no number, never
- * a zero it does not know (rule 16).
+ * The counts the frame shows: projects, what waits for a person (the Inbox's rows — open
+ * questions, pending approvals, held CI jobs and stopped tasks, `ui/task-status.ts`' `inboxRows`)
+ * and the runs in flight (the agents read, the Home screen's "Agents running"). `undefined` while
+ * a read has no answer — the frame then draws no number, never a zero it does not know (rule 16).
  */
 export interface FrameCounts {
   readonly projects: number | undefined;
@@ -99,11 +100,9 @@ export const useFrameCounts = (): FrameCounts => {
   const agents = useAgents();
   return {
     projects: projects.data?.items.length,
-    inbox:
-      inbox.data === undefined
-        ? undefined
-        : // S-26.8b part 2: a CI job held for a person is a row of the inbox too (BACKLOG 1300).
-          inbox.data.questions.length + inbox.data.approvals.length + inbox.data.ci_held.length,
+    // The Inbox's own rows (`ui/task-status.ts`): a held CI job (BACKLOG 1300) and, since S-25.15
+    // part B, a task stopped for a person are rows too.
+    inbox: inbox.data === undefined ? undefined : inboxRows(inbox.data).total,
     running: agents.data?.items.length,
   };
 };

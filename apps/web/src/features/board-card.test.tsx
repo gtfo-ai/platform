@@ -912,3 +912,91 @@ describe('a card that waits for a machine, or for a person to start a CI job', (
     expect(cardActivity(FREE, created, NOW).detail).toBe('Starting');
   });
 });
+
+/**
+ * S-25.15 part B: a task stopped for a person (`needs_human`) says why on its card and its list
+ * row, from the item's `escalation_reason` — whose ticket it is, a key's short words, or *Needs a
+ * person* with the stage — and a structured stop keeps its own short form (S-25.11).
+ */
+describe('a card stopped for a person says why it waits', () => {
+  const VOJTECH = 'Vojtěch <img src=x onerror=alert(1)>';
+  const stopped = (n: number, reason: string | null, over: Partial<TaskListItem> = {}) =>
+    task(n, {
+      state: 'needs_human',
+      current_stage: 'refinement',
+      escalation_reason: reason,
+      ...over,
+    });
+  const NAMED = stopped(21, 'ticket_assigned_elsewhere', {
+    tracker_assignee: { display_name: VOJTECH, user_id: null },
+    unlinked_assignee: { display_name: VOJTECH },
+  });
+  const NAMELESS = stopped(22, 'ticket_assigned_elsewhere', {
+    unlinked_assignee: { display_name: null },
+  });
+  const KEYED = stopped(23, 'converged', { current_stage: 'ci_gate' });
+  const SENTENCE = stopped(24, 'stage "refinement" rejected the task');
+  const UNWORDED = stopped(25, 'escalated');
+  const ACTIVE = task(26, { state: 'active', current_stage: 'refinement' });
+
+  const stopOn = (element: HTMLElement): Element | null =>
+    element.querySelector('[data-card-setback="escalated"]');
+
+  it('names whose ticket it is, says a key’s words, and Needs a person with the stage otherwise', async () => {
+    open({ items: [NAMED, NAMELESS, KEYED, SENTENCE, UNWORDED, ACTIVE], agents: false });
+    const said = async (key: string) => {
+      const line = stopOn(await card(key));
+      return [line?.getAttribute('data-card-escalation'), line?.textContent];
+    };
+    expect(await said('ACME-21')).toEqual([
+      'held_elsewhere',
+      `Waiting for: ${VOJTECH}’s Jira ticket`,
+    ]);
+    expect(await said('ACME-22')).toEqual([
+      'held_nameless',
+      'Waiting for: a Jira ticket someone else holds',
+    ]);
+    expect(await said('ACME-23')).toEqual(['worded', 'The same failure repeated']);
+    // A sentence is not a key, and a key nobody words gets no words of its own.
+    expect(await said('ACME-24')).toEqual(['generic', 'Needs a person · Refinement']);
+    expect(await said('ACME-25')).toEqual(['generic', 'Needs a person · Refinement']);
+    // A provider's name is text, never markup (BD-022).
+    expect((await card('ACME-21')).querySelector('img')).toBeNull();
+    // The other direction: a task that is not stopped says nothing of the kind.
+    expect(stopOn(await card('ACME-26'))).toBeNull();
+  });
+
+  it('says it on the list view’s row too', async () => {
+    open({ items: [NAMED, ACTIVE], agents: false, path: '/projects/acme?view=list' });
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`[data-board-row="${NAMED.id}"]`);
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(stopOn(row)?.textContent).toBe(`Waiting for: ${VOJTECH}’s Jira ticket`);
+    const other = document.querySelector<HTMLElement>(`[data-board-row="${ACTIVE.id}"]`);
+    expect(stopOn(other as HTMLElement)).toBeNull();
+  });
+
+  it('keeps a structured stop’s own short form, which says more (S-25.11)', async () => {
+    const STRUCTURED = stopped(27, 'converged', {
+      current_stage: 'ci_gate',
+      stop: {
+        stage: 'ci_gate',
+        attempt: 1,
+        cause: 'no_answer',
+        loop: null,
+        ci_failure: null,
+        recorded: null,
+        recorded_cut: false,
+        ci_ending: 'ci_timed_out',
+      },
+    });
+    open({ items: [STRUCTURED], agents: false });
+    const element = await card('ACME-27');
+    expect(stopOn(element)).toBeNull();
+    expect(element.querySelector('[data-card-setback="stopped"]')?.textContent).toBe(
+      'CI did not finish',
+    );
+  });
+});
