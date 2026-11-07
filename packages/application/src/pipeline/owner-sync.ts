@@ -56,6 +56,8 @@ import {
   type OwnerChange,
   type OwnerCommandRefusal,
   type OwnershipDecision,
+  recordPlatformAssign,
+  recordPlatformUnassign,
   syncOwnerFromTracker,
   type TaskOwnership,
   taskHeldElsewhere,
