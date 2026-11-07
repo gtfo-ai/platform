@@ -89,6 +89,8 @@ interface World {
   executionReads: { project: string; workerId: string | null }[];
   /** Per project id: the execution read answers this status instead (its line must stay hidden). */
   executionFails: Record<string, number>;
+  /** `GET /api/projects` answers once this settles (the names arrive after the workers). */
+  projectsGate: Promise<void> | null;
 }
 
 const world = (overrides: Partial<World> = {}): World => ({
@@ -99,6 +101,7 @@ const world = (overrides: Partial<World> = {}): World => ({
   puts: [],
   executionReads: [],
   executionFails: {},
+  projectsGate: null,
   ...overrides,
 });
 
@@ -155,7 +158,10 @@ const server = (state: World): typeof fetch =>
       }
       return json(execution(state.othersTake[read[1] ?? '']));
     }
-    if (url.endsWith('/api/projects')) return json({ items: PROJECTS, can_create: false });
+    if (url.endsWith('/api/projects')) {
+      if (state.projectsGate !== null) await state.projectsGate;
+      return json({ items: PROJECTS, can_create: false });
+    }
     if (url.endsWith('/api/version')) {
       return json({ version: '0.0.0-dev', commit: null, built_at: null });
     }
@@ -274,6 +280,48 @@ describe('what this machine takes, per role (S-26.8a)', () => {
     );
     const mine = await policyOf(MINE);
     expect(within(mine).getByRole('button', { name: MACHINE_TAKES_WORDS.change })).toBeTruthy();
+  });
+});
+
+describe('before the project names are known (CI on #109)', () => {
+  it('says Loading, never a project’s key, until the projects read answers', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const state = world({
+      role: 'admin',
+      projectsGate: gate,
+      workers: [
+        workerFixture({ id: MINE, claim_policy: 'mine' }),
+        workerFixture({
+          id: THEIRS,
+          name: 'vojta-mbp',
+          user: { id: OTHER_USER, email: 'vojtech@example.invalid', name: 'Vojtěch' },
+          claim_policy: 'mine',
+          claim_projects: [{ id: AUTIX, key: 'AUT' }],
+        }),
+      ],
+    });
+    renderWorkers(state);
+    const loading = await waitFor(() => {
+      const found = document.querySelectorAll(`[data-worker-policy-loading]`);
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    for (const row of loading) {
+      expect(row.textContent).toBe(WORKERS_POLICY_WORDS.loading);
+    }
+    // No sentence to take back, no Change that would offer no project and ask nothing.
+    expect(document.querySelector('[data-claim-policy-sentence]')).toBeNull();
+    expect(document.body.textContent).not.toContain('in AUT');
+    expect(screen.queryByRole('button', { name: MACHINE_TAKES_WORDS.change })).toBeNull();
+    release();
+    expect(sentenceIn(await policyOf(THEIRS))).toBe(
+      'This machine takes only Vojtěch’s tasks, in Autix.',
+    );
+    expect(document.querySelector('[data-worker-policy-loading]')).toBeNull();
+    expect(state.executionReads).toEqual([]);
   });
 });
 

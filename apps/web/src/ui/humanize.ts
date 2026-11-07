@@ -665,6 +665,8 @@ export const WORKERS_POLICY_WORDS = {
     'Choose at least one project, or all of them. To take nothing by itself, choose Only what I pick.',
   /** A refusal none of the card's words name: the platform's sentence, never the server's text. */
   refusedOther: 'What this machine takes was not changed. Try again.',
+  /** Until the project names are known: the row says nothing it would have to take back. */
+  loading: 'Loading what this machine takes…',
   /** A stored project that no longer exists, on somebody else's machine (the card says *you left*). */
   removedProject: 'a removed project',
 } as const;

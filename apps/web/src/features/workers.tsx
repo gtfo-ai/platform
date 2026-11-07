@@ -294,6 +294,11 @@ const cardProjectsOf = (
  * never on the page's load — and cached per (project, machine). An answer that has not arrived, a
  * `404` or any other error leaves that project out of `unassignedHasTaker`: unknown, so the card says
  * nothing for it. The card itself decides when the line applies (*Only my tasks*).
+ *
+ * **Nothing is said before the project names are known** (CI on #109): until the projects read has
+ * answered, the row says only *Loading…* — never a sentence that names a project by its key and
+ * then by its name, nor a card whose *Change* offers no project and asks nothing. A projects read
+ * that failed draws the card with what the workers read carries (keys), rather than waiting on.
  */
 const WorkerPolicy = ({
   worker,
@@ -302,7 +307,8 @@ const WorkerPolicy = ({
   onSave,
 }: {
   readonly worker: WorkerSummary;
-  readonly projects: readonly ClaimPolicyProject[];
+  /** The projects the reader can see, or `null` while the projects read has not answered. */
+  readonly projects: readonly ClaimPolicyProject[] | null;
   /** Somebody else's machine: the card's sentence names them. */
   readonly ownerName: string | null;
   /** The machine's owner only. */
@@ -310,7 +316,7 @@ const WorkerPolicy = ({
 }): ReactElement => {
   const editable = onSave !== null;
   const [asked, setAsked] = useState(false);
-  const ids = editable ? projects.map((project) => project.id) : [];
+  const ids = editable && projects !== null ? projects.map((project) => project.id) : [];
   const executions = useProjectsExecutionFor(ids, worker.id, asked);
   const unassignedHasTaker: Record<string, boolean> = {};
   ids.forEach((id, index) => {
@@ -318,6 +324,13 @@ const WorkerPolicy = ({
     if (known !== undefined) unassignedHasTaker[id] = known;
   });
   const skipped = worker.policy_skipped_offers ?? 0;
+  if (projects === null) {
+    return (
+      <div className="flex flex-col gap-1" data-worker-policy="" data-worker-policy-loading="">
+        <p className="text-sm text-fg-muted">{WORKERS_POLICY_WORDS.loading}</p>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-1" data-worker-policy="">
       <ClaimPolicyCard
@@ -390,8 +403,11 @@ const WorkerRow = ({
 }: {
   readonly worker: WorkerSummary;
   readonly showUser: boolean;
-  /** The projects the reader can see: the card's chips and the names its sentence says. */
-  readonly projects: readonly ClaimPolicyProject[];
+  /**
+   * The projects the reader can see — the card's chips and the names its sentence says — or `null`
+   * while the projects read has not answered.
+   */
+  readonly projects: readonly ClaimPolicyProject[] | null;
   /** The signed-in person: only the machine's owner may change what it takes. */
   readonly readerId: string | null;
   readonly onSavePolicy: (next: ClaimPolicyValue) => Promise<void>;
@@ -563,9 +579,14 @@ export const WorkersScreen = (): ReactElement => {
   const { now } = useServices();
   const nowMs = now();
   const items = workers.data?.items ?? [];
-  const projects: readonly ClaimPolicyProject[] = (projectList.data?.items ?? []).map(
-    (project) => ({ id: project.id, name: project.name, key: project.key }),
-  );
+  // `null` until the projects read has answered (or failed): a row says nothing before the names.
+  const projects: readonly ClaimPolicyProject[] | null = projectList.isPending
+    ? null
+    : (projectList.data?.items ?? []).map((project) => ({
+        id: project.id,
+        name: project.name,
+        key: project.key,
+      }));
   const savePolicy =
     (workerId: string) =>
     async (next: ClaimPolicyValue): Promise<void> => {
