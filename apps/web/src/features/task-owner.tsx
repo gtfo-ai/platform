@@ -204,26 +204,35 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
 
 export type OwnerControl = ReturnType<typeof useOwnerControl>;
 
-/** The header's owner line and its one secondary button. */
+/**
+ * The header's owner line and its one secondary button — or, while the needs-you callout offers
+ * the owner's steps itself (`stepsInCallout`, a ticket someone else holds: S-25.15 part B), the
+ * line alone: *Unassigned*, with no button and no *Link account…* — the callout says whose ticket
+ * it is and offers both, so the page has one *Take it*. The `···` menu keeps every owner item.
+ */
 export const OwnerLine = ({
   detail,
   control,
+  stepsInCallout = false,
 }: {
   readonly detail: TaskDetailResponse;
   readonly control: OwnerControl;
+  readonly stepsInCallout?: boolean;
 }): ReactElement => {
   const { task } = detail;
   const owner = task.owner ?? null;
-  const unlinked = task.unlinked_assignee ?? null;
+  const unlinked = stepsInCallout ? null : (task.unlinked_assignee ?? null);
   const tracker = trackerName(task.ticket.provider);
   const words = OWNER_WORDS['owner.assigned_in_tracker_unlinked'];
   // The first of *Take it* and *Unassign* that applies, with *Assign…* beside it.
-  const first = control.offers.find((action) => action !== 'assign');
-  const offersAssign = control.offers.includes('assign');
+  const offers = stepsInCallout ? [] : control.offers;
+  const first = offers.find((action) => action !== 'assign');
+  const offersAssign = offers.includes('assign');
   const canLink = isOrgSectionFor('identities', control.viewer?.role);
   return (
     <span
       data-task-owner={owner !== null ? 'owned' : unlinked !== null ? 'unlinked' : 'unassigned'}
+      data-owner-steps={stepsInCallout ? 'callout' : 'line'}
       className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1"
     >
       {owner !== null ? (

@@ -99,7 +99,7 @@ any initial asset by a marker (`LAZY_ONLY`). **The word maps only
 lazy screens show** left `ui/humanize.ts`, which the frame imports, for `ui/words/*` modules of
 their own that `humanize.ts` does not re-export (`readiness-criteria`, `loops`, `integrations`,
 `project-execution`, `settings`, `approvals`, `owners`, `workers-policy`, `ci-manual-jobs`): a module's statements sit in one chunk, so a map in `humanize.ts`
-was in the initial graph whichever screen used it. Measured on `main` at `b867b5b2`, the graph after both is 275 223 B against 298 066 B before (−22 843 B).
+was in the initial graph whichever screen used it. Measured on `main` at `b867b5b2`, the graph after both is 275 223 B against 298 066 B before (−22 843 B). Since S-25.15 (part B) the tracker's name (`trackerName`) is `ui/words/trackers.ts`, which `owners` re-exports: Home's first paint says "Waiting for: Vojtěch Kaizr’s Jira ticket" (`features/escalation-short.ts`), and importing `owners` there would have put all of it back in the initial graph.
 
 The account menu in the top bar (`app/shell.tsx`) is the first screen use of Base UI: who is signed
 in, with which role, and **Sign out** (no theme choice: one dark theme, TD-033's 2026-11-05 amendment). `app/app.tsx` wraps the tree in

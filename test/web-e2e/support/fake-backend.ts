@@ -272,7 +272,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
   let myIdentities: MyIdentity[] = [];
   /**
    * `POST /__test__/waiting` (S-26.8b part 2): the board also serves three tasks waiting for a
-   * machine and the CI-held one, and the inbox its `ci_held` row.
+   * machine and the CI-held one, and the inbox its `ci_held` row — and (S-25.15 part B) AUT-6676,
+   * stopped because its ticket is someone else's, with the inbox's `escalated` row.
    */
   let waitingOpen = false;
   /**
@@ -495,7 +496,11 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     if (path === '/__test__/waiting' && method === 'POST') {
       if (!waitingOpen) {
         waitingOpen = true;
-        extraTasks.push(...fixtures.waitingListItems, fixtures.ciHeldListItem);
+        extraTasks.push(
+          ...fixtures.waitingListItems,
+          fixtures.ciHeldListItem,
+          fixtures.heldElsewhereListItem,
+        );
       }
       json(response, 200, { open: true });
       return;
@@ -951,7 +956,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
           questions: fixtures.inbox.questions.filter((item) => !answeredQuestions.has(item.id)),
           approvals: fixtures.inbox.approvals,
           ci_held: waitingOpen ? fixtures.inboxCiHeld : fixtures.inbox.ci_held,
-          escalated: fixtures.inbox.escalated,
+          escalated: waitingOpen ? fixtures.inboxEscalated : fixtures.inbox.escalated,
         },
         '/api/integrations': fixtures.integrations,
         '/api/integrations/providers': fixtures.integrationProviders,

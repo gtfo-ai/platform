@@ -539,6 +539,169 @@ describe('a CI check held at a manual job', () => {
 });
 
 /**
+ * S-25.15 part B (backlog 1360): a task stopped for a person (`needs_human`) is a row of its own
+ * section — why it waits in short form, where it is, when it stopped — and the whole row opens the
+ * task; nothing is decided here. A stopped task that also has a question is that question's row,
+ * once, and the frame's badge counts what the page lists.
+ */
+describe('a task stopped for a person', () => {
+  const VOJTECH = 'Vojtěch Kaizr';
+  const STOPPED_TASK = '00000000-0000-4000-8000-0000000000c3';
+  const escalated = (
+    overrides: Partial<InboxResponse['escalated'][number]> = {},
+  ): InboxResponse['escalated'][number] => ({
+    task_id: STOPPED_TASK,
+    project_id: PROJECT,
+    ticket: { provider: 'jira-cloud', key: 'AUT-6676', url: 'https://tickets.example.invalid/A' },
+    ticket_title: 'Export invoices as CSV',
+    current_stage: 'refinement',
+    reason: 'ticket_assigned_elsewhere',
+    at: '2026-09-29T07:05:00.000Z',
+    tracker_assignee: { display_name: VOJTECH, user_id: null },
+    unlinked_assignee: { display_name: VOJTECH },
+    ...overrides,
+  });
+
+  const renderStopped = async (fetchImpl: typeof fetch): Promise<HTMLElement> => {
+    const { container } = render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
+    await screen.findByRole('list', { name: 'Stopped, waiting for a person' });
+    return container;
+  };
+
+  const stopOf = (container: HTMLElement, taskId = STOPPED_TASK): HTMLElement | null =>
+    container.querySelector<HTMLElement>(`[data-inbox-escalated="${taskId}"]`);
+
+  it('names whose ticket it is, where it is and when it stopped, and the whole row opens the task', async () => {
+    inbox = { questions: [], approvals: [], ci_held: [], escalated: [escalated()] };
+    const container = await renderStopped(fakeServer().fetchImpl);
+    const stop = stopOf(container);
+    expect(stop?.textContent).toBe(`Waiting for: ${VOJTECH}’s Jira ticket`);
+    expect(stop?.getAttribute('data-inbox-stop')).toBe('held_elsewhere');
+    const row = stop?.closest('li') as HTMLElement;
+    await waitFor(() => {
+      expect(row.querySelector('[data-inbox-where]')?.textContent).toBe('acme·AUT-6676·Refinement');
+    });
+    expect(row.textContent).toContain('stopped 2 h ago');
+    // One link, the row's stretched one, to the task — and no command in the row (M25).
+    const links = [...row.querySelectorAll('a')];
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute('href')).toBe(`/tasks/${STOPPED_TASK}`);
+    expect(links[0]?.hasAttribute(ROW_LINK_ATTRIBUTE)).toBe(true);
+    expect(links[0]?.textContent).toBe('Open AUT-6676');
+    expect(row.querySelectorAll('button')).toHaveLength(0);
+    // Only the stopped section: the questions' list says nothing about an empty filter.
+    expect(screen.queryByRole('list', { name: 'Waiting for you' })).toBeNull();
+    expect(screen.queryByText('Nothing needs you')).toBeNull();
+  });
+
+  it('says a Jira ticket someone else holds when the platform knows no name', async () => {
+    inbox = {
+      questions: [],
+      approvals: [],
+      ci_held: [],
+      escalated: [
+        escalated({
+          tracker_assignee: { display_name: null, user_id: null },
+          unlinked_assignee: { display_name: null },
+        }),
+      ],
+    };
+    const container = await renderStopped(fakeServer().fetchImpl);
+    expect(stopOf(container)?.textContent).toBe('Waiting for: a Jira ticket someone else holds');
+    expect(stopOf(container)?.getAttribute('data-inbox-stop')).toBe('held_nameless');
+  });
+
+  it('renders the name as text, never markup (BD-022)', async () => {
+    const name = 'Jan <img src=x onerror=alert(1)>';
+    inbox = {
+      questions: [],
+      approvals: [],
+      ci_held: [],
+      escalated: [
+        escalated({
+          tracker_assignee: { display_name: name, user_id: null },
+          unlinked_assignee: { display_name: name },
+        }),
+      ],
+    };
+    const container = await renderStopped(fakeServer().fetchImpl);
+    expect(stopOf(container)?.textContent).toBe(`Waiting for: ${name}’s Jira ticket`);
+    expect(container.querySelector('main img')).toBeNull();
+  });
+
+  it('words another reason key the platform words, and a sentence as Needs a person', async () => {
+    const SENTENCE_TASK = '00000000-0000-4000-8000-0000000000c4';
+    inbox = {
+      questions: [],
+      approvals: [],
+      ci_held: [],
+      escalated: [
+        escalated({ reason: 'converged' }),
+        escalated({
+          task_id: SENTENCE_TASK,
+          ticket: {
+            provider: 'jira-cloud',
+            key: 'AUT-7',
+            url: 'https://tickets.example.invalid/B',
+          },
+          reason: 'stage "refinement" rejected the task',
+          current_stage: 'code_review',
+        }),
+      ],
+    };
+    const container = await renderStopped(fakeServer().fetchImpl);
+    expect(stopOf(container)?.textContent).toBe('The same failure repeated');
+    expect(stopOf(container)?.getAttribute('data-inbox-stop')).toBe('worded');
+    const generic = stopOf(container, SENTENCE_TASK);
+    // The reason's own sentence is never the row: the stage is in the meta line already.
+    expect(generic?.textContent).toBe('Needs a person');
+    expect(generic?.getAttribute('data-inbox-stop')).toBe('generic');
+    expect(generic?.closest('li')?.querySelector('[data-inbox-where]')?.textContent).toBe(
+      'acme·AUT-7·Code review',
+    );
+  });
+
+  it('lists a stopped task with a question once — as the question — and counts what it lists', async () => {
+    inbox = {
+      questions: [question({ task_id: STOPPED_TASK })],
+      approvals: [],
+      ci_held: [],
+      escalated: [escalated(), escalated({ task_id: OTHER_TASK, reason: 'undecided' })],
+    };
+    const container = await renderInbox(fakeServer().fetchImpl);
+    await screen.findByRole('list', { name: 'Stopped, waiting for a person' });
+    // The question's task is not a second row; the other stopped task is.
+    expect(stopOf(container)).toBeNull();
+    expect(stopOf(container, OTHER_TASK)?.textContent).toBe('The check couldn’t decide');
+    const filters = screen.getByRole('navigation', { name: 'Inbox filters' });
+    const button = (name: RegExp) => within(filters).getByRole('button', { name });
+    expect(button(/^All/).textContent).toContain('2');
+    expect(button(/^Stopped/).textContent).toContain('1');
+    // The frame's badge: the same two rows (`inboxRows`), not three.
+    await waitFor(() => {
+      expect(document.querySelector('[data-inbox-count]')?.getAttribute('data-inbox-count')).toBe(
+        '2',
+      );
+    });
+  });
+
+  it('filters to the stopped tasks, and keeps them out of Questions', async () => {
+    inbox = { questions: [question()], approvals: [], ci_held: [], escalated: [escalated()] };
+    const container = await renderInbox(fakeServer({ [OTHER_TASK]: 'ACME-12' }).fetchImpl);
+    const filters = screen.getByRole('navigation', { name: 'Inbox filters' });
+    const button = (name: RegExp) => within(filters).getByRole('button', { name });
+    const user = userEvent.setup();
+    await user.click(button(/^Questions/));
+    expect(stopOf(container)).toBeNull();
+    expect(screen.getByText('Should the retry budget be three or five?')).toBeTruthy();
+    await user.click(button(/^Stopped/));
+    expect(stopOf(container)).not.toBeNull();
+    expect(screen.queryByText('Should the retry budget be three or five?')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Waiting for you' })).toBeNull();
+  });
+});
+
+/**
  * The shared helper both rows print their time with (S-27.1): a question's deadline is a due time,
  * and an approval — passed no deadline — says who it waits for, with no *due*, *expires* or *until*
  * clause.

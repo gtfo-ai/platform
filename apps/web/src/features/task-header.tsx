@@ -50,7 +50,10 @@
  * **The owner** (S-26.8b, the M26 UX spec § 2, `./task-owner.tsx`): beside the ticket's links, the
  * owner's avatar and name, *Unassigned*, or the tracker assignee the platform cannot link; and the
  * one **secondary** owner button — *Take it* or *Unassign*, as the read's `can_take` /
- * `can_unassign` allow — with every owner action in the `···` menu too. Never the primary.
+ * `can_unassign` allow — with every owner action in the `···` menu too. Never the primary. While
+ * the callout offers *Take it* / *Assign…* for a ticket someone else holds (S-25.15 part B,
+ * `./ticket-held-elsewhere.tsx`' `heldElsewhereOwnerSteps`), the line is *Unassigned* alone: one
+ * *Take it* on the page, and the menu keeps the owner items.
  *
  * **And only what the caller's role may do** (S-23.23): the read carries `can_pause`, `can_resume`,
  * `can_cancel`, `can_return`, `can_rework` and `can_decide_approval` — each the command route's own
@@ -97,6 +100,7 @@ import { answerInputId } from './task-callout.js';
 import type { TaskDialog } from './task-dialogs.js';
 import { type OwnerControl, OwnerFeedback, OwnerLine, OwnerMenuItems } from './task-owner.js';
 import { TicketClaimAndQa } from './ticket-claim.js';
+import { heldElsewhereOwnerSteps } from './ticket-held-elsewhere.js';
 import { waitingLong, waitingPlain } from './waiting-words.js';
 
 /**
@@ -441,7 +445,11 @@ export const TaskHeader = ({
             </span>
             {/* S-26.8b: who owns it, beside the ticket, and the one secondary owner control. */}
             <span aria-hidden="true">·</span>
-            <OwnerLine detail={detail} control={owner} />
+            <OwnerLine
+              detail={detail}
+              control={owner}
+              stepsInCallout={heldElsewhereOwnerSteps(detail, owner.offers).length > 0}
+            />
             <span>{`· ${titleCase(task.template)}`}</span>
             {currentStage === null ? null : <span>{`· ${stageLabel(currentStage)}`}</span>}
             <span>{`· ${formatUsd(task.cost_actual_usd)} so far`}</span>

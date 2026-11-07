@@ -7,17 +7,19 @@
  * - *Take it* / *Assign…* — the header's **one** owner control (`./task-owner.tsx`), passed in, so
  *   *Take it*'s confirmation (the `take_writes_back` wording) and *Assign…*'s picker (each
  *   candidate's `writes_back`) open once, whichever button opened them. Offered on the read's
- *   `can_take` / `can_assign`, while nobody owns the task;
+ *   `can_take` / `can_assign`, while nobody owns the task — and then **only here**: the header's
+ *   owner line draws no button of its own (S-25.15 part B, {@link heldElsewhereOwnerSteps}), so the
+ *   page has one *Take it*;
  * - *Link account…* — Settings → Linked accounts, for a reader who may open it (an administrator),
  *   and only when the person is not linked;
  * - *Open in Jira* — the ticket's own page, through `ExternalLink` (`safeHref`);
- * - *Give it back to the agent* — once an owner is set **and** the tracker no longer shows
- *   somebody else (`unlinked_assignee` is `null`, the claim's own *held elsewhere* test), the
- *   existing `resume` command (`can_resume`): the task re-enters the stage it stopped at. Before
- *   that the claim would refuse again, so the box says what must happen first instead
- *   (`heldElsewhereOwnedWords`: the write-back landing, or a change in the tracker). It is this
- *   page's word for product/10's *Hand back*; the take-over's hand-back is a different command that
- *   needs a take-over in force;
+ * - *Give it back to the agent* — once an owner is set, the existing `resume` command
+ *   (`can_resume`): the task re-enters the stage it stopped at. Since TD-031 item 5 (#117) the
+ *   claim keeps the ticket for an owner set on the platform even while the tracker still names
+ *   somebody else, so it is offered whatever `unlinked_assignee` says; the box says what the
+ *   tracker shows while that is still somebody else (`heldElsewhereOwnedWords`). It is this page's
+ *   word for product/10's *Hand back*; the take-over's hand-back is a different command that needs
+ *   a take-over in force;
  * - *Cancel task…* — the existing cancel confirmation (`can_cancel`).
  *
  * **One amber primary** (`./page-primary.ts`, the page's one decision, passed in as `primary`):
@@ -42,6 +44,7 @@ import { ownerName } from './task-owner.js';
 import {
   HELD_ELSEWHERE_WORDS,
   heldElsewhereOwnedWords,
+  heldElsewhereStop,
   heldElsewhereWords,
   ticketHolder,
 } from './ticket-held-words.js';
@@ -51,6 +54,20 @@ const STEP = buttonClassName('default', 'sm');
 
 /** The owner actions the box offers; *Unassign* would not move the task. */
 const BOX_ACTIONS: readonly OwnerAction[] = ['take', 'assign'];
+
+/**
+ * The owner buttons the box draws for this reader (S-25.15 part B): *Take it* / *Assign…* while
+ * nobody owns a task stopped because its ticket is somebody else's. Non-empty, the header's owner
+ * line draws neither (nor *Link account…*, which the box offers too) — one *Take it* per page —
+ * and its `···` menu keeps every owner item.
+ */
+export const heldElsewhereOwnerSteps = (
+  detail: TaskDetailResponse,
+  offers: readonly OwnerAction[],
+): readonly OwnerAction[] =>
+  heldElsewhereStop(detail) && (detail.task.owner ?? null) === null
+    ? offers.filter((action) => BOX_ACTIONS.includes(action))
+    : [];
 
 export const HeldElsewhere = ({
   detail,
@@ -83,12 +100,11 @@ export const HeldElsewhere = ({
           unlinkedAssignee: (task.unlinked_assignee ?? null) !== null,
           ownerWritesBack: task.owner_writes_back,
         });
-  const offers = owned
-    ? []
-    : (owner?.offers ?? []).filter((action) => BOX_ACTIONS.includes(action));
+  const offers = heldElsewhereOwnerSteps(detail, owner?.offers ?? []);
   const takeLeads = owner !== undefined && primary === 'take';
   const mayLink = holder.unlinked && isOrgSectionFor('identities', owner?.viewer?.role);
-  const mayHandBack = afterOwner?.kind === 'ready' && detail.can_resume;
+  // TD-031 item 5: the claim keeps the ticket for the owner, so an owner is all it takes.
+  const mayHandBack = owned && detail.can_resume;
   const pending = owner?.command.isPending === true;
   return (
     <div

@@ -14,6 +14,9 @@
  *  - for a task that went back, why and what happens next in short form (S-25.11, `./setback.ts`):
  *    *CI failed · fixing, round 2/3* while the agent is on it — the loop badge of that round is then
  *    not drawn a second time — or *CI did not finish* when it stopped;
+ *  - for a task stopped for a person (`needs_human`) with no structured stop, why it waits
+ *    (S-25.15 part B, `./escalation-short.ts`): *Waiting for: Vojtěch Kaizr’s Jira ticket*, a
+ *    reason key's short words, or *Needs a person · Refinement*;
  *  - while its CI check waits on a manual job a person must start (S-26.8b part 2, BACKLOG 1300, the
  *    item's `gate_wait`), *CI held · start the job* in that slot, and the task is *Needs you* through
  *    the one rule (`ui/task-status.ts`' `ciHeldNow`, active tasks only);
@@ -84,6 +87,7 @@ import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { loopRoundLabel } from '../ui/words/loops.js';
 import { OWNER_WORDS } from '../ui/words/owners.js';
 import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
+import { escalationShort } from './escalation-short.js';
 import { CI_HELD_SHORT } from './gate-wait-words.js';
 import { openReturn, setbackShort } from './setback.js';
 import { WaitingWords, waitingPlain, waitingShort, waitingTail } from './waiting-words.js';
@@ -164,9 +168,33 @@ export const cardSetback = (task: TaskListItem): string | null =>
     ? CI_HELD_SHORT
     : setbackShort(task, task.stages, task.latest_return, task.stop, task.loop_limits);
 
-/** The short form's line, or nothing. */
+/**
+ * Why a stopped task waits (S-25.15 part B, `./escalation-short.ts`): "Waiting for: Vojtěch
+ * Kaizr’s Jira ticket", a key's short words, or "Needs a person · Refinement" — from the item's
+ * `escalation_reason`, every name through `UntrustedText`.
+ */
+export const EscalationLine = ({ task }: { readonly task: TaskListItem }): ReactElement => {
+  const stop = escalationShort({ ...task, reason: task.escalation_reason }, { stage: true });
+  return (
+    <span
+      data-card-setback="escalated"
+      data-card-escalation={stop.kind}
+      className="text-xs text-attention"
+    >
+      <WaitingWords parts={stop.parts} />
+    </span>
+  );
+};
+
+/**
+ * The short form's line, or nothing: a held job, a return or a structured stop (S-25.11), else —
+ * for a task stopped for a person with none of those — why it waits ({@link EscalationLine}).
+ */
 export const SetbackLine = ({ task }: { readonly task: TaskListItem }): ReactElement | null => {
   const text = cardSetback(task);
+  if (text === null && task.state === 'needs_human') {
+    return <EscalationLine task={task} />;
+  }
   const held = ciHeldNow(task);
   // The fixing line asks nothing of the reader, so it is muted; a stop or a held job keeps the
   // attention tone.

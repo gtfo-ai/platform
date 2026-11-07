@@ -139,12 +139,19 @@ ticket is someone else's says whose it is, and offers the ways out in the box.**
 
 *S-25.14's wording (review of #115, 2026-11-07).* The read cannot tell a person with no linked account from a linked
 one below *member* (both have no `user_id`), so the added sentence is "*Vojtěch Kaizr* isn't a linked member of this
-project.", which is true of both. *Hand back* is the existing *Resume*, worded *Give it back to the agent*, and it is
-offered only once the tracker no longer shows the other person (`unlinked_assignee` is empty): taking or assigning the
-task does not change the ticket's assignee by itself, and the claim reads it again, so a hand-back before then stops
-the task again. Until then the box says what must happen first: "Jira is being assigned to *Petra*; give it back to
-the agent once it is." when owners are written back, otherwise "Jira still shows *Vojtěch Kaizr*: assign or unassign
-the ticket there first, or the agent stops again."
+project.", which is true of both. *Hand back* is the existing *Resume*, worded *Give it back to the agent*. Since S-25.15 (part B) it
+is offered as soon as the task has an owner and the reader may resume it: the claim **keeps** the ticket for an owner
+set on the platform even while the tracker still names somebody else (TD-031's 2026-11-07 amendment, item 5), so the
+hand-back no longer waits for the tracker. The box says "It has an owner now. Give it back to the agent and it runs
+the stage it stopped at again.", and adds what the tracker shows only while it is still somebody else: "Jira is being
+assigned to *Petra*." when owners are written back, otherwise "Jira still shows *Vojtěch Kaizr*, which doesn't stop
+the agent." While the box offers *Take it* / *Assign…*, the header's owner line reads *Unassigned* with no buttons of
+its own, so the page has one *Take it*; the `···` menu keeps the owner items. The short form on the board card, Home
+and the Inbox is "Waiting for: *Vojtěch Kaizr*'s Jira ticket", or "Waiting for: a Jira ticket someone else holds"
+with no name. Another reason key the stage timeline words as *Needs you: …* gets those words shortened for a row
+("The same failure repeated"); a reason that is a sentence, or a key nobody words, reads "Needs a person", with the
+stage where the row does not already name it. The Inbox lists each stopped task once, in its own section *Stopped,
+waiting for a person*, and the whole row opens the task: nothing is decided from the list.
 
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.

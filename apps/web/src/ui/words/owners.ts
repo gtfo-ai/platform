@@ -7,22 +7,13 @@
  * them back in the initial graph (TD-013's budget, `bundle:check`). Screens import this module.
  */
 
+// A tracker's name (`trackerName`) is `./trackers.ts`' since S-25.15 part B: Home's first paint
+// draws it, and this module is a lazy screen's.
+import { TRACKER_NAME } from './trackers.js';
+
+export { trackerName } from './trackers.js';
+
 // ── A task's owner (S-26.8b, the M26 UX spec §§ 2–3) ─────────────────────────
-
-/**
- * A tracker's name as a person says it, for *Assigned in Jira to …* and *also assigns DEMO-1 in
- * Jira*. The ticket's `provider` is the binding's provider id (`jira-cloud`), or a fixture's
- * shorter spelling; one this build does not name is *the tracker*, never the raw id.
- */
-const TRACKER_NAME: Readonly<Record<string, string>> = {
-  'jira-cloud': 'Jira',
-  jira: 'Jira',
-  gitlab: 'GitLab',
-  github: 'GitHub',
-  linear: 'Linear',
-};
-
-export const trackerName = (provider: string): string => TRACKER_NAME[provider] ?? 'the tracker';
 
 /** The board's owner filter (`?owner=`): *Everyone* is the absence of one. */
 export type BoardOwnerFilter = 'all' | 'me' | 'none';
