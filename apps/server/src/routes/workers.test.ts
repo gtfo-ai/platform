@@ -560,7 +560,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
       await store.setClaimScope({ workerId: alice.workerId, projectIds: null, policy });
       expect(await blockers()).toEqual([]);
     }
-    // A worker row a build before migration 0106 wrote (no policy, every project): everything.
+    // A worker row a build before migration 0108 wrote (no policy, every project): everything.
     store.clearClaimPolicy(alice.workerId);
     expect(await blockers()).toEqual([]);
   });
@@ -594,7 +594,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
       // A core that cannot name its images counts nothing.
       core = null;
       expect((await read()).policy_skipped_offers).toBeNull();
-      // A row before migration 0106 reads as `everything`.
+      // A row before migration 0108 reads as `everything`.
       store.clearClaimPolicy(alice.workerId);
       expect((await read()).claim_policy).toBe('everything');
     });

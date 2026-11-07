@@ -386,7 +386,7 @@ export interface MemoryRemoteWorker {
    */
   readonly claimProjectIds?: readonly Id[] | null;
   /**
-   * The worker's claim policy (S-26.4, migration 0106): `null`/absent reads as the SQL's `null` —
+   * The worker's claim policy (S-26.4, migration 0108): `null`/absent reads as the SQL's `null` —
    * `pick_only` over a `[]` scope, `everything` otherwise.
    */
   readonly claimPolicy?: WorkerClaimPolicy | null;

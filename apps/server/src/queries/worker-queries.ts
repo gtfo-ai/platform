@@ -132,7 +132,7 @@ export interface WorkerListRow {
    */
   readonly claimProjects: readonly { readonly id: string; readonly key: string | null }[] | null;
   /**
-   * The claim policy as it reads (migration 0106, S-26.4): the stored value, or what a `null`
+   * The claim policy as it reads (migration 0108, S-26.4): the stored value, or what a `null`
    * reads as (`effectiveClaimPolicy`: `pick_only` over a legacy `[]` scope, else `everything`).
    */
   readonly claimPolicy: WorkerClaimPolicy;

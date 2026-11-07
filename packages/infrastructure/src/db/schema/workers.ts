@@ -36,11 +36,11 @@ export const workers = pgTable('workers', {
   /**
    * The worker's claim scope (migration 0101, WP-293): `null` every project, otherwise those
    * projects — a conjunct of an automatic claim only; a pick ignores it. A legacy `[]` (*pick only*
-   * before migration 0106) narrows no project; it makes a `null` policy read `pick_only`.
+   * before migration 0108) narrows no project; it makes a `null` policy read `pick_only`.
    */
   claimProjectIds: uuid('claim_project_ids').array(),
   /**
-   * The worker's claim policy (migration 0106, S-26.4): `everything`, `mine_and_unassigned`, `mine`
+   * The worker's claim policy (migration 0108, S-26.4): `everything`, `mine_and_unassigned`, `mine`
    * or `pick_only`. `null` reads as `pick_only` when `claim_project_ids` is `[]`, else `everything`
    * (`effectiveClaimPolicy` in `@platform/domain`).
    */

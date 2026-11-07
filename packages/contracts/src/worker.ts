@@ -597,7 +597,7 @@ export const workerDeviceTokenErrorSchema = z.strictObject({
 
 /**
  * **What a worker's automatic claims take** (S-26.4, TD-031's 2026-11-06 amendment item 6, BD-032's
- * 2026-11-06 amendment 2) — `workers.claim_policy`, migration 0106, set by the worker's owner only:
+ * 2026-11-06 amendment 2) — `workers.claim_policy`, migration 0108, set by the worker's owner only:
  *
  * - `everything` — any task of the projects it may take (what a worker connected before the policy
  *   keeps, unless it was *pick only*);
@@ -654,7 +654,9 @@ export const workerSettingsSchema = z.strictObject({
    * The worker's claim scope (WP-293): `null` every project, otherwise those projects. **Absent**
    * below protocol 3: the core sends it only when `X-Worker-Protocol ≥ 3` (TD-031's 2026-11-05
    * claim-scope amendment, decision 6). Since S-26.4 a version-3 worker is sent `[]` — its *pick
-   * only* — for a worker whose policy reads `pick_only`, and a version-4 worker is never sent `[]`.
+   * only* — for a worker whose policy reads `pick_only`. A version-4 worker is sent the list as
+   * stored: `[]` only for a legacy row no write has touched since migration 0108, whose `null`
+   * policy then reads `pick_only` and whose `[]` narrows no project.
    */
   claim_project_ids: z.array(idSchema).max(WORKER_CLAIM_SCOPE_MAX_PROJECTS).nullable().optional(),
   /**

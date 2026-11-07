@@ -68,7 +68,7 @@ interface WorkerRowMemory {
   pausedUntilEstimated?: boolean;
   manuallyPausedAt: Date | null;
   claimProjectIds?: readonly string[] | null;
-  /** `workers.claim_policy` (migration 0106); absent or `null` reads as the SQL's `null`. */
+  /** `workers.claim_policy` (migration 0108); absent or `null` reads as the SQL's `null`. */
   claimPolicy?: WorkerClaimPolicy | null;
 }
 
@@ -123,7 +123,7 @@ export interface MemoryWorkerStore extends WorkerStore {
   recordClaim(workerId: string, at: Date): void;
   /** The open offers the worker's policy leaves for others, as PostgreSQL would count them (S-26.4). */
   seedPolicySkippedOffers(workerId: string, count: number | null): void;
-  /** A worker row as a build before migration 0106 left it: its policy `null` (S-26.4). */
+  /** A worker row as a build before migration 0108 left it: its policy `null` (S-26.4). */
   clearClaimPolicy(workerId: string): void;
 }
 

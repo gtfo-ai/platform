@@ -166,8 +166,8 @@ export const projectListTakesSql = (w: string, project: string): string => `(
     or ${project} = any(${w}.claim_project_ids))`;
 
 /**
- * **The claim policy the `workers` row `w` reads as** (S-26.4, migration 0106): the stored value,
- * or — for a `null`, every row before 0106 — `pick_only` when the scope is the legacy `'{}'` and
+ * **The claim policy the `workers` row `w` reads as** (S-26.4, migration 0108): the stored value,
+ * or — for a `null`, every row before 0108 — `pick_only` when the scope is the legacy `'{}'` and
  * `everything` otherwise. The domain's `effectiveClaimPolicy`.
  */
 export const effectiveClaimPolicySql = (w: string): string =>

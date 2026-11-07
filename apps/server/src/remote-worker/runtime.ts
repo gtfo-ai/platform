@@ -139,6 +139,7 @@ import {
 import { CoreCheckError, checkCoreAddress, probeCoreCandidates } from './core-probe.js';
 import { CREDENTIAL_FILE, ensureCredential } from './credential.js';
 import { createLocalUiServer, LocalUiError } from './local-ui.js';
+import { claimScopeReadForPage, claimScopeWriteOfPage } from './page-scope.js';
 import { backoffMs, RETRY_MAX_MS, sleepMs } from './retry.js';
 import {
   type RunSession,
@@ -682,6 +683,8 @@ export const startRemoteWorker = async (
                   : claimScope.length === 0
                     ? 'pick only'
                     : `${claimScope.length} project(s)`,
+            // S-26.4: what it takes by itself, as the core said (`null` from a core before it).
+            claim_policy: claimPolicy,
           },
           'this worker is connected to its core',
         );
@@ -1097,7 +1100,10 @@ export const startRemoteWorker = async (
       if (answer.policy_skipped_offers !== undefined) {
         policySkippedOffers = answer.policy_skipped_offers;
       }
-      return workerLocalClaimScopeSchema.parse(redactKeysAndValues(pageRedactor(), answer));
+      // S-26.4: the page in this build says *pick only* as `[]` (`page-scope.ts`).
+      return claimScopeReadForPage(
+        workerLocalClaimScopeSchema.parse(redactKeysAndValues(pageRedactor(), answer)),
+      );
     } catch (error) {
       throw asLocalError(error, 'read the claim scope');
     }
@@ -1110,10 +1116,12 @@ export const startRemoteWorker = async (
   ): Promise<WorkerLocalClaimScope> => {
     const held = connectedCredential();
     try {
-      const answer = await connectedCore().setClaimScope(held, {
-        claim_project_ids: projectIds === null ? null : [...projectIds],
-        ...(policy === undefined ? {} : { claim_policy: policy }),
-      });
+      // S-26.4: the page's legacy vocabulary, mapped as the core maps a version-3 worker — `[]`
+      // is *pick only*, and a list while *pick only* leaves it (`page-scope.ts`).
+      const answer = await connectedCore().setClaimScope(
+        held,
+        claimScopeWriteOfPage(projectIds, policy, claimPolicy),
+      );
       claimScope = answer.claim_project_ids;
       claimPolicy = answer.claim_policy ?? claimPolicy;
       loggerPort.info(

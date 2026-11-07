@@ -6,7 +6,7 @@
  *
  * - **which projects** — the claim scope, `workers.claim_project_ids` (migration 0101): `null` every
  *   project, otherwise those;
- * - **which tasks** — the claim policy, `workers.claim_policy` (migration 0106): `everything`,
+ * - **which tasks** — the claim policy, `workers.claim_policy` (migration 0108): `everything`,
  *   `mine_and_unassigned`, `mine` or `pick_only`.
  *
  * Two readings make the rows the previous builds wrote keep their meaning with no data rewrite:

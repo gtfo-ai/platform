@@ -877,19 +877,20 @@ describe('a pick-only worker and take this one (WP-293)', () => {
     await pipeline.waitFor('the worker to be connected', async () => {
       return laptop.runtime.state().connection === 'connected';
     });
-    // S-26.4: *pick only* is the claim policy, over every project (`[]` is refused at protocol 4).
-    const refused = await page('POST', '/api/local/claim-scope', { claim_project_ids: [] });
-    expect(refused.status, refused.body).toBe(422);
-    expect(JSON.parse(refused.body).error.code).toBe('claim_scope_empty');
-    const scope = await page('POST', '/api/local/claim-scope', {
-      claim_project_ids: null,
-      claim_policy: 'pick_only',
-    });
+    // S-26.4: the page in this build still says *pick only* as `[]`. The worker sends the core the
+    // policy — `pick_only` over every project, never the `[]` a protocol-4 core refuses — and the
+    // page reads it back as its own `[]`.
+    const scope = await page('POST', '/api/local/claim-scope', { claim_project_ids: [] });
     expect(scope.status, scope.body).toBe(200);
     expect(JSON.parse(scope.body)).toMatchObject({
-      claim_project_ids: null,
+      claim_project_ids: [],
       claim_policy: 'pick_only',
     });
+    const [stored] = await pipeline.query<{ claim_policy: string; claim_project_ids: unknown }>(
+      'select claim_policy, claim_project_ids from workers where id = $1',
+      [laptop.workerId],
+    );
+    expect(stored).toEqual({ claim_policy: 'pick_only', claim_project_ids: null });
     // The page's state carries the policy as the core last said it.
     const local = await page('GET', '/api/local/state');
     expect(JSON.parse(local.body)).toMatchObject({ claim_policy: 'pick_only' });

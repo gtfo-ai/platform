@@ -437,8 +437,8 @@ user).
   core accepts `[3, 4]`, so a worker image older than protocol 3 must be updated first): the owner's
   **claim scope** (every project or named projects) is stored on the core in `workers.claim_project_ids`
   and its **claim policy** (*my tasks and unassigned ones* — the default for a new machine —, *only my
-  tasks*, *everything*, *only what I pick*) in `workers.claim_policy` (migration 0106); both only narrow
-  the claim. A worker approved before 0106 has no policy and keeps its meaning: *everything*, or *only
+  tasks*, *everything*, *only what I pick*) in `workers.claim_policy` (migration 0108); both only narrow
+  the claim. A worker approved before 0108 has no policy and keeps its meaning: *everything*, or *only
   what I pick* if its scope was the old pick-only `[]`. A pick claims one listed run, never jumps a
   project's routing and never takes a task another person owns; picking an unowned task makes the
   picker its owner — the administrator's levers stay the execution mode and *Revoke* (an administrator
@@ -447,7 +447,7 @@ user).
   that assigned `task.owner` with `via: pick`). If every worker of a `workers_only` instance takes only
   its owner's tasks or only what it picks, an unowned task waits for a person to pick it, up to
   `offer_timeout`; the server claimant, when there is one, still takes anything its execution mode
-  allows. **Rollback:** a build before 0106 never reads `claim_policy`, so during a rollback every
+  allows. **Rollback:** a build before 0108 never reads `claim_policy`, so during a rollback every
   machine takes everything its scope allows (BACKLOG 1082).
 
 **The worker updates itself** (WP-287, TD-032 decisions 3, 4 and 6). The `updater` service follows the

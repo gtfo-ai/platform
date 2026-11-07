@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0106 — what a person's machine takes by itself: its claim policy (S-26.4, TD-031's 2026-11-06
+-- 0108 — what a person's machine takes by itself: its claim policy (S-26.4, TD-031's 2026-11-06
 -- amendment item 6, BD-032's 2026-11-06 amendment 2).
 --
 -- `claim_policy` is the second axis of what a worker's **automatic** claims take, orthogonal to

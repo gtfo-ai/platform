@@ -2,7 +2,7 @@
  * **What a person's machine takes, against PostgreSQL 18** — S-26.4, TD-031's 2026-11-06
  * amendment items 6–7 (BD-032's 2026-11-06 amendment 2–3).
  *
- * The claim policy (`workers.claim_policy`, migration 0106) is a conjunct of the claim's **own
+ * The claim policy (`workers.claim_policy`, migration 0108) is a conjunct of the claim's **own
  * statement** for an automatic claim (`workerPolicyTakesSql`), and a pick assigns in the claim's
  * transaction. What only the database can show is held here:
  *

@@ -671,9 +671,9 @@ worker's `claim_projects` (`null`, `[]`, or `[{id, key}]`), which the Workers sc
 **Protocol 4 — what a machine takes, and a pick that assigns (S-26.4, TD-031's 2026-11-06 amendment
 items 6–7, BD-032's 2026-11-06 amendment).** `WORKER_PROTOCOL_VERSION = 4`, accepted `[3, 4]` (a
 version-2 worker is now `426` at the protocol check). No new verb: a worker's **claim policy**
-(`workers.claim_policy`, migration 0106) — `everything`, `mine_and_unassigned` (the default a new worker is
+(`workers.claim_policy`, migration 0108) — `everything`, `mine_and_unassigned` (the default a new worker is
 written with), `mine` or `pick_only` — is the second axis of what its **automatic** claims take,
-orthogonal to the claim scope, which stays the project axis. A `null` policy (every worker before 0106)
+orthogonal to the claim scope, which stays the project axis. A `null` policy (every worker before 0108)
 reads `pick_only` over the legacy scope `[]` and `everything` otherwise, and the legacy `[]` narrows **no**
 project once read through the policy. The claim's own statement asks `workerPolicyTakesSql` beside the
 scope and the eligibility, read live from the offer's task: `mine` is a stage offer whose task the worker's
@@ -709,7 +709,11 @@ claim_policy_owner_only` (they read it), anybody else's worker `404`; `[]` is `4
 project the user may not run in `422 project_not_eligible`; it answers `{worker_id, claim_policy,
 claim_project_ids, performed}`. `GET /api/workers` adds `claim_policy` (as it reads) and
 `policy_skipped_offers` (`null` while the core cannot name its images); the local page's state adds the two
-as its core last said them, its `POST /api/local/claim-scope` takes `claim_policy`, and its `POST
+as its core last said them, its `POST /api/local/claim-scope` takes `claim_policy` — and, until S-26.7
+rewrites the page, maps the page's protocol-3 vocabulary as the core maps a version-3 worker
+(`remote-worker/page-scope.ts`): a save of `[]` with no policy is sent as `pick_only` over every project,
+a list saved while the policy reads `pick_only` leaves it for `mine_and_unassigned`, and a `pick_only`
+worker reads back as `[]` — and its `POST
 /api/local/offers/:id/take` takes `as_of`. The project's execution read reports a `pick_only` policy as
 `picked_only` under `scope_excludes`.
 
