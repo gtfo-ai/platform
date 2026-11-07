@@ -290,6 +290,103 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * S-26.1 (migration 0104, TD-031's 2026-11-06 amendment item 1): the four ownership columns
+       * have one writer, `saveOwner`, a compare-and-set on the owner **and** the stored assignee
+       * the decision was made over; the insert and `save` never touch them. `unownedLiveByAssignee`
+       * is what a newly linked identity adopts (the hook S-26.6 calls).
+       */
+      it('writes the owner narrowly, as a compare-and-set, and never by the insert or save (S-26.1)', async () => {
+        const stored = task({}, 'ACME-OWNER');
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        const unowned = {
+          ownerUserId: null,
+          ownerSource: null,
+          ownerChangedAt: null,
+          ticketAssignee: null,
+        };
+        expect(await store.tasks.ownership(tx, id)).toEqual(unowned);
+
+        const identity = { provider: 'fake-jira', externalId: `acct-${id}` };
+        const assignee = {
+          provider: identity.provider,
+          external_id: identity.externalId,
+          display_name: 'Dev Example',
+          platform: false,
+        };
+        const owned = {
+          ownerUserId: userId,
+          ownerSource: 'tracker' as const,
+          ownerChangedAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          ticketAssignee: assignee,
+        };
+        expect(
+          await store.tasks.saveOwner(tx, id, {
+            expected: { ownerUserId: null, ticketAssignee: null },
+            next: owned,
+          }),
+        ).toBe(true);
+        expect(await store.tasks.ownership(tx, id)).toEqual(owned);
+
+        // A decision made over a stale owner, or over a stale assignee, writes nothing.
+        expect(
+          await store.tasks.saveOwner(tx, id, {
+            expected: { ownerUserId: null, ticketAssignee: assignee },
+            next: { ...owned, ownerUserId: otherUserId },
+          }),
+        ).toBe(false);
+        expect(
+          await store.tasks.saveOwner(tx, id, {
+            expected: { ownerUserId: userId, ticketAssignee: null },
+            next: { ...owned, ownerUserId: otherUserId },
+          }),
+        ).toBe(false);
+        expect(await store.tasks.ownership(tx, id)).toEqual(owned);
+
+        // A whole-row save over a snapshot read before it does not put the old owner back.
+        const loaded = (await store.tasks.load(tx, id)) as StoredTask;
+        await store.tasks.save(tx, { ...loaded, branch: 'agentic/acme-owner' });
+        expect(await store.tasks.ownership(tx, id)).toEqual(owned);
+
+        // Owned: nothing to adopt. Released (the assignee kept): adoptable.
+        expect(await store.tasks.unownedLiveByAssignee(tx, identity)).toEqual([]);
+        const released = {
+          ...owned,
+          ownerUserId: null,
+          ownerSource: 'platform' as const,
+          ownerChangedAt: '2026-06-01T10:00:00.000Z' as IsoDateTime,
+        };
+        expect(
+          await store.tasks.saveOwner(tx, id, {
+            expected: { ownerUserId: userId, ticketAssignee: assignee },
+            next: released,
+          }),
+        ).toBe(true);
+        expect(await store.tasks.ownership(tx, id)).toEqual(released);
+        expect(await store.tasks.unownedLiveByAssignee(tx, identity)).toEqual([
+          { taskId: id, projectId },
+        ]);
+        expect(
+          await store.tasks.unownedLiveByAssignee(tx, { ...identity, provider: 'gitlab' }),
+        ).toEqual([]);
+
+        // An assignee the published shape refuses is refused at the write.
+        await expect(
+          store.tasks.saveOwner(tx, id, {
+            expected: { ownerUserId: null, ticketAssignee: assignee },
+            next: { ...released, ticketAssignee: { ...assignee, platform: 'yes' as never } },
+          }),
+        ).rejects.toThrow();
+        await expect(store.tasks.ownership(tx, nextId())).rejects.toThrow();
+        await expect(
+          store.tasks.saveOwner(tx, nextId(), {
+            expected: { ownerUserId: null, ticketAssignee: null },
+            next: unowned,
+          }),
+        ).rejects.toThrow();
+      });
+
+      /**
        * WP-79: the insert names `requested_by_user_id`. Until then the PostgreSQL statement did not,
        * so WP-67's three writers (discovery, a shadow batch, a bootstrap's chunk tasks) wrote the
        * requester only in the in-memory store — a fake kinder than the database (standing rule 1),

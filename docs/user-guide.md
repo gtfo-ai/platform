@@ -772,6 +772,19 @@ what* lists it: the start, with the person who pressed it. Pressing **Start** tw
 The task page reads like a pull request: what the task is, where it is, and what you do now. It is
 live on that task's topic.
 
+**A task has an owner** (since S-26.1): one person of the project, a member or above. The owner
+follows the ticket's assignee when that assignee is a tracker account linked to a member of the
+project (*Settings → Linked accounts*, an administrator's mapping); an assignee the platform cannot link —
+an unlinked account, or a linked person below member — is kept as *assigned elsewhere* and the task
+has no owner, and the platform's own account or a machine account is nobody. **The latest change
+wins**: a change of assignee in the tracker replaces an owner set on the platform, and an owner set
+on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
+nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
+nobody. Nothing is written to the tracker. The owner's computer gets the head start on the task's
+runs (*Settings → Execution*, below). The page and the board do not show the owner yet; the API does
+(`owner` on every task, `POST /api/tasks/:id/owner`, and `?owner=me` or `?owner=none` on a
+project's task list).
+
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
   platform never read the title), the task's state as a label with its icon — *Needs you* whenever
   something waits on a person, by the same rule as the board's column — and one line: links to the
@@ -1684,9 +1697,10 @@ does:
 - **If no worker takes it within …** / **If the platform server hasn't taken it within …** — with
   a preference, how long the first side has before the other may take the run too (the fallback):
   15 s when the server is preferred, 5 min when workers are, unless you choose another duration.
-- **Head start for the assignee's worker** — a worker of the person a question was asked by gets
-  this long (2 min by default) to take the run before anybody else, while that worker is online. A
-  ticket's assignee does not get it yet: the platform does not keep who a ticket is assigned to.
+- **Head start for the assignee's worker** — a worker of the task's **owner** (for a question, of
+  the person who asked it) gets this long (2 min by default) to take the run before anybody else,
+  while that worker is online and takes the project by itself (not *only what I pick*). The head
+  start is fixed when the run is offered: an owner changed later gets it from the next stage.
 - **Give up and ask a person after** — a run nobody takes within this long (a day by default) is
   withdrawn and its task goes to **Needs you** with the brief *no claimant took this run*; a
   question is answered as failed. Check the choice, and whether a worker or the platform server is
@@ -1894,6 +1908,7 @@ In one place, so it is not spread across thirteen sections:
 | The statistics the screen lists under *Not measured, and why* | statistics |
 | Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, New project step 1 |
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
+| Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

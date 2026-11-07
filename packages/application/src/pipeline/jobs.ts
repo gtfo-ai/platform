@@ -87,6 +87,7 @@ import {
 } from './integrations.js';
 import { type ExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
 import { prefetchObservability } from './observability-prefetch.js';
+import { ownerSyncOnRead } from './owner-sync.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
 import {
@@ -320,7 +321,12 @@ export interface PipelineOutboundData {
      */
     | 'review_findings_post'
     | 'conversation_replies'
-    | 'review_threads_resolve';
+    | 'review_threads_resolve'
+    /**
+     * S-26.1 (TD-031's 2026-11-06 amendment item 2): re-read a live task's ticket after a
+     * `ticket.updated` and follow its assignee — one read per burst (`owner-sync.ts`).
+     */
+    | 'owner_sync';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -790,7 +796,12 @@ export const stageExecuteHandler = (
        * `TransactionOpenError` **does** come out, because that is a programming error rather than a
        * provider being down.
        */
-      const snapshot = await ensureTicketSnapshot(options, admitted.stored);
+      // S-26.1: the read that refreshes the words also follows the ticket's assignee (`owner-sync.ts`).
+      const snapshot = await ensureTicketSnapshot(
+        options,
+        admitted.stored,
+        ownerSyncOnRead(options),
+      );
       /**
        * **What this stage is owed, before the plan reads it** (WP-184, TD-029 decisions 4 and 11):
        * the entry's lifecycle move and the review conversation's posts for the latest completed

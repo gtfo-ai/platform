@@ -730,6 +730,48 @@ export const storedTicketClaimSchema = z.strictObject({
 
 export type StoredTicketClaim = z.infer<typeof storedTicketClaimSchema>;
 
+/**
+ * **Who made a task's last owner change** — `tasks.owner_source` (S-26.1, migration 0104, TD-031's
+ * 2026-11-06 amendment item 1): `tracker`, a sync of the ticket's assignee or a link adopting it;
+ * `platform`, a person's command or a pick.
+ */
+export const taskOwnerSourceSchema = z.enum(['tracker', 'platform']);
+export type TaskOwnerSource = z.infer<typeof taskOwnerSourceSchema>;
+
+/** How an owner change came about — `task.owner.changed.via` (TD-031's amendment item 1). */
+export const taskOwnerViaSchema = z.enum(['tracker_sync', 'command', 'pick', 'link']);
+export type TaskOwnerVia = z.infer<typeof taskOwnerViaSchema>;
+
+/** The longest stored tracker assignee name: provider text, bounded at the write (BD-022). */
+export const TICKET_ASSIGNEE_NAME_MAX_CHARS = 128;
+
+/**
+ * `tasks.ticket_assignee` — the tracker assignee the platform **last read** (S-26.1, migration
+ * 0104, TD-031's 2026-11-06 amendment item 1). `null` on the column is *unassigned in the tracker,
+ * or never read*.
+ *
+ * `provider` and `external_id` are the identity the mapping is keyed by (`user_identities`), and
+ * what a sync compares: a sync acts only when a read names a different identity, so a platform
+ * assignment survives until somebody changes the tracker. `display_name` is untrusted provider
+ * text, redacted through the binding's redactor and cut to {@link TICKET_ASSIGNEE_NAME_MAX_CHARS}
+ * before it is stored. `platform` is true for the binding's own account (unless it maps to a
+ * member of the project) and for a `machine` identity: such an assignee is never a reason a task is
+ * *held elsewhere*.
+ */
+export const ticketAssigneeSchema = z.strictObject({
+  provider: nonEmptyStringSchema.max(255),
+  external_id: nonEmptyStringSchema.max(255),
+  display_name: z.string().max(TICKET_ASSIGNEE_NAME_MAX_CHARS).nullable(),
+  platform: z.boolean(),
+});
+export type TicketAssignee = z.infer<typeof ticketAssigneeSchema>;
+
+/** A task's owner as the task DTO publishes it: the user and their display name (S-26.1). */
+export const taskOwnerViewSchema = z.strictObject({
+  user_id: idSchema,
+  name: z.string(),
+});
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -891,6 +933,30 @@ export const taskRecordSchema = z.strictObject({
    * from the binding's `lifecycle.qa` (TD-029 decision 9).
    */
   qa_stage: z.boolean(),
+  /**
+   * **The task's owner** (S-26.1, TD-031's 2026-11-06 amendment item 3): the platform user who owns
+   * it, or `null` for nobody. The four ownership fields are optional on the wire for one reason —
+   * the SPA's fixtures predate them (its owner UI is S-26.8b) — and this build's server always sends
+   * them.
+   */
+  owner: taskOwnerViewSchema.nullable().optional(),
+  /** Who made the last owner change (`tasks.owner_source`); `null` when nothing ever changed it. */
+  owner_source: taskOwnerSourceSchema.nullable().optional(),
+  /**
+   * The tracker assignee who **holds the ticket elsewhere** — a person the platform cannot map to a
+   * `member`-or-above user of the project (unlinked, or linked below `member`) — or `null` when the
+   * ticket is unassigned, assigned to a linked member, or assigned to the platform's own account.
+   * `display_name` is untrusted provider text (BD-022), redacted and bounded at the write; it is
+   * `null` when the provider gave none. Non-null exactly when the task is *held elsewhere*, the
+   * predicate the owner command, the claim and the pick share.
+   */
+  unlinked_assignee: z.strictObject({ display_name: z.string().nullable() }).nullable().optional(),
+  /**
+   * Whether a platform assignment of this task is also written to the tracker. **Always `false`
+   * in this build**: the write-back is S-26.3's opt-in `lifecycle.assign_owner`, which no binding can
+   * set yet.
+   */
+  owner_writes_back: z.boolean().optional(),
 });
 
 /** A `sha256` digest as lowercase hex — what `runs.settings_hash` stores (WP-91). */

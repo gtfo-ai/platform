@@ -111,7 +111,7 @@ import type {
 } from '../ports/integrations/task-management.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { integrationsForProject, noRunScopedSecrets, ticketReads } from './integrations.js';
 import type { PipelineStore, StoredTask } from './store.js';
@@ -334,12 +334,31 @@ export interface TicketRead {
   readonly snapshot: TicketSnapshot;
   readonly reporter: ExternalIdentity | null;
   /**
-   * Who the ticket is assigned to, or `null` for nobody (WP-177). Read for one question — intake's
-   * skip of a ticket assigned to somebody else on a claiming binding (TD-029 decision 5) — and,
-   * like the reporter, never stored.
+   * Who the ticket is assigned to, or `null` for nobody (WP-177). Read for intake's skip of a
+   * ticket assigned to somebody else on a claiming binding (TD-029 decision 5) and, since S-26.1,
+   * for the task's owner: its identity is stored as `tasks.ticket_assignee` by the owner sync
+   * (`owner-sync.ts`), and this object itself is never stored.
    */
   readonly assignee: ExternalIdentity | null;
+  /**
+   * The assignee's display name **through the binding's redactor** (S-26.1, BD-022), or `null` when
+   * the ticket is unassigned or the provider gave none — the one form of it that may be stored
+   * (`ticket_assignee.display_name`, bounded there by `ticketAssigneeOf`).
+   */
+  readonly assigneeDisplayName: string | null;
 }
+
+/**
+ * What a re-read that won the freshness race does next, inside the transaction that stores its
+ * snapshot (S-26.1): the owner sync (`ownerSyncOnRead`, `owner-sync.ts`), so an older read never
+ * applies its assignee over a newer one — the freshness check that keeps the older snapshot out
+ * keeps its owner out too.
+ */
+export type TicketReadHook = (
+  scope: TransactionScope,
+  current: StoredTask,
+  read: TicketRead,
+) => Promise<void>;
 
 /**
  * Reads the ticket through the executor and bounds it, or answers `null`.
@@ -380,10 +399,16 @@ export const readTicketForTask = async (
     if (ticket === null) {
       return null;
     }
+    const assignee = ticket.assignee ?? null;
+    const assigneeName = assignee?.display_name ?? null;
     return {
       snapshot: boundTicketSnapshot(ticket, resolved.taskManagement.redactor),
       reporter: ticket.reporter ?? null,
-      assignee: ticket.assignee ?? null,
+      assignee,
+      assigneeDisplayName:
+        assigneeName === null || assigneeName.length === 0
+          ? null
+          : resolved.taskManagement.redactor.redactText(assigneeName).value,
     };
   } catch (error) {
     /**
@@ -543,6 +568,9 @@ export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
  *  - it **answers** the words it holds — the fresh read, or the row's own when no read was needed
  *    or the read failed — because the bug pre-fetch (WP-89) looks for the linked issue in them and
  *    the job's loaded row predates this write;
+ *  - with `onRead` (S-26.1), the read that stores its snapshot also syncs the task's owner from its
+ *    assignee, in the same transaction — the `stage.execute` job and the `owner_sync` duty pass
+ *    `ownerSyncOnRead`; a caller with no use for the owner passes nothing;
  *  - a re-read also fills a **missing requester** (WP-79, backlog 243): the reporter resolved
  *    through {@link resolveRequester}, written by `saveRequester`, which never overwrites — so a
  *    task whose intake read failed, or whose reporter was mapped after intake, gains the reviewer
@@ -551,6 +579,7 @@ export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
 export const ensureTicketSnapshot = async (
   options: EnsureTicketSnapshotOptions,
   stored: StoredTask,
+  onRead?: TicketReadHook,
 ): Promise<TicketSnapshot | null> => {
   const taskId = stored.task.id;
   if (!isTicketSnapshotStale(stored)) {
@@ -589,6 +618,9 @@ export const ensureTicketSnapshot = async (
       return;
     }
     await options.store.tasks.saveTicketSnapshot(scope.tx, taskId, read.snapshot, readAt);
+    // S-26.1: the owner follows the assignee this read saw — only for the read that won the
+    // freshness race above, so an older read never puts its assignee over a newer one.
+    await onRead?.(scope, current, read);
   });
   return read.snapshot;
 };

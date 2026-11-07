@@ -1523,6 +1523,11 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
   template: templateIdSchema.optional(),
   mode: taskModeSchema.optional(),
   stage: stageIdSchema.optional(),
+  /**
+   * The board's owner filter (S-26.1, the M26 UX spec § 3): `me`, the tasks the caller owns;
+   * `none`, the tasks nobody owns (`owner` is `null`, whoever the tracker names). Absent is everyone.
+   */
+  owner: z.enum(['me', 'none']).optional(),
 });
 
 /**
@@ -1851,6 +1856,26 @@ export const taskCallerFactsShape = {
   can_decide_approval: z.boolean(),
 } as const;
 
+/**
+ * **The owner control** the task read offers the caller (S-26.1, the M26 UX spec § 2): *Take it*,
+ * *Assign…* and *Unassign*. Not role-only like {@link taskCallerFactsShape} — each is the domain's
+ * `ownerCapabilities` over the caller, the task's owner and whether its ticket is held elsewhere,
+ * the same matrix `POST /api/tasks/:id/owner` decides with (`packages/domain/src/tasks/owner.ts`).
+ * A shape of its own for one reason: these are optional on the wire, because the SPA's fixtures
+ * predate them (its owner UI is S-26.8b), where every role-only fact is required. This build's
+ * server always sends all three, and the export drops them like every other caller fact.
+ */
+export const taskOwnerCallerFactsShape = {
+  can_take: z.boolean().optional(),
+  can_assign: z.boolean().optional(),
+  can_unassign: z.boolean().optional(),
+} as const;
+
+/** The keys of {@link taskOwnerCallerFactsShape}, which the export omits too. */
+export const TASK_OWNER_CALLER_FACT_KEYS = Object.keys(
+  taskOwnerCallerFactsShape,
+) as readonly (keyof typeof taskOwnerCallerFactsShape)[];
+
 /** The keys of {@link taskCallerFactsShape}, which the export omits. */
 export const TASK_CALLER_FACT_KEYS = Object.keys(
   taskCallerFactsShape,
@@ -1858,12 +1883,15 @@ export const TASK_CALLER_FACT_KEYS = Object.keys(
 export type TaskCallerFactKey = keyof typeof taskCallerFactsShape;
 
 const taskCallerFactsMask = Object.fromEntries(
-  TASK_CALLER_FACT_KEYS.map((key) => [key, true] as const),
-) as { readonly [K in TaskCallerFactKey]: true };
+  [...TASK_CALLER_FACT_KEYS, ...TASK_OWNER_CALLER_FACT_KEYS].map((key) => [key, true] as const),
+) as {
+  readonly [K in TaskCallerFactKey | (typeof TASK_OWNER_CALLER_FACT_KEYS)[number]]: true;
+};
 
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
   ...taskCallerFactsShape,
+  ...taskOwnerCallerFactsShape,
   /** The take-over in force, or `null` — see {@link takenOverSchema}. */
   taken_over: takenOverSchema.nullable(),
   /** Human minutes derived from events by the WP-29 projector; never summed with the USD. */
@@ -2067,6 +2095,16 @@ const requiredCommandTextSchema = nonEmptyStringSchema.max(MAX_COMMAND_TEXT_CHAR
 export const pauseTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const resumeTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const cancelTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
+/**
+ * `POST /api/tasks/:id/owner` — set the task's owner, or clear it (S-26.1, TD-031's 2026-11-06
+ * amendment item 3). `user_id` is the new owner, `null` is nobody. Who may set whom is the domain's
+ * `ownerChangePermitted` (`packages/domain/src/tasks/owner.ts`): a member takes an unassigned task
+ * or gives back their own, a maintainer sets anyone of the project or nobody.
+ */
+export const setTaskOwnerRequestSchema = z.strictObject({
+  user_id: idSchema.nullable(),
+});
+
 /** The largest figure `numeric(12,6)` holds — the ceiling of a task's own cap (WP-131). */
 export const MAX_TASK_CAP_USD = 999_999.999999;
 

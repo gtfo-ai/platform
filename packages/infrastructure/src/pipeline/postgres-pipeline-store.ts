@@ -82,12 +82,14 @@ import {
   storedTicketClaimSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
+  taskOwnerSourceSchema,
   taskPipelineDialSchema,
   taskReviewersSchema,
   taskReviewThreadsSchema,
   taskStageExitStateSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
+  ticketAssigneeSchema,
   workpadRefSchema,
 } from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
@@ -107,6 +109,7 @@ import {
   lockOfferOf,
 } from './postgres-run-offers.js';
 import { clearRunPlanSeal, createPostgresRunPlanRepository } from './postgres-run-plans.js';
+import { createPostgresTaskOwnerDirectory } from './postgres-task-owners.js';
 import { takeOverLastActivitySql } from './take-over-activity.js';
 import { runHolderUsableSql } from './worker-holder.js';
 
@@ -681,6 +684,99 @@ export const createPostgresPipelineStore = (
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);
       }
+    },
+
+    /**
+     * The four ownership columns (S-26.1, migration 0104): `ticket_assignee` parsed through its
+     * published schema, never cast — a stored assignee that fails it is refused by name, because
+     * the owner sync compares against it.
+     */
+    ownership: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{
+        owner_user_id: string | null;
+        owner_source: string | null;
+        owner_changed_at: Date | null;
+        ticket_assignee: unknown;
+      }>(
+        `select owner_user_id, owner_source, owner_changed_at, ticket_assignee
+           from tasks where id = $1`,
+        [taskId],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      const source = taskOwnerSourceSchema.nullable().safeParse(row.owner_source);
+      const assignee = ticketAssigneeSchema.nullable().safeParse(row.ticket_assignee ?? null);
+      if (!source.success || !assignee.success) {
+        throw new PipelineStoredStateError(
+          `task ${taskId} has an ownership record that does not match its schema`,
+        );
+      }
+      return {
+        ownerUserId: (row.owner_user_id ?? null) as Id | null,
+        ownerSource: source.data,
+        ownerChangedAt:
+          row.owner_changed_at === null
+            ? null
+            : (row.owner_changed_at.toISOString() as IsoDateTime),
+        ticketAssignee: assignee.data,
+      };
+    },
+
+    /**
+     * The ownership columns' one statement (S-26.1, TD-031's 2026-11-06 amendment item 1): a
+     * compare-and-set on the owner and the stored assignee the decision was made over (`is not
+     * distinct from`, so `null` compares; `jsonb` compares by value). A `null` assignee is passed
+     * as SQL `NULL`, never as the JSON literal `null`. Narrow for the reason every writer here is:
+     * its callers run beside the stage executor's transactions.
+     */
+    saveOwner: async (tx, taskId, write) => {
+      const next = write.next;
+      const assignee =
+        next.ticketAssignee === null
+          ? null
+          : JSON.stringify(ticketAssigneeSchema.parse(next.ticketAssignee));
+      const expectedAssignee =
+        write.expected.ticketAssignee === null
+          ? null
+          : JSON.stringify(ticketAssigneeSchema.parse(write.expected.ticketAssignee));
+      const result = await sqlOf(tx).query(
+        `update tasks set owner_user_id = $2, owner_source = $3, owner_changed_at = $4,
+                ticket_assignee = $5::jsonb, updated_at = now()
+          where id = $1 and owner_user_id is not distinct from $6::uuid
+            and ticket_assignee is not distinct from $7::jsonb`,
+        [
+          taskId,
+          next.ownerUserId,
+          next.ownerSource,
+          next.ownerChangedAt,
+          assignee,
+          write.expected.ownerUserId,
+          expectedAssignee,
+        ],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        return true;
+      }
+      const exists = await sqlOf(tx).query('select 1 from tasks where id = $1', [taskId]);
+      if (exists.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      return false;
+    },
+
+    unownedLiveByAssignee: async (tx, identity) => {
+      const { rows } = await sqlOf(tx).query<{ id: string; project_id: string }>(
+        `select id, project_id from tasks
+          where owner_user_id is null
+            and state <> all (array['done', 'cancelled']::task_state[])
+            and ticket_assignee ->> 'provider' = $1
+            and ticket_assignee ->> 'external_id' = $2
+          order by created_at, id`,
+        [identity.provider, identity.externalId],
+      );
+      return rows.map((row) => ({ taskId: row.id as Id, projectId: row.project_id as Id }));
     },
 
     saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
@@ -2431,6 +2527,7 @@ export const createPostgresPipelineStore = (
     breakdown,
     runCommands: createPostgresRunCommandRepository(),
     bugTraces: postgresBugTraces,
+    owners: createPostgresTaskOwnerDirectory(),
   };
 };
 

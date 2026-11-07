@@ -156,6 +156,8 @@ export * from './pipeline/observability-prefetch.js';
 export * from './pipeline/offer-withdrawal.js';
 export * from './pipeline/offers.js';
 export * from './pipeline/outbound.js';
+// S-26.1: a task's owner — the tracker sync, the command, the link adoption, the duty
+export * from './pipeline/owner-sync.js';
 export * from './pipeline/planner.js';
 export * from './pipeline/progress-tool.js';
 export * from './pipeline/project-stream.js';

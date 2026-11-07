@@ -667,6 +667,14 @@ export const registerProjectRoutes = async (
     },
   );
 
+  /** The signed-in caller's id; the guard refused an anonymous caller before any handler runs. */
+  const callerOf = (request: { readonly actor?: { readonly userId: string } }): string => {
+    if (request.actor === undefined) {
+      throw new HttpError(401, 'unauthenticated', 'this endpoint needs an authenticated session');
+    }
+    return request.actor.userId;
+  };
+
   typed.get(
     '/api/projects/:project_id/tasks',
     {
@@ -676,7 +684,7 @@ export const registerProjectRoutes = async (
       schema: {
         summary: 'One page of a project’s tasks, newest first',
         description:
-          'Filtered by `state`, `template`, `mode` or `stage`. `next_cursor` is an **opaque** keyset over `(created_at, id)`: send it back unchanged, never parse it. A task carries the ticket’s provider, key and URL, which are external text (BD-022): render them, never execute them.',
+          'Filtered by `state`, `template`, `mode`, `stage` or `owner` (`me`: the caller’s tasks; `none`: the tasks nobody owns). `next_cursor` is an **opaque** keyset over `(created_at, id)`: send it back unchanged, never parse it. A task carries the ticket’s provider, key and URL, which are external text (BD-022): render them, never execute them.',
         tags: ['tasks'],
         params: projectParamsSchema,
         querystring: listTasksQuerySchema,
@@ -693,6 +701,12 @@ export const registerProjectRoutes = async (
         ...(query.template === undefined ? {} : { template: query.template }),
         ...(query.mode === undefined ? {} : { mode: query.mode }),
         ...(query.stage === undefined ? {} : { stage: query.stage }),
+        // S-26.1: `owner=me` is the caller — never an id a query could name for somebody else.
+        ...(query.owner === undefined
+          ? {}
+          : query.owner === 'none'
+            ? { owner: { kind: 'none' as const } }
+            : { owner: { kind: 'user' as const, userId: callerOf(request) } }),
       });
       if (page === null) {
         // The same answer `/config`, `/budgets` and `/readiness` give for the same id: an empty page

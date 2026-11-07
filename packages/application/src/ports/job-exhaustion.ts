@@ -45,8 +45,9 @@
  *    effect, or what is lost is a notification (rule 20). The workpad, the status and
  *    `notify.digest` are the ruling's examples.
  *
- * `pipeline.outbound` carries thirty-seven duties of all three shapes since WP-179 (this sentence said
- * thirty-two through three additions), so it is the one queue whose
+ * `pipeline.outbound` carries thirty-nine duties of all three shapes since S-26.1's `owner_sync` (this
+ * sentence said thirty-two through three additions, and thirty-seven past two more), so it is the one
+ * queue whose
  * shape is **`per_duty`**: {@link OUTBOUND_DUTY_EXHAUSTION} declares each, and it is typed as a
  * record over the duty union, so a duty added to `OutboundJobData` without a row fails the build.
  *
@@ -354,6 +355,10 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   ticket_lifecycle: {
     shape: 'notification_shaped',
     why: 'one move of the ticket to a lifecycle slot (TD-029 decision 4): a failed write never blocks the stage, leaves its audit row and a warn naming the slot, and the next moment moves the ticket on; since WP-184 it runs under the task’s duty lease and, finding the lease held past a 2 s wait, throws into its retry rather than holding the one outbound worker, and the retry replays what the holder recorded',
+  },
+  owner_sync: {
+    shape: 'notification_shaped',
+    why: 'one re-read of a live task’s ticket to follow its assignee (S-26.1); a lost read leaves the owner as it was until the next `ticket.updated` or the next agent stage’s re-read, which apply the same assignee — the snapshot stays stale, so the next one reads',
   },
   ticket_release: {
     shape: 'notification_shaped',

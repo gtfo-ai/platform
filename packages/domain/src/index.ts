@@ -97,6 +97,8 @@ export * from './readiness/interview.js';
 export * from './readiness/recheck.js';
 // Shadow mode's comparison arithmetic — product/19 §13 (WP-34)
 export * from './shadow/comparison.js';
+// A task's owner: the sync, the command's matrix and the held-elsewhere predicate (S-26.1)
+export * from './tasks/owner.js';
 // A test fixture, exported for the same reason `FIXTURE_VAULT` is: four tiers assert over the same
 // set of hostile constructs, and a second copy of the set is a set that drifts (rule 68).
 export * from './testing/hostile-text.js';

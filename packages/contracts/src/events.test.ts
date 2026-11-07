@@ -261,6 +261,13 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     from_key: 'PROJ-1',
     from_url: 'https://example.atlassian.net/browse/PROJ-1',
   },
+  'task.owner.changed': {
+    ...taskScoped,
+    owner_user_id: uuid(22),
+    previous_owner_user_id: null,
+    source: 'tracker',
+    via: 'tracker_sync',
+  },
   'task.mr.measured': {
     ...taskScoped,
     mr,

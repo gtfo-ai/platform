@@ -8,6 +8,7 @@
  *   POST /api/tasks/:task_id/questions/:question_id/answer
  *   POST /api/tasks/:task_id/approvals/:approval_id/decide
  *   POST /api/tasks/:task_id/take-over | hand-back            (WP-27)
+ *   POST /api/tasks/:task_id/owner                            (S-26.1: set or clear the owner)
  *   POST /api/runs/:run_id/retry | cancel | steer             (steer: WP-27)
  *
  * Every one of them is the same six steps, which is why {@link command} exists rather than eleven
@@ -104,6 +105,7 @@ import {
   returnToStageRequestSchema,
   reworkRequestSchema,
   runCommandResponseSchema,
+  setTaskOwnerRequestSchema,
   steerRunRequestSchema,
   steerRunResponseSchema,
   submitFeedbackRequestSchema,
@@ -477,6 +479,8 @@ export const registerCommandRoutes = async (
       readonly body: z.output<TBody>;
       readonly taskId: string;
       readonly userId: string;
+      /** The caller's effective role in the task's project, as the guard resolved it (S-26.1). */
+      readonly role: UserRole | undefined;
     }) => Promise<TResult>;
   }): void => {
     typed.post(
@@ -511,7 +515,7 @@ export const registerCommandRoutes = async (
           perform: async () => {
             const deps = commands();
             const { userId } = actorOf(request);
-            return route.perform({ deps, body, taskId, userId });
+            return route.perform({ deps, body, taskId, userId, role: request.effectiveRole });
           },
           answer: async ({ performed }) => ({ ...(await positionOf(taskId)), performed }),
         });
@@ -578,6 +582,39 @@ export const registerCommandRoutes = async (
     }),
     perform: async ({ deps, body, taskId, userId }) =>
       deps.raiseBudget({ taskId, userId, capUsd: body.cap_usd }),
+  });
+
+  /**
+   * **The task's owner** (S-26.1, TD-031's 2026-11-06 amendment item 3, the M26 UX spec § 2). The
+   * guard admits a `member` (`task.owner.take`); which change that member may make is the domain's
+   * matrix (`ownerChangePermitted`), asked by the command of the **effective** role the guard
+   * resolved and of the task's owner and held-elsewhere state read under the row lock — the same
+   * function the task DTO's `can_take`/`can_assign`/`can_unassign` come from. A refusal is `403
+   * owner_change_not_permitted`, a target below `member` `422 owner_not_project_member`, a finished
+   * task `409 task_finished`; each writes no audit row. The key is **required**: an assignment is a
+   * decision made once. The audit row names the owner asked for and the one the task has after.
+   */
+  taskCommand({
+    path: '/api/tasks/:task_id/owner',
+    action: 'task.owner.take',
+    name: 'task.owner',
+    key: 'required',
+    body: setTaskOwnerRequestSchema,
+    summary: 'Set the task’s owner, or clear it',
+    description:
+      'A member may take an **unassigned** task — no owner, and the tracker assignee is not a person the platform cannot map (not held elsewhere) — or give back their own (`user_id: null`). A maintainer or above may set any member of the project, or nobody, on any task. The tracker assignee is not changed and the next tracker read keeps the platform’s owner until somebody changes the tracker; nothing is written to the tracker in this build. `403 owner_change_not_permitted` for a change the caller may not make, `422 owner_not_project_member` for a user who is not a member (or above) of the project, `409 task_finished` for a done or cancelled task. A change to the owner the task already has is accepted and changes nothing.',
+    params: (body) => ({ user_id: body.user_id }),
+    auditResult: (result: { readonly changed: boolean; readonly ownerUserId: string | null }) => ({
+      changed: result.changed,
+      owner_user_id: result.ownerUserId,
+    }),
+    perform: async ({ deps, body, taskId, userId, role }) => {
+      if (role === undefined) {
+        // Unreachable through the guard, which resolved a role before admitting the caller.
+        throw new HttpError(401, 'unauthenticated', 'this endpoint needs an authenticated session');
+      }
+      return deps.setOwner({ taskId, userId, role, targetUserId: body.user_id });
+    },
   });
 
   taskCommand({

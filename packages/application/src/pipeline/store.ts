@@ -65,12 +65,14 @@ import type {
 } from '@platform/contracts';
 import type {
   Approval,
+  AssigneeClass,
   ExecutionSettings,
   IterationLimits,
   OfferRouting,
   Question,
   QueuedTask,
   Task,
+  TaskOwnership,
 } from '@platform/domain';
 import type { PromptsWithheld } from '../config/repository-config.js';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
@@ -678,6 +680,45 @@ export interface TaskRepository {
    * @throws when the task does not exist.
    */
   saveTicketClaim(tx: Transaction, taskId: Id, claim: StoredTicketClaim): Promise<void>;
+  /**
+   * The task's four ownership columns (S-26.1, migration 0104), `UNOWNED` for a row nobody has
+   * written them on. `ticket_assignee` is parsed through `ticketAssigneeSchema`, never cast.
+   *
+   * @throws when the task does not exist.
+   */
+  ownership(tx: Transaction, taskId: Id): Promise<TaskOwnership>;
+  /**
+   * Writes **only** the four ownership columns — their one statement (TD-031's 2026-11-06
+   * amendment item 1), a **compare-and-set** on the owner and the stored assignee the decision was
+   * made over: it writes only while `owner_user_id` and `ticket_assignee` still hold `expected`, and
+   * answers whether it did. A `false` is a decision made over a stale read; the caller re-reads and
+   * decides again rather than writing what it held.
+   *
+   * No version bump: `save` names none of the columns, so no whole-row write can put an older owner
+   * back. A caller that also appends `task.owner.changed` from outside the task's own transactions
+   * bumps the version first (`bumpVersion`), as every stream appender does. Its callers are the
+   * owner decisions in `owner-sync.ts` (intake's sync, a stage's re-read, the `owner_sync` duty, the
+   * command, the link adoption).
+   *
+   * @throws when the task does not exist.
+   */
+  saveOwner(
+    tx: Transaction,
+    taskId: Id,
+    write: {
+      readonly expected: Pick<TaskOwnership, 'ownerUserId' | 'ticketAssignee'>;
+      readonly next: TaskOwnership;
+    },
+  ): Promise<boolean>;
+  /**
+   * The **live** tasks (not `done`, not `cancelled`) that nobody owns and whose stored tracker
+   * assignee is `(provider, externalId)` — what a newly linked identity adopts (the hook S-26.6
+   * calls, `adoptOwnersOnLink`). Oldest first.
+   */
+  unownedLiveByAssignee(
+    tx: Transaction,
+    identity: { readonly provider: string; readonly externalId: string },
+  ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
   /**
    * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
    * (WP-79, PROGRESS backlog 243).
@@ -2890,6 +2931,33 @@ export interface PipelineStore {
   readonly runCommands: RunCommandRepository;
   /** WP-90's read of a ticket's defect trace, off the project's event stream. */
   readonly bugTraces: BugTraceRepository;
+  /** S-26.1's questions about who may own a task — `user_identities`, roles, the binding's account. */
+  readonly owners: TaskOwnerDirectory;
+}
+
+/**
+ * **Who a tracker assignee is, and who may own a task** (S-26.1, TD-031's 2026-11-06 amendment
+ * items 1 and 6) — read in the caller's transaction, live, so a link or a role change made since
+ * the last read counts at once.
+ *
+ * Only through `user_identities`, keyed by the provider-issued account id: never an email, never a
+ * display name (BD-022, Q10 — an owner's machine gets the head start, and a guessed identity would
+ * route a run to a stranger's machine).
+ */
+export interface TaskOwnerDirectory {
+  /**
+   * `member` when `(provider, externalId)` is a `person` identity linked to a user whose effective
+   * role in the project (the higher of the organisation role and a membership,
+   * `userMayRunInProjectSql`) is `member` or above; `platform` when it is a `machine` identity, or
+   * the account of one of the project's bindings (`bindings.account_identity`, migration 0090) that
+   * maps to no such member; `person` otherwise — unlinked, or linked below `member`.
+   */
+  classifyAssignee(
+    tx: Transaction,
+    input: { readonly projectId: Id; readonly provider: string; readonly externalId: string },
+  ): Promise<AssigneeClass>;
+  /** Whether `userId`'s effective role in the project is `member` or above — who may own a task. */
+  mayOwn(tx: Transaction, input: { readonly projectId: Id; readonly userId: Id }): Promise<boolean>;
 }
 
 /** Everything the pipeline needs to name a ticket it has not created a task for yet. */

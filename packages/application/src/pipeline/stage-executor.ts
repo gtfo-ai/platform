@@ -1153,8 +1153,10 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           kind: 'stage',
           offerId: context.ids.next(),
           now: context.clock.now(),
-          // WP-278: the ticket's assignee is not stored, so a stage offer has none yet (BACKLOG 730).
-          assigneeUserId: null,
+          // S-26.1 (closes backlog 730, TD-031's 2026-11-06 amendment item 6): the task's owner
+          // plays the assignee, read in this transaction — the head start goes to their machine
+          // while it is online, its scope takes the project and it is not pick-only.
+          assigneeUserId: (await store.tasks.ownership(scope.tx, task.id)).ownerUserId,
           /**
            * WP-286 (TD-031 §12): a re-planned entry carries its previous offer's exclusions, plus
            * the worker that lost the run — so the second run goes to another claimant. A usage

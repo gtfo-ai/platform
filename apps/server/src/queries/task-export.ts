@@ -37,6 +37,7 @@ import {
   MAX_TASK_EXPORT_EVENTS,
   MAX_TASK_EXPORT_HUMAN_ACTIONS,
   TASK_CALLER_FACT_KEYS,
+  TASK_OWNER_CALLER_FACT_KEYS,
 } from '@platform/contracts';
 import type { TaskEventRow } from './pipeline-queries.js';
 
@@ -88,7 +89,11 @@ const toWireEvent = (row: TaskEventRow, payload: JsonObject): TaskExportEvent =>
  * S-23.23). A document handed to somebody else must not carry the exporter's permissions, and the
  * export's schema has no such field, so a read that carried one would otherwise fail the document.
  */
-const CALLER_FACT_KEYS: ReadonlySet<string> = new Set<string>(TASK_CALLER_FACT_KEYS);
+const CALLER_FACT_KEYS: ReadonlySet<string> = new Set<string>([
+  ...TASK_CALLER_FACT_KEYS,
+  // S-26.1: the owner control's three flags are facts about the caller too.
+  ...TASK_OWNER_CALLER_FACT_KEYS,
+]);
 
 const withoutCallerFacts = (detail: TaskExportParts['detail']): TaskDetailRecord =>
   Object.fromEntries(

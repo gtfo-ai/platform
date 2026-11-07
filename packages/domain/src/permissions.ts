@@ -95,6 +95,9 @@ export const PERMISSION_ACTIONS = [
   'task.feedback.create',
   'task.ask',
   'task.export',
+  // A task's owner (S-26.1): take an unassigned task or give back one's own; set anyone's
+  'task.owner.take',
+  'task.owner.assign',
   // Artifacts and transcripts
   'artifact.read',
   'transcript.read',
@@ -172,6 +175,11 @@ export const PERMISSION_REQUIREMENTS = {
   'task.feedback.create': 'member',
   'task.ask': 'member',
   'task.export': 'member',
+  // S-26.1 (TD-031's 2026-11-06 amendment item 3): a member takes an **unassigned** task or gives
+  // back their own; a maintainer sets anyone of the project, or nobody, on any task. The finer rule
+  // — which task, which target — is `ownerChangePermitted` (`tasks/owner.ts`), which asks these two.
+  'task.owner.take': 'member',
+  'task.owner.assign': 'maintainer',
 
   'artifact.read': 'viewer',
   'transcript.read': 'member',

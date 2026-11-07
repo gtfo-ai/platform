@@ -84,10 +84,10 @@ export interface OfferRunInput {
   readonly now: IsoDateTime;
   /**
    * Who plays the assignee (TD-031 §8, §13): for an ask, the **asking** user; for a stage, the
-   * ticket's assignee's platform user. `null` when there is none — and always for a stage until
-   * the ticket's assignee is stored (the ticket read keeps it for intake's one question and drops
-   * it, `ticket-snapshot.ts`; BACKLOG 730). The head start goes to this user only while a worker of
-   * theirs is online.
+   * task's **owner** (`tasks.owner_user_id`, S-26.1 — TD-031's 2026-11-06 amendment item 6). `null`
+   * when there is none. The head start goes to this user only while a worker of theirs is online
+   * and takes the project automatically (`assigneeOnline`); it is fixed here, so a reassignment
+   * does not re-route an open offer — the next stage's offer names the new owner.
    */
   readonly assigneeUserId: Id | null;
   /**

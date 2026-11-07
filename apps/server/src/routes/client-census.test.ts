@@ -100,8 +100,12 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
  * the one class this census cannot see, stated rather than implied.
  */
 const SERVED_BEFORE_ITS_CALLER: Readonly<Record<string, string>> = {
-  // Empty. WP-181's `/api/projects/{}/ticket-statuses` (entered here with WP-182 as its caller)
-  // left when WP-182's lifecycle pick lists called it; the comparison above now holds it.
+  // WP-181's `/api/projects/{}/ticket-statuses` (entered here with WP-182 as its caller) left when
+  // WP-182's lifecycle pick lists called it; the comparison above now holds it.
+  //
+  // S-26.1's owner command: the task page's *Take it*, *Assign…* and *Unassign* are S-26.8b's
+  // (the M26 UX spec § 2), so the route ships before its caller.
+  '/api/tasks/{}/owner': 'S-26.8b',
 };
 
 /**

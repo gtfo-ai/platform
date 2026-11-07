@@ -20,9 +20,11 @@ import type {
   StoredTicketClaim,
   TaskCoverage,
   TaskDependencies,
+  TaskOwnerSource,
   TaskPipelineDial,
   TaskReviewers,
   TaskReviewThreads,
+  TicketAssignee,
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
@@ -146,6 +148,15 @@ export const tasks = pgTable('tasks', {
    * written only by `TaskRepository.saveTicketClaim`. `null` is "never claimed".
    */
   ticketClaim: jsonb('ticket_claim').$type<StoredTicketClaim>(),
+  /**
+   * S-26.1, migration 0104 (TD-031's 2026-11-06 amendment item 1): the task's owner, who made the
+   * last owner change and when, and the tracker assignee last read (`ticketAssigneeSchema`). All
+   * four are written only by `TaskRepository.saveOwner`, a compare-and-set.
+   */
+  ownerUserId: uuid('owner_user_id'),
+  ownerSource: text('owner_source').$type<TaskOwnerSource>(),
+  ownerChangedAt: timestamp('owner_changed_at', { withTimezone: true }),
+  ticketAssignee: jsonb('ticket_assignee').$type<TicketAssignee>(),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

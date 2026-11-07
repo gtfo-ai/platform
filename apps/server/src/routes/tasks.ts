@@ -31,9 +31,11 @@
  * "separately gated", and this is that gate.
  */
 import type {
+  Id,
   TaskAuditEntry,
   TaskCallerFactKey,
   TaskDetailRecord,
+  TaskRecord,
   UserRole,
 } from '@platform/contracts';
 import {
@@ -42,7 +44,12 @@ import {
   taskDetailResponseSchema,
   taskExportResponseSchema,
 } from '@platform/contracts';
-import { can, type PermissionAction } from '@platform/domain';
+import {
+  can,
+  type OwnerCapabilities,
+  ownerCapabilities,
+  type PermissionAction,
+} from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
@@ -112,6 +119,28 @@ export const TASK_CALLER_FACT_ACTIONS = {
   can_decide_approval: 'task.approve_plan',
 } as const satisfies Record<TaskCallerFactKey, PermissionAction>;
 
+/**
+ * The owner control's three flags (S-26.1): the domain's `ownerCapabilities`, the matrix
+ * `POST /api/tasks/:id/owner` decides with, over the caller, their effective role and the task
+ * record this read publishes — its owner, its state and whether it is held elsewhere
+ * (`unlinked_assignee`, non-null exactly then). So the page offers *Take it*, *Assign…* or
+ * *Unassign* only to a caller the route would admit.
+ */
+export const taskOwnerCallerFacts = (
+  actorUserId: string | undefined,
+  role: UserRole | undefined,
+  task: TaskRecord,
+): OwnerCapabilities =>
+  actorUserId === undefined
+    ? { can_take: false, can_assign: false, can_unassign: false }
+    : ownerCapabilities({
+        actorUserId: actorUserId as Id,
+        actorRole: role,
+        ownerUserId: (task.owner?.user_id ?? null) as Id | null,
+        heldElsewhere: task.unlinked_assignee !== null && task.unlinked_assignee !== undefined,
+        taskState: task.state,
+      });
+
 /** Every caller fact for one effective role; an anonymous caller (unreachable here) gets none. */
 export const taskCallerFacts = (role: UserRole | undefined): Record<TaskCallerFactKey, boolean> =>
   Object.fromEntries(
@@ -159,7 +188,11 @@ export const registerTaskRoutes = async (
         // two reads are separate statements and a task deleted between them is a 404, not a 500.
         throw new NotFoundError(`task ${request.params.task_id}`);
       }
-      return { ...detail, ...taskCallerFacts(request.effectiveRole) };
+      return {
+        ...detail,
+        ...taskCallerFacts(request.effectiveRole),
+        ...taskOwnerCallerFacts(request.actor?.userId, request.effectiveRole, detail.task),
+      };
     },
   );
 

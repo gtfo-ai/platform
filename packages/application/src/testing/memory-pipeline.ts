@@ -21,6 +21,7 @@
  * | 10 | `bugTraces.latest` (WP-90) reads the **committed** project log through {@link MemoryPipelineStoreOptions.projectEvents}, in stream order; PostgreSQL orders by `occurred_at` then `position` and also sees the calling transaction's own staged appends. Unwired, it answers `null`. | **same, when wired** | Its one caller, the `ticket.updated` handler, asks in the dispatcher's transaction about traces an earlier job committed; a trace appended in the asking transaction does not exist, because no handler appends one. Stream order and `occurred_at` order agree for every trace the duty writes, which appends with the platform clock in sequence. The contract suite drives both. |
  * | 11 | `runs.markCliSpawnRequested` (WP-150) refuses a run that has ended and a run already marked, exactly as the SQL's `where cli_spawn_requested_at is null and status = any(active)`; `load` answers the marker and `insert` drops one a caller passed; the held set (`heldFor`, `totalsFor`'s `unmeasuredRuns`) excludes an unmarked run, as `unmeasuredEndedRunSql` does. What it cannot show is the marker **committed before** the `spawn` frame is sent — divergence 4's isolation. | **same** on predicates, **kinder** on commit order | The commit order is asserted against PostgreSQL from a second connection in `test/integration/pipeline/cli-spawn-marker.integration.test.ts`, and the predicates by the shared suite against both stores. |
  * | 12 | `tasks.ticketStatusChangesSinceEntry` (WP-178) reads the **committed** log through {@link MemoryPipelineStoreOptions.committedLog}, ordered by `position`; PostgreSQL's query also sees the calling transaction's own staged appends. Unwired, it answers `[]`. | **same, when wired** | Its one caller, the human-return window, asks in a job's own transaction about events earlier transactions committed (the task's entry into `qa`, a webhook's status change); the predicate — the newest entry, the project stream, the ticket by id or key — is the SQL's, and the contract suite drives it against both stores. |
+ * | 14 | The **owner directory** (S-26.1, `owners`) answers from {@link MemoryPipelineStore.seedIdentity}, {@link MemoryPipelineStore.seedProjectMember} and {@link MemoryPipelineStore.seedBindingAccount} where PostgreSQL joins `user_identities`, `users`, `project_members` and `bindings.account_identity`. Unseeded, every assignee is a `person` and nobody may own a task. | **same** on the predicate, **stricter** unseeded | The SQL's order — a linked member first, then a machine, then a binding's account — is the one {@link classify} applies; that the effective role is the higher of the organisation role and a membership is the SQL's alone, asserted by `test/integration/pipeline/task-owner.integration.test.ts`. |
  * | 13 | A **remote worker's claim** (WP-281) asks {@link MemoryPipelineStoreOptions.remoteWorkers} and {@link MemoryPipelineStoreOptions.runCredentialSource} where the SQL claim joins `workers`, `users`, `project_members`, `bindings` and `integrations` in its one statement; the same callback fences `finish`, `renewLease` and the spawn marker of a run a worker holds (backlog 714's `runHolderUsableSql`). Unwired, no worker is eligible and a worker-held run's fence never holds. | **same** on the predicates, **stricter** unwired | That the predicates are asked **in the committing statement** — a revoke that commits between a request's authentication and its write is seen — is PostgreSQL's isolation, asserted by `test/integration/pipeline/remote-claim.integration.test.ts`; divergence 4 is why it cannot be shown here. |
  */
 import type {
@@ -49,14 +50,23 @@ import {
   taskStageExitStateSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
+  ticketAssigneeSchema,
   workpadRefSchema,
 } from '@platform/contracts';
-import type { Approval, ExecutionSettings, Question, QueuedTask } from '@platform/domain';
+import type {
+  Approval,
+  AssigneeClass,
+  ExecutionSettings,
+  Question,
+  QueuedTask,
+  TaskOwnership,
+} from '@platform/domain';
 import {
   countsAsActive,
   countsInPipeline,
   isActiveRunStatus,
   isTerminalTaskState,
+  UNOWNED,
 } from '@platform/domain';
 import { holdOf } from '../cost/pending.js';
 import { decideRelease } from '../pipeline/release.js';
@@ -239,6 +249,17 @@ export interface MemoryPipelineStore extends PipelineStore {
   setExecutionSettings(projectId: Id, settings: ExecutionSettings | null): void;
   /** Marks a user as having a worker online for a project (WP-278); nothing else writes it here. */
   setAssigneeOnline(projectId: Id, userId: Id, online: boolean): void;
+  /**
+   * S-26.1's owner directory, seeded: a `user_identities` row — `userId` for a `person` linked to
+   * that user, `null` for a `machine` (divergence 14).
+   */
+  seedIdentity(provider: string, externalId: string, userId: Id | null): void;
+  /** The user's effective role in the project is `member` or above (divergence 14). */
+  seedProjectMember(projectId: Id, userId: Id): void;
+  /** A binding of the project acts as this account (`bindings.account_identity`, divergence 14). */
+  seedBindingAccount(projectId: Id, provider: string, externalId: string): void;
+  /** The task's ownership columns as `saveOwner` left them, for a test without a transaction. */
+  ownershipOf(taskId: Id): TaskOwnership;
   /** The holders of a fresh `server_claimants` row, as the claimant renewed them (WP-278). */
   serverClaimantHolders(): readonly string[];
   /**
@@ -382,6 +403,30 @@ export const createMemoryPipelineStore = (
   const budgetCaps = new Map<Id, number>();
   /** `tasks.ticket_claim` (migration 0088, WP-177): not on `StoredTask`, as `save` never names it. */
   const ticketClaims = new Map<Id, StoredTicketClaim>();
+  // S-26.1: the four ownership columns, kept off `StoredTask` as the claim is, and the directory.
+  const ownerships = new Map<Id, TaskOwnership>();
+  const ownerIdentities = new Map<string, Id | null>();
+  const projectMembers = new Set<string>();
+  const bindingAccounts = new Set<string>();
+  const identityKey = (provider: string, externalId: string): string =>
+    `${provider}\0${externalId}`;
+  const mayOwnIn = (projectId: Id, userId: Id): boolean =>
+    projectMembers.has(`${projectId}\0${userId}`);
+  /** The SQL's order: a linked member, then a machine, then a binding's own account (divergence 14). */
+  const classify = (projectId: Id, provider: string, externalId: string): AssigneeClass => {
+    const key = identityKey(provider, externalId);
+    const linked = ownerIdentities.get(key);
+    if (linked !== undefined && linked !== null && mayOwnIn(projectId, linked)) {
+      return { kind: 'member', userId: linked };
+    }
+    if (linked === null) {
+      return { kind: 'platform' };
+    }
+    if (bindingAccounts.has(`${projectId}\0${key}`)) {
+      return { kind: 'platform' };
+    }
+    return { kind: 'person' };
+  };
   /** `runs.reserve_usd` (WP-131): write-only on `NewRun`, so kept beside the row, as the SQL keeps it. */
   const reserves = new Map<Id, number | null>();
   /** `runs.provider_mode`, write-only on the port; read by {@link MemoryPipelineStore.providerModeOf}. */
@@ -939,6 +984,55 @@ export const createMemoryPipelineStore = (
       // shape refuses is refused at the write here rather than at the next read.
       ticketClaims.set(taskId, storedTicketClaimSchema.parse(claim));
     },
+    ownership: async (_tx, taskId) => {
+      if (!tasks.has(taskId)) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      return structuredClone(ownerships.get(taskId) ?? UNOWNED);
+    },
+    saveOwner: async (_tx, taskId, write) => {
+      if (!tasks.has(taskId)) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      const current = ownerships.get(taskId) ?? UNOWNED;
+      // The SQL's compare-and-set: `owner_user_id is not distinct from` and `ticket_assignee is not
+      // distinct from` the values the decision was made over (jsonb equality is by value).
+      if (
+        current.ownerUserId !== write.expected.ownerUserId ||
+        JSON.stringify(current.ticketAssignee) !==
+          JSON.stringify(
+            write.expected.ticketAssignee === null
+              ? null
+              : ticketAssigneeSchema.parse(write.expected.ticketAssignee),
+          )
+      ) {
+        return false;
+      }
+      ownerships.set(taskId, {
+        ownerUserId: write.next.ownerUserId,
+        ownerSource: write.next.ownerSource,
+        ownerChangedAt: write.next.ownerChangedAt,
+        ticketAssignee:
+          write.next.ticketAssignee === null
+            ? null
+            : ticketAssigneeSchema.parse(write.next.ticketAssignee),
+      });
+      return true;
+    },
+    unownedLiveByAssignee: async (_tx, identity) =>
+      [...tasks.values()]
+        .filter((stored) => {
+          const ownership = ownerships.get(stored.task.id) ?? UNOWNED;
+          return (
+            !isTerminalTaskState(stored.task.state) &&
+            ownership.ownerUserId === null &&
+            ownership.ticketAssignee !== null &&
+            ownership.ticketAssignee.provider === identity.provider &&
+            ownership.ticketAssignee.external_id === identity.externalId
+          );
+        })
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map((stored) => ({ taskId: stored.task.id, projectId: stored.task.projectId })),
     budgetCap: async (_tx, taskId) => {
       if (!tasks.has(taskId)) {
         throw new PipelineStoreError(`task ${taskId} does not exist`);
@@ -2644,6 +2738,21 @@ export const createMemoryPipelineStore = (
     breakdown: breakdownRepository,
     runCommands: runCommandRepository,
     bugTraces: bugTraceRepository,
+    owners: {
+      classifyAssignee: async (_tx, input) =>
+        classify(input.projectId, input.provider, input.externalId),
+      mayOwn: async (_tx, input) => mayOwnIn(input.projectId, input.userId),
+    },
+    seedIdentity: (provider, externalId, userId) => {
+      ownerIdentities.set(identityKey(provider, externalId), userId);
+    },
+    seedProjectMember: (projectId, userId) => {
+      projectMembers.add(`${projectId}\0${userId}`);
+    },
+    seedBindingAccount: (projectId, provider, externalId) => {
+      bindingAccounts.add(`${projectId}\0${identityKey(provider, externalId)}`);
+    },
+    ownershipOf: (taskId) => structuredClone(ownerships.get(taskId) ?? UNOWNED),
     runCommandRows: () => [...runCommandRows.values()].map((row) => clone(row)),
     offerRows: () => [...offers.values()].map((row) => clone(row)),
     leaseEpochOf: (runId) => epochs.get(runId) ?? 0,
