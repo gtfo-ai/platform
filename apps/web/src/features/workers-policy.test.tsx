@@ -50,7 +50,9 @@ const project = (id: string, key: string, name: string): ProjectSummary => ({
   spent_usd_30d: 0,
 });
 
-const PROJECTS = [project(AUTIX, 'AUT', 'Autix'), project(FONTAI, 'FON', 'Fontai')];
+// Keys are `slugSchema` (lower_snake_case): an upper-case key fails the projects read's parse, which
+// is retried and stays pending (CI on #109, where every row then stayed on Loading).
+const PROJECTS = [project(AUTIX, 'autix_key', 'Autix'), project(FONTAI, 'fontai_key', 'Fontai')];
 
 /**
  * `GET …/execution`. `others_take_unassigned` is required on the wire: leaving it out (`undefined`)
@@ -244,7 +246,7 @@ describe('what this machine takes, per role (S-26.8a)', () => {
             name: null,
           },
           claim_policy: 'mine_and_unassigned',
-          claim_projects: [{ id: AUTIX, key: 'AUT' }],
+          claim_projects: [{ id: AUTIX, key: 'autix_key' }],
         }),
       ],
     });
@@ -302,7 +304,7 @@ describe('before the project names are known (CI on #109)', () => {
           name: 'vojta-mbp',
           user: { id: OTHER_USER, email: 'vojtech@example.invalid', name: 'Vojtěch' },
           claim_policy: 'mine',
-          claim_projects: [{ id: AUTIX, key: 'AUT' }],
+          claim_projects: [{ id: AUTIX, key: 'autix_key' }],
         }),
       ],
     });
@@ -317,7 +319,7 @@ describe('before the project names are known (CI on #109)', () => {
     }
     // No sentence to take back, no Change that would offer no project and ask nothing.
     expect(document.querySelector('[data-claim-policy-sentence]')).toBeNull();
-    expect(document.body.textContent).not.toContain('in AUT');
+    expect(document.body.textContent).not.toContain('in autix_key');
     expect(screen.queryByRole('button', { name: MACHINE_TAKES_WORDS.change })).toBeNull();
     release();
     expect(sentenceIn(await policyOf(THEIRS))).toBe(
@@ -498,7 +500,7 @@ describe('the stored setting a row reads', () => {
     });
     expect(
       storedClaimPolicyOf(
-        workerFixture({ claim_policy: 'mine', claim_projects: [{ id: AUTIX, key: 'AUT' }] }),
+        workerFixture({ claim_policy: 'mine', claim_projects: [{ id: AUTIX, key: 'autix_key' }] }),
       ),
     ).toEqual({ policy: 'mine', projectIds: [AUTIX] });
   });
