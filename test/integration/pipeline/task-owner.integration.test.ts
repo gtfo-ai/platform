@@ -134,8 +134,8 @@ const within = async <T>(work: (tx: Transaction) => Promise<T>): Promise<T> => {
   }
 };
 
-/** A committed live task of the project. */
-const committedTask = async (): Promise<Id> => {
+/** A committed live task of the project (a `shadow` one for the owner backfill's case). */
+const committedTask = async (mode: 'normal' | 'shadow' = 'normal'): Promise<Id> => {
   const taskId = nextId();
   const stored = {
     task: {
@@ -147,7 +147,7 @@ const committedTask = async (): Promise<Id> => {
         url: `https://jira.example.test/browse/OWN-${counter}`,
       },
       template: 'feature',
-      mode: 'normal',
+      mode,
       state: 'active',
       currentStage: 'implementation' as Slug,
       stageAttempts: { implementation: 1 },
@@ -558,5 +558,94 @@ describe('the board’s owner filter and the DTO’s four fields (criterion 6)',
     }
     of = await published();
     expect(of(linked)?.tracker_assignee?.user_id).toBe(users.alice);
+  });
+});
+
+describe('the owner backfill’s query and mark (BACKLOG 1510, migration 0110)', () => {
+  const FUTURE = '2999-01-01T00:00:00.000Z' as IsoDateTime;
+  const owed = async (limit: number, olderThan: IsoDateTime = FUTURE) =>
+    (await within((tx) => store.tasks.ownerBackfillDue(tx, { olderThan, limit }))).map(
+      (row) => row.taskId,
+    );
+  /** A whole-row write through the aggregate's own `save` — which moves `updated_at`. */
+  const saveState = async (taskId: Id, state?: 'done') =>
+    within(async (tx) => {
+      const loaded = (await store.tasks.load(tx, taskId)) as StoredTask;
+      await store.tasks.save(tx, {
+        ...loaded,
+        task: { ...loaded.task, state: state ?? loaded.task.state },
+        branch: `agentic/touched-${taskId.slice(-4)}`,
+      });
+    });
+
+  // No `update tasks` here: `tasks-column-ownership.test.ts` counts tests' statements as writers
+  // too, so every write below is the store's own.
+  it('answers the live unassigned unmarked tasks most recently touched first, bounded, and each once', async () => {
+    // Every earlier case's task is due too: spend their marks first, so this case sees its own.
+    for (const taskId of await owed(10_000)) {
+      expect(await within((tx) => store.tasks.markOwnerBackfill(tx, taskId, NOW))).toBe(true);
+    }
+    expect(await owed(10_000)).toEqual([]);
+
+    // Committed one after another, so `updated_at` rises first → second → third …
+    const first = await committedTask();
+    const second = await committedTask();
+    const third = await committedTask();
+    const assigned = await committedTask();
+    const shadow = await committedTask('shadow');
+    // … until `save` touches the first, which then leads: the order is `updated_at`'s, not the
+    // id's and not the creation's.
+    await saveState(first);
+    expect(
+      await within((tx) =>
+        store.tasks.saveOwner(tx, assigned, {
+          expected: { ownerUserId: null, ticketAssignee: null },
+          next: {
+            ...UNOWNED,
+            ticketAssignee: {
+              provider: 'jira-cloud',
+              external_id: 'acct-erin',
+              display_name: 'Erin in Jira',
+              platform: false,
+            },
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(shadow).toBeDefined();
+
+    expect(await owed(10_000)).toEqual([first, third, second]);
+    expect(await owed(2)).toEqual([first, third]);
+    // Created after `olderThan`: not yet.
+    expect(await owed(10_000, '2000-01-01T00:00:00.000Z' as IsoDateTime)).toEqual([]);
+
+    const [before] = await query<{ updated_at: Date }>(
+      'select updated_at from tasks where id = $1',
+      [first],
+    );
+    expect(await within((tx) => store.tasks.markOwnerBackfill(tx, first, NOW))).toBe(true);
+    expect(await within((tx) => store.tasks.markOwnerBackfill(tx, first, NOW))).toBe(false);
+    expect(await owed(2)).toEqual([third, second]);
+    // The mark is the column alone: `updated_at`, and therefore the order, stays where it was.
+    const [after] = await query<{ owner_backfill_at: Date; updated_at: Date }>(
+      'select owner_backfill_at, updated_at from tasks where id = $1',
+      [first],
+    );
+    expect(after?.owner_backfill_at.toISOString()).toBe(NOW);
+    expect(after?.updated_at.toISOString()).toBe(before?.updated_at.toISOString());
+
+    // A finished task is never owed.
+    await saveState(second, 'done');
+    expect(await owed(10_000)).toEqual([third]);
+    expect(await within((tx) => store.tasks.markOwnerBackfill(tx, nextId(), NOW))).toBe(false);
+  });
+
+  it('answers the query from the partial index migration 0110 created', async () => {
+    const [index] = await query<{ indexdef: string }>(
+      "select indexdef from pg_indexes where indexname = 'tasks_owner_backfill_due_idx'",
+    );
+    expect(index?.indexdef).toMatch(
+      /WHERE \(\(owner_backfill_at IS NULL\) AND \(ticket_assignee IS NULL\)\)/,
+    );
   });
 });

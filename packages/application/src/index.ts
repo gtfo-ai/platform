@@ -244,6 +244,7 @@ export * from './recovery/expired-job.js';
 export * from './recovery/knowledge-apply.js';
 export * from './recovery/notification-repost.js';
 export * from './recovery/orphan-workspaces.js';
+export * from './recovery/owner-backfill.js';
 export * from './recovery/run-credential.js';
 export * from './recovery/run-lease.js';
 export * from './recovery/stranded.js';

@@ -157,6 +157,11 @@ export const tasks = pgTable('tasks', {
   ownerSource: text('owner_source').$type<TaskOwnerSource>(),
   ownerChangedAt: timestamp('owner_changed_at', { withTimezone: true }),
   ticketAssignee: jsonb('ticket_assignee').$type<TicketAssignee>(),
+  /**
+   * BACKLOG 1510, migration 0110: when the recovery pass spent this task's one owner-backfill read
+   * (`recovery/owner-backfill.ts`); `null` is owed. Written only by `TaskRepository.markOwnerBackfill`.
+   */
+  ownerBackfillAt: timestamp('owner_backfill_at', { withTimezone: true }),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

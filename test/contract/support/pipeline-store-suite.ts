@@ -387,6 +387,72 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * BACKLOG 1510 (migration 0110): the owner backfill's query and its one mark. Due is live,
+       * `normal`, no stored assignee, unmarked and created before `olderThan`; the mark writes only
+       * while unmarked. The PostgreSQL store sets `created_at` itself and the in-memory one keeps
+       * the fixture's, so `olderThan` is far on either side of both; and other suites' rows may
+       * share the database, so only this case's own tasks are compared.
+       */
+      it('finds the tasks owed an owner-backfill read, and marks each once (BACKLOG 1510)', async () => {
+        const due = task({}, 'ACME-BACKFILL-1');
+        const dueToo = task({}, 'ACME-BACKFILL-2');
+        const assigned = task({}, 'ACME-BACKFILL-3');
+        const finished = task({}, 'ACME-BACKFILL-4');
+        const shadowBase = task({}, 'ACME-BACKFILL-5');
+        const shadow: StoredTask = { ...shadowBase, task: { ...shadowBase.task, mode: 'shadow' } };
+        for (const stored of [due, dueToo, assigned, finished, shadow]) {
+          await store.tasks.insert(tx, stored);
+        }
+        const mine = new Set([due, dueToo, assigned, finished, shadow].map((s) => s.task.id));
+        expect(
+          await store.tasks.saveOwner(tx, assigned.task.id, {
+            expected: { ownerUserId: null, ticketAssignee: null },
+            next: {
+              ownerUserId: null,
+              ownerSource: null,
+              ownerChangedAt: null,
+              ticketAssignee: {
+                provider: 'fake-jira',
+                external_id: 'acct-someone',
+                display_name: 'Someone Example',
+                platform: false,
+              },
+            },
+          }),
+        ).toBe(true);
+        const loadedFinished = (await store.tasks.load(tx, finished.task.id)) as StoredTask;
+        await store.tasks.save(tx, {
+          ...loadedFinished,
+          task: { ...loadedFinished.task, state: 'cancelled' },
+        });
+
+        const future = '2999-01-01T00:00:00.000Z' as IsoDateTime;
+        const owed = async (olderThan: IsoDateTime, limit = 10_000) =>
+          (await store.tasks.ownerBackfillDue(tx, { olderThan, limit })).filter((row) =>
+            mine.has(row.taskId),
+          );
+        // Inserted and touched in the same order and instant: the order is by id in both stores.
+        expect(await owed(future)).toEqual(
+          [due, dueToo]
+            .map((stored) => ({ taskId: stored.task.id, projectId }))
+            .sort((a, b) => a.taskId.localeCompare(b.taskId)),
+        );
+        // Created after `olderThan`: not yet.
+        expect(await owed('2000-01-01T00:00:00.000Z' as IsoDateTime)).toEqual([]);
+
+        const at = '2026-06-02T09:00:00.000Z' as IsoDateTime;
+        expect(await store.tasks.markOwnerBackfill(tx, due.task.id, at)).toBe(true);
+        // A second mark of the same task writes nothing: two passes enqueue one read between them.
+        expect(await store.tasks.markOwnerBackfill(tx, due.task.id, at)).toBe(false);
+        expect(await owed(future)).toEqual([{ taskId: dueToo.task.id, projectId }]);
+        expect(await store.tasks.markOwnerBackfill(tx, nextId(), at)).toBe(false);
+        // The mark is not the aggregate's: a whole-row save over an older snapshot keeps it.
+        const loadedDue = (await store.tasks.load(tx, due.task.id)) as StoredTask;
+        await store.tasks.save(tx, { ...loadedDue, branch: 'agentic/acme-backfill-1' });
+        expect(await owed(future)).toEqual([{ taskId: dueToo.task.id, projectId }]);
+      });
+
+      /**
        * WP-79: the insert names `requested_by_user_id`. Until then the PostgreSQL statement did not,
        * so WP-67's three writers (discovery, a shadow batch, a bootstrap's chunk tasks) wrote the
        * requester only in the in-memory store — a fake kinder than the database (standing rule 1),

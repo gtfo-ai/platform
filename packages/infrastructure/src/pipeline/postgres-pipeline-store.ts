@@ -806,6 +806,32 @@ export const createPostgresPipelineStore = (
       return rows.map((row) => ({ taskId: row.id as Id, projectId: row.project_id as Id }));
     },
 
+    // BACKLOG 1510 (migration 0110): `tasks_owner_backfill_due_idx` is this predicate's index.
+    ownerBackfillDue: async (tx, query) => {
+      const { rows } = await sqlOf(tx).query<{ id: string; project_id: string }>(
+        `select id, project_id from tasks
+          where owner_backfill_at is null
+            and ticket_assignee is null
+            and mode = 'normal'
+            and state <> all (array['done', 'cancelled']::task_state[])
+            and created_at < $1
+          order by updated_at desc, id
+          limit $2`,
+        [query.olderThan, query.limit],
+      );
+      return rows.map((row) => ({ taskId: row.id as Id, projectId: row.project_id as Id }));
+    },
+
+    markOwnerBackfill: async (tx, taskId, at) => {
+      // The column's one writer; no `updated_at`, so the mark does not reorder the pass's query.
+      const result = await sqlOf(tx).query(
+        `update tasks set owner_backfill_at = $2
+          where id = $1 and owner_backfill_at is null`,
+        [taskId, at],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
     saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
       // Two columns, for the reason `saveWorkpad` is one: the backfill runs in the `stage.execute`
       // job beside the stage executor's transactions, and a whole-row write from there is a lost

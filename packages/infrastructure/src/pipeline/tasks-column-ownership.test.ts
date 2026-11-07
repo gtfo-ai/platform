@@ -215,6 +215,10 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'owner_source',
     'owner_changed_at',
     'ticket_assignee',
+    // `markOwnerBackfill` — the recovery pass's one owner-backfill read per task (BACKLOG 1510,
+    // migration 0110), written only while it is null and before the `owner_sync` duty is enqueued;
+    // the shape of the recovery marks above, on the pipeline store because the pass reads it there.
+    'owner_backfill_at',
     // `save` — the aggregate's own columns, plus the token that guards them
     'state',
     'current_stage',

@@ -825,7 +825,12 @@ platform never unassigns a person), an owner with no linked Jira account gets no
 in Jira before the write wins over it once the platform has seen it, and a shadow task's write is only
 recorded. The task's `owner_writes_back` says whether its current owner is written back, and the task
 read's `take_writes_back` whether *your* Take would be. The owner's computer gets the head start on
-the task's runs (*Settings → Execution*, below).
+the task's runs (*Settings → Execution*, below). **A task that existed before owners did** — or any
+live task whose ticket assignee the platform has never stored — has its ticket read **once** by the
+recovery pass, about a minute after the upgrade, up to twenty tasks a pass, the most recently
+touched first; so a task stopped because its ticket is assigned to someone else names that person
+without anybody touching the ticket. An unassigned ticket is read that once and not again, and a
+read that fails is not retried until the ticket changes or the task's next stage reads it.
 
 **The owner on the page** (since S-26.8b): beside the ticket's links, the owner's initials and
 *Owner: Vojtěch* (*(you)* when it is you), *Unassigned* in grey, or — for a tracker assignee the

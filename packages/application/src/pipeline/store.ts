@@ -724,6 +724,24 @@ export interface TaskRepository {
     identity: { readonly provider: string; readonly externalId: string },
   ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
   /**
+   * The tasks still **owed an owner-backfill read** (BACKLOG 1510, migration 0110,
+   * `recovery/owner-backfill.ts`): live (not `done`, not `cancelled`), mode `normal`, no stored
+   * tracker assignee (`ticket_assignee is null`), `owner_backfill_at` null, and created before
+   * `olderThan` — the most recently touched first (`updated_at` descending, then id), at most
+   * `limit`.
+   */
+  ownerBackfillDue(
+    tx: Transaction,
+    query: { readonly olderThan: IsoDateTime; readonly limit: number },
+  ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
+  /**
+   * Spends a task's one owner-backfill read: writes `owner_backfill_at = at` **only while it is
+   * null** (one statement, the column's only writer) and answers whether it did — so two passes
+   * that found the same row enqueue one read between them. No version bump: `save` does not name
+   * the column. `false` for a task that does not exist.
+   */
+  markOwnerBackfill(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
+  /**
    * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
    * (WP-79, PROGRESS backlog 243).
    *

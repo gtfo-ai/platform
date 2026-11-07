@@ -24,6 +24,12 @@
  *    nothing stale. A signal that arrives while the read is in flight is newer than it, and the next
  *    duty reads again.
  *
+ *  - **the owner backfill** (BACKLOG 1510): the same duty with `owner_backfill: true`, enqueued by
+ *    the recovery pass's `owner_backfill` row (`recovery/owner-backfill.ts`) for a live task that
+ *    has no stored assignee and has not had its one backfill read — a task created before S-26.1
+ *    whose ticket nobody has touched since, which no other read here reaches. It reads **whatever
+ *    the snapshot's freshness** (`ensureTicketSnapshot`'s `read: 'always'`), once per task.
+ *
  *  - **the claim's pre-read** (`ticket-claim.ts`, S-26.2) — {@link syncOwnerOnClaimRead}, in a
  *    transaction of its own between the read and the claim's writes, which also answers what the
  *    platform says about the holder (a linked member's ticket is kept, never assigned).
@@ -529,6 +535,12 @@ export interface OwnerSyncDutyOptions extends EnsureTicketSnapshotOptions, Owner
  * stale, and applies the read's assignee. **One read per burst** (the module's § Where the tracker
  * is read). No provider call is made inside a transaction: the read is `readTicketForTask`'s,
  * between this duty's two.
+ *
+ * With `owner_backfill: true` (BACKLOG 1510) it also re-validates that the task **still has no
+ * stored assignee** — a `ticket.updated` or a stage's re-read may have filled it since the pass
+ * found the row, and then the read is no longer owed — and reads whatever the snapshot's
+ * freshness. A backfill names no cause event (the pass is not one), so its `task.owner.changed`
+ * carries `cause_event_id: null`.
  */
 export const runOwnerSync = async (
   options: OwnerSyncDutyOptions,
@@ -537,21 +549,39 @@ export const runOwnerSync = async (
   if (data.task_id === undefined) {
     return;
   }
+  const logger = options.logger ?? silentLogger;
   const taskId = data.task_id as Id;
-  const stored = await options.unitOfWork.transaction(async (scope) =>
-    options.store.tasks.load(scope.tx, taskId),
-  );
+  const backfill = data.owner_backfill === true;
+  const found = await options.unitOfWork.transaction(async (scope) => {
+    const stored = await options.store.tasks.load(scope.tx, taskId);
+    return {
+      stored,
+      assigned:
+        stored !== null &&
+        backfill &&
+        (await options.store.tasks.ownership(scope.tx, taskId)).ticketAssignee !== null,
+    };
+  });
+  const stored = found.stored;
   if (stored === null || isTerminalTaskState(stored.task.state)) {
-    (options.logger ?? silentLogger).debug(
+    logger.debug(
       { task_id: taskId },
       'owner_sync: the task is gone or finished, so its ticket is not read',
+    );
+    return;
+  }
+  if (found.assigned) {
+    logger.debug(
+      { task_id: taskId },
+      'owner_sync: a read since the backfill was enqueued stored the ticket’s assignee, so the backfill read is not owed',
     );
     return;
   }
   await ensureTicketSnapshot(
     options,
     stored,
-    ownerSyncOnRead(options, (data.cause_event_id ?? null) as Id | null),
+    ownerSyncOnRead(options, backfill ? null : ((data.cause_event_id ?? null) as Id | null)),
+    { read: backfill ? 'always' : 'when_stale' },
   );
 };
 

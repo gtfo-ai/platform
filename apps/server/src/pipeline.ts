@@ -1808,6 +1808,12 @@ export const composePipeline = async (
        * once; `packages/application/src/recovery/offer-timeout.ts`.
        */
       unroutedOffers: { store: store.offers, execution: store.execution },
+      /**
+       * BACKLOG 1510: a live task with no stored tracker assignee — one created before S-26.1 whose
+       * ticket never changed — gets the `owner_sync` duty once, under `tasks.owner_backfill_at`;
+       * `packages/application/src/recovery/owner-backfill.ts`.
+       */
+      ownerBackfill: { tasks: store.tasks },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,
@@ -1831,7 +1837,7 @@ export const composePipeline = async (
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), a merge request a rework superseded whose close was lost stays open (178), a deferred dependency-gate decision whose resume wake-up was lost waits for the next resume (240), a notification whose job spent every attempt is never re-posted (236), a question or approval whose reminder was lost gets none (291), a task left at a stage with no job and no run stays active for ever (320), and an approved knowledge change whose apply failed, or a discovery run whose findings were never recorded, is never retried or reported (366), and a job a person waits on whose last try expired instead of throwing is never escalated (421)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), a merge request a rework superseded whose close was lost stays open (178), a deferred dependency-gate decision whose resume wake-up was lost waits for the next resume (240), a notification whose job spent every attempt is never re-posted (236), a question or approval whose reminder was lost gets none (291), a task left at a stage with no job and no run stays active for ever (320), and an approved knowledge change whose apply failed, or a discovery run whose findings were never recorded, is never retried or reported (366), a job a person waits on whose last try expired instead of throwing is never escalated (421), and a live task created before task ownership whose ticket never changes never names who holds it (1510)',
     );
   }
 

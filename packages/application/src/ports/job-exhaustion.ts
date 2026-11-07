@@ -360,7 +360,7 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   },
   owner_sync: {
     shape: 'notification_shaped',
-    why: 'one re-read of a live task’s ticket to follow its assignee (S-26.1); a lost read leaves the owner as it was until the next `ticket.updated` or the next agent stage’s re-read, which apply the same assignee — the snapshot stays stale, so the next one reads',
+    why: 'one re-read of a live task’s ticket to follow its assignee (S-26.1); a lost read leaves the owner as it was until the next `ticket.updated` or the next agent stage’s re-read, which apply the same assignee — the snapshot stays stale, so the next one reads; a lost **backfill** read (BACKLOG 1510) has spent its one attempt and leaves the task as it was before the backfill, until one of those',
   },
   ticket_owner_assign: {
     shape: 'notification_shaped',

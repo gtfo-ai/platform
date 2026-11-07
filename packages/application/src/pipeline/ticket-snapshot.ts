@@ -575,14 +575,19 @@ export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
  *    through {@link resolveRequester}, written by `saveRequester`, which never overwrites — so a
  *    task whose intake read failed, or whose reporter was mapped after intake, gains the reviewer
  *    fallback at its next re-read, and a task that already names somebody keeps them.
+ *  - `read: 'always'` (BACKLOG 1510) skips the staleness check and nothing else: the owner
+ *    backfill's one read of a task whose snapshot is fresh but whose assignee was never stored.
+ *    The freshness race inside the write transaction still decides, so a forced read never puts
+ *    its snapshot or its assignee over a read that started after it.
  */
 export const ensureTicketSnapshot = async (
   options: EnsureTicketSnapshotOptions,
   stored: StoredTask,
   onRead?: TicketReadHook,
+  when: { readonly read?: 'when_stale' | 'always' } = {},
 ): Promise<TicketSnapshot | null> => {
   const taskId = stored.task.id;
-  if (!isTicketSnapshotStale(stored)) {
+  if (when.read !== 'always' && !isTicketSnapshotStale(stored)) {
     return stored.ticketSnapshot;
   }
   // The read's **start**, which is what the snapshot is as fresh as (see the module docblock).

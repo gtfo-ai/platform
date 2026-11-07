@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Sixteen sites, fourteen of them here, and the other two named rather than silently absent
+ * ## Eighteen sites, sixteen of them here, and the other two named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -31,6 +31,7 @@
  * | a bound-and-escalate job whose last try **expired** rather than threw (WP-156) | **421** | a person waits on an escalation the wrapper never made: pg-boss fails an expired job without its handler throwing | **here** — `expired_job`, in `./expired-job.ts`: the task escalated once per job id under a mark, never re-enqueued |
  * | an offer written before WP-278 (S-22.19) | **887** | a worker reads its null `workers_from` as *never* and it has no `expires_at`: on a core with no server runner it waits for ever | **here** — `run_offer_reroute`, in `./offer-timeout.ts`: routed from the project's effective setting, once, bounded by the columns it writes |
  * | an agent run's offer nobody claimed (WP-278) | — | the task's stage entry, held by an open offer for ever (a `workers_only` project with no worker, a `server_only` one with no runner) | **here** — `run_offer_timeout`, in `./offer-timeout.ts`: past its `expires_at` the offer is withdrawn, its run cancelled and the task escalated with *no claimant took this run* (an ask is refused), never re-offered |
+ * | a live task created before S-26.1 whose ticket never changed (BACKLOG 1510) | — | its tracker assignee, never read: the held-ticket callout cannot say who holds the ticket | **here** — `owner_backfill`, in `./owner-backfill.ts`: the `owner_sync` duty once per task under a mark (`tasks.owner_backfill_at`), at most twenty a pass, no ending |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
  * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
@@ -181,6 +182,11 @@ import {
   recoverExpiredOffers,
   rerouteUnroutedOffers,
 } from './offer-timeout.js';
+import {
+  OWNER_BACKFILL_SITE,
+  type OwnerBackfillRecoverySite,
+  recoverOwnerBackfill,
+} from './owner-backfill.js';
 import {
   enqueueRunCredentialRevocation,
   type RunCredentialRecoverySite,
@@ -472,6 +478,14 @@ export interface StrandedRecoveryOptions {
    * **Absent is "such an offer keeps waiting"** — every build before S-22.19.
    */
   readonly unroutedOffers?: OfferRerouteRecoverySite;
+  /**
+   * The owner backfill (BACKLOG 1510, `./owner-backfill.ts`): a live task with no stored tracker
+   * assignee that has not had its one backfill read gets the `owner_sync` duty, once.
+   *
+   * **Absent is "such a task stays nameless until its ticket changes"** — every build before it.
+   * Optional for the reason `credentials` is: its wake-up is a `pipeline.outbound` duty.
+   */
+  readonly ownerBackfill?: OwnerBackfillRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -1092,6 +1106,25 @@ export const runStrandedRecovery = async (
       site: 'deadline_reminder',
       found: deadlines.reminderFound,
       reEnqueued: deadlines.reminded,
+      ended: 0,
+    });
+  }
+
+  if (options.ownerBackfill !== undefined) {
+    // A re-enqueue under a mark with no ending: a read that did not take leaves the task as it was.
+    const backfill = await recoverOwnerBackfill(
+      {
+        unitOfWork: options.unitOfWork,
+        jobs: options.jobs,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      options.ownerBackfill,
+      { now, olderThan, limit },
+    );
+    sites.push({
+      site: OWNER_BACKFILL_SITE,
+      found: backfill.found,
+      reEnqueued: backfill.enqueued,
       ended: 0,
     });
   }
