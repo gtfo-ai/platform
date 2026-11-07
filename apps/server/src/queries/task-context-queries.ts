@@ -452,7 +452,8 @@ export const readTaskContext = async (
   const heldArtifact = (type: string, version: number): boolean =>
     holds?.artifacts.some((entry) => entry.artifact_type === type && entry.version === version) ??
     false;
-  const detail = await findTaskDetail(database, scope.taskId);
+  // S-26.5: an agent's tool shows no `waiting`, so its statement is not asked.
+  const detail = await findTaskDetail(database, scope.taskId, { waiting: false });
   if (detail === null) {
     throw new TaskContextRefusedError(`task ${scope.taskId} does not exist`);
   }

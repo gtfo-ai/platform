@@ -823,6 +823,20 @@ platform accepts as the owner. On the **board**, a card shows its owner's initia
 has the same: `owner` on every task, `POST /api/tasks/:id/owner`, and `?owner=` on a project's task
 list.
 
+**Why a run waits** (since S-26.5, read only — the words on the page come with S-26.8b): while a
+task's run waits for a machine or the server to start it, the task, its board card and its row on
+*Agents* carry `waiting` — why nobody takes it now: its owner's machine is offline (with when it was
+last seen) or paused, the owner's machine is on but cannot take it (another build's images, no images
+yet, a usage limit, a drain — `waiting.blockers` says which, in the Workers screen's words), the owner
+has no machine that takes this project or only picks runs by hand,
+no machine takes unassigned tasks in this project, or the tracker assigns it to somebody who is not
+linked to a platform account, so only a machine that takes everyone's tasks can run it. A task that
+somebody gave back is unassigned, whatever the tracker still shows. `waiting.reason` is empty when a
+machine or the server can take the run now. *Settings → Execution* also says, without naming
+anybody's machine, whether the server or another person's machine takes this project's unassigned
+tasks by itself (`others_take_unassigned`) — so a machine set to *Only my tasks* can tell whether
+unassigned tasks would have nowhere to run.
+
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
   platform never read the title), the task's state as a label with its icon — *Needs you* whenever
   something waits on a person, by the same rule as the board's column — and one line: links to the
@@ -1005,8 +1019,10 @@ check waits and the task page says what it waits for, from the first check: *"CI
 someone to start the manual job sentry-release-commit in GitLab. Start it there and the task
 continues."*, with the job linked, a note that links the readiness panel's CI-rules warning (which
 names the rule it understood), and *Start the job in GitLab* as the page's one button. A held job is
-*Needs you* at once on the task page; the board's card does not show it until the check stops (the
-board's list does not carry the check's read yet). While the pipeline is simply running, the page
+*Needs you* at once on the task page; the board's card does not show it until the check stops — the
+board's list and the inbox carry the check's read since S-26.5 (`gate_wait` on each task, and the
+inbox's `ci_held` list of tasks held at a manual job), and the board, Home and the Inbox do not show
+it yet. A paused task shows no CI wait: the check stops while it is paused. While the pipeline is simply running, the page
 says *"CI is running (pipeline n, 12 min so far; the task gives up after 60)"* and asks nothing. If
 the wait runs out, the page says *"CI did not finish within 60 minutes: pipeline n was still held at
 the manual job …"* — never that CI failed — and the next step, *Start the job in GitLab, then

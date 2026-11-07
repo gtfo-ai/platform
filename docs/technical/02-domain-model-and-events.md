@@ -254,6 +254,11 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > `tasks.ticket_assignee` in its record transaction, and a release that unassigns writes `null`
 > there, so the next owner sync reads no change (`claimPreReadDecision`, `recordPlatformAssign`,
 > `recordPlatformUnassign` in the domain).
+> *As built at S-26.5 (TD-031's 2026-11-06 amendment item 8):* a run waiting for a claimant is a
+> **read**, never a state: no event and no column. The task read, the board and the Agents rows
+> derive `waiting` from the open offer and the claim's own predicates (technical/08, *Why a run
+> waits*); a task held elsewhere waits for a machine that takes everyone's tasks, and a task a
+> linked member released is unassigned, exactly as the claim reads it.
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns (and since WP-174 the optional `qa` stage has the same two, spending the same two loops) — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
@@ -445,7 +450,9 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   is `manual`; redacted, then cut at 100 characters), the draft flag, the read's instant and the
 >   CI timeout bounding the wait (`null` on a webhook binding). A pending read that found no
 >   pipeline writes `null`; a closed attempt keeps its last read. `GET /api/tasks/:id` serves the
->   open attempt's as `gate_wait` (technical/08). A pending read never parks a task by itself;
+>   open attempt's as `gate_wait` (technical/08) — only while the task is `active`, since a pause
+>   closes no attempt and the CI job stops checking a paused task (BACKLOG 1301) — and so do the
+>   board's items and the inbox's `ci_held` (BACKLOG 1300). A pending read never parks a task by itself;
 > - **a retry nobody acted on escalates at once**: when an attempt's **first** read (the one made
 >   while the attempt has no read recorded yet — not its first check by count, which a
 >   stranded-stage re-enqueue starts again) shows the same pipeline, on the same head, still

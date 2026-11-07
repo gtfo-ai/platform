@@ -112,6 +112,7 @@ import {
   estimateAccuracy,
   handBackStages,
   ownerWriteBackReachesTracker,
+  type RunImageDigests,
   resumeCommands,
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
@@ -142,6 +143,7 @@ import { approvalViewsFor } from './approval-views.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
 import { latestActivityFor, newestEntryPerRun, seatsFor } from './live-view-queries.js';
+import { waitingForRuns, waitingForTasks } from './offer-waiting.js';
 import { frozenLimits } from './pipeline-graph.js';
 import { returnsOf, type SetbackStageRow, stopOf } from './task-setback.js';
 
@@ -1193,7 +1195,12 @@ const stageRowsFor = async (
 ): Promise<
   ReadonlyMap<
     string,
-    { readonly stages: TaskListItem['stages']; readonly setback: SetbackStageRow[] }
+    {
+      readonly stages: TaskListItem['stages'];
+      readonly setback: SetbackStageRow[];
+      /** The rows as {@link gateWaitOf} reads them (backlog 1300). */
+      readonly gate: GateStageRow[];
+    }
   >
 > => {
   if (taskIds.length === 0) {
@@ -1211,6 +1218,8 @@ const stageRowsFor = async (
       returnedTo: taskStages.returnedTo,
       signature: taskStages.signature,
       ciEnding: taskStages.ciEnding,
+      // Backlog 1300: the CI gate's recorded read, for the card's `gate_wait`.
+      ciPendingRead: taskStages.ciPendingRead,
       // S-25.11: a CI return's reason is its jobs' logs, so the page reads a bounded head of it —
       // one character past the stop's cap, which is how `stopOf` knows it was cut.
       returnReason: sql<
@@ -1222,10 +1231,10 @@ const stageRowsFor = async (
     .orderBy(asc(taskStages.taskId), asc(taskStages.enteredAt), asc(taskStages.attempt));
   const byTask = new Map<
     string,
-    { stages: TaskListItem['stages'][number][]; setback: SetbackStageRow[] }
+    { stages: TaskListItem['stages'][number][]; setback: SetbackStageRow[]; gate: GateStageRow[] }
   >();
   for (const row of rows) {
-    const entry = byTask.get(row.taskId) ?? { stages: [], setback: [] };
+    const entry = byTask.get(row.taskId) ?? { stages: [], setback: [], gate: [] };
     entry.stages.push({
       stage: row.stage,
       attempt: row.attempt,
@@ -1233,6 +1242,7 @@ const stageRowsFor = async (
       entered_at: isoRequired(row.enteredAt),
     });
     entry.setback.push(setbackRowOf(row));
+    entry.gate.push(row);
     byTask.set(row.taskId, entry);
   }
   return byTask;
@@ -1977,11 +1987,20 @@ const gateFeedbackOf = (
 
 type StageRowSelect = typeof taskStages.$inferSelect;
 
+/**
+ * The columns of a `task_stages` row the CI wait reads — what the task read's whole rows and the
+ * board's page's narrow ones (`stageRowsFor`, backlog 1300) both carry.
+ */
+type GateStageRow = Pick<
+  StageRowSelect,
+  'taskId' | 'stage' | 'attempt' | 'state' | 'outcome' | 'enteredAt' | 'exitedAt' | 'ciPendingRead'
+>;
+
 /** The newest `ci_gate` attempt among a task's rows, or `null`. */
-const latestCiGateRow = (stageRows: readonly StageRowSelect[]): StageRowSelect | null =>
+const latestCiGateRow = <R extends GateStageRow>(stageRows: readonly R[]): R | null =>
   stageRows
     .filter((row) => row.stage === CI_GATE_STAGE)
-    .reduce<StageRowSelect | null>(
+    .reduce<R | null>(
       (newest, row) => (newest === null || row.attempt > newest.attempt ? row : newest),
       null,
     );
@@ -1993,7 +2012,7 @@ const latestCiGateRow = (stageRows: readonly StageRowSelect[]): StageRowSelect |
  * attempt's own `entered_at`, which the CI timeout counts from — read off the row, not copied into
  * the value.
  */
-const recordedGateWaitOf = (row: StageRowSelect): GateWait | null => {
+const recordedGateWaitOf = (row: GateStageRow): GateWait | null => {
   if (row.ciPendingRead === null || row.ciPendingRead === undefined) {
     return null;
   }
@@ -2012,15 +2031,18 @@ const recordedGateWaitOf = (row: StageRowSelect): GateWait | null => {
 
 /**
  * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read,
- * when the task's current stage is `ci_gate` — `null` for any other stage, a closed attempt (a
- * parked, settled or superseded one keeps its read; {@link lastGateWaitOf} serves a parked one), or
- * an attempt whose last read found no pipeline.
+ * when the task is `active` at `ci_gate` — `null` for any other stage, a closed attempt (a parked,
+ * settled or superseded one keeps its read; {@link lastGateWaitOf} serves a parked one), an attempt
+ * whose last read found no pipeline, and **a task that is not runnable** (backlog 1301): a pause
+ * closes no stage row and the CI job stops checking a paused task, so its open attempt is a wait
+ * nothing is performing. The task read, the board's page and the inbox's `ci_held` all answer
+ * through this one function.
  */
 export const gateWaitOf = (
-  task: { readonly currentStage: string | null },
-  stageRows: readonly StageRowSelect[],
+  task: { readonly state: string; readonly currentStage: string | null },
+  stageRows: readonly GateStageRow[],
 ): TaskDetailResponse['gate_wait'] => {
-  if (task.currentStage !== CI_GATE_STAGE) {
+  if (task.state !== 'active' || task.currentStage !== CI_GATE_STAGE) {
     return null;
   }
   const latest = latestCiGateRow(stageRows);
@@ -2046,7 +2068,7 @@ export const gateWaitOf = (
  */
 export const lastGateWaitOf = (
   task: { readonly state: string; readonly currentStage: string | null },
-  stageRows: readonly StageRowSelect[],
+  stageRows: readonly GateStageRow[],
 ): TaskDetailResponse['gate_wait'] => {
   if (task.state !== 'needs_human' || task.currentStage !== CI_GATE_STAGE) {
     return null;
@@ -2057,10 +2079,25 @@ export const lastGateWaitOf = (
     : recordedGateWaitOf(latest);
 };
 
+/**
+ * What the reads that carry `waiting` (S-26.5) need from the composition: the core's current run
+ * and egress digests, which a machine's claim compares with what it holds — `null` when this
+ * process has no worker release, and then no machine is counted as able to claim, as none can.
+ */
+export interface WaitingReadOptions {
+  readonly coreDigests?: RunImageDigests | null;
+  /**
+   * `false` skips the `waiting` statement and leaves the key off the task record — for a reader
+   * that never shows it (`get_task_context`, an agent's tool). Absent or `true`: it is read.
+   */
+  readonly waiting?: boolean;
+}
+
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
 export const findTaskDetail = async (
   database: Database,
   taskId: string,
+  options: WaitingReadOptions = {},
 ): Promise<TaskDetailRecord | null> => {
   const taskRows = await database.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   const task = taskRows[0];
@@ -2107,6 +2144,7 @@ export const findTaskDetail = async (
     unmeasured,
     pausedReasons,
     owners,
+    waiting,
   ] = await Promise.all([
     modelUsageFor(
       database,
@@ -2125,18 +2163,25 @@ export const findTaskDetail = async (
     unmeasuredRunsFor(database, [taskId]),
     pausedReasonsFor(database, task.state === 'paused' ? [taskId] : []),
     ownerViewsFor(database, [taskId]),
+    // S-26.5: why the current stage's run waits, off the claim's own predicates.
+    options.waiting === false
+      ? null
+      : waitingForTasks(database, [taskId], options.coreDigests ?? null),
   ]);
 
   const setbackRows = stageRows.map(setbackRowOf);
   return {
-    task: toTaskRecord(
-      task,
-      conflicts.get(task.id) ?? null,
-      estimated.get(task.id) ?? 0,
-      unmeasured.get(task.id) ?? 0,
-      pausedReasons.get(task.id),
-      owners.get(task.id),
-    ),
+    task: {
+      ...toTaskRecord(
+        task,
+        conflicts.get(task.id) ?? null,
+        estimated.get(task.id) ?? 0,
+        unmeasured.get(task.id) ?? 0,
+        pausedReasons.get(task.id),
+        owners.get(task.id),
+      ),
+      ...(waiting === null ? {} : { waiting: waiting.get(task.id) ?? null }),
+    },
     taken_over: takenOver,
     human_time: humanTime,
     gate_feedback: gateFeedbackOf(task, stageRows),
@@ -2206,7 +2251,10 @@ export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = [
  * offer is open — the queue is these runs) and the kind of its newest transcript entry, never the
  * entry's text. One query each for the whole list.
  */
-export const listRunningAgents = async (database: Database): Promise<AgentsResponse> => {
+export const listRunningAgents = async (
+  database: Database,
+  options: WaitingReadOptions = {},
+): Promise<AgentsResponse> => {
   const rows = await database
     .select(runColumns)
     .from(runs)
@@ -2214,11 +2262,13 @@ export const listRunningAgents = async (database: Database): Promise<AgentsRespo
     .where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]))
     .orderBy(desc(runs.createdAt));
   const ids = rows.map((row) => row.id);
-  const [usage, progress, seats, activity] = await Promise.all([
+  const [usage, progress, seats, activity, waiting] = await Promise.all([
     modelUsageFor(database, ids),
     latestProgressFor(database, ids),
     seatsFor(database, ids),
     latestActivityFor(database, ids),
+    // S-26.5: why each run's open offer waits — one statement for the whole list.
+    waitingForRuns(database, ids, options.coreDigests ?? null),
   ]);
   return {
     items: rows.map((row) => {
@@ -2231,6 +2281,7 @@ export const listRunningAgents = async (database: Database): Promise<AgentsRespo
         last_output_at: run.last_output_at ?? null,
         seat: seats.get(row.id) ?? null,
         activity: activity.get(row.id) ?? null,
+        waiting: waiting.get(row.id) ?? null,
       };
     }),
   };
@@ -2261,7 +2312,7 @@ export const listRunningAgents = async (database: Database): Promise<AgentsRespo
  * served as they were stored, because `questions` is append-only and nothing may rewrite them.
  */
 export const listInbox = async (database: Database): Promise<InboxResponse> => {
-  const [questionRows, approvalRows] = await Promise.all([
+  const [questionRows, approvalRows, ciHeld] = await Promise.all([
     database
       .select()
       .from(questions)
@@ -2272,12 +2323,73 @@ export const listInbox = async (database: Database): Promise<InboxResponse> => {
       .from(approvals)
       .where(eq(approvals.status, 'pending'))
       .orderBy(asc(approvals.requestedAt)),
+    listCiHeld(database),
   ]);
   return {
     questions: questionRows.map(toQuestionRecord),
     // The task read's shape (TD-035), so Home and the Inbox name the plan an approval is about.
     approvals: await approvalViewsFor(database, approvalRows),
+    ci_held: ciHeld,
   };
+};
+
+/**
+ * **The tasks whose CI pipeline is held at a manual job** (backlog 1300): the inbox's `ci_held`,
+ * which Home's *Needs you* and the Inbox read — a held job waits for a person, as the task page's
+ * `ci_held` says. One statement: every `ci_gate` attempt of the `active` tasks at `ci_gate`, then
+ * {@link gateWaitOf} per task (the task read's own projection, so a paused task is never here) and
+ * only a wait whose status is `manual`. Oldest wait first, as the inbox is a queue.
+ */
+const listCiHeld = async (database: Database): Promise<NonNullable<InboxResponse['ci_held']>> => {
+  const rows = await database
+    .select({
+      id: tasks.id,
+      projectId: tasks.projectId,
+      state: tasks.state,
+      currentStage: tasks.currentStage,
+      ticketProvider: tasks.ticketProvider,
+      ticketKey: tasks.ticketKey,
+      ticketUrl: tasks.ticketUrl,
+      taskId: taskStages.taskId,
+      stage: taskStages.stage,
+      attempt: taskStages.attempt,
+      stageState: taskStages.state,
+      outcome: taskStages.outcome,
+      enteredAt: taskStages.enteredAt,
+      exitedAt: taskStages.exitedAt,
+      ciPendingRead: taskStages.ciPendingRead,
+    })
+    .from(tasks)
+    .innerJoin(taskStages, eq(taskStages.taskId, tasks.id))
+    .where(
+      and(
+        eq(tasks.state, 'active'),
+        eq(tasks.currentStage, CI_GATE_STAGE),
+        eq(taskStages.stage, CI_GATE_STAGE),
+      ),
+    )
+    .orderBy(asc(tasks.id), asc(taskStages.attempt));
+  const byTask = new Map<string, { task: (typeof rows)[number]; stages: GateStageRow[] }>();
+  for (const row of rows) {
+    const entry = byTask.get(row.id) ?? { task: row, stages: [] };
+    entry.stages.push({ ...row, state: row.stageState });
+    byTask.set(row.id, entry);
+  }
+  return [...byTask.values()]
+    .flatMap(({ task, stages }) => {
+      const wait = gateWaitOf(task, stages);
+      return wait === null || wait.status !== 'manual'
+        ? []
+        : [
+            {
+              task_id: task.id as Id,
+              project_id: task.projectId as Id,
+              ticket: { provider: task.ticketProvider, key: task.ticketKey, url: task.ticketUrl },
+              gate_wait: wait,
+            },
+          ];
+    })
+    .sort((a, b) => Date.parse(a.gate_wait.waiting_since) - Date.parse(b.gate_wait.waiting_since));
 };
 
 /**
@@ -2357,6 +2469,7 @@ export const listProjectTasks = async (
   database: Database,
   projectId: string,
   query: ProjectTasksQuery,
+  options: WaitingReadOptions = {},
 ): Promise<ProjectTaskPage | null> => {
   const project = await database
     .select({ id: projects.id })
@@ -2399,7 +2512,8 @@ export const listProjectTasks = async (
   // and never over the project: a warning for a task the caller is not being shown is not a row
   // this answer has anywhere to put.
   // S-23.9a: the card's glance — its stage rows and what waits on a person — over the same ids.
-  const [conflicts, estimated, unmeasured, pausedReasons, stageRows, asks, owners] =
+  // S-26.5: and why each one's run waits; backlog 1300: its CI wait, off the same stage rows.
+  const [conflicts, estimated, unmeasured, pausedReasons, stageRows, asks, owners, waiting] =
     await Promise.all([
       conflictsFor(
         database,
@@ -2429,6 +2543,11 @@ export const listProjectTasks = async (
         database,
         page.map((row) => row.task.id),
       ),
+      waitingForTasks(
+        database,
+        page.map((row) => row.task.id),
+        options.coreDigests ?? null,
+      ),
     ]);
   return {
     items: page.map((row) => ({
@@ -2440,6 +2559,7 @@ export const listProjectTasks = async (
         pausedReasons.get(row.task.id),
         owners.get(row.task.id),
       ),
+      waiting: waiting.get(row.task.id) ?? null,
       stages: stageRows.get(row.task.id)?.stages ?? [],
       latest_return:
         returnsOf(stageRows.get(row.task.id)?.setback ?? [], compiledPipelineOf(row.task)).at(-1) ??
@@ -2448,6 +2568,7 @@ export const listProjectTasks = async (
       open_questions: asks.questions.get(row.task.id) ?? 0,
       pending_approvals: asks.approvals.get(row.task.id) ?? 0,
       loop_limits: frozenLimits(row.task.iterationLimits),
+      gate_wait: gateWaitOf(row.task, stageRows.get(row.task.id)?.gate ?? []),
     })),
     ...(rows.length > query.limit && last !== undefined
       ? { next: { createdAt: last.cursorAt, id: last.task.id } }

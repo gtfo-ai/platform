@@ -48,6 +48,7 @@ import {
   orgModelsResponseSchema,
   orgUsersResponseSchema,
 } from '@platform/contracts';
+import type { RunImageDigests } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { requirePermission } from '../auth/rbac.js';
@@ -139,6 +140,12 @@ export interface OrgRoutesOptions {
    * `listedModelIds` (`queries/cost-queries.ts`), the same query the retry's refusal asks.
    */
   readonly models: () => Promise<readonly string[]>;
+  /**
+   * The core's current run and egress digests (S-26.5): what the Agents rows' `waiting` compares a
+   * machine's held images with — `routes/workers.ts`'s same option. Absent or `null`: no machine
+   * is counted as able to claim, as none can without them.
+   */
+  readonly coreDigests?: () => RunImageDigests | null;
 }
 
 /**
@@ -259,7 +266,8 @@ export const registerOrgRoutes = async (
         response: { 200: agentsResponseSchema },
       },
     },
-    async () => listRunningAgents(options.database),
+    async () =>
+      listRunningAgents(options.database, { coreDigests: options.coreDigests?.() ?? null }),
   );
 
   typed.get(

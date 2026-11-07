@@ -304,7 +304,7 @@ describe('gate_wait on the task detail', () => {
     }) as unknown as StageRow;
 
   it('serves the open attempt’s read, timed from its entry, without the head it keys on', () => {
-    expect(gateWaitOf({ currentStage: 'ci_gate' }, [row()])).toEqual({
+    expect(gateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [row()])).toEqual({
       pipeline_id: '3038234623',
       pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
       status: 'manual',
@@ -324,7 +324,9 @@ describe('gate_wait on the task detail', () => {
       enteredAt: new Date('2026-11-06T21:53:00.000Z'),
       ciPendingRead: { ...READ, status: 'running', held_job: null, held_job_url: null },
     });
-    expect(gateWaitOf({ currentStage: 'ci_gate' }, [closed, reopened])).toMatchObject({
+    expect(
+      gateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [closed, reopened]),
+    ).toMatchObject({
       status: 'running',
       held_job: null,
       waiting_since: '2026-11-06T21:53:00.000Z',
@@ -332,15 +334,30 @@ describe('gate_wait on the task detail', () => {
   });
 
   it('is null at another stage, for a closed attempt and for an attempt with no read', () => {
-    expect(gateWaitOf({ currentStage: 'code_review' }, [row()])).toBeNull();
-    expect(gateWaitOf({ currentStage: null }, [row()])).toBeNull();
+    expect(gateWaitOf({ state: 'active', currentStage: 'code_review' }, [row()])).toBeNull();
+    expect(gateWaitOf({ state: 'active', currentStage: null }, [row()])).toBeNull();
     expect(
-      gateWaitOf({ currentStage: 'ci_gate' }, [
+      gateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [
         row({ state: 'failed', exitedAt: new Date('2026-11-06T20:28:00.000Z') }),
       ]),
     ).toBeNull();
-    expect(gateWaitOf({ currentStage: 'ci_gate' }, [row({ ciPendingRead: null })])).toBeNull();
-    expect(gateWaitOf({ currentStage: 'ci_gate' }, [row({ stage: 'rebase_gate' })])).toBeNull();
+    expect(
+      gateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [row({ ciPendingRead: null })]),
+    ).toBeNull();
+    expect(
+      gateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [row({ stage: 'rebase_gate' })]),
+    ).toBeNull();
+  });
+
+  /**
+   * Backlog 1301: a pause closes no stage row and the CI job stops checking a paused task, so a
+   * wait is served only while the task is runnable (`active`) — every reader gets that answer.
+   */
+  it('is null unless the task is active: paused by hand, escalated or ended serves no wait', () => {
+    expect(gateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [row()])).not.toBeNull();
+    for (const state of ['paused', 'needs_human', 'done', 'cancelled', 'merged'] as const) {
+      expect(gateWaitOf({ state, currentStage: 'ci_gate' }, [row()]), state).toBeNull();
+    }
   });
 
   /**
@@ -411,7 +428,9 @@ describe('gate_wait on the task detail', () => {
     ]) {
       const failure = (() => {
         try {
-          return gateWaitOf({ currentStage: 'ci_gate' }, [row({ ciPendingRead: corrupt })]);
+          return gateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [
+            row({ ciPendingRead: corrupt }),
+          ]);
         } catch (error) {
           return error;
         }

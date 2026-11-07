@@ -23,6 +23,10 @@
  * may see, whether it takes this project's runs by itself, only when picked, or not at all, and why
  * — the Workers screen's blockers (`coreClaimBlockersOf`) and the project's own reason — plus the
  * open offers and how many no worker may take now. All reads; nothing here changes routing.
+ *
+ * **And whether anybody else takes unassigned tasks** (S-26.5, the M26 UX spec §1's consequence
+ * line): `others_take_unassigned` — the server claimant, or another person's machine whose policy
+ * admits an unassigned task — a yes or no, so a member learns it without seeing anyone's machine.
  */
 import {
   apiErrorSchema,
@@ -93,12 +97,19 @@ export interface ProjectExecutionQueries {
   ) => Promise<{ readonly open: number; readonly never: number; readonly later: number }>;
   /** The core's current run and egress digests, or `null` (`routes/workers.ts`'s same option). */
   readonly coreDigests?: () => RunImageDigests | null;
+  /**
+   * Whether the server or **another** user's machine takes this project's unassigned tasks by
+   * itself (S-26.5, `queries/offer-waiting.ts`'s `othersTakeUnassigned`). Absent answers `false`.
+   */
+  readonly othersTakeUnassigned?: (projectId: string, userId: string) => Promise<boolean>;
 }
 
 /** What the read adds to the setting (S-22.19, N2): who would take the runs, and what waits. */
 export interface ExecutionAudience {
   readonly workers: readonly ProjectExecutionWorker[];
   readonly waiting: ProjectExecutionWaiting;
+  /** S-26.5: whether the server or another person's machine takes unassigned tasks by itself. */
+  readonly othersTakeUnassigned?: boolean;
 }
 
 /**
@@ -216,6 +227,7 @@ export const executionDocument = (
     notice: notices.length === 0 ? null : notices.join(' '),
     workers: audience.workers,
     waiting: audience.waiting,
+    others_take_unassigned: audience.othersTakeUnassigned ?? false,
   });
 };
 
@@ -265,6 +277,9 @@ export const registerProjectExecutionRoutes = async (
         projectWorkerOf(row, { projectId, settings, credentialRefused: refused, coreDigests, now }),
       ),
       waiting: waitingOf(await queries.waitingOffers(projectId), refused),
+      // S-26.5: the consequence line's question, answered without naming anybody's machine.
+      othersTakeUnassigned:
+        (await queries.othersTakeUnassigned?.(projectId, actor.userId)) ?? false,
     });
   };
 
@@ -275,7 +290,7 @@ export const registerProjectExecutionRoutes = async (
       schema: {
         summary: 'Where this project’s agent runs execute',
         description:
-          'TD-031 decision 8. `stored: false` is the defaults (`hybrid`, the server preferred, a 120 s assignee window, a 24 h offer timeout); `fallback_after_seconds: null` is the preference’s default (15 s for the server, 300 s for workers), and `effective_fallback_after_seconds` is what it resolves to. `server_claimant` is whether **this instance** has a server runner claiming offers now; with `none`, `notice` says what that does to this project’s mode — a `hybrid` project opens its runs to workers at once, a `server_only` project’s runs wait. Never set by `.agentic/config.yml`. **Who would run it** (S-22.19): `workers` — every registered worker for an administrator, your own otherwise — each `automatically`, `picked_only` or `no`, with its own `blockers` and the project’s `project_reason`; `waiting` — the open offers, and how many no worker may take now and why.',
+          'TD-031 decision 8. `stored: false` is the defaults (`hybrid`, the server preferred, a 120 s assignee window, a 24 h offer timeout); `fallback_after_seconds: null` is the preference’s default (15 s for the server, 300 s for workers), and `effective_fallback_after_seconds` is what it resolves to. `server_claimant` is whether **this instance** has a server runner claiming offers now; with `none`, `notice` says what that does to this project’s mode — a `hybrid` project opens its runs to workers at once, a `server_only` project’s runs wait. Never set by `.agentic/config.yml`. **Who would run it** (S-22.19): `workers` — every registered worker for an administrator, your own otherwise — each `automatically`, `picked_only` or `no`, with its own `blockers` and the project’s `project_reason`; `waiting` — the open offers, and how many no worker may take now and why. `others_take_unassigned` (S-26.5): whether the server claimant or another person’s machine takes this project’s unassigned tasks by itself, naming no machine.',
         tags: ['projects'],
         params: projectParamsSchema,
         response: { 200: projectExecutionResponseSchema, 404: apiErrorSchema },
