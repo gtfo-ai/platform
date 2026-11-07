@@ -584,6 +584,8 @@ export interface StartPipelineOptions {
     readonly description?: string;
     /** WP-110: the ticket's workflow status, for a binding whose pick-up rule is a status. */
     readonly status?: string;
+    /** S-26.2: the provider account the ticket is assigned to at intake; absent is unassigned. */
+    readonly assignee?: string;
   }[];
   /**
    * WP-177: the fake tracker's workflow — the statuses a lifecycle slot may name and `transition`

@@ -23,10 +23,13 @@
  * - **A stop** is the current stage's latest attempt of a `needs_human` task: closed `returned` while
  *   the task did not move is a spent loop (`returnToStage` escalates and leaves the counter at its
  *   limit — the only writer of that shape: `spendLoop`'s exhaustion closes the row `escalated`);
- *   `converged` is the same failure repeated; `undecided` is a check that got no answer.
+ *   `converged` is the same failure repeated; `undecided` is a check that got no answer — and at
+ *   `ci_gate`, `ci_ending` says which of the gate's own wait endings it was when the row records
+ *   one (`ci_timed_out`, `ci_held_unchanged`; backlog 1078), `null` for every other stop.
  */
 import type {
   AgentRole,
+  CiGateEnding,
   TaskCiFailure,
   TaskReturn,
   TaskStageOutcome,
@@ -50,6 +53,11 @@ export interface SetbackStageRow {
    */
   readonly returnReason: string | null;
   readonly signature: string | null;
+  /**
+   * `task_stages.ci_ending` (backlog 1078, migration 0107), already parsed by the caller: how the CI
+   * gate's own wait ended the attempt. Absent reads as `null`.
+   */
+  readonly ciEnding?: CiGateEnding | null;
 }
 
 /** The task's columns this module reads. */
@@ -147,7 +155,7 @@ export const stopOf = (task: SetbackTask, rows: readonly SetbackStageRow[]): Tas
     return null;
   }
   const ci = stage === CI_GATE ? ciFailureOf(latest.signature) : null;
-  const base = { stage, attempt: latest.attempt, ci_failure: ci };
+  const base = { stage, attempt: latest.attempt, ci_failure: ci, ci_ending: null };
   if (latest.state === 'returned') {
     return {
       ...base,
@@ -167,6 +175,8 @@ export const stopOf = (task: SetbackTask, rows: readonly SetbackStageRow[]): Tas
     return {
       ...base,
       cause: 'no_answer',
+      // Backlog 1078: which of the CI gate's own wait endings this no-answer was, off the row.
+      ci_ending: stage === CI_GATE ? (latest.ciEnding ?? null) : null,
       loop: null,
       recorded: cut ? text.slice(0, MAX_TASK_STOP_RECORDED_CHARS) : text,
       recorded_cut: cut,

@@ -1968,6 +1968,135 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         );
       });
 
+      /**
+       * Backlog 1078: `ci_pending_read` has one writer, which writes **only an open row**, and a
+       * closed attempt keeps its last read for the next attempt's first read to compare with.
+       */
+      it('records a CI gate attempt’s pending read on its open row only, and answers the previous attempt’s last read (backlog 1078)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const read = {
+          pipeline_id: '3038234623',
+          pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+          head_sha: '1'.repeat(40),
+          status: 'manual' as const,
+          held_job: 'sentry-release-commit',
+          held_job_url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+          draft: true,
+          checked_at: '2026-11-06T19:58:00.000Z',
+          timeout_minutes: 60,
+        };
+        const key = (attempt: number) => ({ taskId: stored.task.id, stage: 'ci_gate', attempt });
+        // No row: nothing written, nothing to compare with.
+        expect(await store.tasks.recordCiPendingRead(tx, key(1), read)).toBe(false);
+        expect(await store.tasks.ciPendingReadOf(tx, stored.task.id, 'ci_gate', 1)).toBeNull();
+        expect(await store.tasks.recordCiEnding(tx, key(1), 'ci_timed_out')).toBe(false);
+        expect(
+          await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2),
+        ).toBeNull();
+
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.recordCiPendingRead(tx, key(1), null)).toBe(true);
+        expect(
+          await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2),
+        ).toBeNull();
+        expect(await store.tasks.recordCiPendingRead(tx, key(1), read)).toBe(true);
+        const later = { ...read, checked_at: '2026-11-06T20:27:30.000Z' };
+        expect(await store.tasks.recordCiPendingRead(tx, key(1), later)).toBe(true);
+        // A read never answers for its own attempt, only for a later one: its own is ciPendingReadOf.
+        expect(
+          await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 1),
+        ).toBeNull();
+        expect(await store.tasks.ciPendingReadOf(tx, stored.task.id, 'ci_gate', 1)).toEqual(later);
+        // The wait's ending is written while the row is open (the settlement, before it closes).
+        expect(await store.tasks.recordCiEnding(tx, key(1), 'ci_timed_out')).toBe(true);
+        expect(await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2)).toEqual(
+          later,
+        );
+
+        await store.tasks.closeOpenStage(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          outcome: 'undecided',
+          reason: 'the gate timed out',
+        });
+        // Closed: a stale job's write is refused and the last read is kept.
+        expect(
+          await store.tasks.recordCiPendingRead(tx, key(1), { ...read, status: 'running' }),
+        ).toBe(false);
+        expect(await store.tasks.recordCiEnding(tx, key(1), 'ci_held_unchanged')).toBe(false);
+        expect(await store.tasks.ciPendingReadOf(tx, stored.task.id, 'ci_gate', 1)).toEqual(later);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 2,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2)).toEqual(
+          later,
+        );
+        // Attempt 2's own read does not touch attempt 1's, and another stage's rows are not read.
+        expect(
+          await store.tasks.recordCiPendingRead(tx, key(2), { ...read, pipeline_id: '3038234624' }),
+        ).toBe(true);
+        expect(await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2)).toEqual(
+          later,
+        );
+        expect(await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 3)).toEqual({
+          ...read,
+          pipeline_id: '3038234624',
+        });
+        expect(
+          await store.tasks.previousCiPendingRead(tx, stored.task.id, 'rebase_gate', 3),
+        ).toBeNull();
+      });
+
+      it('refuses to record a CI read its schema does not admit (backlog 1078)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        const hostile = {
+          pipeline_id: '1',
+          pipeline_url: 'javascript:alert(1)',
+          head_sha: '1'.repeat(40),
+          status: 'manual' as const,
+          held_job: null,
+          held_job_url: null,
+          draft: false,
+          checked_at: '2026-11-06T19:58:00.000Z',
+          timeout_minutes: null,
+        };
+        await expect(
+          store.tasks.recordCiPendingRead(
+            tx,
+            { taskId: stored.task.id, stage: 'ci_gate', attempt: 1 },
+            hostile,
+          ),
+        ).rejects.toThrow();
+        expect(
+          await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2),
+        ).toBeNull();
+        // …nor an ending outside the vocabulary, which the task read would refuse.
+        await expect(
+          store.tasks.recordCiEnding(
+            tx,
+            { taskId: stored.task.id, stage: 'ci_gate', attempt: 1 },
+            'ci_gave_up' as never,
+          ),
+        ).rejects.toThrow();
+      });
+
       it('has no signatures and no reason for a stage that has not run', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);

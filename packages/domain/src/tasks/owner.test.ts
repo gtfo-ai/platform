@@ -17,6 +17,8 @@ import {
   ownerChangePermitted,
   ownerTargetOf,
   pickRefusalOf,
+  recordPlatformAssign,
+  recordPlatformUnassign,
   sameTicketAssignee,
   syncOwnerFromTracker,
   type TaskOwnership,
@@ -430,5 +432,50 @@ describe('a pick assigns (S-26.4, TD-031 amendment item 7)', () => {
     expect(pickRefusalOf(AT, AT)).toBe('task_owned_by_another');
     expect(pickRefusalOf(AT, null)).toBe('task_owned_by_another');
     expect(pickRefusalOf(null, before)).toBe('task_owned_by_another');
+  });
+});
+
+/**
+ * S-26.2 criterion 4 (TD-031 item 2): the platform's own tracker writes are recorded as the
+ * last-seen assignee, so the read that follows them is no change and costs nobody their owner.
+ */
+describe('the platform’s own tracker writes (S-26.2)', () => {
+  const bot = person('bot', true);
+
+  it('(4) the claim’s assign stores the binding’s account and keeps the owner; the next read of it changes nothing', () => {
+    const before = owned(ME, null);
+    const decision = recordPlatformAssign(before, bot);
+    expect(decision).toEqual({
+      kind: 'write',
+      next: { ...before, ticketAssignee: bot },
+      change: null,
+    });
+    const after = decision.kind === 'write' ? decision.next : before;
+    expect(
+      syncOwnerFromTracker(after, {
+        assignee: { ...bot, display_name: 'renamed' },
+        assigneeClass: { kind: 'platform' },
+        at: AT,
+      }),
+    ).toEqual({ kind: 'unchanged' });
+    // Recording it twice is a no-op.
+    expect(recordPlatformAssign(after, bot)).toEqual({ kind: 'unchanged' });
+  });
+
+  it('the release’s unassign clears the binding’s account, keeps the owner, and never touches a person', () => {
+    const held = owned(ME, bot);
+    const decision = recordPlatformUnassign(held, bot);
+    expect(decision).toEqual({
+      kind: 'write',
+      next: { ...held, ticketAssignee: null },
+      change: null,
+    });
+    const after = decision.kind === 'write' ? decision.next : held;
+    // The read after the release (nobody) is no change: the platform-set owner survives a Rework.
+    expect(syncOwnerFromTracker(after, { assignee: null, assigneeClass: null, at: AT })).toEqual({
+      kind: 'unchanged',
+    });
+    expect(recordPlatformUnassign(owned(ME, person('dev')), bot)).toEqual({ kind: 'unchanged' });
+    expect(recordPlatformUnassign(owned(ME, null), bot)).toEqual({ kind: 'unchanged' });
   });
 });

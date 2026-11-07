@@ -1216,6 +1216,19 @@ describe('the task projection', () => {
       signature: null,
       exited: '2026-11-07T11:00:00.000Z',
     });
+    // Backlog 1078: the gate's wait ending and its last read, as the escalation leaves them.
+    await pool.query(
+      `update task_stages set ci_ending = 'ci_timed_out',
+              ci_pending_read = jsonb_build_object(
+                'pipeline_id', '3038234623',
+                'pipeline_url', 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+                'head_sha', repeat('1', 40), 'status', 'manual',
+                'held_job', 'sentry-release-commit',
+                'held_job_url', 'https://gitlab.example.test/acme/api/-/jobs/9003',
+                'draft', true, 'checked_at', '2026-11-07T10:59:30.000Z', 'timeout_minutes', 60)
+        where task_id = $1`,
+      [timedOut],
+    );
     const parked = await findTaskDetail(drizzled, timedOut);
     expect(parked?.returns).toEqual([]);
     expect(parked?.stop).toEqual({
@@ -1224,8 +1237,18 @@ describe('the task projection', () => {
       cause: 'no_answer',
       loop: null,
       ci_failure: null,
+      ci_ending: 'ci_timed_out',
       recorded: LONG.slice(0, MAX_TASK_STOP_RECORDED_CHARS),
       recorded_cut: true,
+    });
+    expect(parked?.gate_wait).toBeNull();
+    expect(parked?.last_gate_wait).toMatchObject({
+      pipeline_id: '3038234623',
+      status: 'manual',
+      held_job: 'sentry-release-commit',
+      held_job_url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+      timeout_minutes: 60,
+      waiting_since: '2026-11-07T10:59:00.000Z',
     });
     // The board's bounded read of the same column says the same.
     const parkedCard = (await listProjectTasks(drizzled, project.id, { limit: 50 }))?.items.find(

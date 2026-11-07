@@ -232,7 +232,9 @@ const lifecycleStatusNameSchema = nonEmptyStringSchema.max(MAX_LIFECYCLE_STATUS_
  * The platform claimed the task's ticket before an agent run was admitted (`ensureTicketClaim`,
  * WP-177): it assigned the ticket to the binding's own account and, when the `in_progress` slot is
  * mapped, moved it there. `account_id` is that account's provider id. `shadow` is a claim whose
- * writes were `would_have` (shadow mode), recorded as such and never as confirmed. technical/02's
+ * writes were `would_have` (shadow mode), recorded as such and never as confirmed. `held_by:
+ * 'member'` (S-26.2, TD-031's 2026-11-06 amendment item 5) is a claim that found the ticket assigned
+ * to a linked member of the project and **assigned nothing**: the ticket stays theirs. technical/02's
  * catalogue row; the task DTO reads the claim off `tasks.ticket_claim`, not off this event.
  */
 export const ticketClaimedEvent = defineEvent('ticket.claimed', {
@@ -241,6 +243,7 @@ export const ticketClaimedEvent = defineEvent('ticket.claimed', {
   account_id: nonEmptyStringSchema.max(255),
   in_progress_written: z.boolean(),
   shadow: z.boolean(),
+  held_by: z.enum(['member']).optional(),
 });
 
 /** Why a claim was refused (TD-029 decision 5); each is also the escalation's reason. */

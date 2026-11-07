@@ -11,11 +11,13 @@
  *    replaced and the owner follows it: the mapped `member`-or-above person, or nobody. So a
  *    platform assignment made after a read survives every later read that names the same assignee,
  *    and a tracker change made after a platform assignment replaces it. A read that names the
- *    identity already stored — including the claim's own `assignToSelf`, which writes the binding's
- *    account into `ticket_assignee` in its transaction (S-26.2) — is never a change. **A read that
+ *    identity already stored — including the claim's own `assignToSelf` and the release's
+ *    `unassign`, which write `ticket_assignee` in their own transactions (S-26.2,
+ *    {@link recordPlatformAssign}, {@link recordPlatformUnassign}) — is never a change. **A read that
  *    names a platform assignee** (the binding's own account, a machine) replaces the stored
  *    assignee and **never changes the owner** (the review of PR #92): it is the claim's own assign
- *    read back, which S-26.1 ships before S-26.2 stops making it, and an owner a person set must
+ *    read back — S-26.2 records that assign, so this guard now covers what the record cannot (a
+ *    claim made before S-26.2, a machine a person assigned) — and an owner a person set must
  *    survive it. TD-031's amendment item 2 reads such an assignee as *nobody*; that is what it
  *    still means for a task with no owner, and only an owner already held is kept.
  * 2. **An owner is a `member` or above of the project.** The caller answers that question
@@ -211,6 +213,36 @@ export const syncOwnerFromTracker = (
     },
   };
 };
+
+/**
+ * **The platform's own tracker write, recorded as the last-seen assignee** (S-26.2, TD-031's
+ * amendment item 2): the claim's `assignToSelf` writes the binding's account into `ticket_assignee`
+ * in the claim's own transaction, so the next read — which names that account — is no change
+ * (rule 1) and costs nobody their owner. The owner, its source and its instant are kept; nothing
+ * is recorded. `assignee` is the stored shape of the binding's account ({@link ticketAssigneeOf}).
+ */
+export const recordPlatformAssign = (
+  current: TaskOwnership,
+  assignee: TicketAssignee,
+): OwnershipDecision =>
+  sameTicketAssignee(current.ticketAssignee, assignee)
+    ? { kind: 'unchanged' }
+    : { kind: 'write', next: { ...current, ticketAssignee: assignee }, change: null };
+
+/**
+ * **The release's `unassign`, recorded** (S-26.2): when the release took the binding's own account
+ * off the ticket, `ticket_assignee` becomes nobody in the release's transaction — but only while it
+ * still names that account, so a person read since is never overwritten. Without it the next read
+ * (nobody) would differ from the stored account and cost a platform-set owner the task after a
+ * *Rework*. The owner is kept; nothing is recorded.
+ */
+export const recordPlatformUnassign = (
+  current: TaskOwnership,
+  self: Pick<TicketAssignee, 'provider' | 'external_id'>,
+): OwnershipDecision =>
+  current.ticketAssignee !== null && sameTicketAssignee(current.ticketAssignee, self)
+    ? { kind: 'write', next: { ...current, ticketAssignee: null }, change: null }
+    : { kind: 'unchanged' };
 
 /**
  * A link made later adopts the owner (TD-031's amendment item 2's last sentence, the hook S-26.6

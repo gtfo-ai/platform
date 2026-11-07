@@ -135,6 +135,12 @@ export interface GitBinding {
    */
   readonly mintingHints?: CredentialMintingHints;
   /**
+   * The provider's name as a person knows it (`GitLab`) — its registration's display name up to any
+   * parenthetical (backlog 1078's review: the CI gate's retry brief tells a person where to start a
+   * job). Absent for a binding a test builds by hand; a sentence then names the provider id.
+   */
+  readonly providerName?: string;
+  /**
    * The integration's **static run credential** (TD-028 decision 13, WP-137) — present exactly when
    * the integration declares one (GitLab: `run_credential: static`), absent when minting is the only
    * source. Read by {@link runCredentialWrites} and by the dependency gate's exact-value search, and

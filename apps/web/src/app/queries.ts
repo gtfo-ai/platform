@@ -78,12 +78,37 @@ export const useProjectByKey = (key: string) => {
   return { ...projects, project };
 };
 
-export const useProjectTasks = (projectId: string | null, state?: string) => {
+/**
+ * A project's task page. `owner` is the board's *Mine* / *Unassigned* filter (S-26.8b), which the
+ * server applies (S-26.1's `?owner=`); left out, the key is the unfiltered page's, so the command
+ * palette and Home share it with the board's *Everyone*. `keepPrevious` holds the page on screen
+ * while another filter's is read, so the board's filter control — in the list box's header — is
+ * not unmounted (with the focus) by its own press.
+ */
+export const useProjectTasks = (
+  projectId: string | null,
+  state?: string,
+  owner?: 'me' | 'none',
+  keepPrevious = false,
+) => {
   const { endpoints } = useServices();
+  const filters = {
+    ...(state === undefined ? {} : { state }),
+    ...(owner === undefined ? {} : { owner }),
+  };
   return useQuery({
-    queryKey: queryKeys.projectTasks(projectId ?? '', state === undefined ? {} : { state }),
-    queryFn: () => endpoints.projectTasks(projectId ?? '', state === undefined ? {} : { state }),
+    queryKey: queryKeys.projectTasks(projectId ?? '', filters),
+    queryFn: () => endpoints.projectTasks(projectId ?? '', filters),
     enabled: projectId !== null,
+    // The previous page of **this** project only: another project's tasks are never a placeholder.
+    ...(keepPrevious
+      ? {
+          placeholderData: <T>(previous: T | undefined, query?: { readonly queryKey: unknown }) =>
+            Array.isArray(query?.queryKey) && query.queryKey[1] === projectId
+              ? previous
+              : undefined,
+        }
+      : {}),
     ...FOREVER,
   });
 };
@@ -1067,6 +1092,34 @@ export const useTakeOverCommands = (taskId: string, mint?: MintKey) => {
       },
     }),
   };
+};
+
+/**
+ * The task's owner (S-26.1's `POST /api/tasks/:id/owner`, S-26.8b's *Take it*, *Assign…* and
+ * *Unassign*): `userId` is the new owner, `null` nobody.
+ *
+ * Its own hook, as the take-over pair are, because the route **requires** an `Idempotency-Key`: the
+ * key is per intent — the task and the owner asked for — so a double click sends one decision, and
+ * it is released once the change is recorded. The task and the project's task pages are refreshed,
+ * because the board's *Mine* and *Unassigned* read the owner too.
+ */
+export const useTaskOwnerCommand = (taskId: string, projectId: string, mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return useMutation({
+    mutationFn: (userId: string | null) =>
+      endpoints.setTaskOwner(
+        taskId,
+        { user_id: userId },
+        intents.keyFor(['task.owner', taskId, userId]),
+      ),
+    onSuccess: async (_result, userId) => {
+      intents.release(['task.owner', taskId, userId]);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) });
+      await queryClient.invalidateQueries({ queryKey: ['project', projectId, 'tasks'] });
+    },
+  });
 };
 
 /** The epic split's queue for one task (WP-40's route, WP-44's panel). */

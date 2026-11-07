@@ -28,6 +28,7 @@
 import type {
   AgentRole,
   ArtifactType,
+  CiGateEnding,
   ContextPackRecord,
   DomainEvent,
   EstimateBasis,
@@ -43,6 +44,7 @@ import type {
   WorkerClaimPolicy,
 } from '@platform/contracts';
 import {
+  ciGateEndingSchema,
   mergeRequestRefSchema,
   storedTicketClaimSchema,
   taskCoverageSchema,
@@ -76,6 +78,7 @@ import {
   UNOWNED,
 } from '@platform/domain';
 import { holdOf } from '../cost/pending.js';
+import { type CiPendingRead, ciPendingReadSchema } from '../pipeline/ci-pending-read.js';
 import { decideRelease } from '../pipeline/release.js';
 import type {
   ApprovalRepository,
@@ -150,6 +153,10 @@ interface StageRow {
   /** `task_stages.lost_runs` and `usage_limited_runs` (migration 0100, WP-285/WP-286). */
   lostRuns?: number;
   usageLimitedRuns?: number;
+  /** `task_stages.ci_pending_read` (migration 0107, backlog 1078): the CI gate's last pending read. */
+  ciPendingRead?: CiPendingRead | null;
+  /** `task_stages.ci_ending` (migration 0107, backlog 1078): how the CI gate's wait ended it. */
+  ciEnding?: CiGateEnding | null;
   enteredAt: number;
   /**
    * The instant the row was entered, on {@link MemoryPipelineStoreOptions.now} — PostgreSQL's
@@ -1275,6 +1282,47 @@ export const createMemoryPipelineStore = (
         open: row.state === 'running' && row.exitedAt === null,
         enteredAt: new Date(row.enteredAtMs).toISOString() as IsoDateTime,
       };
+    },
+    // Backlog 1078: the SQL store's two statements — open rows only, and parsed both ways.
+    recordCiPendingRead: async (_tx, entry, read) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === entry.taskId &&
+          candidate.stage === entry.stage &&
+          candidate.attempt === entry.attempt &&
+          candidate.state === 'running' &&
+          candidate.exitedAt === null,
+      );
+      if (row === undefined) return false;
+      row.ciPendingRead = read === null ? null : clone(ciPendingReadSchema.parse(read));
+      return true;
+    },
+    ciPendingReadOf: async (_tx, taskId, stage, attempt) => {
+      const value =
+        stages.find(
+          (row) => row.taskId === taskId && row.stage === stage && row.attempt === attempt,
+        )?.ciPendingRead ?? null;
+      return value === null ? null : ciPendingReadSchema.parse(value);
+    },
+    recordCiEnding: async (_tx, entry, ending) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === entry.taskId &&
+          candidate.stage === entry.stage &&
+          candidate.attempt === entry.attempt &&
+          candidate.state === 'running' &&
+          candidate.exitedAt === null,
+      );
+      if (row === undefined) return false;
+      row.ciEnding = ciGateEndingSchema.parse(ending);
+      return true;
+    },
+    previousCiPendingRead: async (_tx, taskId, stage, attempt) => {
+      const previous = stages
+        .filter((row) => row.taskId === taskId && row.stage === stage && row.attempt < attempt)
+        .sort((a, b) => b.attempt - a.attempt)[0];
+      const value = previous?.ciPendingRead ?? null;
+      return value === null ? null : ciPendingReadSchema.parse(value);
     },
     recentStageSignatures: async (_tx, taskId, stage, limit) =>
       stages

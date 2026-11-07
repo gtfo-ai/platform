@@ -7,7 +7,14 @@
  * back.
  */
 import { expect, test } from '@playwright/test';
-import { failedJobs, HOSTILE, IDS, PROJECT_KEY } from './support/fixtures.js';
+import {
+  failedJobs,
+  HOSTILE,
+  IDS,
+  OWNER_NAME,
+  PROJECT_KEY,
+  UNLINKED_ASSIGNEE,
+} from './support/fixtures.js';
 import { commandLog, resetBackend, signIn } from './support/harness.js';
 
 test.beforeEach(async ({ page, request }) => {
@@ -1068,4 +1075,78 @@ test('the run screen counts only admitted documents and marks the one that was n
   await expect(
     page.getByText(/Searched for retries \(dropped as too common: demo\)/),
   ).toBeVisible();
+});
+
+/**
+ * S-26.8b (the M26 UX spec §§ 2–3): the owner on the task page — a task somebody else owns, one the
+ * tracker assigns to a person the platform cannot link, and one nobody owns — and on the board: the
+ * card's avatar, and *Everyone* · *Mine* · *Unassigned* in the URL, in the request (the fake applies
+ * `?owner=` as the server does) and remembered for the next visit.
+ */
+test('the owner on the task page and the board, with the board’s filter remembered (S-26.8b)', async ({
+  page,
+  request,
+}) => {
+  // DEMO-1: owned by somebody who is not the operator, so *Take it* asks first and names them.
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
+  await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
+  const owned = page.locator('[data-task-owner="owned"]');
+  await expect(owned).toContainText(`Owner: ${OWNER_NAME}`);
+  await expect(owned.locator('[data-avatar]')).toHaveText('VD');
+  await owned.getByRole('button', { name: 'Take it' }).click();
+  const dialog = page.getByRole('dialog', { name: `Take DEMO-1 from ${OWNER_NAME}?` });
+  await expect(dialog).toContainText('Their machine stops getting it.');
+  // The project does not write the assignment back, so the tracker is not mentioned.
+  await expect(dialog).not.toContainText('Jira');
+  await dialog.getByRole('button', { name: `Take it from ${OWNER_NAME}` }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('[data-owner-done]')).toHaveText(
+    'Assigned to you. Your machine picks it up at the next stage.',
+  );
+  const taken = (await commandLog(request)).filter((entry) => entry.path.endsWith('/owner'));
+  expect(taken).toEqual([
+    { path: `/api/tasks/${IDS.taskFeature}/owner`, body: { user_id: IDS.user } },
+  ]);
+
+  // DEMO-2: the tracker's assignee, unlinked — their name is text, and an administrator may link.
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
+  const unlinked = page.locator('[data-task-owner="unlinked"]');
+  await expect(unlinked).toContainText(
+    `Assigned in Jira to ${UNLINKED_ASSIGNEE} (not linked to a platform account)`,
+  );
+  await expect(unlinked.locator('script')).toHaveCount(0);
+  await expect(unlinked.getByRole('link', { name: 'Link account…' })).toHaveAttribute(
+    'href',
+    '/settings/identities',
+  );
+
+  // DEMO-3: nobody owns it, and the tracker names nobody.
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskTaken}`);
+  await expect(page.locator('[data-task-owner="unassigned"]')).toContainText('Unassigned');
+
+  // The board: the owner's initials on the card, nothing on a card nobody owns.
+  await page.goto(`/projects/${PROJECT_KEY}`);
+  const demo1 = page.getByRole('article', { name: 'DEMO-1' });
+  await expect(demo1.getByRole('img', { name: `Owner: ${OWNER_NAME}` })).toHaveText('VD');
+  await expect(demo1.locator('[data-card-owner]')).toHaveAttribute('title', `Owner: ${OWNER_NAME}`);
+  await expect(
+    page.getByRole('article', { name: 'DEMO-2' }).locator('[data-card-owner]'),
+  ).toHaveCount(0);
+
+  // *Unassigned*: in the URL, applied by the server, and remembered for the next visit.
+  const whose = page.getByRole('group', { name: 'Whose tasks' });
+  await whose.getByRole('button', { name: 'Unassigned' }).click();
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}?owner=none`);
+  await expect(page.getByRole('article', { name: 'DEMO-2' })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'DEMO-1' })).toHaveCount(0);
+  await page.goto(`/projects/${PROJECT_KEY}`);
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}?owner=none`);
+  await expect(whose.getByRole('button', { name: 'Unassigned' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  // *Everyone* forgets it.
+  await whose.getByRole('button', { name: 'Everyone' }).click();
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
+  await expect(page.getByRole('article', { name: 'DEMO-1' })).toBeVisible();
 });

@@ -480,6 +480,9 @@ export const runIntakeCheck = async (
    * recorded as `ticket.intake.skipped` on the project's stream. Asked here, after the ticket read
    * and before the insert, because the read is the one that already names the assignee. A ticket
    * that could not be read is taken: the claim before its first run asks again and refuses by name.
+   * **A ticket a linked member of the project holds is taken** whatever `take_assigned_tickets`
+   * says (S-26.2, BD-031's 2026-11-06 amendment 2): it becomes that member's task, and the claim
+   * keeps it with them.
    */
   if (
     await skipsAssignedTicket(options, integrations, {
@@ -715,7 +718,9 @@ export const runIntakeCheck = async (
  * Intake's skip question (TD-029 decision 5), with the binding's own account read only when it can
  * change the answer: a claiming binding that does not take assigned tickets, and a ticket that is
  * assigned at all. An unreadable account is **not** a skip — the claim asks again before the first
- * run and refuses by name — so a tracker blip never drops a ticket.
+ * run and refuses by name — so a tracker blip never drops a ticket. **A linked member of the
+ * project is never skipped** (S-26.2): the directory is asked first, live, and a `member` answer
+ * takes the ticket with no provider call.
  */
 const skipsAssignedTicket = async (
   options: IntakeCheckOptions,
@@ -730,8 +735,23 @@ const skipsAssignedTicket = async (
   const { projectId, ticket, lifecycle, assignee } = question;
   // Asked once with the assignee standing in for "me": `true` only when the binding claims, does
   // not take assigned tickets, and the ticket is assigned — the cases the account can change.
-  if (!intakeSkipsAssignedTicket({ lifecycle, self: null, assignee })) {
+  if (
+    assignee === null ||
+    !intakeSkipsAssignedTicket({ lifecycle, self: null, assignee, assigneeIsLinkedMember: false })
+  ) {
     // Not claiming, opted in, or unassigned: nothing the binding's own account could change.
+    return false;
+  }
+  // A linked member of the project holds it (S-26.2): their task, whoever the binding is.
+  const assigneeClass = await options.unitOfWork.transaction(async (scope) =>
+    options.store.owners.classifyAssignee(scope.tx, {
+      projectId,
+      provider: assignee.provider,
+      externalId: assignee.external_id,
+    }),
+  );
+  const assigneeIsLinkedMember = assigneeClass.kind === 'member';
+  if (assigneeIsLinkedMember) {
     return false;
   }
   let self: ExternalIdentity | null;
@@ -747,7 +767,10 @@ const skipsAssignedTicket = async (
     );
     return false;
   }
-  return self !== null && intakeSkipsAssignedTicket({ lifecycle, self, assignee });
+  return (
+    self !== null &&
+    intakeSkipsAssignedTicket({ lifecycle, self, assignee, assigneeIsLinkedMember })
+  );
 };
 
 /** `ticket.intake.skipped` on the project's stream (an audit record; nothing consumes it). */

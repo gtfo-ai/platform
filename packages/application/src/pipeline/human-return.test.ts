@@ -52,11 +52,16 @@ const person = (external_id: string, provider = 'fake-jira'): ExternalIdentity =
 
 // ── The tracker double: one ticket's assignee, status and comments ──────────
 
-const tracker = (options: { readonly refuseStatus?: string } = {}) => {
+const tracker = (
+  options: { readonly refuseStatus?: string; readonly assignee?: string | null } = {},
+) => {
   const state = {
-    assignee: null as string | null,
+    assignee: options.assignee ?? null,
     status: 'Ready for the agent',
     comments: [] as TicketComment[],
+    /** Every `assignToSelf` and `unassign` the platform made (S-26.2 counts them). */
+    assigns: 0,
+    unassigns: 0,
   };
   const port: Partial<TaskManagementPort> = {
     readTicket: async (ref: TicketRefInput) => ({
@@ -78,11 +83,13 @@ const tracker = (options: { readonly refuseStatus?: string } = {}) => {
     }),
     selfIdentity: async () => person(SELF_ID),
     assignToSelf: async () => {
+      state.assigns += 1;
       const changed = state.assignee !== SELF_ID;
       state.assignee = SELF_ID;
       return { changed, assignee: person(SELF_ID) };
     },
     unassign: async () => {
+      state.unassigns += 1;
       const changed = state.assignee === SELF_ID;
       if (changed) state.assignee = null;
       return { changed };
@@ -258,11 +265,15 @@ const waitingAt = async (
     readonly refuseStatus?: string;
     /** A lifecycle block other than the fully mapped one (WP-178 review: partial mapping). */
     readonly lifecycle?: BindingLifecycle;
+    /** Who holds the ticket at intake (S-26.2), and the directory seeded before it. */
+    readonly assignee?: string;
+    readonly seed?: (harness: PipelineHarness) => void;
   } = {},
 ): Promise<Waiting> => {
-  const ticket = tracker(
-    options.refuseStatus === undefined ? {} : { refuseStatus: options.refuseStatus },
-  );
+  const ticket = tracker({
+    ...(options.refuseStatus === undefined ? {} : { refuseStatus: options.refuseStatus }),
+    ...(options.assignee === undefined ? {} : { assignee: options.assignee }),
+  });
   const discussions: Discussion[] = [];
   const holder: { harness: PipelineHarness | null } = { harness: null };
   const harness = createPipelineHarness({
@@ -299,6 +310,7 @@ const waitingAt = async (
     },
   });
   holder.harness = harness;
+  options.seed?.(harness);
   await harness.publish([event(harness, 'ticket.matched', ticketMatchedPayload())]);
   expect(at(harness)).toEqual(
     stage === 'qa' ? ['active', 'qa'] : ['ready_for_merge', 'ready_for_merge'],
@@ -991,6 +1003,43 @@ describe('a return marks the claim stale for a human return', () => {
     // Re-claimed (a stale claim is a re-claim), so the agent holds it again.
     expect(waiting.ticket.state.assignee).toBe(SELF_ID);
     expect(eventsOf(waiting.harness, 'ticket.claimed')).toHaveLength(2);
+  });
+
+  /**
+   * S-26.2 criterion 2 (TD-031's 2026-11-06 amendment item 5): a return, then the re-claim, on a
+   * ticket a **linked member** of the project holds. Before S-26.2 the re-claim skipped the
+   * pre-read and re-assigned the ticket to the binding's own account; now every claim reads first
+   * and a member keeps their ticket — no assign, the status still moves to `in_progress`.
+   */
+  it('S-26.2 (2): a return then a re-claim on a ticket a linked member holds writes no assign and keeps it theirs', async () => {
+    const ALICE = '00000000-0000-4000-8000-00000000a11c' as Id;
+    const waiting = await waitingAt('qa', {
+      assignee: 'alice',
+      seed: (harness) => {
+        harness.store.seedIdentity('fake-jira', 'alice', ALICE);
+        harness.store.seedProjectMember(PROJECT, ALICE);
+      },
+    });
+    // The first claim kept it too: the member held the ticket from intake.
+    expect(waiting.ticket.state.assigns).toBe(0);
+    expect(waiting.ticket.state.assignee).toBe('alice');
+    later(waiting.harness);
+    await fire(waiting.harness, statusMoved(waiting, 'Sent back'));
+
+    expect(returnsFrom(waiting.harness, 'qa')).toHaveLength(1);
+    const claimed = eventsOf(waiting.harness, 'ticket.claimed');
+    // Re-claimed after the return (the stale claim was claimed again) …
+    expect(claimed).toHaveLength(2);
+    expect(claimed.map((entry) => entry.payload.held_by)).toEqual(['member', 'member']);
+    // … with no assign at all, the member still holding the ticket, and the status moved on.
+    expect(waiting.ticket.state.assigns).toBe(0);
+    expect(waiting.ticket.state.unassigns).toBe(0);
+    expect(waiting.ticket.state.assignee).toBe('alice');
+    expect(waiting.ticket.state.status).not.toBe('Sent back');
+    const claim = await waiting.harness.memory.transaction(async (scope) =>
+      waiting.harness.store.tasks.ticketClaim(scope.tx, taskOf(waiting.harness).task.id),
+    );
+    expect(claim).toMatchObject({ held_by: 'member', stale: false });
   });
 });
 

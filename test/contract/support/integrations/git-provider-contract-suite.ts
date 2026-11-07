@@ -1084,6 +1084,14 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         const failing = pipeline?.jobs.find((job) => job.name === context.failingJobName);
         expect(failing?.status).toBe('failed');
         expect(failing?.log_ref).not.toBeNull();
+        // Backlog 1078: a job's own page, when the provider gives one, is a page a person can
+        // open — an http(s) URL (the CI gate publishes a held job's as `gate_wait.held_job_url`).
+        for (const job of pipeline?.jobs ?? []) {
+          if (job.web_url !== null && job.web_url !== undefined) {
+            expect(new URL(job.web_url).protocol, job.name).toMatch(/^https?:$/);
+          }
+        }
+        expect(failing?.web_url, 'the failing job names its page').toMatch(/^https?:\/\//);
 
         const log = await port.getJobLog(context.project, failing?.log_ref as string, {
           tailBytes: 20,

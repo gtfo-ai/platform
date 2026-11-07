@@ -52,12 +52,15 @@ export const Avatar = ({
   name,
   size = 24,
   decorative = false,
+  label,
   className,
 }: {
   readonly name: string;
   readonly size?: keyof typeof SIZES;
   /** Beside the name in text: hidden, so the name is not read twice. */
   readonly decorative?: boolean;
+  /** The accessible name when it says more than the name (*Owner: Ada*); the name otherwise. */
+  readonly label?: string;
   readonly className?: string;
 }): ReactElement => (
   <span
@@ -68,7 +71,7 @@ export const Avatar = ({
       avatarTone(name),
       className,
     )}
-    {...(decorative ? { 'aria-hidden': true } : { role: 'img', 'aria-label': name })}
+    {...(decorative ? { 'aria-hidden': true } : { role: 'img', 'aria-label': label ?? name })}
   >
     {initialsOf(name)}
   </span>

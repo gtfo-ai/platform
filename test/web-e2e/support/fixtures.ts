@@ -104,7 +104,12 @@ export const IDS = {
   // S-25.11: a task CI sent back that the Developer is fixing, and one whose CI check timed out.
   taskCiFixing: id(26),
   taskCiTimedOut: id(27),
+  // S-26.8b: the person who owns DEMO-1 — not the signed-in operator, so *Take it* asks first.
+  ownerVojtech: id(95),
 } as const;
+
+/** S-26.8b: DEMO-1's owner, as the task DTO publishes them. */
+export const OWNER_NAME = 'Vojtěch Dvořák';
 
 export const PROJECT_KEY = 'demo_service';
 
@@ -155,6 +160,12 @@ export const HOSTILE = {
    */
   fileUrl: 'file:///etc/passwd',
 } as const;
+
+/**
+ * S-26.8b: DEMO-2's tracker assignee, whom the platform cannot link to a member (S-26.1's
+ * `unlinked_assignee`). Provider text, so the corpus makes it hostile (BD-022).
+ */
+export const UNLINKED_ASSIGNEE = `Jan Novák ${HOSTILE.script}`;
 
 const now = '2026-09-10T09:00:00.000Z';
 
@@ -310,6 +321,11 @@ export const featureTask = taskRecordSchema.parse({
   id: IDS.taskFeature,
   ticket: { provider: 'jira', key: 'DEMO-1', url: HOSTILE.safeUrl },
   ticket_title: `Checkout ${HOSTILE.script}`,
+  // S-26.8b: owned by a person who is not the signed-in operator.
+  owner: { user_id: IDS.ownerVojtech, name: OWNER_NAME },
+  owner_source: 'tracker',
+  unlinked_assignee: null,
+  owner_writes_back: false,
   // A merge request whose URL is a `data:` document. `taskRecordSchema` accepts it — which is the
   // point — and React would render it unchanged, so whatever refuses it is the application's own.
   mr_ref: { provider: 'gitlab', project_path: 'demo/service', iid: 7, url: HOSTILE.mrUrlData },
@@ -324,6 +340,11 @@ export const bugTask = taskRecordSchema.parse({
   // assertion about it is about this application only when read together with the `data:` one.
   ticket: { provider: 'jira', key: 'DEMO-2', url: HOSTILE.ticketUrlJavascript },
   template: 'bug',
+  // S-26.8b: nobody owns it, and the tracker names a person the platform cannot link.
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: { display_name: UNLINKED_ASSIGNEE },
+  owner_writes_back: false,
   state: 'waiting_answers',
   current_stage: 'investigation',
   iteration_counters: {},
@@ -519,6 +540,10 @@ export const taskDetail = taskDetailResponseSchema.parse({
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  // S-26.8b: the operator is an administrator — every owner action the matrix allows.
+  can_take: true,
+  can_assign: true,
+  can_unassign: true,
   gate_feedback: null,
   returns: [],
   stop: null,
@@ -596,6 +621,10 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  // S-26.8b: nobody owns it, so nothing to unassign; an administrator may take it.
+  can_take: true,
+  can_assign: true,
+  can_unassign: false,
   gate_feedback: null,
   returns: [],
   stop: null,
@@ -628,6 +657,10 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
     ...featureTask,
     id: IDS.taskTaken,
     ticket: { provider: 'jira', key: 'DEMO-3', url: HOSTILE.safeUrl },
+    // S-26.8b: nobody owns it and the tracker names nobody — *Unassigned*.
+    owner: null,
+    owner_source: null,
+    unlinked_assignee: null,
     mr_ref: null,
     state: 'needs_human',
     current_stage: 'implementation',

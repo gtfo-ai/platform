@@ -131,6 +131,7 @@ import {
   isCommunicationAccount,
   replaceOrganisationSettings,
 } from './queries/org-settings-queries.js';
+import { findOwnerCandidates } from './queries/owner-candidate-queries.js';
 import { databasePipelineGraphReaders } from './queries/pipeline-graph-queries.js';
 import {
   findArtifactBody,
@@ -170,6 +171,7 @@ import { type IdentityLinkCommands, registerMeIdentityRoutes } from './routes/me
 import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
+import { registerOwnerCandidateRoutes } from './routes/owner-candidates.js';
 import { registerPipelineGraphRoutes } from './routes/pipeline-graph.js';
 import { registerProjectBindingRoutes } from './routes/project-bindings.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
@@ -773,6 +775,14 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
           findProjectTicketLifecycle(options.database, projectId),
         accountIsAPerson: async (projectId) =>
           findBindingAccountIsAPerson(options.database, projectId),
+      },
+    });
+    // S-26.1's follow-up: the Assign picker's people — the owner command's own target rule.
+    await registerOwnerCandidateRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        candidates: async (projectId) => findOwnerCandidates(options.database, projectId),
       },
     });
     // WP-63: the configuration export and the repository re-read (Q94). The database reads and writes
