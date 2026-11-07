@@ -100,6 +100,7 @@ import {
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
+  ticketAssigneeSchema,
   transcriptEventSchema,
 } from '@platform/contracts';
 import {
@@ -1348,6 +1349,73 @@ const unmeasuredRunsFor = async (
 };
 
 /**
+ * **A task's owner as the DTO publishes it** (S-26.1, TD-031's 2026-11-06 amendment item 3): the
+ * owner's display name, and whether the ticket is **held elsewhere** — asked through
+ * `taskHeldElsewhereSql`, the predicate the owner command, the claim and the pick share, read live
+ * through `user_identities` so a link made since the last tracker read counts here at once.
+ */
+interface OwnerView {
+  readonly ownerName: string | null;
+  readonly heldElsewhere: boolean;
+}
+
+const HELD_ELSEWHERE = sql.raw(pipelineAdapters.taskHeldElsewhereSql('t'));
+
+const ownerViewsFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, OwnerView>> => {
+  if (taskIds.length === 0) {
+    return new Map();
+  }
+  const { rows } = await database.execute<{
+    id: string;
+    owner_name: string | null;
+    held_elsewhere: boolean;
+  }>(sql`
+    select t.id, u.name as owner_name, ${HELD_ELSEWHERE} as held_elsewhere
+      from tasks t
+      left join users u on u.id = t.owner_user_id
+     where t.id in (${sql.join(
+       taskIds.map((taskId) => sql`${taskId}::uuid`),
+       sql`, `,
+     )})`);
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      { ownerName: row.owner_name, heldElsewhere: row.held_elsewhere === true },
+    ]),
+  );
+};
+
+/** The four ownership fields of the task DTO, off the row and its {@link OwnerView}. */
+const ownerFieldsOf = (
+  row: typeof tasks.$inferSelect,
+  view: OwnerView | undefined,
+): Pick<TaskRecord, 'owner' | 'owner_source' | 'unlinked_assignee' | 'owner_writes_back'> => {
+  const assignee = ticketAssigneeSchema.nullable().safeParse(row.ticketAssignee ?? null);
+  if (!assignee.success) {
+    throw new UnprojectableRowError(
+      `task ${row.id}`,
+      'its recorded tracker assignee (`tasks.ticket_assignee`) does not parse',
+    );
+  }
+  return {
+    owner:
+      row.ownerUserId === null
+        ? null
+        : { user_id: row.ownerUserId as Id, name: view?.ownerName ?? '' },
+    owner_source: row.ownerSource ?? null,
+    unlinked_assignee:
+      view?.heldElsewhere === true && assignee.data !== null
+        ? { display_name: assignee.data.display_name }
+        : null,
+    // The write-back is S-26.3's opt-in, which no binding can set in this build.
+    owner_writes_back: false,
+  };
+};
+
+/**
  * The title out of `tasks.ticket_snapshot`, or `null` when there is no snapshot.
  *
  * The column is `jsonb` typed by the writer, so the value is checked rather than trusted: a
@@ -1368,6 +1436,7 @@ const toTaskRecord = (
   estimatedUsd: number,
   unmeasuredRuns: number,
   paused: PausedWhy | undefined,
+  owner: OwnerView | undefined,
 ): TaskRecord => ({
   id: row.id as Id,
   project_id: row.projectId as Id,
@@ -1451,6 +1520,8 @@ const toTaskRecord = (
   // here at the read rather than trusted (a row that fails is a fault, never "never claimed").
   ticket_claim: ticketClaimViewOf(row.id, row.ticketClaim),
   qa_stage: row.qaStage,
+  // S-26.1 (migration 0104): the owner, who set them, and the assignee who holds the ticket elsewhere.
+  ...ownerFieldsOf(row, owner),
 });
 
 /**
@@ -1890,25 +1961,35 @@ export const findTaskDetail = async (
       .orderBy(asc(runs.createdAt)),
   ]);
 
-  const [usage, progress, takenOver, humanTime, conflicts, estimated, unmeasured, pausedReasons] =
-    await Promise.all([
-      modelUsageFor(
-        database,
-        runRows.map((row) => row.id),
-      ),
-      latestProgressFor(
-        database,
-        runRows.map((row) => row.id),
-      ),
-      findTakenOver(database, task),
-      // The project id comes from the task row rather than from the request: the breakdown setting
-      // belongs to the project that owns the task, and a caller cannot name a different one.
-      findHumanTime(database, taskId, task.projectId),
-      conflictsFor(database, [taskId]),
-      estimatedSpendFor(database, [taskId]),
-      unmeasuredRunsFor(database, [taskId]),
-      pausedReasonsFor(database, task.state === 'paused' ? [taskId] : []),
-    ]);
+  const [
+    usage,
+    progress,
+    takenOver,
+    humanTime,
+    conflicts,
+    estimated,
+    unmeasured,
+    pausedReasons,
+    owners,
+  ] = await Promise.all([
+    modelUsageFor(
+      database,
+      runRows.map((row) => row.id),
+    ),
+    latestProgressFor(
+      database,
+      runRows.map((row) => row.id),
+    ),
+    findTakenOver(database, task),
+    // The project id comes from the task row rather than from the request: the breakdown setting
+    // belongs to the project that owns the task, and a caller cannot name a different one.
+    findHumanTime(database, taskId, task.projectId),
+    conflictsFor(database, [taskId]),
+    estimatedSpendFor(database, [taskId]),
+    unmeasuredRunsFor(database, [taskId]),
+    pausedReasonsFor(database, task.state === 'paused' ? [taskId] : []),
+    ownerViewsFor(database, [taskId]),
+  ]);
 
   const setbackRows = stageRows.map(setbackRowOf);
   return {
@@ -1918,6 +1999,7 @@ export const findTaskDetail = async (
       estimated.get(task.id) ?? 0,
       unmeasured.get(task.id) ?? 0,
       pausedReasons.get(task.id),
+      owners.get(task.id),
     ),
     taken_over: takenOver,
     human_time: humanTime,
@@ -2106,6 +2188,11 @@ export interface ProjectTasksQuery {
   readonly template?: string;
   readonly mode?: TaskRecord['mode'];
   readonly stage?: string;
+  /**
+   * The board's owner filter (S-26.1): the tasks `userId` owns, or the tasks nobody owns. The route
+   * resolves `owner=me` to the caller, so a query never names somebody else's id.
+   */
+  readonly owner?: { readonly kind: 'user'; readonly userId: string } | { readonly kind: 'none' };
 }
 
 export interface ProjectTaskPage {
@@ -2150,6 +2237,11 @@ export const listProjectTasks = async (
     ...(query.template === undefined ? [] : [eq(tasks.template, query.template)]),
     ...(query.mode === undefined ? [] : [eq(tasks.mode, query.mode)]),
     ...(query.stage === undefined ? [] : [eq(tasks.currentStage, query.stage)]),
+    ...(query.owner === undefined
+      ? []
+      : query.owner.kind === 'none'
+        ? [isNull(tasks.ownerUserId)]
+        : [eq(tasks.ownerUserId, query.owner.userId)]),
     ...(query.before === undefined
       ? []
       : [
@@ -2171,32 +2263,37 @@ export const listProjectTasks = async (
   // and never over the project: a warning for a task the caller is not being shown is not a row
   // this answer has anywhere to put.
   // S-23.9a: the card's glance — its stage rows and what waits on a person — over the same ids.
-  const [conflicts, estimated, unmeasured, pausedReasons, stageRows, asks] = await Promise.all([
-    conflictsFor(
-      database,
-      page.map((row) => row.task.id),
-    ),
-    estimatedSpendFor(
-      database,
-      page.map((row) => row.task.id),
-    ),
-    unmeasuredRunsFor(
-      database,
-      page.map((row) => row.task.id),
-    ),
-    pausedReasonsFor(
-      database,
-      page.filter((row) => row.task.state === 'paused').map((row) => row.task.id),
-    ),
-    stageRowsFor(
-      database,
-      page.map((row) => row.task.id),
-    ),
-    openAsksFor(
-      database,
-      page.map((row) => row.task.id),
-    ),
-  ]);
+  const [conflicts, estimated, unmeasured, pausedReasons, stageRows, asks, owners] =
+    await Promise.all([
+      conflictsFor(
+        database,
+        page.map((row) => row.task.id),
+      ),
+      estimatedSpendFor(
+        database,
+        page.map((row) => row.task.id),
+      ),
+      unmeasuredRunsFor(
+        database,
+        page.map((row) => row.task.id),
+      ),
+      pausedReasonsFor(
+        database,
+        page.filter((row) => row.task.state === 'paused').map((row) => row.task.id),
+      ),
+      stageRowsFor(
+        database,
+        page.map((row) => row.task.id),
+      ),
+      openAsksFor(
+        database,
+        page.map((row) => row.task.id),
+      ),
+      ownerViewsFor(
+        database,
+        page.map((row) => row.task.id),
+      ),
+    ]);
   return {
     items: page.map((row) => ({
       ...toTaskRecord(
@@ -2205,6 +2302,7 @@ export const listProjectTasks = async (
         estimated.get(row.task.id) ?? 0,
         unmeasured.get(row.task.id) ?? 0,
         pausedReasons.get(row.task.id),
+        owners.get(row.task.id),
       ),
       stages: stageRows.get(row.task.id)?.stages ?? [],
       latest_return:

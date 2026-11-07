@@ -102,6 +102,7 @@ import {
   type PipelineOutboundData,
 } from './jobs.js';
 import { closeStageOffer } from './offer-withdrawal.js';
+import { nextTaskSequence, syncOwnerAtIntake } from './owner-sync.js';
 import { appendOnProjectWithRetry } from './project-stream.js';
 import { refrozen, refrozenColumns } from './refreeze.js';
 import { isPlatformNote } from './review-threads.js';
@@ -621,6 +622,23 @@ export const runIntakeCheck = async (
      * reconciler re-matches the ticket.
      */
     await options.store.tasks.insert(scope.tx, stored, { defaultBranch: settings.defaultBranch });
+    /**
+     * **The task's owner, from the ticket's assignee** (S-26.1, TD-031's 2026-11-06 amendment
+     * item 2), in the insert's transaction: a linked `member`-or-above assignee becomes the owner
+     * (`task.owner.changed`, `tracker_sync`); anybody else leaves the owner `null` with the
+     * assignee stored, `platform` for the binding's own account or a machine. The event goes after
+     * the creation's own, at the stream's next sequence, on every ending below.
+     */
+    const ownerEvent = await syncOwnerAtIntake(options, scope.tx, {
+      projectId,
+      taskId: created.aggregate.id,
+      read: ticketRead,
+      causeEventId,
+    });
+    const withOwner = (events: readonly DomainEvent[]): DomainEvent[] =>
+      ownerEvent === null
+        ? [...events]
+        : [...events, ownerEvent(nextTaskSequence(events, created.aggregate.id))];
 
     if (unprotected !== null) {
       const escalated = escalateTask(
@@ -635,7 +653,7 @@ export const runIntakeCheck = async (
       );
       await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
       await closeParkedStageRow(options.store, scope.tx, escalated, ESCALATED_OUTCOME);
-      await scope.events.append([...created.events, ...escalated.events]);
+      await scope.events.append(withOwner([...created.events, ...escalated.events]));
       return null;
     }
 
@@ -648,7 +666,7 @@ export const runIntakeCheck = async (
         contextFor(options, created.aggregate.id, causeEventId),
       );
       await options.store.tasks.save(scope.tx, { ...stored, task: queued.aggregate });
-      await scope.events.append([...created.events, ...queued.events]);
+      await scope.events.append(withOwner([...created.events, ...queued.events]));
       return null;
     }
 
@@ -670,7 +688,7 @@ export const runIntakeCheck = async (
       causedByEventId: causeEventId,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     });
-    await scope.events.append([...created.events, ...applied.events]);
+    await scope.events.append(withOwner([...created.events, ...applied.events]));
     return applied.work;
   });
   const work = await creation.catch((error: unknown) => {

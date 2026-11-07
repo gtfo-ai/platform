@@ -70,6 +70,7 @@ import {
   type InboundContext,
   type InboundNormaliser,
   IntegrationError,
+  linkCodeClaimOf,
   type NormalisedDelivery,
   type NormalisedEvent,
   type SecretRedactor,
@@ -220,10 +221,21 @@ const changelogItemSchema = z.object({
   toString: z.string().nullish(),
 });
 
+/**
+ * The comment a `comment_*` event carries — "the same shape returned from the Jira REST API when a
+ * comment is retrieved" (the webhooks page), so `updateAuthor`, `created` and `updated` are the REST
+ * comment's (`mapping.ts`'s `jiraCommentSchema`). S-26.6 reads all three: a link code in an edited
+ * comment, or in one another account edited (*Edit All Comments*), proves nothing about its author.
+ * Each is optional here — a comment without them still becomes `ticket.comment.added` — and their
+ * absence refuses only the link (`edit_state_unknown`).
+ */
 const commentSchema = z.object({
   id: z.string().min(1),
   author: jiraUserSchema.optional(),
+  updateAuthor: jiraUserSchema.optional(),
   body: z.unknown().optional(),
+  created: z.string().optional(),
+  updated: z.string().optional(),
 });
 
 /**
@@ -293,6 +305,13 @@ export interface JiraNormaliserOptions {
   readonly redactor: SecretRedactor;
   /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
   readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
+  /**
+   * The account id this binding acts as (`GET /myself`, remembered by the adapter) — asked only
+   * for a comment that carries a self-service link code (S-26.6), because a code in a comment the
+   * platform itself posted links nobody. Absent, or a lookup that fails, refuses the link
+   * (`binding_account_unknown`): never a comparison against nothing.
+   */
+  readonly bindingAccount?: () => Promise<string | null>;
 }
 
 const ignored = (
@@ -374,6 +393,7 @@ export const createJiraInboundNormaliser = (
   options: JiraNormaliserOptions & WebhookVerifierOptions,
 ): InboundNormaliser<TaskManagementInboundEvent> => {
   const { siteUrl, projectKeys, pickup } = options;
+  const bindingAccount = options.bindingAccount ?? (async () => null);
 
   const matchedEvent = (
     issue: NonNullable<JiraWebhookEnvelope['issue']>,
@@ -519,6 +539,31 @@ export const createJiraInboundNormaliser = (
         ...identity,
         verified: context.resolveUser(identity) !== null,
       };
+      const text = adfToMarkdown(comment.body);
+      /**
+       * S-26.6: a comment carrying a link code becomes a **claim** beside the event — its author
+       * from the comment itself (never the envelope's `user`, who may be somebody acting on it),
+       * its two instants and its `updateAuthor`. `linkCodeClaimOf` is the only reader of the text
+       * for this purpose, and answers the codes' hashes, never the codes.
+       */
+      const claim = await linkCodeClaimOf(
+        {
+          provider: PROVIDER_ID,
+          commentId: comment.id,
+          author:
+            comment.author?.accountId === undefined
+              ? null
+              : {
+                  externalId: comment.author.accountId,
+                  displayName: comment.author.displayName ?? null,
+                },
+          updateAuthorId: comment.updateAuthor?.accountId ?? null,
+          createdAt: comment.created ?? null,
+          updatedAt: comment.updated ?? null,
+          text,
+        },
+        bindingAccount,
+      );
       events.push({
         type: 'ticket.comment.added',
         payload: {
@@ -527,7 +572,7 @@ export const createJiraInboundNormaliser = (
           ticket,
           comment_id: comment.id,
           author,
-          text: adfToMarkdown(comment.body),
+          text,
         },
         actor: {
           kind: 'integration',
@@ -536,7 +581,7 @@ export const createJiraInboundNormaliser = (
           identity: author,
         },
       });
-      return { events, ignored: [] };
+      return { events, ignored: [], ...(claim === null ? {} : { linkClaims: [claim] }) };
     }
 
     if (body.webhookEvent === 'jira:issue_updated' || body.webhookEvent === 'jira:issue_created') {

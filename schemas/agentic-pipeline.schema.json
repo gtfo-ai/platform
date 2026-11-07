@@ -154,6 +154,7 @@
         "task.rebase.checked",
         "task.conflict.warned",
         "task.ticket.rekeyed",
+        "task.owner.changed",
         "task.mr.measured",
         "ticket.bug.traced",
         "task.breakdown.decided",

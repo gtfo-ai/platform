@@ -167,7 +167,8 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * **first** of the event's three promised consumers; the other two are named where they wait —
    * the linter's re-lint on a measurement of how often a real Jira sends updates (`docs/TODO.md`),
    * and product/18:60's *"edited within 48 h"* on a statistics fold (`stats-metrics.ts`'s absent
-   * entry names its owner).
+   * entry names its owner). Since S-26.1 `pipeline.owner.sync` (`owner-sync.ts`) also wakes the
+   * `owner_sync` duty for the ticket's live task, which follows the ticket's assignee.
    */
   'ticket.updated': 'handled',
 
@@ -358,6 +359,10 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // **An audit entry, not a step** — the key was rewritten in the same transaction by the handler
   // that appended it, so nothing is left for a consumer to do.
   'task.ticket.rekeyed': 'unconsumed',
+  // S-26.1 (TD-031's 2026-11-06 amendment item 1): an owner change, recorded in the transaction
+  // that wrote `tasks.owner_user_id`. An audit record in this build; S-26.3's write-back duty
+  // (`ticket_owner_assign`) is the consumer it waits for.
+  'task.owner.changed': 'unconsumed',
   // WP-61, PROGRESS backlog 114, Q87: the defect-escape trace. **Read, not handled** — the
   // statistics query joins it to `stats_task_delivery` at request time, because "within thirty days
   // of the merge" is a comparison between this event and a delivery that a fold of one event at a
@@ -420,6 +425,7 @@ export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${s
     'integration.action.failed': null,
     'task.mr.measured': null,
     'task.ticket.rekeyed': null,
+    'task.owner.changed': null,
     'ticket.bug.traced': null,
   };
 

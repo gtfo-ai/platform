@@ -74,6 +74,7 @@ import {
   runMergeRequestReady,
 } from './merge-request-ready.js';
 import { underReviewConversationLease } from './owed-duties.js';
+import { runOwnerSync } from './owner-sync.js';
 import { runReadyHeadCheck } from './ready-head.js';
 import { runResolveOnMerge } from './resolve-on-merge.js';
 import {
@@ -322,6 +323,10 @@ const dispatchOutbound =
         return;
       case 'ticket_release':
         await runTicketRelease(options, data);
+        return;
+      // S-26.1 (TD-031's 2026-11-06 amendment item 2): follow the ticket's assignee, one read per burst.
+      case 'owner_sync':
+        await runOwnerSync(options, data);
         return;
       // WP-179 (TD-029 decision 10): the review conversation on the merge request — under the
       // task's duty lease since WP-184, because the stage job performs the same duties before it

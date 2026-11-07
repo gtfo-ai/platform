@@ -60,6 +60,7 @@ import {
   retryStageCommand,
   returnToStageCommand,
   reworkStageCommand,
+  setTaskOwnerCommand,
   steerRunCommand,
   submitFeedbackCommand,
   takeOverTaskCommand,
@@ -72,7 +73,7 @@ import {
   redaction as redactionAdapters,
 } from '@platform/infrastructure';
 
-/** The fourteen commands of technical/08, as the routes see them. */
+/** The fourteen commands of technical/08, and S-26.1's owner command, as the routes see them. */
 export interface TaskCommands {
   /**
    * Answers with the person's own words, redacted, because the `human_actions` row is the only
@@ -205,6 +206,17 @@ export interface TaskCommands {
     readonly stage: string;
     readonly summary: string;
   }): Promise<void>;
+  /**
+   * Sets the task's owner, or clears it (S-26.1): the matrix asked of the caller's **effective**
+   * role in the task's project (the guard's), the target's role and the task's state. Answers
+   * whether anything changed and the owner the task has now, for the audit row.
+   */
+  setOwner(input: {
+    readonly taskId: string;
+    readonly userId: string;
+    readonly role: UserRole;
+    readonly targetUserId: string | null;
+  }): Promise<{ readonly changed: boolean; readonly ownerUserId: string | null }>;
 }
 
 export interface TaskCommandOptions {
@@ -398,5 +410,21 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         stage: slug(input.stage),
         summary: input.summary,
       }),
+    setOwner: async (input) =>
+      setTaskOwnerCommand(
+        {
+          unitOfWork: deps.unitOfWork,
+          store: deps.store,
+          ids: { next: (): Id => randomUUID() as Id },
+          clock: { now: (): IsoDateTime => new Date().toISOString() as IsoDateTime },
+          logger: options.logger,
+        },
+        {
+          taskId: id(input.taskId),
+          actorUserId: id(input.userId),
+          actorRole: input.role,
+          targetUserId: input.targetUserId === null ? null : id(input.targetUserId),
+        },
+      ),
   };
 };

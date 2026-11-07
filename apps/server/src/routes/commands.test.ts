@@ -1,5 +1,5 @@
 /**
- * The eleven command routes, driven end to end through Fastify against **plain functions**
+ * The command routes — WP-15i's eleven and every one since (S-26.1's owner) — driven end to end through Fastify against **plain functions**
  * (WP-15i).
  *
  * The e2e tier drives the same routes against a real instance and a task the pipeline created,
@@ -24,6 +24,7 @@ import {
   IterationLimitReachedError,
   ModelNotListedError,
   NoGateFeedbackError,
+  OwnerChangeRefusedError,
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
@@ -35,7 +36,12 @@ import {
   UnknownAggregateError,
 } from '@platform/application';
 import type { JsonObject, UserRole } from '@platform/contracts';
-import { IllegalTransitionError, InvariantViolationError, TaskMergedError } from '@platform/domain';
+import {
+  IllegalTransitionError,
+  InvariantViolationError,
+  type OwnerCommandRefusal,
+  TaskMergedError,
+} from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -203,6 +209,17 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
       steerRun: record('run-steer'),
       takeOver: record('take-over'),
       handBack: record('hand-back'),
+      // S-26.1: the owner command answers whether it changed anything and the owner after, for the
+      // audit row; the recorder's default carries neither, so a case that set no `world.result`
+      // gets the honest pair for the target it asked for.
+      setOwner: async (input) => {
+        const recorded = (await record('owner')(input)) as unknown;
+        return recorded !== null &&
+          typeof recorded === 'object' &&
+          'changed' in (recorded as object)
+          ? (recorded as { changed: boolean; ownerUserId: string | null })
+          : { changed: true, ownerUserId: input.targetUserId };
+      },
     },
   });
   await app.ready();
@@ -371,6 +388,15 @@ const COMMANDS: readonly {
     path: `/api/tasks/${TASK}/hand-back`,
     body: { stage: 'code_review', summary: 'fixed by hand' },
     otherBody: { stage: 'implementation', summary: 'fixed by hand' },
+    key: 'required',
+    role: 'member',
+  },
+  {
+    // S-26.1: the guard admits a member (`task.owner.take`); the matrix is the command's.
+    name: 'owner',
+    path: `/api/tasks/${TASK}/owner`,
+    body: { user_id: USER },
+    otherBody: { user_id: null },
     key: 'required',
     role: 'member',
   },
@@ -844,6 +870,81 @@ describe('what each refusal maps to', () => {
       expect(world.actions).toEqual([]);
     });
   }
+});
+
+/**
+ * S-26.1 — the owner command through the real router (TD-031's 2026-11-06 amendment item 3). The
+ * enumerated cases above hold its 401, its 403 below `member`, its required key, its replay and its
+ * key scope; these hold what is the route's own: the role it hands the matrix, the target, the
+ * three refusals and their statuses, and the audit row.
+ */
+describe('the task’s owner (S-26.1)', () => {
+  const OTHER = '00000000-0000-4000-8000-0000000000ea';
+
+  it('hands the command the caller, their effective role and the target, and audits the owner after', async () => {
+    world.role = 'maintainer';
+    const reply = await post(world, `/api/tasks/${TASK}/owner`, { user_id: OTHER }, 'owner-1');
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(reply.body.performed).toBe(true);
+    expect(world.calls).toEqual([
+      {
+        name: 'owner',
+        input: { taskId: TASK, userId: USER, role: 'maintainer', targetUserId: OTHER },
+      },
+    ]);
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]).toMatchObject({
+      action: 'task.owner',
+      taskId: TASK,
+      params: { task_id: TASK, user_id: OTHER, changed: true, owner_user_id: OTHER },
+    });
+  });
+
+  it('passes a release as a null target, and records a change that changed nothing', async () => {
+    world.role = 'member';
+    world.result = { changed: false, ownerUserId: null };
+    const reply = await post(world, `/api/tasks/${TASK}/owner`, { user_id: null }, 'owner-2');
+    expect(reply.status).toBe(200);
+    expect(world.calls[0]?.input).toMatchObject({ role: 'member', targetUserId: null });
+    expect(world.actions[0]?.params).toMatchObject({ changed: false, owner_user_id: null });
+  });
+
+  const REFUSALS: readonly [OwnerCommandRefusal, number][] = [
+    ['owner_change_not_permitted', 403],
+    ['owner_not_project_member', 422],
+    ['task_finished', 409],
+  ];
+
+  it.each(REFUSALS)('answers %s as %i and audits nothing', async (reason, status) => {
+    world.role = 'member';
+    world.throws = new OwnerChangeRefusedError(TASK as never, reason);
+    const reply = await post(
+      world,
+      `/api/tasks/${TASK}/owner`,
+      { user_id: USER },
+      `refuse-${reason}`,
+    );
+    expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe(`${status} ${reason}`);
+    expect(world.actions).toEqual([]);
+    // The key was given back: the same request performs once the refusal is gone.
+    const again = await post(
+      world,
+      `/api/tasks/${TASK}/owner`,
+      { user_id: USER },
+      `refuse-${reason}`,
+    );
+    expect(again.status).toBe(200);
+    expect(again.body.performed).toBe(true);
+  });
+
+  it('refuses a body that is not a user id or null, before the command runs', async () => {
+    world.role = 'maintainer';
+    for (const body of [{}, { user_id: 'someone' }, { user_id: OTHER, extra: true }]) {
+      const reply = await post(world, `/api/tasks/${TASK}/owner`, body, 'owner-bad');
+      expect(reply.status, JSON.stringify(body)).toBe(400);
+    }
+    expect(world.calls).toEqual([]);
+  });
 });
 
 /**

@@ -53,6 +53,10 @@ const EXPECTED_TABLES = [
   'history_bootstrap_batches',
   'history_bootstrap_chunks',
   'human_time_entries',
+  // S-26.6, migration 0105: a person's self-service link code (hashed) and what a comment carrying
+  // it proved — a link was only ever an admin's statement before.
+  'identity_link_codes',
+  'identity_link_matches',
   'inbox',
   'integration_actions',
   'integration_idempotency',
@@ -264,6 +268,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // ending — and registered rather than defaulted so the "registry lists every table"
       // invariant above stays true. It is the first row this table has ever had a writer for.
       row('human_time_entries', 'read_write', null),
+      // S-26.6 (migration 0105): a code is issued, voided and consumed in place; a match confirmed.
+      row('identity_link_codes', 'read_write', null),
+      row('identity_link_matches', 'read_write', null),
       // WP-15c (migration 0014): `inbox` was the one table 0005 created without registering it, and
       // the access it needs is the default — so the row changes no privilege and closes the gap in
       // the registry that made the omission invisible.

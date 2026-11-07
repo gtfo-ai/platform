@@ -212,7 +212,16 @@ describe('ticket.updated marks the live tasks of its ticket (Q61 (b))', () => {
     await harness.publish([edited('ACME-1', '2026-06-01T09:05:00.000Z')]);
     const after = row(harness, LIVE);
     expect(after.version).toBe(before.version);
-    expect({ ...after, ticketSignalAt: null }).toEqual(before);
+    // Since S-26.1 the `owner_sync` duty this signal wakes re-reads the stale ticket and stores the
+    // read through the narrow `saveTicketSnapshot` (which is what makes a burst one read), so the
+    // snapshot pair moves too — never through `save`, and never the version.
+    expect(after.ticketSnapshotAt).not.toBeNull();
+    expect({
+      ...after,
+      ticketSignalAt: null,
+      ticketSnapshot: before.ticketSnapshot,
+      ticketSnapshotAt: before.ticketSnapshotAt,
+    }).toEqual(before);
   });
 
   it('settles a signal for a ticket no task has, rather than failing the dispatch', async () => {

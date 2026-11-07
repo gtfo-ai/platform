@@ -600,6 +600,10 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         author: identityOf(note.author),
         body: note.body,
         created_at: toIsoDateTime(note.created_at, 'list_discussions'),
+        // S-26.6: an edited note's link code proves nothing about its author.
+        ...(note.updated_at === null || note.updated_at === undefined
+          ? {}
+          : { updated_at: toIsoDateTime(note.updated_at, 'list_discussions') }),
         path: note.position?.new_path ?? note.position?.old_path ?? null,
         line: note.position?.new_line ?? note.position?.old_line ?? null,
         system: note.system,
@@ -704,6 +708,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     }
   };
 
+  /** The id `GET /user` answered for this token (S-26.6), read once per adapter. */
+  let boundAccountId: string | null = null;
   const inbound: InboundNormaliser<GitProviderInboundEvent> = {
     verify: (delivery: WebhookDelivery) =>
       verifyGitLabDelivery(
@@ -727,6 +733,12 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         // written to `events.payload` verbatim (BD-003: append-only, so it cannot be fixed later).
         redactor,
         ...(options.onRedaction === undefined ? {} : { onRedaction: options.onRedaction }),
+        // S-26.6: the account this token acts as, asked only for a note carrying a link code and
+        // remembered for the adapter's life, as Jira's `/myself` is (the review of PR #93).
+        bindingAccount: async () => {
+          boundAccountId ??= String((await client.currentUser()).id);
+          return boundAccountId;
+        },
         findThreadForNote: async (project, iid, noteId) => {
           // A note past the cut is answered as no thread, as before WP-209 (the delivery is kept).
           const { discussions } = await client.listDiscussions(project, iid);

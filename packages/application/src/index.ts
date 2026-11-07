@@ -75,6 +75,10 @@ export * from './human-time/minutes.js';
 export * from './human-time/ports.js';
 export * from './human-time/projector.js';
 export * from './human-time/runtime.js';
+// A person links their own tracker or git account, proven by the provider (S-26.6, TD-031 item 9)
+export * from './identity/identity-links.js';
+export * from './identity/link-codes.js';
+export * from './identity/link-thread.js';
 // Outbound integration actions (technical/06, WP-07)
 export * from './integrations/action-executor.js';
 export * from './integrations/credential-shape.js';
@@ -158,6 +162,8 @@ export * from './pipeline/observability-prefetch.js';
 export * from './pipeline/offer-withdrawal.js';
 export * from './pipeline/offers.js';
 export * from './pipeline/outbound.js';
+// S-26.1: a task's owner — the tracker sync, the command, the link adoption, the duty
+export * from './pipeline/owner-sync.js';
 export * from './pipeline/planner.js';
 export * from './pipeline/progress-tool.js';
 export * from './pipeline/project-stream.js';
@@ -206,6 +212,7 @@ export * from './ports/dependency-metadata.js';
 export * from './ports/dispatch-queue.js';
 export * from './ports/event-store.js';
 export * from './ports/handler-executions.js';
+export * from './ports/identity-links.js';
 export * from './ports/integrations/audit.js';
 export * from './ports/integrations/bindings.js';
 export * from './ports/integrations/common.js';

@@ -95,6 +95,9 @@ export const PERMISSION_ACTIONS = [
   'task.feedback.create',
   'task.ask',
   'task.export',
+  // A task's owner (S-26.1): take an unassigned task or give back one's own; set anyone's
+  'task.owner.take',
+  'task.owner.assign',
   // Artifacts and transcripts
   'artifact.read',
   'transcript.read',
@@ -113,6 +116,8 @@ export const PERMISSION_ACTIONS = [
   'discovery.run',
   // Remote workers: approve a device code for one's own machine, list and revoke one's own (WP-280)
   'worker.register',
+  // Link one's own tracker or git account, proven by the provider, and unlink it (S-26.6)
+  'identity.link',
 ] as const;
 
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
@@ -172,6 +177,11 @@ export const PERMISSION_REQUIREMENTS = {
   'task.feedback.create': 'member',
   'task.ask': 'member',
   'task.export': 'member',
+  // S-26.1 (TD-031's 2026-11-06 amendment item 3): a member takes an **unassigned** task or gives
+  // back their own; a maintainer sets anyone of the project, or nobody, on any task. The finer rule
+  // — which task, which target — is `ownerChangePermitted` (`tasks/owner.ts`), which asks these two.
+  'task.owner.take': 'member',
+  'task.owner.assign': 'maintainer',
 
   'artifact.read': 'viewer',
   'transcript.read': 'member',
@@ -193,6 +203,11 @@ export const PERMISSION_REQUIREMENTS = {
   // What a worker may then run is decided at the claim, by the effective project role (the higher of
   // the organisation role and a membership) at `member` or above (TD-031 §8, backlog 886) — so registering a machine grants nothing by itself.
   'worker.register': 'viewer',
+
+  // Viewer: a person links **their own** account (TD-031's 2026-11-06 amendment item 9). What the
+  // link then lets them do is decided where they act — `can()` on their role, and the thread read
+  // (*I wrote it on …*) is refused below an effective `member` in that project, by its route.
+  'identity.link': 'viewer',
 } as const satisfies Record<PermissionAction, UserRole>;
 
 /**

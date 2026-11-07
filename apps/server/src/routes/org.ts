@@ -37,9 +37,11 @@ import {
   agentsResponseSchema,
   apiErrorSchema,
   createIdentityMappingRequestSchema,
+  identityAccountParamsSchema,
   identityCandidateListSchema,
   identityMappingListSchema,
   identityMappingSchema,
+  identityUnlinkedSchema,
   inboxResponseSchema,
   orgAuditQuerySchema,
   orgAuditResponseSchema,
@@ -102,7 +104,16 @@ export interface IdentityQueries {
   }) => Promise<IdentityMappingRecord>;
   readonly listMappings: () => Promise<readonly IdentityMappingRecord[]>;
   /**
-   * Accounts refused as `unmapped_identity` that nobody has mapped since — the candidates the
+   * Removes the mapping — a person's or a machine's (S-26.6: *unlink works for the person and for
+   * an admin*). The row it removed, or `null` when there was none.
+   */
+  readonly unlinkMapping: (input: {
+    readonly provider: string;
+    readonly externalId: string;
+  }) => Promise<{ readonly kind: 'person' | 'machine'; readonly user_id: string | null } | null>;
+  /**
+   * Accounts refused as `unmapped_identity`, and since S-26.6 the unlinked assignees of live tasks,
+   * that nobody has mapped since — the candidates the
    * identities screen offers (WP-44, PROGRESS backlog 198). A read, never a write.
    */
   readonly listCandidates: () => Promise<readonly IdentityCandidate[]>;
@@ -375,6 +386,41 @@ export const registerOrgRoutes = async (
     },
   );
 
+  typed.delete(
+    '/api/org/identities/:provider/:external_id',
+    {
+      preValidation: requirePermission(guard, 'org.users.manage'),
+      schema: {
+        summary: 'Unlink a provider account — a person’s or a machine’s',
+        description:
+          'The admin half of S-26.6’s *unlink works for the person and for an admin*: deletes the `user_identities` row, whoever linked it (this mapping, or the person’s own confirmed link code). `404 identity_not_found` when there is none. An owner a link adopted changes at the ticket’s next sync (BACKLOG 1083). One `human_actions` row `org.identity.unmap`, naming the user the row named.',
+        tags: ['org'],
+        params: identityAccountParamsSchema,
+        response: { 200: identityUnlinkedSchema, 404: apiErrorSchema },
+      },
+    },
+    async (request) => {
+      const actor = actorOf(request);
+      const { provider, external_id: externalId } = request.params;
+      const removed = await options.identities.unlinkMapping({ provider, externalId });
+      if (removed === null) {
+        throw new HttpError(404, 'identity_not_found', 'no mapping exists for that account');
+      }
+      await options.identities.recordAction({
+        userId: actor.userId,
+        action: 'org.identity.unmap',
+        params: {
+          provider,
+          external_id: externalId,
+          kind: removed.kind,
+          user_id: removed.user_id,
+        },
+        taskId: null,
+      });
+      return { provider, external_id: externalId };
+    },
+  );
+
   typed.get(
     '/api/org/identities',
     {
@@ -402,9 +448,9 @@ export const registerOrgRoutes = async (
       // tried to act on the platform, which is who somebody is on Slack.
       preHandler: requirePermission(guard, 'org.users.manage'),
       schema: {
-        summary: 'Provider accounts the platform refused because nobody has mapped them',
+        summary: 'Provider accounts nobody has mapped: refused deliveries and unlinked assignees',
         description:
-          'Read off the inbound deliveries refused as `unmapped_identity` since migration 0047, excluding every account already mapped or declared a machine; newest first. A **proposal** to fill the mapping form with — nothing here writes a mapping, and an admin still decides who the account is (WP-44, PROGRESS backlog 198). `external_id` is the provider’s own id: untrusted text (BD-022).',
+          'Since S-26.6 also the **unlinked tracker assignees of live tasks** (`tasks.ticket_assignee`, never the integration’s own account or a machine), with `assigned_tasks` and the tracker’s `display_name` (untrusted) for those; an account seen only as an assignee has `deliveries: 0`. Read off the inbound deliveries refused as `unmapped_identity` since migration 0047, excluding every account already mapped or declared a machine; newest first. A **proposal** to fill the mapping form with — nothing here writes a mapping, and an admin still decides who the account is (WP-44, PROGRESS backlog 198). `external_id` is the provider’s own id: untrusted text (BD-022).',
         tags: ['org'],
         response: { 200: identityCandidateListSchema },
       },

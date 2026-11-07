@@ -205,6 +205,15 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // `raiseBudgetCap` — the task's own cap, only ever raised, by a maintainer's command (WP-131
     // review round 1, migration 0072). Not the aggregate's, and never `save`'s.
     'budget_cap_usd',
+    // `saveOwner` — the task's owner, who made the last change and when, and the tracker assignee
+    // last read (S-26.1, migration 0104, TD-031's 2026-11-06 amendment item 1). One statement, a
+    // compare-and-set on the owner and the assignee the decision was made over; its callers (the
+    // owner sync at intake, a stage's re-read and the `owner_sync` duty, the owner command, the
+    // link adoption) run beside the stage executor, so it is narrow and never `save`'s.
+    'owner_user_id',
+    'owner_source',
+    'owner_changed_at',
+    'ticket_assignee',
     // `save` — the aggregate's own columns, plus the token that guards them
     'state',
     'current_stage',

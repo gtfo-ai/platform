@@ -80,6 +80,7 @@ import type { LiveRuns } from './live-runs.js';
 import { mergeRequestReadyHandlers } from './merge-request-ready.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
 import { performOwedDuties } from './owed-duties.js';
+import { ownerSyncHandlers } from './owner-sync.js';
 import { providerSignalHandlers } from './provider-signals.js';
 import { resolveOnMergeHandler } from './resolve-on-merge.js';
 import { reviewConversationHandlers } from './review-conversation.js';
@@ -474,6 +475,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // WP-60: two provider signals written down — an edited ticket marks the live tasks'
       // snapshots stale (Q61 (b)), and a push nobody on the platform made moves the recorded head.
       ...providerSignalHandlers(options),
+      // S-26.1 (TD-031's 2026-11-06 amendment item 2): an edited ticket's live task follows its
+      // assignee — the decision here, the read in the `owner_sync` duty.
+      ...ownerSyncHandlers(options),
       // WP-61: the size of a merge the platform made, and the defect trace of a bug ticket — two
       // measurements the delivery metrics need and no event carried (PROGRESS backlog 179, 114).
       ...deliveryMeasureHandlers(options),

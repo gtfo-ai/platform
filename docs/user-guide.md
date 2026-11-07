@@ -772,6 +772,20 @@ what* lists it: the start, with the person who pressed it. Pressing **Start** tw
 The task page reads like a pull request: what the task is, where it is, and what you do now. It is
 live on that task's topic.
 
+**A task has an owner** (since S-26.1): one person of the project, a member or above. The owner
+follows the ticket's assignee when that assignee is a tracker account linked to a member of the
+project (*Settings → Linked accounts*, an administrator's mapping); an assignee the platform cannot link —
+an unlinked account, or a linked person below member — is kept as *assigned elsewhere* and the task
+has no owner, and the platform's own account or a machine account is nobody — it never takes a
+task from the person who owns it, so the platform claiming the ticket keeps its owner. A disabled
+account owns nothing. **The latest change wins**: a change of assignee in the tracker replaces an owner set on the platform, and an owner set
+on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
+nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
+nobody. Nothing is written to the tracker. The owner's computer gets the head start on the task's
+runs (*Settings → Execution*, below). The page and the board do not show the owner yet; the API does
+(`owner` on every task, `POST /api/tasks/:id/owner`, and `?owner=me` or `?owner=none` on a
+project's task list).
+
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
   platform never read the title), the task's state as a label with its icon — *Needs you* whenever
   something waits on a person, by the same rule as the board's column — and one line: links to the
@@ -1614,7 +1628,34 @@ administrator; anybody else who opens one of their addresses lands where *Settin
   window the server refuses says so under its own field.
 - **Users** — everybody with an account, with their role and whether they are active.
 - **Linked accounts** (*Provider identities* before) — which Slack, Jira or GitLab account is which
-  person, without which a decision made in those tools is refused as unmapped.
+  person, without which a decision made in those tools is refused as unmapped. An administrator can
+  also **unlink** an account here (the server half since S-26.6; the button comes with S-26.8a).
+
+**Linking your own Jira or GitLab account** (the server half since S-26.6; the *Your accounts*
+section of Settings is S-26.8a's, so today it is the API, technical/08's *Your accounts* row). A
+linked account can answer questions and approve plans from Jira or GitLab, so the platform never
+takes your word for which account is yours and never matches by email: it **proves** it.
+
+1. Ask for a code. It looks like `agentic-link-7K3Q9VDM2X`, is valid for 30 minutes and is shown
+   **once** — reloading the page asks for a new one, and asking voids the old one. At most five an
+   hour.
+2. Write it as a comment **from your own account**: on a ticket of a project you are in (Jira), or on
+   a merge request (GitLab — merge requests only, not issues). Do not edit the comment afterwards:
+   an edited comment, or one somebody else edited, links nobody.
+3. The platform reads the comment's author from the provider — from the webhook, or, on a project
+   with no webhook, when you name the ticket or merge request (*I wrote it on …*, only for a task of
+   a project where you are a member or above).
+4. It then **asks you**: *Link Jira account Dev One?*, with the provider and the account id beside
+   the name. Only your confirmation links it. The name is the provider's text: check the account id.
+
+If somebody else writes your code too — anyone who can read the ticket can copy it — the code links
+nobody, and you are told someone else used it: ask for a new one and post it where fewer people can
+see it. A comment written by the integration's own account, by an account an administrator declared
+a machine, or carrying the platform's own marker never links anybody, and an account already linked
+to another person is refused. Once linked, every task in progress that the tracker assigns to that
+account and that nobody owns becomes yours. You can unlink your own account at any time (tasks you
+own through it keep you as owner until the ticket's assignee changes); you can delete the comment
+once you are linked.
 - **Stuck events** (*Dead letters* before) — events the platform stopped retrying after their handler
   failed every attempt, each with a **Try again** button for once the fault is fixed (the operator
   guide's §9 says what a re-queue does and does not do). The newest come first, and **Show older**
@@ -1684,9 +1725,10 @@ does:
 - **If no worker takes it within …** / **If the platform server hasn't taken it within …** — with
   a preference, how long the first side has before the other may take the run too (the fallback):
   15 s when the server is preferred, 5 min when workers are, unless you choose another duration.
-- **Head start for the assignee's worker** — a worker of the person a question was asked by gets
-  this long (2 min by default) to take the run before anybody else, while that worker is online. A
-  ticket's assignee does not get it yet: the platform does not keep who a ticket is assigned to.
+- **Head start for the assignee's worker** — a worker of the task's **owner** (for a question, of
+  the person who asked it) gets this long (2 min by default) to take the run before anybody else,
+  while that worker is online and takes the project by itself (not *only what I pick*). The head
+  start is fixed when the run is offered: an owner changed later gets it from the next stage.
 - **Give up and ask a person after** — a run nobody takes within this long (a day by default) is
   withdrawn and its task goes to **Needs you** with the brief *no claimant took this run*; a
   question is answered as failed. Check the choice, and whether a worker or the platform server is
@@ -1894,6 +1936,8 @@ In one place, so it is not spread across thirteen sections:
 | The statistics the screen lists under *Not measured, and why* | statistics |
 | Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, New project step 1 |
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
+| Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
+| *Settings → Your accounts* — linking your own Jira or GitLab account in the browser (the server half is built, S-26.6; the screen is S-26.8a) | settings |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

@@ -65,6 +65,8 @@ const EXPECTED_ROLES: Record<PermissionAction, readonly UserRole[]> = {
   'task.feedback.create': MEMBER_UP,
   'task.ask': MEMBER_UP,
   'task.export': MEMBER_UP,
+  'task.owner.take': MEMBER_UP,
+  'task.owner.assign': MAINTAINER_UP,
 
   'artifact.read': ALL,
   'transcript.read': MEMBER_UP,
@@ -83,6 +85,7 @@ const EXPECTED_ROLES: Record<PermissionAction, readonly UserRole[]> = {
   'discovery.run': MAINTAINER_UP,
 
   'worker.register': ALL,
+  'identity.link': ALL,
 };
 
 describe('can — exhaustive role × action', () => {

@@ -1873,3 +1873,68 @@ describe('no line the adapter posts runs a quick action', () => {
     expect(bodyOf(calls, `POST /projects/${P}/merge_requests`, 'title')).toBe('/close the totals');
   });
 });
+
+/**
+ * S-26.6 (the review of PR #93): the account a note carrying a link code is checked against is
+ * `GET /user`, read **once** per adapter — as Jira's `/myself` is — not once per delivery.
+ */
+describe('the binding account a link code is checked against', () => {
+  const CODE = 'agentic-link-7K3Q9VDM2X';
+  const note = (id: number) => ({
+    object_kind: 'note',
+    user: { id: 77, name: 'Dana Reviewer', username: 'dana.reviewer' },
+    project: { id: 1, path_with_namespace: PROJECT, default_branch: 'main' },
+    object_attributes: {
+      id,
+      note: `my link ${CODE}`,
+      noteable_type: 'MergeRequest',
+      author_id: 77,
+      system: false,
+      created_at: '2026-06-01 07:30:00 UTC',
+      updated_at: '2026-06-01 07:30:00 UTC',
+      url: `${HOST}/${PROJECT}/-/merge_requests/16#note_${id}`,
+    },
+    merge_request: { id: 93, iid: 16, source_branch: 'agentic/task-1' },
+  });
+  const discussionNote = (id: number) => ({
+    id,
+    type: 'DiscussionNote',
+    body: `my link ${CODE}`,
+    author: { id: 77, username: 'dana.reviewer', name: 'Dana Reviewer' },
+    created_at: AT,
+    updated_at: AT,
+    system: false,
+    resolvable: true,
+    resolved: false,
+  });
+
+  it('asks GET /user once for two deliveries that carry a code', async () => {
+    const { port, calls } = build({
+      'GET /user': { status: 200, body: { id: 4242, username: 'agentic-bot', name: 'Bot' } },
+      [`GET /projects/${P}/merge_requests/16/discussions?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          { id: 'd1', individual_note: false, notes: [discussionNote(1301), discussionNote(1302)] },
+        ],
+      },
+    });
+    const context = {
+      projectId: '00000000-0000-4000-8000-0000000000b9',
+      integrationId: '00000000-0000-4000-8000-0000000000a9',
+      defaultBranch: 'main',
+      resolveUser: () => null,
+      resolveThread: async () => null,
+    };
+    const first = await port.inbound.normalise(
+      { headers: {}, body: JSON.stringify(note(1301)) },
+      context,
+    );
+    const second = await port.inbound.normalise(
+      { headers: {}, body: JSON.stringify(note(1302)) },
+      context,
+    );
+    expect(first.linkClaims?.[0]?.refusal).toBeNull();
+    expect(second.linkClaims?.[0]?.refusal).toBeNull();
+    expect(calls.filter((call) => call.method === 'GET' && call.path === '/user')).toHaveLength(1);
+  });
+});

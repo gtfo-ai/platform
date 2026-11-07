@@ -60,6 +60,8 @@ import {
   knowledgeProposalRecordSchema,
   pausedBudgetScopeSchema,
   questionRecordSchema,
+  taskOwnerSourceSchema,
+  taskOwnerViaSchema,
   taskTotalsSchema,
   workspaceRecordSchema,
 } from './records.js';
@@ -616,6 +618,28 @@ export const taskTicketRekeyedEvent = defineEvent('task.ticket.rekeyed', {
   ticket: ticketRefSchema,
   from_key: z.string().min(1).max(255),
   from_url: httpUrlSchema,
+});
+
+/**
+ * **The task's owner changed** (S-26.1, TD-031's 2026-11-06 amendment item 1), on the task's stream
+ * in the transaction that wrote `tasks.owner_user_id` — through the one narrow writer,
+ * `TaskRepository.saveOwner`, each change decided by a pure domain function
+ * (`packages/domain/src/tasks/owner.ts`). `owner_user_id` is the new owner (`null` is nobody) and
+ * `previous_owner_user_id` the one it replaced; `source` is who made the change (`tracker` for a
+ * sync of the ticket's assignee or a link adopting it, `platform` for a person's command or a pick)
+ * and `via` the path: `tracker_sync` (intake, a stage's re-read, the `owner_sync` duty), `command`
+ * (`POST /api/tasks/:id/owner`), `pick` (a worker's pick, S-26.4) or `link` (a newly linked identity
+ * adopting the owner, S-26.6). A tracker read that changes only the stored assignee — an unlinked
+ * person replaced by another — changes no owner and records nothing. The actor is the person for a
+ * command or a pick and the pipeline otherwise. An audit record today; S-26.3's write-back duty is
+ * its first consumer.
+ */
+export const taskOwnerChangedEvent = defineEvent('task.owner.changed', {
+  ...taskScoped,
+  owner_user_id: idSchema.nullable(),
+  previous_owner_user_id: idSchema.nullable(),
+  source: taskOwnerSourceSchema,
+  via: taskOwnerViaSchema,
 });
 
 /**
@@ -1202,6 +1226,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskRebaseCheckedEvent,
   taskConflictWarnedEvent,
   taskTicketRekeyedEvent,
+  taskOwnerChangedEvent,
   taskMergeRequestMeasuredEvent,
   ticketBugTracedEvent,
   taskBreakdownDecidedEvent,

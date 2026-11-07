@@ -32,6 +32,7 @@
  * that reports the wrong one.
  */
 import type {
+  Id,
   RunRecord,
   TaskAuditEntry,
   TaskDetailResponse,
@@ -46,6 +47,7 @@ import {
   taskDetailResponseSchema,
   taskExportResponseSchema,
 } from '@platform/contracts';
+import { ownerCapabilities } from '@platform/domain';
 import { redaction } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
@@ -704,5 +706,86 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_rework: 'task.rework',
       can_decide_approval: 'task.approve_plan',
     });
+  });
+});
+
+/**
+ * S-26.1 criterion 3: the owner control's three flags are the domain's `ownerCapabilities` — the
+ * matrix `POST /api/tasks/:id/owner` decides with — over the caller, their effective role and the
+ * task this read publishes (its owner, its state, and `unlinked_assignee`, non-null exactly when the
+ * ticket is held elsewhere). Asked over every role, owner and held-elsewhere case, so a flag wired
+ * to anything else fails here; and the export carries none of them.
+ */
+describe('GET /api/tasks/:task_id — the owner control (S-26.1)', () => {
+  let app: FastifyInstance;
+  let world: World;
+  const OTHER = '00000000-0000-4000-8000-0000000000d2';
+
+  beforeEach(async () => {
+    ({ app, world } = await build());
+  });
+
+  it('answers each flag exactly as the command’s matrix would', async () => {
+    for (const role of ['viewer', 'member', 'maintainer', 'admin'] as const) {
+      for (const owner of [null, USER, OTHER]) {
+        for (const held of [false, true]) {
+          for (const state of ['active', 'done'] as const) {
+            world.orgRole = 'viewer';
+            world.role = role;
+            world.detail = {
+              ...DETAIL,
+              task: {
+                ...DETAIL.task,
+                state,
+                owner: owner === null ? null : { user_id: owner as Id, name: 'Somebody' },
+                owner_source: owner === null ? null : 'platform',
+                unlinked_assignee: held ? { display_name: 'Jan Novák' } : null,
+                owner_writes_back: false,
+              },
+            };
+            const reply = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
+            expect(reply.statusCode, reply.body).toBe(200);
+            const body = reply.json() as Record<string, unknown>;
+            const label = `${role}/${String(owner)}/${String(held)}/${state}`;
+            expect(
+              {
+                can_take: body.can_take,
+                can_assign: body.can_assign,
+                can_unassign: body.can_unassign,
+              },
+              label,
+            ).toEqual(
+              ownerCapabilities({
+                actorUserId: USER as Id,
+                actorRole: role,
+                ownerUserId: owner as Id | null,
+                heldElsewhere: held,
+                taskState: state,
+              }),
+            );
+          }
+        }
+      }
+    }
+    // Calibrated (rule 6): the sweep met both answers of every flag.
+    world.role = 'member';
+    world.detail = { ...DETAIL, task: { ...DETAIL.task, owner: null, unlinked_assignee: null } };
+    const member = (await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` })).json() as {
+      can_take: boolean;
+      can_assign: boolean;
+    };
+    expect(member).toMatchObject({ can_take: true, can_assign: false });
+  });
+
+  it('keeps the owner control out of the export', async () => {
+    world.orgRole = 'viewer';
+    world.role = 'maintainer';
+    // A read that carried the three flags: the export must drop them, or its strict schema fails.
+    world.detail = { ...DETAIL, can_take: true, can_assign: true, can_unassign: true };
+    const exported = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}/export` });
+    expect(exported.statusCode, exported.body).toBe(200);
+    for (const key of ['can_take', 'can_assign', 'can_unassign']) {
+      expect(Object.hasOwn(exported.json() as object, key), key).toBe(false);
+    }
   });
 });

@@ -170,6 +170,7 @@ import {
   type RepositoryConfigColumns,
   repositorySnapshotFrom,
 } from './config-layers.js';
+import { composeIdentityLinkRecorder } from './identity-links.js';
 import { composeKnowledgeMirror } from './knowledge.js';
 import { composePlatformTools } from './platform-tools.js';
 import { createProductionAskPlanner, createProductionStagePlanner } from './run-planners.js';
@@ -667,6 +668,9 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
     logger: options.logger,
     rateLimit: options.rateLimit,
     jobs: options.jobs,
+    // S-26.6: a verified comment carrying a self-service link code records a match (never a link)
+    // in the delivery's transaction.
+    identityLinks: composeIdentityLinkRecorder({ pool: options.pool, logger: options.logger }),
   });
 
 const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;

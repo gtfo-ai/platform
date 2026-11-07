@@ -1525,6 +1525,11 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
   template: templateIdSchema.optional(),
   mode: taskModeSchema.optional(),
   stage: stageIdSchema.optional(),
+  /**
+   * The board's owner filter (S-26.1, the M26 UX spec § 3): `me`, the tasks the caller owns;
+   * `none`, the tasks nobody owns (`owner` is `null`, whoever the tracker names). Absent is everyone.
+   */
+  owner: z.enum(['me', 'none']).optional(),
 });
 
 /**
@@ -1873,6 +1878,26 @@ export const taskCallerFactsShape = {
   can_decide_approval: z.boolean(),
 } as const;
 
+/**
+ * **The owner control** the task read offers the caller (S-26.1, the M26 UX spec § 2): *Take it*,
+ * *Assign…* and *Unassign*. Not role-only like {@link taskCallerFactsShape} — each is the domain's
+ * `ownerCapabilities` over the caller, the task's owner and whether its ticket is held elsewhere,
+ * the same matrix `POST /api/tasks/:id/owner` decides with (`packages/domain/src/tasks/owner.ts`).
+ * A shape of its own for one reason: these are optional on the wire, because the SPA's fixtures
+ * predate them (its owner UI is S-26.8b), where every role-only fact is required. This build's
+ * server always sends all three, and the export drops them like every other caller fact.
+ */
+export const taskOwnerCallerFactsShape = {
+  can_take: z.boolean().optional(),
+  can_assign: z.boolean().optional(),
+  can_unassign: z.boolean().optional(),
+} as const;
+
+/** The keys of {@link taskOwnerCallerFactsShape}, which the export omits too. */
+export const TASK_OWNER_CALLER_FACT_KEYS = Object.keys(
+  taskOwnerCallerFactsShape,
+) as readonly (keyof typeof taskOwnerCallerFactsShape)[];
+
 /** The keys of {@link taskCallerFactsShape}, which the export omits. */
 export const TASK_CALLER_FACT_KEYS = Object.keys(
   taskCallerFactsShape,
@@ -1880,8 +1905,10 @@ export const TASK_CALLER_FACT_KEYS = Object.keys(
 export type TaskCallerFactKey = keyof typeof taskCallerFactsShape;
 
 const taskCallerFactsMask = Object.fromEntries(
-  TASK_CALLER_FACT_KEYS.map((key) => [key, true] as const),
-) as { readonly [K in TaskCallerFactKey]: true };
+  [...TASK_CALLER_FACT_KEYS, ...TASK_OWNER_CALLER_FACT_KEYS].map((key) => [key, true] as const),
+) as {
+  readonly [K in TaskCallerFactKey | (typeof TASK_OWNER_CALLER_FACT_KEYS)[number]]: true;
+};
 
 /**
  * The longest held-job name `gate_wait` carries, in characters — the CI gate's own bound on that
@@ -1925,6 +1952,7 @@ export const gateWaitSchema = z.strictObject({
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
   ...taskCallerFactsShape,
+  ...taskOwnerCallerFactsShape,
   /** The take-over in force, or `null` — see {@link takenOverSchema}. */
   taken_over: takenOverSchema.nullable(),
   /** Human minutes derived from events by the WP-29 projector; never summed with the USD. */
@@ -2143,6 +2171,16 @@ const requiredCommandTextSchema = nonEmptyStringSchema.max(MAX_COMMAND_TEXT_CHAR
 export const pauseTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const resumeTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const cancelTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
+/**
+ * `POST /api/tasks/:id/owner` — set the task's owner, or clear it (S-26.1, TD-031's 2026-11-06
+ * amendment item 3). `user_id` is the new owner, `null` is nobody. Who may set whom is the domain's
+ * `ownerChangePermitted` (`packages/domain/src/tasks/owner.ts`): a member takes an unassigned task
+ * or gives back their own, a maintainer sets anyone of the project or nobody.
+ */
+export const setTaskOwnerRequestSchema = z.strictObject({
+  user_id: idSchema.nullable(),
+});
+
 /** The largest figure `numeric(12,6)` holds — the ceiling of a task's own cap (WP-131). */
 export const MAX_TASK_CAP_USD = 999_999.999999;
 
@@ -2487,13 +2525,139 @@ export const identityMappingListSchema = z.strictObject({
 export const identityCandidateSchema = z.strictObject({
   provider: nonEmptyStringSchema,
   external_id: nonEmptyStringSchema,
-  /** How many refused deliveries named this account. */
-  deliveries: z.int().positive(),
+  /** How many refused deliveries named this account — `0` for an assignee seen only on tasks. */
+  deliveries: z.int().nonnegative(),
+  /**
+   * How many live tasks the tracker assigns to this unlinked account (S-26.6, read off S-26.1's
+   * `tasks.ticket_assignee`, never the platform's own account). Present only when it is at least 1.
+   */
+  assigned_tasks: z.int().positive().optional(),
+  /**
+   * The assignee's display name as the tracker last answered it, redacted and bounded at the write
+   * (untrusted, BD-022). Present only for an account seen as an assignee.
+   */
+  display_name: z.string().nullable().optional(),
   last_seen_at: isoDateTimeSchema,
 });
 
 export const identityCandidateListSchema = z.strictObject({
   items: z.array(identityCandidateSchema),
+});
+
+// ── A person links their own account, proven by the provider (S-26.6) ───────
+
+/**
+ * The self-service link code — `agentic-link-` and ten Crockford base32 characters, 50 bits (TD-031's
+ * 2026-11-06 amendment item 9). Answered **once**, by `POST /api/me/identity-links`; the platform
+ * stores only its SHA-256, so no read answers it again.
+ */
+export const LINK_CODE_SHAPE = /^agentic-link-[0-9A-HJKMNP-TV-Z]{10}$/;
+
+export const identityLinkCodeIssuedSchema = z.strictObject({
+  id: idSchema,
+  code: z.string().regex(LINK_CODE_SHAPE),
+  expires_at: isoDateTimeSchema,
+});
+
+/** Why a code stopped before its expiry. */
+export const identityLinkVoidReasonSchema = z.enum([
+  'replaced',
+  'second_author',
+  'identity_linked_elsewhere',
+]);
+
+/**
+ * One provider account a comment carrying the person's code proved — **a proposal, never a link**:
+ * only `POST …/matches/:match_id/confirm` links it. `display_name` is the provider's untrusted text
+ * (BD-022), shown beside `provider` and `external_id`, never resolved by.
+ */
+export const identityLinkMatchSchema = z.strictObject({
+  id: idSchema,
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  display_name: z.string().nullable(),
+  integration_id: idSchema,
+  /** The integration's name (`integrations.name`), or `null` when it is gone. */
+  integration_name: z.string().nullable(),
+  matched_at: isoDateTimeSchema,
+  confirmed_at: isoDateTimeSchema.nullable(),
+});
+
+/**
+ * `GET /api/me/identity-links`: the person's newest code — never the code itself — and what it
+ * matched. `status` is `live` until it is confirmed (`consumed`), voided or past `expires_at`.
+ */
+export const identityLinkStateSchema = z.strictObject({
+  code: z
+    .strictObject({
+      id: idSchema,
+      created_at: isoDateTimeSchema,
+      expires_at: isoDateTimeSchema,
+      status: z.enum(['live', 'expired', 'voided', 'consumed']),
+      /** Set for `voided`: `second_author` is *someone else used this code* — issue a new one. */
+      void_reason: identityLinkVoidReasonSchema.nullable(),
+    })
+    .nullable(),
+  matches: z.array(identityLinkMatchSchema),
+});
+
+/**
+ * `POST /api/me/identity-links/read` — *I wrote it on …*: the ticket key, or the merge request's
+ * iid, of a task in a project where the caller is `member` or above.
+ */
+export const identityLinkThreadRequestSchema = z.union([
+  z.strictObject({ project_id: idSchema, ticket_key: nonEmptyStringSchema.max(255) }),
+  z.strictObject({ project_id: idSchema, merge_request_iid: z.int().positive() }),
+]);
+
+export const identityLinkThreadResponseSchema = z.strictObject({
+  /** How many comments the read answered. */
+  comments: z.int().nonnegative(),
+  /** How many of them carried a link code. */
+  carried_code: z.int().nonnegative(),
+  /** How many new matches were recorded — `0` also when a match was already there. */
+  matched: z.int().nonnegative(),
+  state: identityLinkStateSchema,
+});
+
+/** `POST /api/me/identity-links/matches/:match_id/confirm` — the link it wrote. */
+export const identityLinkConfirmedSchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  display_name: z.string().nullable(),
+  user_id: idSchema,
+  /** `false` for a retry of a confirmation already performed. */
+  performed: z.boolean(),
+  /**
+   * The live tasks whose stored tracker assignee is this account and that nobody owned, which the
+   * link made the person's (`task.owner.changed`, `via: link`, S-26.1's `adoptOwnersOnLink`).
+   * Empty on a retry. When adoption fails partway it names the tasks adopted before the failure
+   * (logged; the link stands).
+   */
+  adopted_task_ids: z.array(idSchema),
+});
+
+/** One of the caller's own linked accounts (`GET /api/me/identities`). */
+export const myIdentitySchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  display_name: z.string().nullable(),
+  created_at: isoDateTimeSchema,
+});
+
+export const myIdentityListSchema = z.strictObject({
+  items: z.array(myIdentitySchema),
+});
+
+/** The answer of both unlinks — the person's own and an admin's. */
+export const identityUnlinkedSchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+});
+
+export const identityAccountParamsSchema = z.strictObject({
+  provider: nonEmptyStringSchema.max(64),
+  external_id: nonEmptyStringSchema.max(255),
 });
 
 /**
@@ -3646,6 +3810,13 @@ export type GateWait = z.infer<typeof gateWaitSchema>;
 export type TaskDetailRecord = Omit<TaskDetailResponse, TaskCallerFactKey>;
 export type TakenOver = z.infer<typeof takenOverSchema>;
 export type IdentityCandidate = z.infer<typeof identityCandidateSchema>;
+export type IdentityLinkCodeIssued = z.infer<typeof identityLinkCodeIssuedSchema>;
+export type IdentityLinkMatch = z.infer<typeof identityLinkMatchSchema>;
+export type IdentityLinkState = z.infer<typeof identityLinkStateSchema>;
+export type IdentityLinkThreadRequest = z.infer<typeof identityLinkThreadRequestSchema>;
+export type IdentityLinkThreadResponse = z.infer<typeof identityLinkThreadResponseSchema>;
+export type IdentityLinkConfirmed = z.infer<typeof identityLinkConfirmedSchema>;
+export type MyIdentity = z.infer<typeof myIdentitySchema>;
 export type RefusedDelivery = z.infer<typeof refusedDeliverySchema>;
 export type HumanTimeSummary = z.infer<typeof humanTimeSummarySchema>;
 export type HumanTimeByUser = z.infer<typeof humanTimeByUserSchema>;

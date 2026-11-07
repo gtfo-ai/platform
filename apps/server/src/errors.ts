@@ -25,6 +25,7 @@ import {
   IterationLimitReachedError,
   ModelNotListedError,
   NoGateFeedbackError,
+  OwnerChangeRefusedError,
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
@@ -215,6 +216,17 @@ export const commandRefusal = (error: unknown): HttpError | null => {
     // TD-035 decision 6: a plan is approved only as the plan the person was shown — mismatch,
     // superseded or unrecorded, each its own code so the page can say which.
     return new HttpError(409, error.code, error.message);
+  }
+  if (error instanceof OwnerChangeRefusedError) {
+    // S-26.1 (TD-031's 2026-11-06 amendment item 3): the matrix (403), the target's role (422)
+    // and a finished task (409) are three different sentences to the caller.
+    const status =
+      error.reason === 'owner_change_not_permitted'
+        ? 403
+        : error.reason === 'owner_not_project_member'
+          ? 422
+          : 409;
+    return new HttpError(status, error.reason, error.message);
   }
   if (error instanceof UnknownAggregateError) {
     return new HttpError(404, 'not_found', error.message);
