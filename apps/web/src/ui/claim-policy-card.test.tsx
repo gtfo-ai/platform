@@ -494,4 +494,54 @@ describe('the card on the Workers screen (S-26.8a’s props)', () => {
     expect(bare.className).not.toContain('border');
     expect(bare.className).not.toContain('bg-surface');
   });
+
+  it('onOpenChange: told true when Change opens, false when Change, Cancel or a save closes', async () => {
+    const onOpenChange = vi.fn((_open: boolean) => undefined);
+    const onSave = vi.fn(async (_next: ClaimPolicyValue) => undefined);
+    render(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine_and_unassigned', projectIds: null }}
+        projects={PROJECTS}
+        onSave={onSave}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    const user = userEvent.setup();
+    const change = screen.getByRole('button', { name: 'Change' });
+    // Nothing is said before a press: the card starts closed.
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await user.click(change);
+    expect(onOpenChange.mock.calls).toEqual([[true]]);
+    await user.click(change);
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+    await user.click(change);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onOpenChange.mock.calls).toEqual([[true], [false], [true], [false]]);
+    await user.click(change);
+    await user.click(screen.getByRole('radio', { name: 'Everything' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onOpenChange.mock.calls.at(-1)).toEqual([false]));
+    expect(onOpenChange.mock.calls).toEqual([[true], [false], [true], [false], [true], [false]]);
+  });
+
+  it('onOpenChange: a refused save keeps the controls open and says nothing', async () => {
+    const onOpenChange = vi.fn((_open: boolean) => undefined);
+    render(
+      <ClaimPolicyCard
+        stored={{ policy: 'mine_and_unassigned', projectIds: null }}
+        projects={PROJECTS}
+        onSave={async () => {
+          throw new Error('refused');
+        }}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Change' }));
+    await user.click(screen.getByRole('radio', { name: 'Everything' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('refused')).toBeTruthy();
+    expect(onOpenChange.mock.calls).toEqual([[true]]);
+  });
 });

@@ -642,16 +642,23 @@ describe('the Workers screen', () => {
     expect(reads.workers).toBeGreaterThan(first);
   });
 
-  it('shows each worker’s claim scope, read only: every project, pick only, named projects (WP-293)', async () => {
+  it('says what each worker takes in one sentence from the stored setting: every project, a legacy pick only, named projects (WP-293, S-26.8a)', async () => {
     const every = worker();
     const pickOnly = worker({
       id: '00000000-0000-4000-8000-0000000002c1',
       name: 'gil-laptop',
       claim_projects: [],
     });
+    // Somebody else's machine, read only: a stored project the reader cannot see is named by its
+    // key, and one that no longer exists as *a removed project* (WP-293's words, kept).
     const named = worker({
       id: '00000000-0000-4000-8000-0000000002c2',
       name: 'hana-desktop',
+      user: {
+        id: '00000000-0000-4000-8000-0000000000f9',
+        email: 'hana@example.invalid',
+        name: 'Hana',
+      },
       claim_projects: [
         { id: '00000000-0000-4000-8000-0000000002d1', key: 'ACME' },
         { id: '00000000-0000-4000-8000-0000000002d2', key: null },
@@ -660,16 +667,21 @@ describe('the Workers screen', () => {
     const { fetchImpl, sent } = fetchFor('missing', [every, pickOnly, named]);
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
     await waitFor(() => {
-      expect(container.querySelectorAll('[data-worker]')).toHaveLength(3);
+      expect(container.querySelectorAll('[data-claim-policy-sentence]')).toHaveLength(3);
     });
-    const scopeOf = (id: string) =>
-      container.querySelector(`[data-worker="${id}"] [data-claim-scope]`)?.textContent;
-    expect(scopeOf(every.id)).toBe('Takes runs of every project');
-    expect(scopeOf(pickOnly.id)).toBe('Takes only runs its owner picks');
-    expect(scopeOf(named.id)).toBe('Takes runs of ACME, a removed project');
-    // Read only: the screen offers no way to change it.
+    const sentenceOf = (id: string) =>
+      container.querySelector(`[data-worker="${id}"] [data-claim-policy-sentence]`)?.textContent;
+    // No `claim_policy` on the wire (a fixture older than S-26.4): `everything`, or `pick_only`
+    // for a legacy `[]` scope — and that `[]` narrows no project.
+    expect(sentenceOf(every.id)).toBe('This machine takes every task, in all your projects.');
+    expect(sentenceOf(pickOnly.id)).toBe(
+      'This machine takes nothing by itself. You pick runs on its page.',
+    );
+    expect(sentenceOf(named.id)).toBe(
+      'This machine takes every task, in ACME and a removed project.',
+    );
+    expect(container.querySelector('[data-claim-scope]')).toBeNull();
     expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
-    expect(screen.queryByRole('button', { name: /scope/i })).toBeNull();
   });
 
   it('shows a usage pause in the organisation’s zone, *about* for a default one, and a past one as none (WP-285)', async () => {

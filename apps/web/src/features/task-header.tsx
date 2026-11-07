@@ -23,7 +23,9 @@
  *   subject-less approve dialog), *Raise this task's cap…* for a task its own cap paused
  *   when the caller may raise it, *Start the job in GitLab* — a link to the held job's page (or
  *   its pipeline's) — while the CI check waits on a manual job (S-25.12), *Resume* for a paused
- *   or escalated task — or none.
+ *   or escalated task — or none. A task stopped because its ticket is somebody else's (S-25.14)
+ *   has no *Resume* here: the callout's *Take it* is the page's one primary when the reader may
+ *   take it, and there is none otherwise (`./ticket-held-elsewhere.tsx`).
  *   Everything else is in the `···` menu, and a command with fields or no undo opens a dialog
  *   (`./task-dialogs.tsx`).
  *
@@ -91,6 +93,7 @@ import { answerInputId } from './task-callout.js';
 import type { TaskDialog } from './task-dialogs.js';
 import { type OwnerControl, OwnerFeedback, OwnerLine, OwnerMenuItems } from './task-owner.js';
 import { TicketClaimAndQa } from './ticket-claim.js';
+import { heldElsewhereStop } from './ticket-held-words.js';
 import { waitingLong, waitingPlain } from './waiting-words.js';
 
 /** The header's one primary action. */
@@ -125,6 +128,12 @@ export const taskPrimaryAction = (input: {
   readonly canResume?: boolean;
   /** The CI check waits on a held manual job whose page (or pipeline's) the page can link. */
   readonly ciHeldLink?: boolean;
+  /**
+   * The task stopped because its ticket is somebody else's (S-25.14, `heldElsewhereStop`): a
+   * resume would only stop it again, so the header offers none as its primary — the callout's
+   * *Take it* is the one, when the reader may take it.
+   */
+  readonly heldElsewhere?: boolean;
 }): TaskPrimaryAction => {
   if (input.canHandBack) {
     return 'hand_back';
@@ -140,6 +149,9 @@ export const taskPrimaryAction = (input: {
   }
   if (input.ciHeldLink === true) {
     return 'start_job';
+  }
+  if (input.heldElsewhere === true) {
+    return null;
   }
   return input.canResume !== false && (input.state === 'paused' || input.state === 'needs_human')
     ? 'resume'
@@ -211,6 +223,7 @@ export const TaskHeader = ({
     canDecide: detail.can_decide_approval,
     canResume: detail.can_resume,
     ciHeldLink: heldJobUrl !== null,
+    heldElsewhere: heldElsewhereStop(detail),
   });
   const needsYouInput = {
     state: task.state,

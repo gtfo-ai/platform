@@ -255,13 +255,26 @@ moved at that point, and the stage still runs.
 Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it
 off): before a task's first run the platform assigns the ticket to the tracker integration's own
 account, moves it to *In progress* if that slot is mapped, and reads the ticket again. If somebody
-else holds the ticket, the task stops in **Needs you** with the reason *assigned elsewhere* (its callout
-says who holds it and what to do, under *Why it stopped*), no run
+else holds the ticket, the task stops in **Needs you** with the reason *assigned elsewhere* — its callout
+says whose ticket it is (*"AUT-6676 is assigned in Jira to Vojtěch Kaizr, so no agent started on it."*, and
+that they aren't a linked member of this project when the platform cannot hand them the task) and offers the ways out in the box:
+**Take it** or **Assign…** (the same confirmation as the header's, which says when Jira is assigned too),
+**Link account…** for an administrator, **Open in Jira** and **Cancel task…**. Taking or assigning the task does
+not change the Jira assignee by itself, so **Give it back to the agent** (which runs the stage again) appears only
+once Jira no longer shows the other person: until then the callout says the owner is being assigned in Jira (when
+the project writes owners back), or that the ticket must be assigned or unassigned there first. The platform's own account of the stop is under
+*Details* (since S-25.14). No run
 starts, and the platform posts one comment on the ticket — *"The agent did not start work on this
 ticket: it is assigned to somebody else. A maintainer has been asked who should take it."* While
 claiming, a ticket already assigned to a person is not started at all, unless you tick **Also start
 tickets already assigned to a person**. On cancel or rework the platform unassigns itself (and moves
 the ticket back to *Pick up from*, if mapped).
+
+A third switch, **Assign the owner in the tracker** (off unless you tick it; since S-26.8a), writes a
+task's owner back to the ticket: *"When someone takes or is assigned a task here, also assign the
+ticket to them in Jira. Only people who linked their Jira account are assigned there."* It is saved
+with the rest of the lifecycle, and like the slots it is a maintainer's (section 4, *Task
+detail*, says what it writes and what it never does).
 
 **A ticket assigned to a member of the project stays theirs** (since S-26.2). When the assignee is a
 tracker account linked to a member (or above) of the project (*Settings → Linked accounts*), the
@@ -805,7 +818,7 @@ account owns nothing. **The latest change wins**: a change of assignee in the tr
 on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
 nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
 nobody. By default nothing is written to the tracker. **A project can opt in to writing the owner
-back** (since S-26.3; the tracker binding's `lifecycle.assign_owner`, Jira only): then an owner set on
+back** (since S-26.3; the ticket lifecycle's switch **Assign the owner in the tracker**, Jira only): then an owner set on
 the platform — by a maintainer, or by a person picking the task on their own machine — is also
 assigned the ticket in Jira, through their linked Jira account. Giving a task back writes nothing (the
 platform never unassigns a person), an owner with no linked Jira account gets no write, a change made
@@ -1943,9 +1956,18 @@ because it has an older build or speaks an older version — says *Updating now�
 not as a fault: its updater brings it up to date by itself, usually within a minute or two, and there
 is nothing to do (re-running the installer is a repair and changes no images). The header counts it
 as *updating*, and Home, the wizard's *Ready to work* and a project's execution settings say the same. Then its owner, *Last took work 5 m ago* (or *Has
-not taken work yet*), what it takes by itself (*Takes runs of every project*, *Takes only runs its
-owner picks* or the projects' keys), and how many of its run slots are busy (*1 of 2 busy*);
-**Details** holds when it was registered and last seen, its worker version and the image digests it
+not taken work yet*), and how many of its run slots are busy (*1 of 2 busy*). Under that, **What this
+machine takes** says the machine's setting in the same sentence as its own page (*What a machine
+takes*, below): on your own machine with **Change**, the same two choices and **Save**; on somebody
+else's — an administrator sees every machine — with their name (*This machine takes **only Vojtěch's
+tasks**, in **all their projects**.*) and nothing to press, because only a machine's owner changes it.
+On your own machine, under *Only my tasks*, the card warns *Unassigned tasks in Autix have nowhere to
+run.* for each project where neither the platform server nor any other machine — your others included —
+takes unassigned tasks by itself, as the machine's own page does; the screen asks once you press
+**Change**, so before that, when the platform did not answer, and on somebody else's machine it says
+nothing. A muted *Skipped 3 runs this machine doesn't take* counts the waiting runs its choice leaves
+for others. **Details**
+holds when it was registered and last seen, its worker version and the image digests it
 reported. The header counts *2 ready · 1 can't take work · 1 revoked*. The page refreshes by itself
 every 15 seconds while it is open. **Revoke** opens a dialog that says what it does before anything
 happens: the machine's credential stops at its next call, any run it holds is ended by the lease
@@ -2103,8 +2125,6 @@ In one place, so it is not spread across thirteen sections:
 | Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, New project step 1 |
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
 | Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
-| Choosing which tasks a machine takes on the Workers screen (the machine's own page has it; the Workers screen still shows the projects only, S-26.8a) | Workers screen |
-| The card's warning *Unassigned tasks in Autix have nowhere to run.* on the Workers screen (the machine's own page says it since BACKLOG 1456) | Workers screen |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

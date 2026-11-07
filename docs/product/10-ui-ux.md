@@ -117,6 +117,32 @@ the return's row does not record. A timed-out check whose attempt recorded no re
 finish in the time the platform waits for it", followed by the sentence the platform recorded; since S-25.12 every
 other waiting or timed-out check is worded from its read, as above.
 
+*Amended 2026-11-07 (product owner, AUT-6676, AUT-6795, AUT-6746, S-25.14).* **A task that stopped because its
+ticket is someone else's says whose it is, and offers the ways out in the box.** The escalation's reason is the key
+`ticket_assigned_elsewhere`. The callout leads with one sentence built from the task's `tracker_assignee`
+(`unlinked_assignee` for the name when the person isn't linked), never from the recorded brief. The brief stays under
+*Details*, the same as for every structured stop.
+- The sentence: "AUT-6676 is assigned in Jira to *Vojtěch Kaizr*, so no agent started on it." If the person has no
+  linked platform account, it adds "*Vojtěch Kaizr* has no linked platform account." If the platform knows no name,
+  it says "is assigned in Jira to someone else". The name is untrusted text.
+- The ways out, in the box, each offered only to whoever may use it:
+  - *Take it* or *Assign…*, through the header's one owner control, so the tracker write-back confirmation applies;
+  - *Link account…* (administrators, unlinked person only);
+  - *Open in Jira*;
+  - *Cancel task*.
+  After an owner is set, the next step is *Hand back*. One amber primary: *Take it* when the reader may take it,
+  otherwise none.
+- On the board card, and on Home and the Inbox rows, the short form is "Waiting for: Vojtěch Kaizr's Jira ticket".
+
+*S-25.14's wording (review of #115, 2026-11-07).* The read cannot tell a person with no linked account from a linked
+one below *member* (both have no `user_id`), so the added sentence is "*Vojtěch Kaizr* isn't a linked member of this
+project.", which is true of both. *Hand back* is the existing *Resume*, worded *Give it back to the agent*, and it is
+offered only once the tracker no longer shows the other person (`unlinked_assignee` is empty): taking or assigning the
+task does not change the ticket's assignee by itself, and the claim reads it again, so a hand-back before then stops
+the task again. Until then the box says what must happen first: "Jira is being assigned to *Petra*; give it back to
+the agent once it is." when owners are written back, otherwise "Jira still shows *Vojtěch Kaizr*: assign or unassign
+the ticket there first, or the agent stops again."
+
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.
 - *Amended 2026-11-06 (M25).* While a run is live, watching is the job: *Cancel run* is a danger secondary, never the

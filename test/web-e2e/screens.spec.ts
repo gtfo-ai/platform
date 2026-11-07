@@ -9,8 +9,10 @@
 import { expect, test } from '@playwright/test';
 import {
   AUT_6655_JOB_URL,
+  AUT_6676_URL,
   CANDIDATE_NAME,
   failedJobs,
+  HELD_ELSEWHERE_ASSIGNEE,
   HOSTILE,
   IDS,
   identityLinkIssued,
@@ -1174,6 +1176,64 @@ test('a CI check held at a manual job says what it waits for, and its timeout fr
   await expect(parked.getByRole('button', { name: 'Retry stage…' })).toBeVisible();
   await expect(parked.getByText(/What the platform saw last/)).toHaveCount(0);
   await expect(parked.getByText(/poll-only|ci_timeout_minutes|CI failed/)).toHaveCount(0);
+});
+
+/**
+ * S-25.14 (product/10's Task detail amendment of 2026-11-07), AUT-6676's shape: the task stopped
+ * because its Jira ticket is assigned to Vojtěch Kaizr, whom the platform cannot link. The callout
+ * says whose ticket it is — from the record, not the brief — with the ways out in the box, *Take it*
+ * the page's one amber primary, and the brief under *Details*. *Take it* writes the assignment
+ * back, so it asks once, through the header's own confirmation.
+ */
+test('a ticket someone else holds says whose it is, with the ways out in the box (S-25.14)', async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskHeldElsewhere}`);
+  await expect(
+    page.getByRole('heading', { level: 1, name: /Export invoices as CSV/ }),
+  ).toBeVisible();
+  const needs = page.getByRole('region', { name: 'Needs you' });
+  await expect(needs.locator('[data-held-sentence]')).toHaveText(
+    `AUT-6676 is assigned in Jira to ${HELD_ELSEWHERE_ASSIGNEE}, so no agent started on it. ${HELD_ELSEWHERE_ASSIGNEE} isn’t a linked member of this project.`,
+  );
+  // The ways out, for an administrator: the owner control's two, Link account…, the ticket, Cancel.
+  const steps = needs.locator('[data-held-steps]');
+  await expect(steps.getByRole('button', { name: 'Take it' })).toBeVisible();
+  await expect(steps.getByRole('button', { name: 'Assign…' })).toBeVisible();
+  await expect(steps.getByRole('link', { name: 'Link account…' })).toHaveAttribute(
+    'href',
+    '/settings/identities',
+  );
+  await expect(steps.getByRole('link', { name: 'Open in Jira' })).toHaveAttribute(
+    'href',
+    AUT_6676_URL,
+  );
+  await expect(steps.getByRole('button', { name: 'Cancel task…' })).toBeVisible();
+  // One amber primary, and it is the box's Take it: the header offers no Resume.
+  const primaries = page.locator('main [class~="border-primary-line"]');
+  await expect(primaries).toHaveCount(1);
+  await expect(primaries).toHaveText('Take it');
+  // The brief, collapsed.
+  const details = needs.locator('details[data-escalation-details]');
+  await expect(details.locator('summary')).toHaveText('Details');
+  await expect(details).not.toHaveAttribute('open');
+  await details.locator('summary').click();
+  await expect(details.getByText(/the ticket is assigned to somebody other than/)).toBeVisible();
+
+  // Take it, written back to Jira: one confirmation, the header's, naming whom it replaces.
+  await steps.getByRole('button', { name: 'Take it' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Take AUT-6676?' });
+  await expect(dialog).toContainText(
+    `This also assigns AUT-6676 in Jira to you, replacing ${HELD_ELSEWHERE_ASSIGNEE}.`,
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await dialog.getByRole('button', { name: 'Take it and assign in Jira' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const taken = (await commandLog(request)).filter((entry) => entry.path.endsWith('/owner'));
+  expect(taken).toEqual([
+    { path: `/api/tasks/${IDS.taskHeldElsewhere}/owner`, body: { user_id: IDS.user } },
+  ]);
 });
 
 test('the epic split’s breakdown panel accepts a chosen child with one request (WP-44)', async ({

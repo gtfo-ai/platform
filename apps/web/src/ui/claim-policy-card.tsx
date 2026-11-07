@@ -24,8 +24,9 @@
  *   ({@link claimPolicyRefusalWords}), never the core's text, which names ids.
  * - **Reused on the Workers screen** (S-26.8a): `ownerName` makes the sentence somebody else's
  *   ("Vojtěch’s tasks", "Vojtěch picks"), `surface: 'workers'` words *Only what I pick*'s help for a
- *   page that is not the machine's own, `headingLevel` sets the heading, and `framed={false}` drops
- *   the card's own frame so it can sit inside another card or a row.
+ *   page that is not the machine's own, `headingLevel` sets the heading, `framed={false}` drops
+ *   the card's own frame so it can sit inside another card or a row, and `onOpenChange` tells the
+ *   caller when *Change* opens or closes the controls (the screen asks its evidence then).
  *
  * **Presentational**: props in, callbacks out. It asks nobody anything; the draft and the
  * open/closed state are the only state it keeps. Every project name is untrusted text (BD-022) and
@@ -87,6 +88,12 @@ export interface ClaimPolicyCardProps {
    * inside a settings card or a row. Default `true`.
    */
   readonly framed?: boolean;
+  /**
+   * Told when *Change* opens the controls (`true`) and when *Change*, *Cancel* or a save that
+   * resolved closes them (`false`) — the Workers screen asks the evidence for the consequence line
+   * only once they open (S-26.8a). Optional: the worker's page passes none.
+   */
+  readonly onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -201,6 +208,7 @@ export const ClaimPolicyCard = ({
   surface = 'worker',
   headingLevel: Heading = 'h2',
   framed = true,
+  onOpenChange,
 }: ClaimPolicyCardProps): ReactElement => {
   const id = useId();
   const section = useRef<HTMLElement>(null);
@@ -241,6 +249,7 @@ export const ClaimPolicyCard = ({
       setDraft(null);
       setSaved(true);
       setError(null);
+      onOpenChange?.(false);
     } catch (caught) {
       setError(claimPolicyRefusalWords(caught) ?? (caught as Error).message);
     } finally {
@@ -312,6 +321,7 @@ export const ClaimPolicyCard = ({
             onClick={() => {
               if (draft) {
                 setDraft(null);
+                onOpenChange?.(false);
                 return;
               }
               focusNext.current = 'draft';
@@ -325,6 +335,7 @@ export const ClaimPolicyCard = ({
               });
               setSaved(false);
               setError(null);
+              onOpenChange?.(true);
             }}
           >
             {W.change}
@@ -417,6 +428,7 @@ export const ClaimPolicyCard = ({
               onClick={() => {
                 focusNext.current = 'change';
                 setDraft(null);
+                onOpenChange?.(false);
               }}
             >
               {W.cancel}
