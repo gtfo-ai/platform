@@ -33,6 +33,7 @@ import {
   type RunPackage,
   runPackageSchema,
   WORKER_API_PREFIX,
+  WORKER_CLAIM_SCOPE_TAKERS_QUERY,
   WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
@@ -177,9 +178,13 @@ export interface CoreClient {
   pause(credential: string, body: unknown): Promise<void>;
   /**
    * The claim scope and the projects it may name (WP-293, protocol 3) — and, at protocol 4
-   * (S-26.4), the claim policy and `policy_skipped_offers`.
+   * (S-26.4), the claim policy and `policy_skipped_offers`. With `takers` (BACKLOG 1456) it asks
+   * `?fields=unassigned_has_taker`; a core before it ignores the query and sends no field.
    */
-  claimScope(credential: string): Promise<z.output<typeof workerClaimScopeResponseSchema>>;
+  claimScope(
+    credential: string,
+    takers?: boolean,
+  ): Promise<z.output<typeof workerClaimScopeResponseSchema>>;
   /**
    * Set the claim scope (WP-293): `{ claim_project_ids, claim_policy? }`, a state assertion; the
    * core refuses `[]` at protocol 4 (`422 claim_scope_empty`: *pick only* is `claim_policy`).
@@ -466,11 +471,12 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
       });
       if (answer.status !== 204) throw refusal(WORKER_PATHS.updateReport, answer, false);
     },
-    claimScope: (credential) =>
+    claimScope: (credential, takers = false) =>
       expect(
         {
           method: 'GET',
           verb: WORKER_PATHS.claimScope,
+          ...(takers ? { query: WORKER_CLAIM_SCOPE_TAKERS_QUERY } : {}),
           bearer: credential,
           body: null,
           runScoped: false,

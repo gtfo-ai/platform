@@ -27,11 +27,15 @@ const recording = (status: number, body: unknown) => {
 };
 
 describe('the local client (S-26.7)', () => {
-  it('reads the claim scope in the policy’s vocabulary', async () => {
+  it('reads the claim scope in the policy’s vocabulary, asking for the takers by name (backlog 1456)', async () => {
     const { calls, client } = recording(200, SCOPE);
     await client.claimScope();
-    expect(CLAIM_SCOPE_POLICY_READ).toBe('claim-scope?vocabulary=policy');
-    expect(calls[0]?.url).toBe('/api/local/claim-scope?vocabulary=policy');
+    expect(CLAIM_SCOPE_POLICY_READ).toBe(
+      'claim-scope?vocabulary=policy&fields=unassigned_has_taker',
+    );
+    expect(calls[0]?.url).toBe(
+      '/api/local/claim-scope?vocabulary=policy&fields=unassigned_has_taker',
+    );
     expect(calls[0]?.init.method).toBe('GET');
   });
 

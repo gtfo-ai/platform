@@ -12,7 +12,11 @@
  *   when it did not), and `offer_not_claimable` in the page's; the list's `as_of` goes back with
  *   every pick;
  * - every untrusted string renders as text; a blocked worker cannot press; the list is polled every
- *   10 s **only while the page is visible**.
+ *   10 s **only while the page is visible**;
+ * - **the consequence line** (BACKLOG 1456) from the read's `unassigned_has_taker`: said for *Only
+ *   my tasks* where nobody else takes a project's unassigned tasks, and nowhere else — not for *My
+ *   tasks and unassigned ones*, not for an unknown answer, not where a taker exists — and kept
+ *   across a save, whose read-back does not carry it.
  */
 import type {
   WorkerClaimPolicy,
@@ -86,7 +90,9 @@ const fakeClient = (initial: {
         claim_policy: policy,
         claim_project_ids: ids === null ? null : [...ids].sort(),
       };
-      return scope;
+      // The worker's read-back after a save never carries the takers (backlog 1456).
+      const { unassigned_has_taker: _readBack, ...answer } = scope;
+      return answer;
     }),
     offers: vi.fn(async () => ({ offers, as_of: AS_OF })),
     take: vi.fn(async (runId: string, _asOf?: string) => {
@@ -141,6 +147,69 @@ const rowOf = async (container: HTMLElement, runId: string): Promise<Element> =>
     expect(row).not.toBeNull();
     return row as Element;
   });
+
+describe('the consequence line on the machine’s page (backlog 1456)', () => {
+  const NOWHERE = /have nowhere to run/;
+  const withTakers = (
+    policy: WorkerClaimPolicy,
+    takers?: Readonly<Record<string, boolean>>,
+  ): WorkerLocalClaimScope => ({
+    ...SCOPE,
+    claim_policy: policy,
+    ...(takers === undefined ? {} : { unassigned_has_taker: { ...takers } }),
+  });
+  /** Renders the page over `scope` and waits for the card's sentence (the read answered). */
+  const shown = async (scope: WorkerLocalClaimScope) => {
+    const view = renderPick(fakeClient({ scope }));
+    await waitFor(() =>
+      expect(view.container.querySelector('[data-claim-policy-sentence]')).not.toBeNull(),
+    );
+    return view;
+  };
+
+  it('says it for Only my tasks, naming the projects nobody else takes unassigned tasks of', async () => {
+    await shown(withTakers('mine', { [ACME]: false, [OPS]: true }));
+    expect(screen.getByText(NOWHERE).textContent).toBe(
+      'Unassigned tasks in Acme storefront have nowhere to run.',
+    );
+  });
+
+  it('says nothing for My tasks and unassigned ones, whatever the answer', async () => {
+    await shown(withTakers('mine_and_unassigned', { [ACME]: false, [OPS]: false }));
+    expect(screen.queryByText(NOWHERE)).toBeNull();
+  });
+
+  it('says nothing for an unknown answer: no field (an older core), or no key for the project', async () => {
+    await shown(withTakers('mine'));
+    expect(screen.queryByText(NOWHERE)).toBeNull();
+    cleanup();
+    await shown(withTakers('mine', { [OPS]: true }));
+    expect(screen.queryByText(NOWHERE)).toBeNull();
+  });
+
+  it('says nothing where another taker exists', async () => {
+    await shown(withTakers('mine', { [ACME]: true, [OPS]: true }));
+    expect(screen.queryByText(NOWHERE)).toBeNull();
+  });
+
+  it('says it for the draft, and keeps it after a save whose read-back does not carry the answer', async () => {
+    const client = fakeClient({ scope: withTakers('mine_and_unassigned', { [ACME]: false }) });
+    renderPick(client);
+    await userEvent.click(await screen.findByRole('button', { name: 'Change' }));
+    expect(screen.queryByText(NOWHERE)).toBeNull();
+    await userEvent.click(screen.getByLabelText(/^Only my tasks/));
+    expect(screen.getByText(NOWHERE).textContent).toBe(
+      'Unassigned tasks in Acme storefront have nowhere to run.',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Saved · applies to the next run')).toBeTruthy();
+    const answer = await client.setClaimScope.mock.results[0]?.value;
+    expect(answer).not.toHaveProperty('unassigned_has_taker');
+    expect(screen.getByText(NOWHERE).textContent).toBe(
+      'Unassigned tasks in Acme storefront have nowhere to run.',
+    );
+  });
+});
 
 describe('what this machine takes, on its page (S-26.7)', () => {
   it('reads the stored setting: a pick only machine’s projects as stored, and an older core', () => {

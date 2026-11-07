@@ -100,9 +100,11 @@ export class LocalCallError extends Error {
 
 /**
  * The claim-scope read in the policy's vocabulary (S-26.7): a *pick only* machine's projects come
- * back as stored. Without it the worker answers an older cached page's `[]` (`page-scope.ts`).
+ * back as stored. Without it the worker answers an older cached page's `[]` (`page-scope.ts`). And
+ * `fields=unassigned_has_taker` (BACKLOG 1456): the core's per-project answer the consequence line
+ * reads, asked by name so a page built before it is never sent the key.
  */
-export const CLAIM_SCOPE_POLICY_READ = 'claim-scope?vocabulary=policy';
+export const CLAIM_SCOPE_POLICY_READ = 'claim-scope?vocabulary=policy&fields=unassigned_has_taker';
 
 export interface LocalClient {
   state(): Promise<WorkerLocalState>;

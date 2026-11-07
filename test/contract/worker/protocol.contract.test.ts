@@ -47,6 +47,7 @@ import {
   runPackageSchema,
   type UserRole,
   WORKER_API_PREFIX,
+  WORKER_CLAIM_SCOPE_TAKERS_QUERY,
   WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_VERSION,
@@ -235,6 +236,11 @@ const world = async (
     readonly maxTranscriptEntries?: number;
     /** `APP_BASE_URL`; absent, `https://core.example.test`. */
     readonly baseUrl?: string;
+    /** `GET claim-scope?fields=unassigned_has_taker`'s answer (backlog 1456); absent, `null`. */
+    readonly unassignedTakers?: (
+      workerId: Id,
+      projectIds: readonly Id[],
+    ) => Promise<ReadonlyMap<string, boolean>>;
   } = {},
 ): Promise<World> => {
   const store = createMemoryWorkerStore();
@@ -503,6 +509,9 @@ const world = async (
       holds: { claimMs: 30, heartbeatMs: 30, claimPollMs: 10 },
       // WP-293: the offers' names, the package's display block for every task.
       offerDisplays: async (taskIds) => new Map(taskIds.map((taskId) => [taskId, DISPLAY])),
+      // The database's answer is PostgreSQL's (`offer-waiting.integration.test.ts`); `null`
+      // here, so a test that does not pass one is never sent the field.
+      unassignedTakers: options.unassignedTakers ?? null,
     },
   });
   opened = app;
@@ -2061,6 +2070,55 @@ describe('the worker protocol (WP-293): protocol 3, the claim scope and take thi
     expect(w.store.worker(w.alice.workerId)?.claimPolicy).toBe('mine_and_unassigned');
     // Bob's worker is his own: Alice's scope is not his.
     expect(w.store.worker(w.bob.workerId)?.claimProjects).toBeNull();
+  });
+
+  it('sends unassigned_has_taker only to a protocol-4 worker that asks, asked for that worker and keyed by the listed projects (backlog 1456)', async () => {
+    const asked: { workerId: Id; projectIds: readonly Id[] }[] = [];
+    const w = await world({
+      unassignedTakers: async (workerId, projectIds) => {
+        asked.push({ workerId, projectIds });
+        // A project the read does not list is never sent, whatever the answer names.
+        return new Map([
+          [PROJECT, false],
+          [ELSEWHERE, true],
+        ]);
+      },
+    });
+    const takersUrl = `${url(WORKER_PATHS.claimScope)}?${WORKER_CLAIM_SCOPE_TAKERS_QUERY}`;
+    const read = async (path: string, headers = bearer(w.alice.credential)) => {
+      const response = await w.app.inject({ method: 'GET', url: path, headers });
+      expect(response.statusCode).toBe(200);
+      return response.json();
+    };
+    // A worker built before the field parses strictly and never asks: it is never sent the key,
+    // and the core does not compute it.
+    const strictBefore = workerClaimScopeResponseSchema.omit({ unassigned_has_taker: true });
+    expect(strictBefore.safeParse(await read(url(WORKER_PATHS.claimScope))).success).toBe(true);
+    expect(asked).toEqual([]);
+    // Nor at protocol 3, asked or not.
+    const v3 = await read(takersUrl, { authorization: `Bearer ${w.alice.credential}`, ...V3 });
+    expect(v3).not.toHaveProperty('unassigned_has_taker');
+    expect(asked).toEqual([]);
+    // Asked: for the asking worker, over the projects the read lists, and only those keys.
+    const answer = workerClaimScopeResponseSchema.parse(await read(takersUrl));
+    expect(answer.unassigned_has_taker).toEqual({ [PROJECT]: false });
+    expect(asked).toEqual([{ workerId: w.alice.workerId, projectIds: [PROJECT] }]);
+    // Another `fields` value beside it still asks; Bob's worker is asked about as itself.
+    await read(`${takersUrl},held_elsewhere`, bearer(w.bob.credential));
+    expect(asked.at(-1)?.workerId).toBe(w.bob.workerId);
+  });
+
+  it('a core composed without the answer sends no unassigned_has_taker even when asked — unknown (backlog 1456)', async () => {
+    const w = await world();
+    const response = await w.app.inject({
+      method: 'GET',
+      url: `${url(WORKER_PATHS.claimScope)}?${WORKER_CLAIM_SCOPE_TAKERS_QUERY}`,
+      headers: bearer(w.alice.credential),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(workerClaimScopeResponseSchema.parse(response.json())).not.toHaveProperty(
+      'unassigned_has_taker',
+    );
   });
 
   it('a version-3 worker’s [] is stored as pick_only over every project; its other writes leave the policy (S-26.4)', async () => {

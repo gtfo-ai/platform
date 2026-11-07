@@ -115,7 +115,7 @@ import {
   projectExists,
   upsertIdentityMapping,
 } from './queries/identity-queries.js';
-import { othersTakeUnassigned } from './queries/offer-waiting.js';
+import { othersTakeUnassigned, unassignedTakersOf } from './queries/offer-waiting.js';
 import {
   assertBindingItemsWritable,
   findBindingAccounts,
@@ -338,6 +338,13 @@ export interface BuildAppOptions {
     readonly runCancel?: WorkerRunCancelPort | null;
     /** `GET offers`' display names (WP-293); absent, every offer is listed without them. */
     readonly offerDisplays?: OfferDisplays | null;
+    /**
+     * `GET claim-scope?fields=unassigned_has_taker` (BACKLOG 1456). Absent: this process's
+     * database (`unassignedTakersOf`, the asking worker excluded); a test passes its own or `null`.
+     */
+    readonly unassignedTakers?:
+      | ((workerId: Id, projectIds: readonly Id[]) => Promise<ReadonlyMap<string, boolean>>)
+      | null;
     /** The held requests' bounds; absent, TD-031 §9's 25 s and 20 s (a test shortens them). */
     readonly holds?: {
       readonly claimMs?: number;
@@ -735,6 +742,12 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       remoteRuns: options.workerProtocol?.remoteRuns ?? null,
       runCalls: options.workerProtocol?.runCalls ?? null,
       offerDisplays: options.workerProtocol?.offerDisplays ?? null,
+      // BACKLOG 1456: the execution read's statement, with the asking worker excluded.
+      unassignedTakers:
+        options.workerProtocol?.unassignedTakers !== undefined
+          ? options.workerProtocol.unassignedTakers
+          : async (workerId, projectIds) =>
+              unassignedTakersOf(options.database, projectIds, { workerId }),
       broadcast: options.workerProtocol?.broadcast ?? null,
       release: workerRelease,
       ...(options.workerProtocol?.unresolved === undefined

@@ -41,6 +41,22 @@
  *   elsewhere without assigning, assigns nothing for an ask, and refuses another person's task:
  *   `409 task_taken_by_another` when its owner changed after the body's `as_of`, else `409
  *   task_owned_by_another`, both naming the owner — and `offer_not_claimable` to a version-3 worker.
+ *
+ * ## `GET claim-scope?fields=unassigned_has_taker` (BACKLOG 1456)
+ *
+ * The M26 UX spec § 1's consequence line — "Unassigned tasks in Autix have nowhere to run." — needs,
+ * per project the page lists, whether **someone other than this worker** takes its unassigned tasks
+ * by itself. The worker has no user session, so the execution read (S-26.5's
+ * `others_take_unassigned`) is not its to call; the answer rides on the read that already lists
+ * exactly those projects and is read exactly when the setting is — at the page's mount, after a
+ * save, and whenever the polled state's policy moves — rather than on `GET offers`, which the page
+ * polls every 10 s for an answer about other machines' **settings** that moves far less often, or
+ * on a new verb, which an older core would answer `404`. It is **opt-in** (`fields=`, as
+ * `held_elsewhere` is on `GET offers`): a worker built before it parses strictly and never asks, an
+ * older core ignores the query and sends no field, which the page reads as unknown. Protocol ≥ 4
+ * only. The computation is the execution read's own statement (`queries/offer-waiting.ts`'s
+ * `unassignedTakersOf`) with the **asking worker** excluded instead of its user, since the spec says
+ * "no other machine" — the user's other machines take work too — and it names no machine.
  */
 import type { RemoteRuns } from '@platform/application';
 import {
@@ -50,6 +66,7 @@ import {
   parseWorkerProtocolHeader,
   type RunDisplay,
   runPackageSchema,
+  WORKER_CLAIM_SCOPE_TAKERS_QUERY,
   WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_OFFERS_LIST_MAX,
   WORKER_PATHS,
@@ -106,6 +123,13 @@ export interface WorkerPickVerbOptions {
     pkg: z.output<typeof runPackageSchema>,
   ) => Promise<FastifyReply>;
   readonly now: () => Date;
+  /**
+   * Per project id: whether somebody other than `workerId` takes its unassigned tasks by itself
+   * (BACKLOG 1456, `unassignedTakersOf`). `null`/absent: `unassigned_has_taker` is never sent.
+   */
+  readonly unassignedTakers?:
+    | ((workerId: Id, projectIds: readonly Id[]) => Promise<ReadonlyMap<string, boolean>>)
+    | null;
 }
 
 const runParamsSchema = z.strictObject({ id: z.uuid() });
@@ -118,6 +142,12 @@ const speaksClaimPolicy = (request: FastifyRequest): boolean =>
   (parseWorkerProtocolHeader(request.headers[WORKER_PROTOCOL_HEADER]) ?? WORKER_PROTOCOL_VERSION) >=
   WORKER_PROTOCOL_CLAIM_POLICY;
 
+/** Whether the request's `fields` names `field` — the opt-ins' one reader. */
+const asksField = (request: FastifyRequest, field: string | null): boolean => {
+  const fields = (request.query as Record<string, unknown> | undefined)?.fields;
+  return typeof fields === 'string' && fields.split(',').includes(field ?? '');
+};
+
 /** The `fields` value a worker sends to be told each offer's `held_elsewhere` (S-26.7). */
 const HELD_ELSEWHERE_FIELD = new URLSearchParams(WORKER_OFFERS_HELD_ELSEWHERE_QUERY).get('fields');
 
@@ -126,10 +156,11 @@ const HELD_ELSEWHERE_FIELD = new URLSearchParams(WORKER_OFFERS_HELD_ELSEWHERE_QU
  * field — whose strict parse refuses an unknown key — is never sent it. The route declares no
  * querystring schema, so any other query is ignored, as it always was.
  */
-const asksHeldElsewhere = (request: FastifyRequest): boolean => {
-  const fields = (request.query as Record<string, unknown> | undefined)?.fields;
-  return typeof fields === 'string' && fields.split(',').includes(HELD_ELSEWHERE_FIELD ?? '');
-};
+const asksHeldElsewhere = (request: FastifyRequest): boolean =>
+  asksField(request, HELD_ELSEWHERE_FIELD);
+
+/** The `fields` value a worker sends to be told `unassigned_has_taker` (BACKLOG 1456). */
+const TAKERS_FIELD = new URLSearchParams(WORKER_CLAIM_SCOPE_TAKERS_QUERY).get('fields');
 
 /**
  * The scope a version-3 worker is shown (S-26.4): `[]` — its own *pick only* — when the policy
@@ -173,7 +204,7 @@ export const registerWorkerPickVerbs = (
     requireWorkerProtocol(options.upgradeBody, verb, WORKER_PROTOCOL_CLAIM_SCOPE);
   const isoNow = (): IsoDateTime => options.now().toISOString() as IsoDateTime;
 
-  const readScope = async (workerId: Id, v4: boolean) => {
+  const readScope = async (workerId: Id, v4: boolean, takers = false) => {
     const release = options.release();
     const scope = await options.store.claimScope(
       workerId,
@@ -189,14 +220,34 @@ export const registerWorkerPickVerbs = (
       key: project.key,
       name: project.name,
     }));
-    return v4
-      ? {
-          claim_project_ids: scope.claimProjectIds === null ? null : [...scope.claimProjectIds],
-          projects,
-          claim_policy: scope.claimPolicy,
-          policy_skipped_offers: scope.policySkippedOffers,
-        }
-      : { claim_project_ids: scopeForV3(scope.claimProjectIds, scope.claimPolicy), projects };
+    if (!v4) {
+      return { claim_project_ids: scopeForV3(scope.claimProjectIds, scope.claimPolicy), projects };
+    }
+    const asked = takers ? (options.unassignedTakers ?? null) : null;
+    const answered =
+      asked === null
+        ? null
+        : await asked(
+            workerId,
+            projects.map((project) => project.id as Id),
+          );
+    return {
+      claim_project_ids: scope.claimProjectIds === null ? null : [...scope.claimProjectIds],
+      projects,
+      claim_policy: scope.claimPolicy,
+      policy_skipped_offers: scope.policySkippedOffers,
+      // BACKLOG 1456: a listed project the answer does not name (gone since) is left unknown.
+      ...(answered === null
+        ? {}
+        : {
+            unassigned_has_taker: Object.fromEntries(
+              projects.flatMap((project) => {
+                const value = answered.get(project.id);
+                return value === undefined ? [] : [[project.id, value] as const];
+              }),
+            ),
+          }),
+    };
   };
 
   typed.get(
@@ -206,7 +257,7 @@ export const registerWorkerPickVerbs = (
       schema: {
         summary: 'The worker’s claim scope and the projects it may name (WP-293)',
         description:
-          'Worker credential, protocol ≥ 3. `claim_project_ids`: `null` every project, otherwise those projects; `projects`: the projects where the worker’s user’s effective role is `member` or above now — the claim’s own predicate — by key. Protocol ≥ 4 (S-26.4): `claim_policy` — what the worker takes by itself — and `policy_skipped_offers`, the open offers its eligibility and scope admit now and its policy leaves for others (`null` while the core cannot name its images). A version-3 worker is answered `[]` for a policy that reads `pick_only`. `426` below protocol 3.',
+          'Worker credential, protocol ≥ 3. `claim_project_ids`: `null` every project, otherwise those projects; `projects`: the projects where the worker’s user’s effective role is `member` or above now — the claim’s own predicate — by key. Protocol ≥ 4 (S-26.4): `claim_policy` — what the worker takes by itself — and `policy_skipped_offers`, the open offers its eligibility and scope admit now and its policy leaves for others (`null` while the core cannot name its images). With `?fields=unassigned_has_taker` (BACKLOG 1456), protocol ≥ 4: `unassigned_has_taker`, per listed project id, whether the server claimant or any machine other than this one takes the project’s unassigned tasks by itself — the setting, connected or not, naming no machine — an opt-in, so a worker built before the field is never sent it. A version-3 worker is answered `[]` for a policy that reads `pick_only`. `426` below protocol 3.',
         tags: ['worker'],
         response: {
           200: workerClaimScopeResponseSchema,
@@ -217,7 +268,7 @@ export const registerWorkerPickVerbs = (
     },
     async (request): Promise<z.output<typeof workerClaimScopeResponseSchema>> => {
       const { workerId } = await options.workerOf(request, null);
-      return readScope(workerId, speaksClaimPolicy(request));
+      return readScope(workerId, speaksClaimPolicy(request), asksField(request, TAKERS_FIELD));
     },
   );
 

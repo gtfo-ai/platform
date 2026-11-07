@@ -9,6 +9,7 @@ import {
   runPackageSchema,
   WORKER_CLAIM_POLICIES,
   WORKER_CLAIM_SCOPE_MAX_PROJECTS,
+  WORKER_CLAIM_SCOPE_TAKERS_QUERY,
   WORKER_OFFERS_LIST_MAX,
   WORKER_PACKAGE_MAX_BYTES,
   WORKER_PATHS,
@@ -17,6 +18,7 @@ import {
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
+  WORKER_SCOPE_PROJECTS_MAX,
   WORKER_USER_CODE_ALPHABET,
   workerApprovalRequestSchema,
   workerApprovalResponseSchema,
@@ -885,6 +887,34 @@ describe('the claim policy (S-26.4)', () => {
         policy_skipped_offers: -1,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('whether a project’s unassigned tasks have a taker (backlog 1456)', () => {
+  const id = (index: number) => `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
+  const answer = (extra: Record<string, unknown>) => ({
+    claim_project_ids: null,
+    projects: [],
+    ...extra,
+  });
+
+  it('is optional, keyed by project id, a yes or a no, and bounded by the projects a read lists', () => {
+    expect(workerClaimScopeResponseSchema.safeParse(answer({})).success).toBe(true);
+    const of = (value: unknown) =>
+      workerClaimScopeResponseSchema.safeParse(answer({ unassigned_has_taker: value })).success;
+    expect(of({ [id(1)]: true, [id(2)]: false })).toBe(true);
+    expect(of({})).toBe(true);
+    expect(of({ ACME: true })).toBe(false);
+    expect(of({ [id(1)]: 'yes' })).toBe(false);
+    expect(of(null)).toBe(false);
+    const many = (n: number) =>
+      Object.fromEntries(Array.from({ length: n }, (_, index) => [id(index), true]));
+    expect(of(many(WORKER_SCOPE_PROJECTS_MAX))).toBe(true);
+    expect(of(many(WORKER_SCOPE_PROJECTS_MAX + 1))).toBe(false);
+  });
+
+  it('is asked for by name: an opt-in query, not a protocol bump', () => {
+    expect(WORKER_CLAIM_SCOPE_TAKERS_QUERY).toBe('fields=unassigned_has_taker');
   });
 });
 

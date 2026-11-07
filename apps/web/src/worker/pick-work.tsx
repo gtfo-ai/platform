@@ -10,6 +10,12 @@
  *   `[]` (`client.ts`). The sentence is the stored setting's: what the worker answered, never the
  *   draft. It is read again whenever the polled state's `claim_policy` moves (another screen's
  *   change).
+ * - **The consequence line** (BACKLOG 1456): the read asks the core, by name, whether someone other
+ *   than this machine — the server, or any other machine — takes each listed project's unassigned
+ *   tasks by itself (`unassigned_has_taker`), and the card says "Unassigned tasks in Autix have
+ *   nowhere to run." for *Only my tasks* where nobody does. The answer is kept from the last read
+ *   that carried it — a save's read-back does not, and this machine's own setting is not part of it
+ *   — and a core that does not send it leaves it unknown, which says nothing.
  * - **Runs waiting for a machine** — the open offers this worker could take **now** (the claim's own
  *   eligibility, the scope ignored). A task nobody owns reads *Take this one* with "Assigns DEMO-1 to
  *   you." (a pick assigns, S-26.4); the reader's own task reads *Run it here* with no such line;
@@ -123,6 +129,7 @@ export const PickWork = ({
   visible = visibleNow,
 }: PickWorkProps): ReactElement => {
   const [scope, setScope] = useState<WorkerLocalClaimScope | null>(null);
+  const [takers, setTakers] = useState<WorkerLocalClaimScope['unassigned_has_taker']>(undefined);
   const [offers, setOffers] = useState<readonly WorkerOffer[] | null>(null);
   const [asOf, setAsOf] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +142,7 @@ export const PickWork = ({
 
   const adopt = useCallback((answer: WorkerLocalClaimScope): void => {
     setScope(answer);
+    if (answer.unassigned_has_taker !== undefined) setTakers(answer.unassigned_has_taker);
     onScopeRef.current?.(answer);
   }, []);
 
@@ -252,6 +260,7 @@ export const PickWork = ({
           stored={storedClaimPolicyOf(scope)}
           projects={scope.projects}
           onSave={save}
+          {...(takers === undefined ? {} : { unassignedHasTaker: takers })}
         />
       )}
 

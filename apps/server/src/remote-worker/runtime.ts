@@ -1120,11 +1120,16 @@ export const startRemoteWorker = async (
   /**
    * The claim scope and the projects it may name, as the core holds them (WP-293). The page that
    * speaks the policy (S-26.7) reads it as stored; an older cached page reads `[]` for *pick only*.
+   * With `takers` (BACKLOG 1456) the core is asked `?fields=unassigned_has_taker` and its answer,
+   * when it sent one, rides along; without it the core is not asked and the key is never sent.
    */
-  const readClaimScope = async (policyVocabulary = false): Promise<WorkerLocalClaimScope> => {
+  const readClaimScope = async (
+    policyVocabulary = false,
+    takers = false,
+  ): Promise<WorkerLocalClaimScope> => {
     const held = connectedCredential();
     try {
-      const answer = await connectedCore().claimScope(held);
+      const answer = await connectedCore().claimScope(held, takers);
       claimScope = answer.claim_project_ids;
       claimPolicy = answer.claim_policy ?? claimPolicy;
       if (answer.policy_skipped_offers !== undefined) {

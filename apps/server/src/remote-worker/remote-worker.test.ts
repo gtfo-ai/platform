@@ -334,6 +334,11 @@ const fakeCore = (options: {
   )[];
   /** The projects `GET claim-scope` lists (WP-293). */
   readonly scopeProjects?: readonly { id: string; key: string; name: string }[];
+  /**
+   * `GET claim-scope`'s `unassigned_has_taker`, sent only when asked by name (backlog 1456), as
+   * the routes do; absent is a core before the field, which ignores the query.
+   */
+  readonly unassignedHasTaker?: Readonly<Record<string, boolean>>;
   /** The handshake's answer by number (from 1); absent is the worker's settings (WP-294 (6)). */
   readonly handshake?: (n: number) => { readonly status: number; readonly body: unknown } | null;
   /** `device/token`'s answer by poll number (from 1); absent is `authorization_pending`. */
@@ -512,10 +517,16 @@ const fakeCore = (options: {
             performed,
           });
         }
+        const asksTakers = (new URL(url).searchParams.get('fields') ?? '')
+          .split(',')
+          .includes('unassigned_has_taker');
         return answer(200, {
           claim_project_ids: claimProjectIds,
           projects: options.scopeProjects ?? [],
           ...(claimPolicy === null ? {} : { claim_policy: claimPolicy }),
+          ...(asksTakers && options.unassignedHasTaker !== undefined
+            ? { unassigned_has_taker: options.unassignedHasTaker }
+            : {}),
         });
       }
       case 'offers':
@@ -1922,6 +1933,79 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       expect(worker.sessions.size).toBe(0);
     } finally {
       await worker.stop();
+    }
+  });
+
+  /**
+   * Backlog 1456: the page that asks by name gets the core's per-project answer — the worker asks
+   * the core `?fields=unassigned_has_taker` for it — and nothing else does: a page built before
+   * it (no `fields`), a save's read-back, and an older core that ignores the query.
+   */
+  it('carries unassigned_has_taker from the core to the page that asks for it, and to nothing else', async () => {
+    const stateDir = stateDirWithCredential();
+    const PROJECT = { id: PROJECT_ID, key: 'ACME', name: 'Acme storefront' };
+    const core = fakeCore({
+      scopeProjects: [PROJECT],
+      unassignedHasTaker: { [PROJECT_ID]: false },
+    });
+    const { worker } = await start({ stateDir, core });
+    try {
+      const port = portOf(worker.uiAddress());
+      const token = readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim();
+      const auth = { authorization: `Bearer ${token}` };
+      const origin = { origin: `http://127.0.0.1:${PUBLISHED}` };
+      await until('the worker is connected', () => worker.state().connection === 'connected');
+      const scopeReads = () =>
+        core.captured.filter((call) => call.verb === 'claim-scope' && call.body === '');
+
+      const asked = await request(port, {
+        path: '/api/local/claim-scope?vocabulary=policy&fields=unassigned_has_taker',
+        headers: auth,
+      });
+      expect(asked.status).toBe(200);
+      expect(workerLocalClaimScopeSchema.parse(JSON.parse(asked.text))).toMatchObject({
+        projects: [PROJECT],
+        unassigned_has_taker: { [PROJECT_ID]: false },
+      });
+      expect(scopeReads().at(-1)?.search).toBe('?fields=unassigned_has_taker');
+
+      // A page built before it never asks: the core is not asked either, and no key is sent.
+      const before = await request(port, {
+        path: '/api/local/claim-scope?vocabulary=policy',
+        headers: auth,
+      });
+      expect(JSON.parse(before.text)).not.toHaveProperty('unassigned_has_taker');
+      expect(scopeReads().at(-1)?.search).toBe('');
+
+      // A save's read-back carries none (the page keeps the last answer it read).
+      const saved = await request(port, {
+        method: 'POST',
+        path: '/api/local/claim-scope',
+        headers: { ...auth, ...origin },
+        body: { claim_project_ids: null, claim_policy: 'mine' },
+      });
+      expect(saved.status).toBe(200);
+      expect(JSON.parse(saved.text)).not.toHaveProperty('unassigned_has_taker');
+    } finally {
+      await worker.stop();
+    }
+
+    // An older core ignores the query: the page that asks gets no key — unknown, said nowhere.
+    const olderDir = stateDirWithCredential();
+    const older = fakeCore({ scopeProjects: [PROJECT] });
+    const { worker: second } = await start({ stateDir: olderDir, core: older });
+    try {
+      const port = portOf(second.uiAddress());
+      const token = readFileSync(path.join(olderDir, UI_TOKEN_FILE), 'utf8').trim();
+      await until('the worker is connected', () => second.state().connection === 'connected');
+      const read = await request(port, {
+        path: '/api/local/claim-scope?vocabulary=policy&fields=unassigned_has_taker',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(read.status).toBe(200);
+      expect(JSON.parse(read.text)).not.toHaveProperty('unassigned_has_taker');
+    } finally {
+      await second.stop();
     }
   });
 

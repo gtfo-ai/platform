@@ -55,6 +55,8 @@ export type Spec =
   | { readonly t: 'optional'; readonly of: Spec }
   /** Any JSON object with string keys (`jsonObjectSchema`). */
   | { readonly t: 'json-object' }
+  /** An object whose every key conforms to `key` and every value to `of` (`z.record`). */
+  | { readonly t: 'record'; readonly key: Spec; readonly of: Spec }
   /** Any JSON value (`jsonValueSchema`). */
   | { readonly t: 'json' };
 
@@ -332,6 +334,8 @@ export const CLAIM_SCOPE: Spec = object({
   },
   claim_policy: { t: 'optional', of: { t: 'enum', values: CLAIM_POLICIES } },
   policy_skipped_offers: nullish(count),
+  // BACKLOG 1456: per project id, whether another taker takes its unassigned tasks by itself.
+  unassigned_has_taker: { t: 'optional', of: { t: 'record', key: uuid, of: { t: 'boolean' } } },
 });
 
 /** One offer of `GET /api/local/offers` — `workerOfferSchema` (WP-293). */
@@ -426,6 +430,13 @@ export const conforms = (spec: Spec, value: unknown): boolean => {
       return isJson(value);
     case 'json-object':
       return isRecord(value) && isJson(value);
+    case 'record':
+      return (
+        isRecord(value) &&
+        Object.entries(value).every(
+          ([key, item]) => conforms(spec.key, key) && conforms(spec.of, item),
+        )
+      );
     case 'array':
       return (
         Array.isArray(value) &&

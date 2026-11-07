@@ -84,6 +84,14 @@ export class LocalUiError extends Error {
 export const CLAIM_SCOPE_POLICY_VOCABULARY = 'policy';
 
 /**
+ * `GET /api/local/claim-scope?…&fields=unassigned_has_taker` (BACKLOG 1456): the page that draws the
+ * consequence line asks for the core's per-project answer by name. A page built before it — a tab
+ * left open across a worker update, whose strict guard refuses an unknown key — never asks, so it
+ * is never sent the key.
+ */
+export const CLAIM_SCOPE_TAKERS_FIELD = 'unassigned_has_taker';
+
+/**
  * What the listener asks of the worker: the page's state, the three controls — and, since WP-293,
  * the claim scope and *take this one*.
  */
@@ -100,9 +108,10 @@ export interface LocalUiApi {
   /**
    * The claim scope and the projects it may name — the core's `GET claim-scope` (WP-293). With
    * `policyVocabulary` (S-26.7's page) the stored projects as they are; without it, a *pick only*
-   * machine reads as `[]` for an older cached page (`page-scope.ts`).
+   * machine reads as `[]` for an older cached page (`page-scope.ts`). With `takers` (BACKLOG 1456)
+   * the answer carries `unassigned_has_taker` when the core sent it.
    */
-  claimScope(policyVocabulary?: boolean): Promise<unknown>;
+  claimScope(policyVocabulary?: boolean, takers?: boolean): Promise<unknown>;
   /**
    * Set the claim scope — the core's `PUT claim-scope` — and answer it read back (WP-293); since
    * S-26.4 with the claim policy, absent leaving it as it was.
@@ -264,7 +273,10 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
       send(
         response,
         200,
-        await options.api.claimScope(query.get('vocabulary') === CLAIM_SCOPE_POLICY_VOCABULARY),
+        await options.api.claimScope(
+          query.get('vocabulary') === CLAIM_SCOPE_POLICY_VOCABULARY,
+          (query.get('fields') ?? '').split(',').includes(CLAIM_SCOPE_TAKERS_FIELD),
+        ),
       );
       return;
     }

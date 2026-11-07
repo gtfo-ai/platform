@@ -424,23 +424,38 @@ export const waitingForTasks = async (
 };
 
 /**
- * **Whether anybody else takes the project's unassigned tasks by themselves** (S-26.5 criterion 5,
- * the M26 UX spec §1's consequence line) — the execution read's `others_take_unassigned`: the
- * server claimant is running and the project's mode is not `workers_only`, or the mode is not
- * `server_only`, the run credential lets workers in (`remoteRunCredentialRefusedSql`), and a machine
- * of **another** user than `readerUserId` is not revoked, its user may act (`USER_MAY_ACT_SQL`) and
- * run here (`userMayRunInProjectSql`), its project list takes the project (`projectListTakesSql`)
- * and its policy (`effectiveClaimPolicySql`) is `everything` or `mine_and_unassigned` — the
- * policies whose claim admits an unassigned task. Connected or not: it answers the setting, not
- * this minute. No machine is named.
+ * Who is **not** counted as "somebody else" by {@link unassignedTakersOf}: a person — every machine
+ * of theirs (the execution read, S-26.5) — or one machine (the worker's own `GET claim-scope`,
+ * BACKLOG 1456: the spec's "no other machine or server claimant", so its user's other machines
+ * count).
  */
-export const othersTakeUnassigned = async (
+export type UnassignedTakerExclusion = { readonly userId: string } | { readonly workerId: string };
+
+/**
+ * **Whether anybody else takes the projects' unassigned tasks by themselves** (S-26.5 criterion 5,
+ * the M26 UX spec §1's consequence line), per project id, in one statement: the server claimant is
+ * running and the project's mode is not `workers_only`, or the mode is not `server_only`, the run
+ * credential lets workers in (`remoteRunCredentialRefusedSql`), and a machine not excluded by
+ * `exclude` is not revoked, its user may act (`USER_MAY_ACT_SQL`) and run here
+ * (`userMayRunInProjectSql`), its project list takes the project (`projectListTakesSql`) and its
+ * policy (`effectiveClaimPolicySql`) is `everything` or `mine_and_unassigned` — the policies whose
+ * claim admits an unassigned task. Connected or not: it answers the setting, not this minute. No
+ * machine is named. A project id that names no project is absent from the answer.
+ */
+export const unassignedTakersOf = async (
   database: Pick<Database, 'execute'>,
-  projectId: string,
-  readerUserId: string,
-): Promise<boolean> => {
-  const { rows } = await database.execute<{ others: boolean }>(sql`
-    select (
+  projectIds: readonly string[],
+  exclude: UnassignedTakerExclusion,
+): Promise<ReadonlyMap<string, boolean>> => {
+  if (projectIds.length === 0) {
+    return new Map();
+  }
+  const notExcluded =
+    'workerId' in exclude
+      ? sql`w.id <> ${exclude.workerId}::uuid`
+      : sql`w.user_id <> ${exclude.userId}::uuid`;
+  const { rows } = await database.execute<{ project_id: string; others: boolean }>(sql`
+    select p.id as project_id, (
       (exists (select 1 from server_claimants sc where sc.expires_at > now())
          and coalesce(s.mode, ${DEFAULT_EXECUTION_MODE}) <> 'workers_only')
       or (coalesce(s.mode, ${DEFAULT_EXECUTION_MODE}) <> 'server_only'
@@ -448,7 +463,7 @@ export const othersTakeUnassigned = async (
           and exists (
             select 1 from workers w join users u on u.id = w.user_id
              where w.revoked_at is null
-               and w.user_id <> ${readerUserId}::uuid
+               and ${notExcluded}
                and ${sql.raw(pipelineAdapters.USER_MAY_ACT_SQL)}
                and ${sql.raw(pipelineAdapters.userMayRunInProjectSql('w.user_id', 'p.id'))}
                and ${sql.raw(pipelineAdapters.projectListTakesSql('w', 'p.id'))}
@@ -457,6 +472,18 @@ export const othersTakeUnassigned = async (
     ) as others
       from projects p
       left join project_execution_settings s on s.project_id = p.id
-     where p.id = ${projectId}::uuid`);
-  return rows[0]?.others === true;
+     where p.id in (${uuidList(projectIds)})`);
+  return new Map(rows.map((row) => [row.project_id, row.others === true]));
 };
+
+/**
+ * The execution read's `others_take_unassigned` (S-26.5): {@link unassignedTakersOf} for one
+ * project, every machine of `readerUserId` excluded — another **person's** machine counts.
+ */
+export const othersTakeUnassigned = async (
+  database: Pick<Database, 'execute'>,
+  projectId: string,
+  readerUserId: string,
+): Promise<boolean> =>
+  (await unassignedTakersOf(database, [projectId], { userId: readerUserId })).get(projectId) ===
+  true;

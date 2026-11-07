@@ -44,6 +44,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import {
   othersTakeUnassigned,
+  unassignedTakersOf,
   waitingForRuns,
 } from '../../../apps/server/src/queries/offer-waiting.js';
 import {
@@ -906,6 +907,61 @@ describe('the execution read: does anybody else take unassigned tasks (criterion
     );
     // Workers-only and only the reader's own machine left: nobody else.
     expect(await othersTakeUnassigned(drizzled, projectId, reader)).toBe(false);
+    await claimantPresent(false);
+  });
+
+  it('asked for a worker (backlog 1456): excludes that machine only, and otherwise answers as others_take_unassigned', async () => {
+    await claimantPresent(false);
+    const quiet = await project();
+    const busy = await project();
+    const reader = await member(quiet, 'Reader');
+    const other = await member(quiet, 'Other');
+    await pool.query(
+      "insert into project_members (project_id, user_id, role) values ($1, $2, 'member')",
+      [busy, reader],
+    );
+    await pool.query(
+      "insert into project_members (project_id, user_id, role) values ($1, $2, 'member')",
+      [busy, other],
+    );
+    const asking = await machine(reader, 'everything', 'connected');
+    const forWorker = async () =>
+      Object.fromEntries(
+        await unassignedTakersOf(drizzled, [quiet, busy], { workerId: asking.id }),
+      );
+    const forReader = async () => ({
+      [quiet]: await othersTakeUnassigned(drizzled, quiet, reader),
+      [busy]: await othersTakeUnassigned(drizzled, busy, reader),
+    });
+
+    // The asking machine takes everything, and it is not "somebody else": nobody, in both.
+    expect(await forWorker()).toEqual({ [quiet]: false, [busy]: false });
+    expect(await forWorker()).toEqual(await forReader());
+
+    // Another person's machine that takes unassigned work in `busy` only: the two reads agree.
+    await machine(other, 'mine_and_unassigned', 'offline', [busy]);
+    expect(await forWorker()).toEqual({ [quiet]: false, [busy]: true });
+    expect(await forWorker()).toEqual(await forReader());
+
+    // Another person's `mine` machine in `quiet` takes no unassigned task: still agreed.
+    await machine(other, 'mine', 'connected', [quiet]);
+    expect(await forWorker()).toEqual(await forReader());
+
+    // The reader's own second machine counts for the worker — "no other machine" — and not for
+    // the execution read, which asks about other people.
+    await machine(reader, 'mine_and_unassigned', 'connected', [quiet]);
+    expect(await forWorker()).toEqual({ [quiet]: true, [busy]: true });
+    expect(await forReader()).toEqual({ [quiet]: false, [busy]: true });
+
+    // The server claimant takes both, for both reads; an id that names no project is absent.
+    await claimantPresent(true);
+    expect(await forWorker()).toEqual({ [quiet]: true, [busy]: true });
+    expect(await forReader()).toEqual({ [quiet]: true, [busy]: true });
+    const missing = nextId();
+    expect(
+      (await unassignedTakersOf(drizzled, [missing], { workerId: asking.id })).has(missing),
+    ).toBe(false);
+    expect((await unassignedTakersOf(drizzled, [], { workerId: asking.id })).size).toBe(0);
     await claimantPresent(false);
   });
 });

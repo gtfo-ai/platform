@@ -1999,7 +1999,11 @@ task. "Unassigned" means nobody owns the task and its ticket is not held by some
 match to a member — a ticket a member gave back is unassigned. A machine that takes only your tasks and
 finds none waits by choice, and is not shown as blocked; the Workers screen counts the runs it left for
 others. The machine's owner changes the choice; an administrator sees it on the Workers screen and
-cannot change it.
+cannot change it. Under *Only my tasks* the card warns, for each selected project where neither the
+server nor any other machine — yours included — takes unassigned tasks by itself, *Unassigned tasks in
+Autix have nowhere to run.* It is a warning: the choice still saves. It says nothing when the platform
+did not answer (an older platform version), and it reflects the other machines' settings when the page
+last read them, so reload the page after changing another machine.
 
 **Picking a run.** Below the card, **Runs waiting for a machine** lists what the machine could take
 right now, refreshed every 10 seconds while the page is open. A run of a task nobody owns reads **Take
@@ -2034,7 +2038,7 @@ In one place, so it is not spread across thirteen sections:
 | Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
 | *Settings → Your accounts* — linking your own Jira or GitLab account in the browser (the server half is built, S-26.6; the screen is S-26.8a) | settings |
 | Choosing which tasks a machine takes on the Workers screen (the machine's own page has it; the Workers screen still shows the projects only, S-26.8a) | Workers screen |
-| The card's warning *Unassigned tasks in Autix have nowhere to run.* under *Only my tasks* (the card is built to say it; the platform's answer to whether anyone else takes unassigned work is S-26.5) | worker page |
+| The card's warning *Unassigned tasks in Autix have nowhere to run.* on the Workers screen (the machine's own page says it since BACKLOG 1456) | Workers screen |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

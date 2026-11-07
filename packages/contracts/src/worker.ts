@@ -752,6 +752,16 @@ export const workerScopeProjectSchema = z.strictObject({
 export type WorkerScopeProject = z.infer<typeof workerScopeProjectSchema>;
 
 /**
+ * Project id → whether another taker takes its unassigned tasks automatically (BACKLOG 1456): one
+ * key per listed project, so at most {@link WORKER_SCOPE_PROJECTS_MAX}.
+ */
+export const unassignedHasTakerSchema = z
+  .record(idSchema, z.boolean())
+  .refine((value) => Object.keys(value).length <= WORKER_SCOPE_PROJECTS_MAX, {
+    message: `at most ${WORKER_SCOPE_PROJECTS_MAX} projects`,
+  });
+
+/**
  * `GET claim-scope` → the stored scope and the projects it may name: those where the worker's user's
  * effective role is `member` or above now, by key. Worker credential, protocol ≥ 3.
  */
@@ -762,8 +772,24 @@ export const workerClaimScopeResponseSchema = z.strictObject({
   claim_policy: workerClaimPolicySchema.optional(),
   /** Open offers its policy leaves for others (S-26.4). **Absent** below protocol 4. */
   policy_skipped_offers: policySkippedOffersSchema.optional(),
+  /**
+   * Per listed project's id: whether **someone other than this worker** — the server claimant, or
+   * any other machine, its own user's included — takes the project's **unassigned** tasks by
+   * itself (BACKLOG 1456, the M26 UX spec § 1's consequence line). Sent only when the worker asks
+   * — `GET claim-scope?fields=unassigned_has_taker` ({@link WORKER_CLAIM_SCOPE_TAKERS_QUERY}) — and
+   * only at protocol ≥ 4, so a worker built before the field, whose strict parse refuses an
+   * unknown key, is never sent it, and a worker that asks an older core gets no field: **absent
+   * is unknown**, and the page then says nothing.
+   */
+  unassigned_has_taker: unassignedHasTakerSchema.optional(),
 });
 export type WorkerClaimScopeResponse = z.infer<typeof workerClaimScopeResponseSchema>;
+
+/**
+ * The query a worker adds to `GET claim-scope` to be sent `unassigned_has_taker` (BACKLOG 1456):
+ * an opt-in rather than a protocol bump, as `held_elsewhere` is on `GET offers` (S-26.7).
+ */
+export const WORKER_CLAIM_SCOPE_TAKERS_QUERY = 'fields=unassigned_has_taker';
 
 /**
  * `PUT claim-scope` `{ claim_project_ids }` — a **state assertion** by the worker's owner. An id that

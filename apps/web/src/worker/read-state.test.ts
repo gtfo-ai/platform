@@ -130,7 +130,15 @@ const specOf = (node: ZodNode): Spec => {
         options: (def.options as ZodNode[]).map(specOf),
       };
     case 'record':
-      return { t: 'json-object' };
+      // A JSON object (`jsonObjectSchema`, its values `z.lazy`) is checked as JSON; any other
+      // record key by key and value by value (BACKLOG 1456's `unassigned_has_taker`).
+      return (def.valueType as ZodNode)._zod.def.type === 'lazy'
+        ? { t: 'json-object' }
+        : {
+            t: 'record',
+            key: specOf(def.keyType as ZodNode),
+            of: specOf(def.valueType as ZodNode),
+          };
     case 'lazy':
       return { t: 'json' };
     default:
@@ -148,6 +156,8 @@ const normal = (spec: Spec): unknown => {
       return { ...spec, of: normal(spec.of) };
     case 'array':
       return { ...spec, of: normal(spec.of) };
+    case 'record':
+      return { ...spec, key: normal(spec.key), of: normal(spec.of) };
     case 'object':
       return {
         t: 'object',
@@ -537,6 +547,35 @@ describe('the claim scope, the offers and a take through both checks (WP-293)', 
       readClaimScope,
       workerLocalClaimScopeSchema,
       { ...SCOPE, projects: [{ id: PROJECT, key: 'A', name: 'x', extra: 1 }] },
+      false,
+    ],
+    // BACKLOG 1456: the per-project answer the consequence line reads.
+    [
+      'a scope with whether each project’s unassigned tasks have a taker',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, unassigned_has_taker: { [PROJECT]: false } },
+      true,
+    ],
+    [
+      'an empty taker answer',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, unassigned_has_taker: {} },
+      true,
+    ],
+    [
+      'a taker answer keyed by something other than a project id',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, unassigned_has_taker: { p1: true } },
+      false,
+    ],
+    [
+      'a taker answer that is not a yes or a no',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, unassigned_has_taker: { [PROJECT]: 'yes' } },
       false,
     ],
     ['an offer', readOffers, workerLocalOffersSchema, { offers: [OFFER] }, true],

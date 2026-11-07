@@ -113,7 +113,12 @@ import { renderInstallScripts } from '../../workers/install.js';
 import type { WorkerRelease } from '../../workers/release.js';
 import { authenticateWorkerCredential } from '../../workers/secrets.js';
 import { registerWorkerOwnerVerbs, type WorkerRunCancelPort } from './owner-verbs.js';
-import { type OfferDisplays, registerWorkerPickVerbs, storedDigestsOf } from './pick-verbs.js';
+import {
+  type OfferDisplays,
+  registerWorkerPickVerbs,
+  storedDigestsOf,
+  type WorkerPickVerbOptions,
+} from './pick-verbs.js';
 import { registerWorkerRunCallRoutes } from './run-calls.js';
 
 /** How often a held claim asks again with no notification: an offer's `workers_from` passing. */
@@ -222,6 +227,11 @@ export interface WorkerProtocolRoutesOptions {
    * ticket snapshot. `null`/absent: `GET offers` lists every offer without its names.
    */
   readonly offerDisplays?: OfferDisplays | null;
+  /**
+   * Whether somebody other than the asking worker takes each project's unassigned tasks by itself
+   * (BACKLOG 1456) — `GET claim-scope?fields=unassigned_has_taker`. `null`/absent: never sent.
+   */
+  readonly unassignedTakers?: WorkerPickVerbOptions['unassignedTakers'];
   /** `APP_BASE_URL`, for the owner verbs' `426` (`compose_url`). @default `http://localhost` */
   readonly baseUrl?: string;
   readonly release: () => WorkerRelease | null;
@@ -1117,6 +1127,7 @@ export const registerWorkerProtocolRoutes = async (
     release: options.release,
     unresolved,
     displays: options.offerDisplays ?? null,
+    unassignedTakers: options.unassignedTakers ?? null,
     watch: presenceOf,
     deliverClaimed,
     now,

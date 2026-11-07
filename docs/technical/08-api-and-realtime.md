@@ -728,6 +728,23 @@ named as the local envelope's `error.owner` `{user_id, name}` (the name through 
 so the page says *Vojtěch took DEMO-1 a moment ago* without parsing a message. The project's execution
 read reports a `pick_only` policy as `picked_only` under `scope_excludes`.
 
+**The consequence line on the worker's page (BACKLOG 1456).** `GET claim-scope?fields=unassigned_has_taker`
+(protocol ≥ 4) adds `unassigned_has_taker` — per listed project id, whether **someone other than this
+worker** takes the project's unassigned tasks by itself: the execution read's `others_take_unassigned`
+statement (`queries/offer-waiting.ts`'s `unassignedTakersOf`) with the **asking machine** excluded rather
+than its user's, because the M26 UX spec § 1 says "no other machine or server claimant" and the user's own
+other machines take work too. A setting's answer, connected or not; it names no machine. It rides on
+`claim-scope` rather than the 10 s `offers` poll or a new verb: that read lists exactly the projects the
+answer is about and is read whenever the setting is (the page's mount, after a save, when the state's
+policy moves), while a new verb would be an older core's `404`. It is an **opt-in** for the same reasons
+as `held_elsewhere`: a worker built before it parses strictly and never asks, and an older core ignores
+the query and sends no field — unknown, so the page says nothing. The local page asks the same way —
+`GET /api/local/claim-scope?vocabulary=policy&fields=unassigned_has_taker` — so a tab still open on an
+earlier page, whose guard is strict, is never sent the key, and only then does the worker ask its core;
+the save's read-back (`POST /api/local/claim-scope`) never carries it and the page keeps the answer it
+last read. The card then says *Unassigned tasks in Autix have nowhere to run.* under *Only my tasks*
+for each selected project answered `false`.
+
 **Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8). The task record (`GET /api/tasks/:id`'s
 `task` and every item of `GET /api/projects/:id/tasks`) and every `GET /api/org/agents` item carry
 `waiting` — `{reason, user, last_seen_at, assignee_name, blockers}` for the run's **open** offer (the task's: its
