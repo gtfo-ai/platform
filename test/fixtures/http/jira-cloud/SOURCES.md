@@ -188,3 +188,16 @@ a label and pointing the URL at a domain that does not exist changed no test at 
    reading is still not measured, because there is no Jira site. The replay honours `startAt` and
    caps a page at fifty (its divergence 8); no fixture changed, because the envelope is the same
    document.
+
+- `https://developer.atlassian.com/cloud/jira/platform/webhooks/` again, retrieved **2026-11-07** for
+  S-26.6 (a person links their own account with a code written as a comment, TD-031's 2026-11-06
+  amendment item 9): the comment a `comment_created` delivery carries *"is the same shape returned
+  from the Jira REST API when a comment is retrieved"*, and the REST comment (`getComment` in the
+  swagger above, and `comments-acme-1.json`) has `author`, `updateAuthor`, `created` and `updated`.
+  Four `composed`/`inferred` files are built from `webhook-comment-created.json` with the comment
+  replaced: `webhook-comment-link-code.json` (fresh, its own author), `…-edited.json` (`updated`
+  after `created`), `…-edit-all.json` (another account — an *Edit All Comments* holder — edited it,
+  so `updateAuthor` ≠ `author`), and `…-customer.json` (a Jira Service Management customer's `qm:`
+  account, `accountType: customer`, **inferred** from the user schema's documented `accountType`
+  values: no Atlassian page shows a customer's webhook comment). The code in them is the obviously
+  fake `agentic-link-7K3Q9VDM2X` the integration test draws. Not measured against a live site.

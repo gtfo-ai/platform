@@ -345,12 +345,19 @@ export const listIdentityMappings = async (
     .orderBy(asc(userIdentities.provider), asc(userIdentities.externalId));
 
 /**
- * The provider accounts refused as `unmapped_identity` that nobody has mapped or declared a machine
- * since — the candidates the identities screen offers (WP-44, PROGRESS backlog 198).
+ * The provider accounts nobody has mapped or declared a machine — the candidates the identities
+ * screen offers. Two sources:
  *
- * Read off `inbox.unmapped_identities` (migration 0047); a row written before it recorded no list
- * and contributes nothing, which is the honest limit of the read rather than an empty answer. Newest
- * first, at most `limit` accounts: a debugging surface, not an archive.
+ *  - the accounts refused as `unmapped_identity` (WP-44, PROGRESS backlog 198), read off
+ *    `inbox.unmapped_identities` (migration 0047); a row written before it recorded no list and
+ *    contributes nothing;
+ *  - since S-26.6, the **unlinked assignees of live tasks** (`tasks.ticket_assignee`, S-26.1's
+ *    migration 0104) — never one the platform marked `platform` (the binding's own account or a
+ *    machine), and never a task that is `done` or `cancelled`.
+ *
+ * Newest first, at most `limit` accounts: a debugging surface, not an archive. `assigned_tasks` and
+ * `display_name` are published only for an account seen as an assignee, so an inbox-only candidate
+ * reads as it did before.
  */
 export const listIdentityCandidates = async (
   database: Database,
@@ -360,29 +367,62 @@ export const listIdentityCandidates = async (
     provider: string;
     external_id: string;
     deliveries: string | number;
+    assigned_tasks: string | number;
+    display_name: string | null;
     last_seen_at: Date | string;
   }>(sql`
-    select c.provider, c.external_id, count(*) as deliveries, max(i.received_at) as last_seen_at
-      from inbox i
-      cross join lateral jsonb_to_recordset(i.unmapped_identities)
-                 as c(provider text, external_id text)
-     where i.unmapped_identities is not null
-       and jsonb_typeof(i.unmapped_identities) = 'array'
-       and c.provider is not null and c.external_id is not null
-       and not exists (
-         select 1 from user_identities ui
-          where ui.provider = c.provider and ui.external_id = c.external_id
-       )
-     group by c.provider, c.external_id
-     order by max(i.received_at) desc, c.provider, c.external_id
+    with refused as (
+      select c.provider, c.external_id, count(*) as deliveries, max(i.received_at) as last_seen_at
+        from inbox i
+        cross join lateral jsonb_to_recordset(i.unmapped_identities)
+                   as c(provider text, external_id text)
+       where i.unmapped_identities is not null
+         and jsonb_typeof(i.unmapped_identities) = 'array'
+         and c.provider is not null and c.external_id is not null
+       group by c.provider, c.external_id
+    ), assigned as (
+      select t.ticket_assignee ->> 'provider' as provider,
+             t.ticket_assignee ->> 'external_id' as external_id,
+             count(*) as assigned_tasks,
+             (array_agg(t.ticket_assignee ->> 'display_name' order by t.updated_at desc))[1]
+               as display_name,
+             max(t.updated_at) as last_seen_at
+        from tasks t
+       where t.ticket_assignee is not null
+         and jsonb_typeof(t.ticket_assignee) = 'object'
+         and coalesce((t.ticket_assignee ->> 'platform')::boolean, false) = false
+         and t.ticket_assignee ->> 'provider' is not null
+         and t.ticket_assignee ->> 'external_id' is not null
+         and t.state not in ('done', 'cancelled')
+       group by 1, 2
+    ), candidates as (
+      select coalesce(r.provider, a.provider) as provider,
+             coalesce(r.external_id, a.external_id) as external_id,
+             coalesce(r.deliveries, 0) as deliveries,
+             coalesce(a.assigned_tasks, 0) as assigned_tasks,
+             a.display_name,
+             greatest(r.last_seen_at, a.last_seen_at) as last_seen_at
+        from refused r
+        full join assigned a on a.provider = r.provider and a.external_id = r.external_id
+    )
+    select c.* from candidates c
+     where not exists (
+       select 1 from user_identities ui
+        where ui.provider = c.provider and ui.external_id = c.external_id
+     )
+     order by c.last_seen_at desc, c.provider, c.external_id
      limit ${limit}
   `);
-  return rows.map((row) => ({
-    provider: row.provider,
-    external_id: row.external_id,
-    deliveries: Number(row.deliveries),
-    last_seen_at: new Date(row.last_seen_at).toISOString(),
-  }));
+  return rows.map((row) => {
+    const assigned = Number(row.assigned_tasks);
+    return {
+      provider: row.provider,
+      external_id: row.external_id,
+      deliveries: Number(row.deliveries),
+      ...(assigned > 0 ? { assigned_tasks: assigned, display_name: row.display_name } : {}),
+      last_seen_at: new Date(row.last_seen_at).toISOString(),
+    };
+  });
 };
 
 export const listUsers = async (database: Database): Promise<UserSummary[]> => {

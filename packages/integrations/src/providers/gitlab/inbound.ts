@@ -16,15 +16,17 @@
  *  - `malformed_payload` — the body failed its schema, or it is a merge-request note whose thread
  *    cannot be identified.
  */
-import type {
-  ExternalIdentity,
-  GitProviderInboundEvent,
-  IgnoredDelivery,
-  InboundContext,
-  NormalisedDelivery,
-  NormalisedEvent,
-  SecretRedactor,
-  WebhookDelivery,
+import {
+  type ExternalIdentity,
+  type GitProviderInboundEvent,
+  type IgnoredDelivery,
+  type InboundContext,
+  type LinkCodeClaim,
+  linkCodeClaimOf,
+  type NormalisedDelivery,
+  type NormalisedEvent,
+  type SecretRedactor,
+  type WebhookDelivery,
 } from '@platform/application';
 import type { Actor, JsonObject } from '@platform/contracts';
 import { GITLAB_PROVIDER_ID } from './http.js';
@@ -72,6 +74,12 @@ export interface InboundDeps {
   readonly redactor: SecretRedactor;
   /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
   readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
+  /**
+   * The user id this binding's token acts as (`GET /user`) — asked only for a note that carries a
+   * self-service link code (S-26.6), because the platform posts its notes as that account. Absent,
+   * or a lookup that fails, refuses the link (`binding_account_unknown`).
+   */
+  readonly bindingAccount?: () => Promise<string | null>;
 }
 
 const ignored = (
@@ -308,12 +316,42 @@ const normaliseNote = async (
     return ignored('malformed_payload', 'note delivery carries no url');
   }
 
+  /**
+   * S-26.6: a note carrying a link code is a **claim** beside the event. Its author is the note's
+   * own `author_id` (falling back to the hook's `user`), and the hook's `user` — who triggered this
+   * delivery — is its last editor: a different one is `edited_by_another`. An edit is also read off
+   * `updated_at` ≠ `created_at`, which is `[unverified]` live (docs/TODO.md): a fresh note is
+   * assumed to carry one instant in both.
+   */
+  const authorId = attributes.author_id ?? hook.user.id;
+  const claim = await linkCodeClaimOf(
+    {
+      provider: GITLAB_PROVIDER_ID,
+      commentId: String(attributes.id),
+      author: {
+        externalId: String(authorId),
+        displayName:
+          authorId === hook.user.id ? (hook.user.name ?? hook.user.username ?? null) : null,
+      },
+      updateAuthorId: String(hook.user.id),
+      createdAt: attributes.created_at ?? null,
+      updatedAt: attributes.updated_at ?? null,
+      text: attributes.note,
+    },
+    deps.bindingAccount ?? (async () => null),
+  );
+  const claims: { linkClaims?: readonly LinkCodeClaim[] } =
+    claim === null ? {} : { linkClaims: [claim] };
+
   const thread = await deps.findThreadForNote(project, iid, attributes.id);
   if (thread === null) {
-    return ignored(
-      'malformed_payload',
-      `note ${attributes.id} belongs to no discussion of ${project}!${iid}`,
-    );
+    return {
+      ...ignored(
+        'malformed_payload',
+        `note ${attributes.id} belongs to no discussion of ${project}!${iid}`,
+      ),
+      ...claims,
+    };
   }
 
   const base = identityOf(hook.user);
@@ -338,7 +376,7 @@ const normaliseNote = async (
     },
     actor: { ...actor, identity: author } as Actor,
   };
-  return { events: [event], ignored: [] };
+  return { events: [event], ignored: [], ...claims };
 };
 
 const normalisePipeline = (

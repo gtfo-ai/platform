@@ -96,6 +96,12 @@ import {
   writeProjectExecution,
 } from './queries/execution-queries.js';
 import { claimCommandAttempt, releaseCommandAttempt } from './queries/idempotency-queries.js';
+import {
+  findLinkThread,
+  listMyIdentities,
+  unlinkIdentity,
+  unlinkMyIdentity,
+} from './queries/identity-link-queries.js';
 import type { Database } from './queries/identity-queries.js';
 import {
   findConfigLayers,
@@ -161,6 +167,7 @@ import { registerDownloadRoutes } from './routes/downloads.js';
 import { type FailedJobsReader, registerFailedJobRoutes } from './routes/failed-jobs.js';
 import { type IntegrationRoutesOptions, registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
+import { type IdentityLinkCommands, registerMeIdentityRoutes } from './routes/me-identities.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
@@ -282,6 +289,12 @@ export interface BuildAppOptions {
    * its guard, which is what the census probes.
    */
   readonly taskStart?: TaskStartCommands | null;
+  /**
+   * A person's own account link (S-26.6): issue, confirm, the state read and *I wrote it on …*, or
+   * `null`/absent for a process that composed none. Optional like `taskStart`; the routes are
+   * registered either way and answer `503 identity_links_unavailable` by name, behind their guard.
+   */
+  readonly identityLinks?: IdentityLinkCommands | null;
   /**
    * The dead-letter list and its re-queue (WP-95, PROGRESS backlog 126), or `null`/absent for a
    * process that composed no eventing. Optional like `projectConfig`: `app.test.ts` and the census
@@ -628,11 +641,26 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         findUser: async (userId) => findUserById(options.database, userId),
         upsertMapping: async (input) => upsertIdentityMapping(options.database, input),
         listMappings: async () => listIdentityMappings(options.database),
+        unlinkMapping: async (input) => unlinkIdentity(options.database, input),
         listCandidates: async () => listIdentityCandidates(options.database),
         recordAction: async (input) => recordHumanAction(options.database, input),
       },
       // WP-159: open now, by this process's clock — the instant the retry's check reads too.
       models: async () => listedModelIds(options.database, new Date()),
+    });
+    // S-26.6: a person links their own tracker or git account, proven by the provider.
+    await registerMeIdentityRoutes(app, {
+      commands: options.identityLinks ?? null,
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        listMine: async (userId) => listMyIdentities(options.database, userId),
+        unlinkMine: async (input) => unlinkMyIdentity(options.database, input),
+        threadOf: async (projectId, target) => findLinkThread(options.database, projectId, target),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
     });
     // WP-95, backlog 126: the operator's two instruments over the events WP-49 dead-lettered.
     await registerDeadLetterRoutes(app, {

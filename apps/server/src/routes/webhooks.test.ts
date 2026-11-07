@@ -168,6 +168,7 @@ describe('the webhook route at its integration’s rate limit (Q60)', () => {
       // A frozen clock: the bucket never refills inside a test.
       timer: { now: () => 0 },
       jobs: null,
+      identityLinks: null,
       rateLimit: {
         policy: { ...policy, maxConcurrent: 1 },
         onLimited: ({ provider }) => limited.push(provider),

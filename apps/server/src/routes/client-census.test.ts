@@ -106,6 +106,14 @@ const SERVED_BEFORE_ITS_CALLER: Readonly<Record<string, string>> = {
   // S-26.1's owner command: the task page's *Take it*, *Assign…* and *Unassign* are S-26.8b's
   // (the M26 UX spec § 2), so the route ships before its caller.
   '/api/tasks/{}/owner': 'S-26.8b',
+  // S-26.6 serves a person's own account link before *Settings → Your accounts* exists; S-26.8a
+  // (the UI session's) gives every one of these its caller, and each entry must leave with it.
+  '/api/me/identity-links': 'S-26.8a — Settings → Your accounts: issue a code, read its state',
+  '/api/me/identity-links/read': 'S-26.8a — Your accounts: *I wrote it on …*',
+  '/api/me/identity-links/matches/{}/confirm': 'S-26.8a — Your accounts: *Link Jira account …?*',
+  '/api/me/identities': 'S-26.8a — Your accounts: the linked list',
+  '/api/me/identities/{}/{}': 'S-26.8a — Your accounts: *Unlink*',
+  '/api/org/identities/{}/{}': 'S-26.8a — Linked accounts (admin): *Unlink*',
   // S-26.1's follow-up: the *Assign…* picker's people, read before S-26.8b's picker calls it.
   '/api/projects/{}/owner-candidates': 'S-26.8b',
 };
