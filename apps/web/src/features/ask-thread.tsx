@@ -67,6 +67,17 @@ const STATUS_LABEL = {
 export const ASK_WRONG_SHAPE = 'The answer didn’t come back in the expected shape.';
 
 /**
+ * The answer the platform held back (S-25.17 review): the run finished and its answer put a secret
+ * the run was given into an identifier field, which the executor refuses to rewrite and ends by
+ * name (`packages/application/src/ask/executor.ts`, the `refusedPath` branch). Not a shape failure.
+ */
+export const ASK_HELD_BACK =
+  'The answer was held back because it quoted a credential. Ask again, or open the run.';
+
+/** The executor's own opening of that refusal — the one sentence it stores for it. */
+const HELD_BACK_REFUSAL = 'the answer put a secret';
+
+/**
  * Why the run behind an ask ended without an answer, in a sentence (S-25.17) — one per
  * `runs.terminal_reason`, so a reason added to the contract fails the build here until it is worded.
  * `success` is reached only for a **failed** ask: the run finished and its result did not match the
@@ -96,6 +107,9 @@ export const ASK_ENDED_BECAUSE: Readonly<Record<RunTerminalReason, string>> = {
  */
 export const askEnding = (ask: TaskAsk): { readonly words: string } | null => {
   if (ask.status === 'failed') {
+    if (ask.refusal_reason?.startsWith(HELD_BACK_REFUSAL) === true) {
+      return { words: ASK_HELD_BACK };
+    }
     return {
       words:
         ask.run_terminal_reason === null

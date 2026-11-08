@@ -22,7 +22,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { ASK_ENDED_BECAUSE, ASK_WRONG_SHAPE, askEnding } from './ask-thread.js';
+import { ASK_ENDED_BECAUSE, ASK_HELD_BACK, ASK_WRONG_SHAPE, askEnding } from './ask-thread.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -310,8 +310,12 @@ describe('the ask-the-task thread', () => {
       dropped_citations: 0,
       refusal_reason: 'the run ended "failed"',
     };
+    const sent: unknown[] = [];
     const { container } = render(
-      createApp({ fetchImpl: fetchFor([failed]), realtime: false }).element,
+      createApp({
+        fetchImpl: fetchFor([failed], { onAsk: (body) => sent.push(body) }),
+        realtime: false,
+      }).element,
     );
     await screen.findByText('Ask the task');
     await waitFor(() => {
@@ -325,6 +329,32 @@ describe('the ask-the-task thread', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Ask again' }));
     expect(field.value).toBe('what am I supposed to decide?');
     expect(document.activeElement).toBe(field);
+    // A prefill only: nothing is asked (and paid for) until the person presses Ask.
+    expect(sent).toEqual([]);
+  });
+
+  it('says an answer held back for quoting a credential was held back, not mis-shaped', async () => {
+    const held: TaskAsk = {
+      ...ANSWERED,
+      status: 'failed',
+      run_terminal_reason: 'success',
+      answer: null,
+      answered_at: null,
+      citations: [],
+      dropped_citations: 0,
+      refusal_reason:
+        'the answer put a secret this run was given in "citations[0].run_id", which the platform reads as an identifier and therefore refuses to rewrite',
+    };
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor([held]), realtime: false }).element,
+    );
+    await screen.findByText('Ask the task');
+    await waitFor(() => {
+      expect(container.textContent).toContain(ASK_HELD_BACK);
+    });
+    expect(container.textContent).not.toContain(ASK_WRONG_SHAPE);
+    expect(screen.getByRole('button', { name: 'Ask again' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open this ask’s run' })).toBeTruthy();
   });
 
   it('says a cancelled ask was cancelled, and offers it again', async () => {
