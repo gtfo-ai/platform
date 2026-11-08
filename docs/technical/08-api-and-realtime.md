@@ -160,7 +160,7 @@
 > `autonomy_above_organisation` `organisation_maximum` and `autonomy`; `wip_above_organisation`
 > `limit`, `value` and `organisation_maximum`. Each is a `{path, message}` entry of the one error
 > shape; the message is unchanged. `apps/web/src/api/error-code-census.test.ts` holds every code the
-> server raises to a sentence in `apps/web/src/api/read-error.ts`, both directions.
+> server raises to a sentence in `apps/web/src/api/error-sentences.ts`, both directions.
 >
 > **WP-15i served the eleven task and run commands** — `POST /api/tasks/:id/{pause,resume,cancel,
 > retry-stage,return-to-stage,rework,feedback}`, `POST /api/tasks/:id/questions/:qid/answer`,

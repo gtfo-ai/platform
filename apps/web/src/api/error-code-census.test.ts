@@ -2,7 +2,8 @@
  * **Every error code the server raises has a sentence, with its next step** (S-25.18, the owner's
  * rule: the person always understands what went wrong, why, and what is required of them).
  *
- * `errorSentence` (`api/read-error.ts`) builds the visible sentence from `error.code`. A code its
+ * `errorSentence` (`api/read-error.ts`) builds the visible sentence from `error.code`, out of the
+ * table in `api/error-sentences.ts`. A code its
  * table did not hold used to fall back to a per-status sentence, so ten typed 409s read *"This is
  * not possible in the state it is in now. Reload to see where it stands"* — reload fixed none of
  * them — and the reason sat behind the collapsed *Technical details*. This census is the comparison
@@ -42,8 +43,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
+import { CODE_SENTENCE } from './error-sentences.js';
 import { ApiError } from './http.js';
-import { CODE_SENTENCE } from './read-error.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 

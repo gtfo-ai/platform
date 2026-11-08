@@ -11,10 +11,18 @@
  * did when the import was static. A setup file shares the test file's module registry, so this is
  * the same `action-menu.tsx` instance the test renders.
  *
+ * `api/read-error.ts` loads its sentence table (`api/error-sentences.ts`) the same way (S-25.18):
+ * until it arrives a notice says an error by its status, and the sentence a test asserts is the
+ * code's own, so it is loaded here too.
+ *
  * What it trades: no test but the ones written for it sees the plain trigger —
  * `ui/action-menu.test.tsx`'s *ActionMenu drawn before its menu module has loaded*, which resets
  * the registry to get a fresh, unloaded instance.
  */
+import { loadErrorSentences } from '../../apps/web/src/api/read-error.js';
 import { loadActionMenu } from '../../apps/web/src/ui/action-menu.js';
 
 await loadActionMenu();
+// S-25.18 (review of #123): the error-sentence table `ErrorNotice` loads on the first failure, so
+// every notice a test renders says the code's own sentence, as it does once the chunk has arrived.
+await loadErrorSentences();

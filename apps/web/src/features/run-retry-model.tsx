@@ -21,7 +21,7 @@
  * Every id rendered here is text in an `<option>` — a React text node, never markup (BD-022).
  */
 import type { ReactElement } from 'react';
-import { errorSentence } from '../api/read-error.js';
+import { errorSentence, useErrorSentences } from '../api/read-error.js';
 import { useOrgModels } from '../app/queries.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
@@ -105,6 +105,8 @@ export const RetryModelField = ({
   readonly onChange: (next: RetryModelChoice) => void;
 }): ReactElement => {
   const models = useOrgModels();
+  // The notice's detail is composed here, so this field re-renders when the sentences arrive.
+  useErrorSentences();
   const listed = models.data === undefined ? null : models.data.models.map((m) => m.model_id);
   const options = retryModelOptions(current, configured, listed);
   return (

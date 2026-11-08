@@ -8,11 +8,12 @@
  * remote worker's local page, so it sits in the chunk `worker.html` loads, which `bundle:check` holds
  * to 120 kB gzipped. These words, appended there, put that page at 119 807 B — 193 B under its
  * budget, with the next slice's words already on their way; here they leave it at 117 723 B.
- * Imported only by the two settings screens (both lazy), they ship in the settings chunk and in
- * neither entry's initial graph.
+ * Imported by the two settings screens (both lazy) and by `api/error-sentences.ts`, the error
+ * sentence table `api/read-error.ts` loads with `import()` on the first failure (S-25.18, which
+ * says the linking refusals on every notice from {@link LINK_REFUSAL_WORDS}) — so they ship in lazy
+ * chunks only, and in neither entry's initial graph.
  */
 import { ApiError } from '../api/http.js';
-import { LINK_REFUSAL_WORDS } from '../api/read-error.js';
 import { titleCase } from './humanize.js';
 
 /**
@@ -134,12 +135,32 @@ export const YOUR_ACCOUNTS_WORDS = {
 } as const;
 
 /**
- * The refusals of S-26.6's routes, said plainly — keyed by the server's code. Since S-25.18 the
- * table lives in `api/read-error.ts`, because every notice says these codes (the error-code census
- * holds each server code to a sentence there); it is re-exported here for the two account screens.
- * A `link_code_voided` refusal is said by its `void_reason` ({@link LINK_VOID_REASON_WORDS}).
+ * The refusals of S-26.6's routes, said plainly — keyed by the server's code. `api/error-sentences.ts`
+ * spreads them into every notice's table (S-25.18), so the error-code census holds them too. A `link_code_voided` refusal is
+ * said by its `void_reason` ({@link LINK_VOID_REASON_WORDS}).
  */
-export { LINK_REFUSAL_WORDS };
+export const LINK_REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  link_code_rate_limited:
+    'You have asked for five codes in the last hour. Use the newest one, or try again later.',
+  identity_links_unavailable:
+    'Linking accounts is not available on this server right now. An administrator can tell why.',
+  link_match_not_found: 'That match no longer belongs to your code. Reload the page.',
+  link_code_expired: 'The code expired before you confirmed. Get a new code and comment again.',
+  link_code_used: 'This code has already linked an account.',
+  link_code_voided: 'This code no longer links anybody. Get a new code.',
+  identity_linked_elsewhere:
+    'That account is linked to another person. An administrator can unlink it.',
+  identity_is_machine: 'An administrator declared that account a machine, so it links nobody.',
+  identity_is_binding_account:
+    'That is the account an integration acts as, so it links nobody. An administrator can link it if it is yours.',
+  identity_link_read_not_permitted:
+    'The platform reads a ticket for you only in a project where you are a member or above.',
+  link_thread_not_found:
+    'No task of that project has that ticket or merge request. Name one the platform has a task for.',
+  link_thread_no_binding: 'That project has no connection that reads those comments.',
+  link_thread_unavailable: 'The provider could not be read just now. Try again in a moment.',
+  identity_not_found: 'That account is not linked any more.',
+};
 
 /** *Linked accounts*' (the administrator's) new words: Unlink and the unlinked assignees. */
 export const LINKED_ACCOUNTS_WORDS = {

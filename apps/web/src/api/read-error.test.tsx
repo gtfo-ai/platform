@@ -5,11 +5,12 @@
  * the projects that still use an integration, the organisation's maximum, the state a task is in and
  * the command it refused, the policy that refused, and the request id of the platform's own failure.
  */
-import { cleanup, render } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, render, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ErrorNotice } from '../ui/kit.js';
+import { CODE_SENTENCE } from './error-sentences.js';
 import { ApiError } from './http.js';
-import { CODE_SENTENCE, errorSentence } from './read-error.js';
+import { errorSentence } from './read-error.js';
 
 afterEach(() => {
   cleanup();
@@ -105,7 +106,7 @@ describe('the sentences built from details (S-25.18)', () => {
     [
       'config_conflict',
       refusal(409, 'config_conflict'),
-      'The project’s settings changed since you opened them. Reload the page to see the new settings, then make your change again.',
+      'The project’s settings changed since you opened them. Reload the page to see the new settings, then try again.',
     ],
     [
       'run_credential_refused, naming the fields',
@@ -155,7 +156,7 @@ describe('a move the state machine does not have names the state and the way on 
       'Task',
       'needs_human',
       'task.cancel',
-      'This task is waiting for you, so it cannot be cancelled — open it and choose one of the ways on it offers.',
+      'This task is waiting for you, so it cannot be cancelled — open it and choose one of the ways on that it offers.',
     ],
     [
       'Task',
@@ -189,6 +190,20 @@ describe('a move the state machine does not have names the state and the way on 
     ],
   ])('%s %s refusing %s', (aggregate, from, command, sentence) => {
     expect(errorSentence(transition(aggregate, from, command)).sentence).toBe(sentence);
+  });
+
+  it('says a command aimed at the state the task is already in as just that', () => {
+    const paused = refusal(409, 'illegal_transition', [
+      { path: 'aggregate', message: 'Task' },
+      { path: 'from', message: 'paused' },
+      { path: 'to', message: 'paused' },
+      { path: 'command', message: 'task.pause' },
+    ]);
+    expect(errorSentence(paused).sentence).toBe('This task is already paused.');
+    // The other side: a different target still names the command and the way on.
+    expect(errorSentence(transition('Task', 'paused', 'task.retry_stage')).sentence).toContain(
+      'so it cannot be retried',
+    );
   });
 
   it('says "this cannot be done to it" for a command it has no word for, or none', () => {
@@ -262,5 +277,29 @@ describe('the platform’s own failure quotes its request id (S-25.18)', () => {
     expect(
       visible(new ApiError(500, 'internal_error', 'the organisation row was not created')),
     ).toContain('report it with the time it happened.');
+  });
+});
+
+/** Review of #123: the table is a lazy chunk; a notice drawn first says the status, then the code. */
+describe('a notice drawn before its sentence table has loaded (S-25.18)', () => {
+  it('says the status sentence first, and the code’s own once the table arrives', async () => {
+    vi.resetModules();
+    const http = await import('./http.js');
+    const kit = await import('../ui/kit.js');
+    const fresh = await import('./read-error.js');
+    const error = new http.ApiError(409, 'config_conflict', SERVER_TEXT);
+    // Before anything loaded it: the status's sentence, which never offers a reload as the fix.
+    expect(fresh.errorSentence(error).sentence).toBe(
+      'This cannot be done in the state it is in now. Open it to see where it stands and what it needs.',
+    );
+    const { container } = render(<kit.ErrorNotice title="Not saved." error={error} />);
+    await waitFor(() => {
+      expect(container.textContent).toContain(
+        'The project’s settings changed since you opened them.',
+      );
+    });
+    expect(fresh.errorSentence(error).sentence).toContain(
+      'Reload the page to see the new settings',
+    );
   });
 });

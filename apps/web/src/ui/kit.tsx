@@ -16,7 +16,7 @@
 import type { InputHTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
 import { useId } from 'react';
 import { PlatformUpdatedError } from '../api/http.js';
-import { errorSentence } from '../api/read-error.js';
+import { errorSentence, useErrorSentences } from '../api/read-error.js';
 import { Blankslate } from './blankslate.js';
 import {
   Button as PrimitiveButton,
@@ -213,6 +213,8 @@ export const ErrorNotice = ({
   /** The failure itself: its type decides whether to hide, its fields the sentence. */
   readonly error?: unknown;
 }): ReactElement | null => {
+  // The code's sentence arrives with its lazy table; until then the status says it (S-25.18).
+  useErrorSentences();
   if (error instanceof PlatformUpdatedError) {
     return null;
   }
@@ -262,6 +264,7 @@ export const ErrorReason = ({
   /** Platform text before the sentence: "Where the last discovery is could not be read:". */
   readonly lead?: string;
 }): ReactElement => {
+  useErrorSentences();
   const said = errorSentence(error);
   return (
     <span className="flex flex-col gap-0.5">
