@@ -1750,18 +1750,31 @@ export const MAX_QUEUE_WAIT_HOLDERS = 10;
  *   leaves the active set, and none has since — the honest third state, never a guessed wait.
  * - `waiting`: `reason` is the limit that refused (`max_parallel_tasks` is checked first, as the
  *   scheduler checks it), `count` the places it counted against `limit`, and `holders` the tasks
- *   holding those places — at most {@link MAX_QUEUE_WAIT_HOLDERS}, the ones waiting for a person
+ *   holding the places (below) — at most {@link MAX_QUEUE_WAIT_HOLDERS}, the ones waiting for a person
  *   first, then the oldest; `total` counts them all and `needs_human` those waiting for a person
  *   (`needs_human`), so a reader can say *5 of them wait for you* past the cut.
  *
  * `position` is the task's 1-based place in `orderQueue` (ticket priority, then age, then id) among
  * the project's `queued` tasks, `queued` their number. A ticket key is the provider's text (BD-022).
+ *
+ * **Both limits, always** (review of #124): `running` (active tasks against `max_parallel_tasks`)
+ * and `pipeline` (tasks in the pipeline against `max_tasks_in_pipeline`), because the scheduler
+ * checks both on every event — a reader that knew only the refusing one would promise a start the
+ * other then refuses. `holders` are the pipeline's whenever it is full (it holds the running tasks
+ * too), else the running tasks.
  */
+const queueWaitLimitSchema = z.strictObject({
+  count: z.int().nonnegative(),
+  limit: z.int().positive(),
+});
+
 export const queueWaitSchema = z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('admitted'),
     position: z.int().positive(),
     queued: z.int().positive(),
+    running: queueWaitLimitSchema,
+    pipeline: queueWaitLimitSchema,
   }),
   z.strictObject({
     status: z.literal('waiting'),
@@ -1770,6 +1783,8 @@ export const queueWaitSchema = z.discriminatedUnion('status', [
     limit: z.int().positive(),
     position: z.int().positive(),
     queued: z.int().positive(),
+    running: queueWaitLimitSchema,
+    pipeline: queueWaitLimitSchema,
     holders: z.strictObject({
       total: z.int().nonnegative(),
       needs_human: z.int().nonnegative(),

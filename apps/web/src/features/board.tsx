@@ -112,11 +112,15 @@ export const QUEUED_COLUMN = 'queued';
  * for the column — the same for every queued task, read off the first one the limits hold; each
  * card says its own place. Nothing when no queued task waits (none, or the limits have room).
  */
-export const queueColumnNote = (tasks: readonly TaskListItem[]): string | null => {
+export const queueColumnNote = (
+  tasks: readonly TaskListItem[],
+  /** Whether the reader may decide or cancel the holders: they then wait for *you*. */
+  mayDecide: boolean,
+): string | null => {
   for (const task of tasks) {
     const wait = task.state === 'queued' ? task.queue_wait : null;
     if (wait !== null && wait !== undefined && wait.status === 'waiting') {
-      return queueNote(wait);
+      return queueNote(wait, mayDecide);
     }
   }
   return null;
@@ -124,10 +128,12 @@ export const queueColumnNote = (tasks: readonly TaskListItem[]): string | null =
 
 const QueueColumnNote = ({
   tasks,
+  mayDecide,
 }: {
   readonly tasks: readonly TaskListItem[];
+  readonly mayDecide: boolean;
 }): ReactElement | null => {
-  const note = queueColumnNote(tasks);
+  const note = queueColumnNote(tasks, mayDecide);
   return note === null ? null : (
     <p data-queue-note="" className="px-1 text-xs text-fg-muted">
       {note}
@@ -452,7 +458,7 @@ const Columns = ({
           key={column.id}
           aria-label={column.title}
           data-column={column.id}
-          // S-25.16: Home's "tickets can't start until you decide these" links here.
+          // S-25.16: Home's "tickets can’t start until these are decided or cancelled" links here.
           id={column.id === QUEUED_COLUMN ? QUEUED_COLUMN_ANCHOR : undefined}
           className={cx(
             'flex w-72 shrink-0 snap-start flex-col gap-2 rounded-lg border bg-subtle p-2 xl:w-auto',
@@ -473,7 +479,9 @@ const Columns = ({
               label={`${tasks.length} task${tasks.length === 1 ? '' : 's'}`}
             />
           </h3>
-          {column.id === QUEUED_COLUMN ? <QueueColumnNote tasks={tasks} /> : null}
+          {column.id === QUEUED_COLUMN ? (
+            <QueueColumnNote tasks={tasks} mayDecide={may.cancel} />
+          ) : null}
           {tasks.map((task) => (
             <TaskCard
               key={task.id}

@@ -837,6 +837,8 @@ describe('Home, a queue the stopped tasks hold (S-25.16)', () => {
     limit: 5,
     position: 1,
     queued: 5,
+    running: { count: reason === 'max_parallel_tasks' ? 2 : 0, limit: 2 },
+    pipeline: { count: reason === 'max_parallel_tasks' ? 2 : 5, limit: 5 },
     holders: {
       total: 5,
       needs_human: needsHuman,
@@ -852,7 +854,7 @@ describe('Home, a queue the stopped tasks hold (S-25.16)', () => {
     start(world);
     const needs = await screen.findByRole('list', { name: 'Needs you' });
     const line = await within(needs).findByRole('link', {
-      name: '5 tickets can’t start until you decide these',
+      name: '5 tickets can’t start until these are decided or cancelled',
     });
     expect(line.getAttribute('href')).toBe('/projects/p1#queued-tasks');
     expect(needs.querySelector('[data-home-queue="p1"]')).not.toBeNull();
@@ -861,7 +863,16 @@ describe('Home, a queue the stopped tasks hold (S-25.16)', () => {
   it.each<readonly [string, QueueWait]>([
     ['a parallel-tasks wait (running tasks hold it)', waiting(0, 'max_parallel_tasks')],
     ['a pipeline wait nobody stopped holds', waiting(0, 'max_tasks_in_pipeline')],
-    ['a queue the limits admit', { status: 'admitted', position: 1, queued: 1 }],
+    [
+      'a queue the limits admit',
+      {
+        status: 'admitted',
+        position: 1,
+        queued: 1,
+        running: { count: 0, limit: 2 },
+        pipeline: { count: 1, limit: 5 },
+      },
+    ],
   ])('says nothing for %s', async (_name, wait) => {
     // Project 2's queue is held: its line proves the queued reads answered before the assertion.
     const world = newWorld({

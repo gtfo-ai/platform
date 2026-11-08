@@ -105,6 +105,8 @@ const AUTIX: Extract<QueueWait, { status: 'waiting' }> = {
   limit: 5,
   position: 2,
   queued: 5,
+  running: { count: 0, limit: 2 },
+  pipeline: { count: 5, limit: 5 },
   holders: { total: 5, needs_human: 5, items: holders(5) },
 };
 
@@ -191,9 +193,9 @@ describe('a queued task’s page (S-25.16)', () => {
     start(detail(AUTIX));
     const box = await notice();
     expect(box.querySelector('[data-queue-sentence]')?.textContent).toBe(
-      'Waiting for a place: this project runs at most 5 tasks at once, and 5 are in the pipeline — ' +
+      'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — ' +
         '5 of them wait for you. A place frees when one of them finishes or is cancelled, so decide ' +
-        'them or cancel one. AUT-6862 is 2nd in the queue and starts once 2 places are free.',
+        'them or cancel one. AUT-6862 is 2nd in the queue: 1 ticket is ahead of it.',
     );
     // Information, never the amber *Needs you* callout.
     expect(box.querySelector('[data-flash]')?.getAttribute('data-flash')).toBe('info');
@@ -225,11 +227,19 @@ describe('a queued task’s page (S-25.16)', () => {
     expect(within(await notice()).queryByRole('link', { name: 'Change the limit' })).toBeNull();
   });
 
+  it('says the holders wait for a person, and asks nothing, of a reader who may not cancel', async () => {
+    start(detail(AUTIX, { can_cancel: false }));
+    const sentence = (await notice()).querySelector('[data-queue-sentence]')?.textContent ?? '';
+    expect(sentence).toContain('5 of them wait for a person.');
+    expect(sentence).not.toMatch(/for you|decide them/);
+  });
+
   it('lists ten holders and says how many more', async () => {
     const many: QueueWait = {
       ...AUTIX,
       count: 12,
       limit: 12,
+      pipeline: { count: 12, limit: 12 },
       holders: { total: 12, needs_human: 12, items: holders(10) },
     };
     start(detail(many));
@@ -246,20 +256,30 @@ describe('a queued task’s page (S-25.16)', () => {
       limit: 2,
       position: 1,
       queued: 1,
+      running: { count: 2, limit: 2 },
+      pipeline: { count: 2, limit: 5 },
       holders: { total: 2, needs_human: 0, items: holders(2, 'active') },
     };
     start(detail(parallel));
     const box = await notice();
     expect(box.querySelector('[data-queue-sentence]')?.textContent).toBe(
       'Waiting for a place: this project runs at most 2 tasks at once, and 2 are running. A place ' +
-        'frees when one of them finishes, stops for a person or is paused. AUT-6862 is next in the ' +
-        'queue and starts then.',
+        'frees when one of them finishes, stops for a person, is paused or is cancelled. AUT-6862 is ' +
+        'next in the queue and starts then.',
     );
     expect(box.querySelectorAll('[data-queue-holder="active"]')).toHaveLength(2);
   });
 
   it('says there is room for an admitted task, with nothing holding it and no limit to change', async () => {
-    start(detail({ status: 'admitted', position: 1, queued: 1 }));
+    start(
+      detail({
+        status: 'admitted',
+        position: 1,
+        queued: 1,
+        running: { count: 0, limit: 2 },
+        pipeline: { count: 1, limit: 5 },
+      }),
+    );
     const box = await notice();
     expect(box.getAttribute('data-testid')).toBe('queue-wait-notice');
     expect(box.querySelector('[data-queue-wait]')?.getAttribute('data-queue-wait')).toBe(

@@ -37,6 +37,8 @@ describe('queueWaitsOf', () => {
       limit: 5,
       position: 2,
       queued: 2,
+      running: { count: 0, limit: 2 },
+      pipeline: { count: 5, limit: 5 },
       holders: {
         total: 5,
         needs_human: 5,
@@ -65,7 +67,13 @@ describe('queueWaitsOf', () => {
       [queued.id],
       DEFAULT_WIP_LIMITS,
     );
-    expect(answers.get(queued.id)).toEqual({ status: 'admitted', position: 1, queued: 1 });
+    expect(answers.get(queued.id)).toEqual({
+      status: 'admitted',
+      position: 1,
+      queued: 1,
+      running: { count: 1, limit: 2 },
+      pipeline: { count: 2, limit: 5 },
+    });
   });
 
   it('names the running tasks for the parallel limit, never a stopped one', () => {
@@ -87,6 +95,27 @@ describe('queueWaitsOf', () => {
     expect(wait?.status === 'waiting' ? wait.holders.items.map((h) => h.task_id) : []).toEqual(
       running.map((held) => held.id),
     );
+  });
+
+  it('carries both limits, and lists the pipeline’s holders when it is full too — review case (a)', () => {
+    // 2 running + 3 stopped: the parallel limit refuses first, and the pipeline is full as well.
+    const running = [task('active'), task('active')];
+    const stopped = [task('needs_human'), task('needs_human'), task('needs_human')];
+    const queued = task('queued');
+    const wait = queueWaitsOf(
+      [...running, ...stopped, queued],
+      [queued.id],
+      DEFAULT_WIP_LIMITS,
+    ).get(queued.id);
+    expect(wait).toMatchObject({
+      status: 'waiting',
+      reason: 'max_parallel_tasks',
+      count: 2,
+      limit: 2,
+      running: { count: 2, limit: 2 },
+      pipeline: { count: 5, limit: 5 },
+      holders: { total: 5, needs_human: 3 },
+    });
   });
 
   it('applies the limits it is given, not the defaults', () => {

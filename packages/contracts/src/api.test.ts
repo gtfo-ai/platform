@@ -1409,23 +1409,38 @@ describe('queue_wait (S-25.16)', () => {
     limit: 5,
     position: 2,
     queued: 5,
+    running: { count: 0, limit: 2 },
+    pipeline: { count: 5, limit: 5 },
     holders: { total: 5, needs_human: 5, items: [1, 2, 3, 4, 5].map(holder) },
   };
+  const room = { running: { count: 0, limit: 2 }, pipeline: { count: 1, limit: 5 } };
 
   it('parses a wait and the honest admitted state', () => {
     expect(queueWaitSchema.parse(waiting)).toEqual(waiting);
-    expect(queueWaitSchema.parse({ status: 'admitted', position: 1, queued: 1 })).toEqual({
+    expect(queueWaitSchema.parse({ status: 'admitted', position: 1, queued: 1, ...room })).toEqual({
       status: 'admitted',
       position: 1,
       queued: 1,
+      ...room,
     });
+    // Both limits are required on either shape.
+    expect(queueWaitSchema.safeParse({ status: 'admitted', position: 1, queued: 1 }).success).toBe(
+      false,
+    );
+    const { pipeline: _pipeline, ...onlyRunning } = waiting;
+    expect(queueWaitSchema.safeParse(onlyRunning).success).toBe(false);
   });
 
   it('refuses an unknown key, a wait without its counts, and a run-limit reason', () => {
     expect(queueWaitSchema.safeParse({ ...waiting, guessed: true }).success).toBe(false);
     expect(
-      queueWaitSchema.safeParse({ status: 'admitted', position: 1, queued: 1, holders: {} })
-        .success,
+      queueWaitSchema.safeParse({
+        status: 'admitted',
+        position: 1,
+        queued: 1,
+        ...room,
+        holders: {},
+      }).success,
     ).toBe(false);
     const { count: _count, ...noCount } = waiting;
     expect(queueWaitSchema.safeParse(noCount).success).toBe(false);

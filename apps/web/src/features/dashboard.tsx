@@ -11,7 +11,7 @@
  * the two reads' own `total`s, which nobody else is asked for (the server refuses them below admin).
  * And when tasks stopped for a person hold a project's queue (S-25.16, the queued page's
  * `queue_wait`), *Needs you* says how many tickets that keeps from starting, in one line linked to
- * the board's *Queued* column ("5 tickets can’t start until you decide these").
+ * the board's *Queued* column ("5 tickets can’t start until these are decided or cancelled").
  * A brand-new instance gets none of that: for an admin with no project, or no integration, Home
  * **is** the setup checklist (`home-setup.ts`), a Stepper whose every ✓ is read from the server and
  * whose one primary button continues at the first step that is not done. Once a project exists the
@@ -290,9 +290,10 @@ export interface HeldQueue {
 
 /**
  * The projects whose queued tasks wait for a pipeline place that tasks stopped for a person hold
- * (S-25.16): the queued page's first `queue_wait` that is a `max_tasks_in_pipeline` wait with a
- * holder at *Needs you*. A parallel-tasks wait is not one — running tasks hold it, not a decision —
- * and neither is `admitted`, which nothing holds.
+ * (S-25.16): the queued page's first `queue_wait` that waits with the **pipeline** full (whichever
+ * limit the scheduler names first — both are checked) and a holder at *Needs you*. A wait on the
+ * running tasks alone is not one — running tasks hold it, not a decision — and neither is
+ * `admitted`, which nothing holds.
  */
 export const heldQueuesOf = (
   projects: readonly { readonly id: string; readonly key: string; readonly name: string }[],
@@ -306,15 +307,15 @@ export const heldQueuesOf = (
     return wait !== undefined &&
       wait !== null &&
       wait.status === 'waiting' &&
-      wait.reason === 'max_tasks_in_pipeline' &&
+      wait.pipeline.count >= wait.pipeline.limit &&
       wait.holders.needs_human > 0
       ? [{ projectKey: project.key, projectName: project.name, tickets: wait.queued }]
       : [];
   });
 
-/** "5 tickets can't start until you decide these". */
+/** "5 tickets can’t start until these are decided or cancelled". */
 export const heldQueueLine = (tickets: number): string =>
-  `${tickets === 1 ? '1 ticket' : `${formatInteger(tickets)} tickets`} can’t start until you decide these`;
+  `${tickets === 1 ? '1 ticket' : `${formatInteger(tickets)} tickets`} can’t start until these are decided or cancelled`;
 
 interface NeedsYouItem {
   readonly id: string;

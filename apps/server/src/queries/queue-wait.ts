@@ -104,7 +104,12 @@ export const queueWaitsOf = (
   taskIds: readonly string[],
   limits: WipLimits,
 ): ReadonlyMap<string, QueueWait> => {
-  const admission = queueAdmissionOf(wipCountsOf(live.map((task) => task.state)), limits);
+  const counts = wipCountsOf(live.map((task) => task.state));
+  const admission = queueAdmissionOf(counts, limits);
+  // Both limits, as the scheduler checks both on every event (review of #124): a reader that knew
+  // only the refusing one would promise a start the other limit then refuses.
+  const running = { count: counts.activeTasks, limit: limits.maxParallelTasks };
+  const pipeline = { count: counts.tasksInPipeline, limit: limits.maxTasksInPipeline };
   const queue = orderQueue(
     live
       .filter((task) => task.state === 'queued')
@@ -116,10 +121,13 @@ export const queueWaitsOf = (
       })),
   );
   const position = new Map(queue.map((task, index) => [task.id as string, index + 1]));
+  // The places a reader must see freed: the pipeline's whenever it is full (it holds the running
+  // tasks too, and only a task that finishes or is cancelled leaves it), else the running ones.
+  const basis = pipeline.count >= pipeline.limit ? 'max_tasks_in_pipeline' : 'max_parallel_tasks';
   const holders =
     admission.status === 'admitted'
       ? null
-      : live.filter((task) => holdsPlace(admission.reason, task.state)).sort(holderOrder);
+      : live.filter((task) => holdsPlace(basis, task.state)).sort(holderOrder);
 
   const answers = new Map<string, QueueWait>();
   for (const taskId of taskIds) {
@@ -130,7 +138,7 @@ export const queueWaitsOf = (
     answers.set(
       taskId,
       admission.status === 'admitted' || holders === null
-        ? { status: 'admitted', position: at, queued: queue.length }
+        ? { status: 'admitted', position: at, queued: queue.length, running, pipeline }
         : {
             status: 'waiting',
             reason: admission.reason,
@@ -138,6 +146,8 @@ export const queueWaitsOf = (
             limit: admission.limit,
             position: at,
             queued: queue.length,
+            running,
+            pipeline,
             holders: {
               total: holders.length,
               needs_human: holders.filter((task) => task.state === 'needs_human').length,

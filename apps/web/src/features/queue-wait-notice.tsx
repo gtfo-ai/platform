@@ -22,6 +22,7 @@ export const QueueWaitNotice = ({
   ticketKey,
   projectKey,
   canChangeLimits,
+  mayDecide,
 }: {
   readonly wait: QueueWait;
   /** The task's own ticket key — provider text (BD-022). */
@@ -29,6 +30,8 @@ export const QueueWaitNotice = ({
   /** The board's key, when the projects read has it: *Change the limit* links there. */
   readonly projectKey: string | null;
   readonly canChangeLimits: boolean;
+  /** Whether the reader may decide or cancel the holders (`can_cancel`): they then wait for *you*. */
+  readonly mayDecide: boolean;
 }): ReactElement => {
   const holders = wait.status === 'waiting' ? wait.holders : null;
   const more = holders === null ? 0 : holders.total - holders.items.length;
@@ -38,7 +41,7 @@ export const QueueWaitNotice = ({
         <div className="flex flex-col gap-2" data-queue-wait={wait.status}>
           <p data-queue-sentence="">
             {/* Platform words around the ticket key, which is the provider's text. */}
-            <UntrustedText value={queueSentence(wait, ticketKey)} />
+            <UntrustedText value={queueSentence(wait, ticketKey, mayDecide)} />
           </p>
           {holders === null || holders.items.length === 0 ? null : (
             <div className="flex flex-col gap-1">

@@ -137,6 +137,8 @@ describe('queue_wait (S-25.16)', () => {
       limit: 5,
       position: 2,
       queued: 2,
+      running: { count: 0, limit: 2 },
+      pipeline: { count: 5, limit: 5 },
       holders: {
         total: 5,
         needs_human: 5,
@@ -204,6 +206,9 @@ describe('queue_wait (S-25.16)', () => {
           scheduler.reason === 'max_parallel_tasks' ? counts.activeTasks : counts.tasksInPipeline,
         );
       }
+      // Both limits, as the store counts them, whichever refused.
+      expect(wait?.running.count).toBe(counts.activeTasks);
+      expect(wait?.pipeline.count).toBe(counts.tasksInPipeline);
       expect(wait?.position).toBe(queued.findIndex((entry) => entry.id === id) + 1);
     }
     expect(queued.map((entry) => entry.id)).toEqual([urgent, later]);

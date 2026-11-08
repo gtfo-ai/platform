@@ -1014,6 +1014,8 @@ describe('the Queued column says what holds it (S-25.16)', () => {
     limit: 5,
     position,
     queued: 2,
+    running: { count: 0, limit: 2 },
+    pipeline: { count: 5, limit: 5 },
     holders: { total: 5, needs_human: 5, items: HOLDERS },
   });
   const FIRST = task(41, { state: 'queued', queue_wait: waitAt(1) });
@@ -1022,7 +1024,7 @@ describe('the Queued column says what holds it (S-25.16)', () => {
     task(31 + index, { state: 'needs_human', current_stage: 'refinement' }),
   );
   const NOTE =
-    'Waiting for a place: this project runs at most 5 tasks at once, and 5 are in the pipeline — ' +
+    'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — ' +
     '5 of them wait for you. A place frees when one of them finishes or is cancelled, so decide ' +
     'them or cancel one.';
 
@@ -1044,11 +1046,25 @@ describe('the Queued column says what holds it (S-25.16)', () => {
     );
   });
 
+  it('says the holders wait for a person to a reader who may not cancel them', async () => {
+    open({ items: [FIRST, SECOND, ...STOPPED], agents: false, may: MEMBER });
+    await card('ACME-42');
+    const note = document.querySelector('[data-queue-note]')?.textContent ?? '';
+    expect(note).toContain('5 of them wait for a person.');
+    expect(note).not.toMatch(/for you|decide them/);
+  });
+
   it('draws no note and the state’s word for a queued task the read gives no wait', async () => {
     const plain = task(43, { state: 'queued' });
     const admitted = task(44, {
       state: 'queued',
-      queue_wait: { status: 'admitted', position: 1, queued: 2 },
+      queue_wait: {
+        status: 'admitted',
+        position: 1,
+        queued: 2,
+        running: { count: 0, limit: 2 },
+        pipeline: { count: 0, limit: 5 },
+      },
     });
     open({ items: [plain, admitted], agents: false });
     const bare = await card('ACME-43');

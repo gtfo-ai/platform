@@ -53,12 +53,14 @@ Settings (org)             – auth, Claude provider mode, default models, globa
   task with an open question, a pending approval, or the `needs_human` state needs you, whatever its stage. Loop
   counters read as rounds ("Review round 2 of 3").
 - *Amended 2026-11-09 (S-25.16).* A queued task says what it waits for and what frees it, from the scheduler's own
-  admission (BD-010, unchanged: a stopped task holds its pipeline place): the *Queued* column carries the reason once
-  as a note ("Waiting for a place: this project runs at most 5 tasks at once, and 5 are in the pipeline — 5 of them
-  wait for you. …"), each queued card its place ("2nd in queue · 5 of 5 places taken"), the task page a *Now* line and
-  a neutral callout listing the tasks that hold the places, and Home's *Needs you* one line when stopped tasks hold a
-  queue ("5 tickets can't start until you decide these"). The words say a place frees when a task **finishes or is
-  cancelled**, because that is what the count reads — deciding a stopped task moves it on, it does not free its place.
+  admission over **both** limits (BD-010, unchanged: a stopped task holds its pipeline place): the *Queued* column
+  carries the reason once as a note ("Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5
+  are in it — 5 of them wait for you. …"), each queued card its place ("2nd in queue · 5 of 5 places taken"), the task
+  page a *Now* line and a neutral callout listing the tasks that hold the places, and Home's *Needs you* one line when
+  stopped tasks hold a queue ("5 tickets can't start until these are decided or cancelled"). The words say a place
+  frees when a task **finishes or is cancelled** (only a *running* one when the running limit is full too), because
+  that is what the counts read — deciding a stopped task moves it on, it does not free its place — and promise a start
+  only to the head of the queue when one such event admits it; a task further back is told how many are ahead.
 
 ### Task detail
 - Left: vertical **stage timeline** with status, duration, cost per stage, returns drawn as loops with reason.
