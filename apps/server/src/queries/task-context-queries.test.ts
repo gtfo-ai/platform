@@ -292,9 +292,12 @@ describe('where the task is and why it stopped (S-25.17)', () => {
       status: 'ok',
       task_state: 'needs_human',
       current_stage: 'ci_gate',
-      stop: { status: 'ok', cause: 'no_answer', ci_ending: 'ci_timed_out', attempt: 2 },
-      escalation: { status: 'ok', reason: 'ci_timed_out', brief: ESCALATION.brief },
-      last_gate_wait: { status: 'ok', held_job: 'deploy', timeout_minutes: 60 },
+      stop: { status: 'ok', value: { cause: 'no_answer', ci_ending: 'ci_timed_out', attempt: 2 } },
+      escalation: { status: 'ok', value: { reason: 'ci_timed_out', brief: ESCALATION.brief } },
+      last_gate_wait: {
+        status: 'ok',
+        value: { status: 'manual', held_job: 'deploy', timeout_minutes: 60 },
+      },
     });
     // The absent ones are refused by name, never `null` (rule 2).
     expect(sub(section, 'gate_wait')).toEqual({
@@ -328,7 +331,10 @@ describe('where the task is and why it stopped (S-25.17)', () => {
         reason: 'the task is active, not waiting for a person',
       });
     }
-    expect(sub(section, 'gate_wait')).toMatchObject({ status: 'ok', pipeline_id: '812' });
+    expect(sub(section, 'gate_wait')).toMatchObject({
+      status: 'ok',
+      value: { pipeline_id: '812' },
+    });
     expect(sub(section, 'last_gate_wait')).toMatchObject({ status: 'refused' });
   });
 
@@ -360,8 +366,7 @@ describe('where the task is and why it stopped (S-25.17)', () => {
     );
     expect(sub(section, 'paused')).toEqual({
       status: 'ok',
-      reason: 'budget',
-      budget_scope: 'task',
+      value: { reason: 'budget', budget_scope: 'task' },
     });
   });
 

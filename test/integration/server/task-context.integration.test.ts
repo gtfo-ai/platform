@@ -403,14 +403,18 @@ describe('get_task_context, scoped to the run’s own task', () => {
       current_stage: 'ci_gate',
       stop: {
         status: 'ok',
-        cause: 'no_answer',
-        attempt: 1,
-        recorded: 'CI did not finish within 60 minutes',
+        value: {
+          cause: 'no_answer',
+          attempt: 1,
+          recorded: 'CI did not finish within 60 minutes',
+        },
       },
       escalation: {
         status: 'ok',
-        reason: 'ci_timed_out',
-        brief: 'CI did not finish within 60 minutes: pipeline 812 was still held',
+        value: {
+          reason: 'ci_timed_out',
+          brief: 'CI did not finish within 60 minutes: pipeline 812 was still held',
+        },
       },
       gate_wait: { status: 'refused' },
       paused: { status: 'refused' },

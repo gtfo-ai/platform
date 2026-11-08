@@ -25,7 +25,7 @@
  *
  * | value | answered from | refused when |
  * |---|---|---|
- * | `state` | the task read's own projections (`findTaskDetail`, S-25.17): `task_state` and `current_stage`, and — each refused by name when absent — `paused` (`paused_reason`, `paused_budget_scope`), `stop` (`stopOf`), `escalation` (`escalationFor`: the reason key and the brief), `gate_wait` and `last_gate_wait` | never as a whole; per value: the task is not in the state the value describes, or the row does not say (see {@link taskStateSectionOf}) |
+ * | `state` | the task read's own projections (`findTaskDetail`, S-25.17): `task_state` and `current_stage`, and — each refused by name when absent — `paused` (`paused_reason`, `paused_budget_scope`), `stop` (`stopOf`), `escalation` (`escalationFor`: the reason key and the brief), `gate_wait` and `last_gate_wait` | never as a whole; per value (`{status: "ok", value}`, the projection nested so its own `status` survives): the task is not in the state the value describes, or the row does not say (see {@link taskStateSectionOf}) |
  * | `ticket` | `tasks.ticket_snapshot` (bounded and redacted at the write, WP-15f) | the platform has not read the ticket |
  * | `artifacts` | the latest version of each type, `findArtifactBody` | per artifact: stored before redaction existed (migration 0038) |
  * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`), the reason and — since WP-105 — its `cause` ({@link returnCauseOf}), and — since WP-166 — the gate excerpt a person chose to send with their return (`attached: {reason, original_chars}`, absent when none was sent) — escalations excluded (WP-55) | never; an empty list is an answer |
@@ -457,11 +457,13 @@ export interface TaskStateSource {
   readonly last_gate_wait: TaskDetailRecord['last_gate_wait'];
 }
 
-/** One value of the `state` section: the projection's own answer, or a refusal saying why not. */
+/**
+ * One value of the `state` section: the projection's own answer under `value`, or a refusal saying
+ * why not. The answer is nested, never spread: a projection with a `status` of its own (a CI wait's
+ * `manual`/`running`) would otherwise overwrite the `ok`, or be overwritten by it.
+ */
 const servedOr = (value: object | null | undefined, reason: string): Record<string, unknown> =>
-  value === null || value === undefined
-    ? { status: 'refused', reason }
-    : { status: 'ok', ...(value as Record<string, unknown>) };
+  value === null || value === undefined ? { status: 'refused', reason } : { status: 'ok', value };
 
 /**
  * **Where the task is and why it stopped** — `get_task_context`'s `state` (S-25.17).
@@ -497,8 +499,7 @@ export const taskStateSectionOf = (source: TaskStateSource): TaskContextSection 
       task.state === 'paused'
         ? {
             status: 'ok',
-            reason: task.paused_reason,
-            budget_scope: task.paused_budget_scope,
+            value: { reason: task.paused_reason, budget_scope: task.paused_budget_scope },
           }
         : { status: 'refused', reason: `the task is ${task.state}, not paused` },
     stop: servedOr(
