@@ -353,7 +353,7 @@ describe('what the inbox says about an item that expired', () => {
     const container = await renderInbox(fakeServer().fetchImpl);
     const note = container.querySelector('[data-inbox-expiry-note]');
     expect(note?.querySelector('p')?.textContent).toBe(
-      'Questions and approvals waiting for a person, across all projects.',
+      'Questions, approvals and stopped tasks waiting for a person, across all projects.',
     );
     expect(note?.querySelector('p')?.textContent).not.toContain('expire');
   });

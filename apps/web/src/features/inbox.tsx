@@ -69,7 +69,7 @@ type Inbox = NonNullable<ReturnType<typeof useInbox>['data']>;
 type Question = Inbox['questions'][number];
 type Approval = Inbox['approvals'][number];
 type CiHeld = Inbox['ci_held'][number];
-type Escalated = Inbox['escalated'][number];
+type StoppedTask = Inbox['escalated'][number];
 
 /** The filter the NavList holds: a kind, or one project by id. */
 type Filter =
@@ -368,7 +368,7 @@ const EscalatedRow = ({
   where,
   nowMs,
 }: {
-  readonly row: Escalated;
+  readonly row: StoppedTask;
   readonly where: Where;
   readonly nowMs: number;
 }): ReactElement => {
