@@ -385,3 +385,93 @@ describe('the conversation cases run offline (WP-176 review round 1)', () => {
     });
   });
 });
+
+/**
+ * S-25.17 (AUT-6655): the ask's three cases run offline the same way — an answer a correct model
+ * would give passes every `javascript` assertion, and each wrong answer the row names (Markdown, a
+ * raw run id, the fields inside `answer`, "approve it" on an expired approval) fails one. Nothing
+ * here is a claim about a model (standing rule 3).
+ */
+const ASK_RUN = '0199a0b0-1111-7000-8000-000000000008';
+const askAnswer = (overrides: Record<string, unknown>) => ({
+  answer: '',
+  citations: [{ kind: 'run', run_id: ASK_RUN, detail: 'the run the record names' }],
+  unanswered: [],
+  confidence: 'high',
+  ...overrides,
+});
+const CI_ANSWER =
+  'The second CI check waited 60 minutes and the pipeline never finished: it is held at the manual job deploy. Start that job in GitLab and retry the CI check from the task page, or cancel the task.';
+const EXPIRED_ANSWER =
+  'Nobody decided the plan approval in time, and an expired approval can no longer be approved or rejected. Retry the plan approval stage from the task page to have the plan written and asked for again, or cancel the task.';
+const REVIEW_ANSWER =
+  'The review sent it back because the migration is not reversible, which is its one finding.';
+
+const ASK_CASE_OUTPUTS: Readonly<
+  Record<string, { readonly correct: object; readonly wrong: Readonly<Record<string, object>> }>
+> = {
+  'ask-why-needs-me-ci-timeout': {
+    correct: askAnswer({ answer: CI_ANSWER }),
+    wrong: {
+      'Markdown in the answer': askAnswer({ answer: `**Why it stopped:** ${CI_ANSWER}` }),
+      'a raw run id in the answer': askAnswer({ answer: `${CI_ANSWER} See run ${ASK_RUN}.` }),
+      'no way out named': askAnswer({
+        answer: 'The CI check waited 60 minutes for the job deploy and did not finish.',
+      }),
+      'the stop not explained': askAnswer({ answer: 'Retry the CI check from the task page.' }),
+    },
+  },
+  'ask-why-needs-me-expired-approval': {
+    correct: askAnswer({ answer: EXPIRED_ANSWER }),
+    wrong: {
+      'told to approve an expired approval': askAnswer({
+        answer: 'The plan approval expired. Please approve the plan, or retry the stage.',
+      }),
+      'no retry named': askAnswer({ answer: 'Nobody decided the plan approval in time.' }),
+      'backticks in the answer': askAnswer({
+        answer: `${EXPIRED_ANSWER} Stage: \`plan_approval\`.`,
+      }),
+    },
+  },
+  'ask-holds-the-fields-apart': {
+    correct: askAnswer({ answer: REVIEW_ANSWER, unanswered: ['who asked for the migration'] }),
+    wrong: {
+      'the citations as tags inside the answer': askAnswer({
+        answer: `${REVIEW_ANSWER}\n<citations>run ${ASK_RUN}</citations>`,
+      }),
+      'the confidence inside the answer': askAnswer({
+        answer: `${REVIEW_ANSWER}\nConfidence: high`,
+      }),
+      'no citation as a field': askAnswer({ answer: REVIEW_ANSWER, citations: [] }),
+    },
+  },
+};
+
+describe('the ask cases run offline (S-25.17)', () => {
+  const cases = ROLE_EVALS.ask.cases;
+  const byId = new Map(cases.map((entry) => [entry.id, entry]));
+
+  it('cover every case S-25.17 added', () => {
+    const added = cases
+      .filter((entry) => /\bS-25\.17\b/.test(entry.description))
+      .map((entry) => entry.id);
+    expect(added.sort()).toEqual(Object.keys(ASK_CASE_OUTPUTS).sort());
+  });
+
+  describe.each(Object.entries(ASK_CASE_OUTPUTS))('%s', (id, { correct, wrong }) => {
+    const expressions = (byId.get(id)?.assert ?? [])
+      .filter((assertion) => assertion.type === 'javascript')
+      .map((assertion) => assertion.value);
+
+    it('passes every assertion on the correct output', () => {
+      expect(expressions.length).toBeGreaterThan(0);
+      for (const expression of expressions) {
+        expect(passes(expression, correct), expression).toBe(true);
+      }
+    });
+
+    it.each(Object.entries(wrong))('fails at least one assertion when %s', (_, output) => {
+      expect(expressions.every((expression) => passes(expression, output))).toBe(false);
+    });
+  });
+});

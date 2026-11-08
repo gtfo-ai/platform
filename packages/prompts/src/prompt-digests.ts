@@ -88,6 +88,7 @@ export const ROLE_PROMPT_DIGESTS = {
     '1': '96614f76e4c0a537735a98140eeff73f83e6515d0670531b23f28f599fbbdb56',
     '2': 'e838b99068c0f4f12adfc260cb382ec53fee29d38cb3cfb9fc9c1bbddd09b12a',
     '3': '8281516dea0cafc3d3974297ee2f3d80fab461d06ff2c9a0b23a715a0f883b50',
+    '4': 'b244b0eb37a3aacc249acdfe45e4f23858e5f38834c6b475e89f5ab61688641c',
   },
   historian: {
     '1': '8fd962ad1c6362ac9d0a602065351c9c3a6594cbbd7262e0a444794969c31047',

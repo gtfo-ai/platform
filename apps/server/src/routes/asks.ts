@@ -39,6 +39,7 @@ import type {
   AskAnswerCitation,
   IsoDateTime,
   JsonObject,
+  RunTerminalReason,
   TaskAsk,
   UserRole,
 } from '@platform/contracts';
@@ -291,30 +292,37 @@ export const registerAskRoutes = async (
   );
 };
 
-/** The wire shape of one thread entry; the projection and the route agree on this one function. */
-export const toWireAsk = (ask: {
-  readonly id: string;
-  readonly taskId: string;
-  readonly source: 'ui' | 'ticket';
-  readonly askedByUserId: string;
-  readonly question: string;
-  readonly runId: string | null;
-  readonly status: 'pending' | 'answered' | 'refused' | 'failed';
-  readonly answer: string | null;
-  readonly citations: readonly AskAnswerCitation[];
-  readonly droppedCitations: number;
-  readonly answerArtifactId: string | null;
-  readonly refusalReason: string | null;
-  readonly mirroredAt: string | null;
-  readonly createdAt: string;
-  readonly answeredAt: string | null;
-}): TaskAsk => ({
+/**
+ * The wire shape of one thread entry; the projection and the route agree on this one function.
+ * `ending` is how the ask's run ended (S-25.17), `null` for an ask with no run or a run not read.
+ */
+export const toWireAsk = (
+  ask: {
+    readonly id: string;
+    readonly taskId: string;
+    readonly source: 'ui' | 'ticket';
+    readonly askedByUserId: string;
+    readonly question: string;
+    readonly runId: string | null;
+    readonly status: 'pending' | 'answered' | 'refused' | 'failed';
+    readonly answer: string | null;
+    readonly citations: readonly AskAnswerCitation[];
+    readonly droppedCitations: number;
+    readonly answerArtifactId: string | null;
+    readonly refusalReason: string | null;
+    readonly mirroredAt: string | null;
+    readonly createdAt: string;
+    readonly answeredAt: string | null;
+  },
+  ending: { readonly terminalReason: RunTerminalReason | null } | null = null,
+): TaskAsk => ({
   id: ask.id,
   task_id: ask.taskId,
   source: ask.source,
   asked_by_user_id: ask.askedByUserId,
   question: ask.question,
   run_id: ask.runId,
+  run_terminal_reason: ending?.terminalReason ?? null,
   status: ask.status,
   answer: ask.answer,
   citations: [...ask.citations],

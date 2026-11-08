@@ -226,6 +226,24 @@ export const runAskStoreContract = (harness: AskStoreHarness): void => {
       expect(typeof entry?.params).toBe('object');
     });
 
+    /**
+     * S-25.17: the thread words a failed ask from its run's own ending, so the store reads it by
+     * id — the seeded run's status and reason, and nothing for an id that names no run.
+     */
+    it('reads how the seeded run ended, and nothing for an id naming no run', async () => {
+      expect(await store.runEndings(tx, [])).toEqual([]);
+      expect(await store.runEndings(tx, [nextId()])).toEqual([]);
+      if (runId === null) {
+        return;
+      }
+      const endings = await store.runEndings(tx, [runId, nextId()]);
+      expect(endings).toHaveLength(1);
+      expect(endings[0]?.runId).toBe(runId);
+      // Both harnesses seed a completed run; the reason is the column's (`success` or none).
+      expect(endings[0]?.status).toBe('completed');
+      expect([null, 'success']).toContain(endings[0]?.terminalReason);
+    });
+
     it('projects nothing for a task that has neither', async () => {
       const other = nextId();
       expect(await store.runsForTask(tx, other, 10)).toEqual([]);

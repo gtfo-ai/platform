@@ -26,6 +26,7 @@ import type {
   IsoDateTime,
   JsonObject,
   RunStatus,
+  RunTerminalReason,
   Slug,
 } from '@platform/contracts';
 import type { Transaction } from '../ports/transaction.js';
@@ -133,6 +134,17 @@ export interface AskAuditLine {
   readonly createdAt: IsoDateTime;
 }
 
+/**
+ * How one run ended, for the thread (S-25.17): `runs.status` and `runs.terminal_reason`, read beside
+ * the asks rather than stored on them, so the thread says why a failed ask's run ended in the run's
+ * own words. `terminalReason` is `null` while the run is live and for an ending that recorded none.
+ */
+export interface AskRunEnding {
+  readonly runId: Id;
+  readonly status: RunStatus;
+  readonly terminalReason: RunTerminalReason | null;
+}
+
 export interface AskStore {
   /**
    * Records a new question.
@@ -175,4 +187,9 @@ export interface AskStore {
   runsForTask(tx: Transaction, taskId: Id, limit: number): Promise<readonly AskRunLine[]>;
   /** This task's `human_actions`, newest first (criterion 10, PROGRESS backlog 52). */
   auditForTask(tx: Transaction, taskId: Id, limit: number): Promise<readonly AskAuditLine[]>;
+  /**
+   * How each named run ended (S-25.17) — one entry per id that names a run, in no order; an id
+   * naming no run has none. Read for the thread's asks, so it is bounded by the thread's page.
+   */
+  runEndings(tx: Transaction, runIds: readonly Id[]): Promise<readonly AskRunEnding[]>;
 }

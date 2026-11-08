@@ -376,9 +376,11 @@ export const reportProgressInputSchema = z.strictObject({
  * What `get_task_context` may be asked for. `runs` and `audit` joined at WP-54 (PROGRESS backlog
  * 83): they are the two things an ask is asked about, and the platform holds both. The tool's input
  * names **no task and no project** — the run's own come from `PlatformToolContext`, so a model
- * cannot read another task's record by naming it.
+ * cannot read another task's record by naming it. `state` joined at S-25.17: where the task is and
+ * why it stopped — the question an ask is asked most, which no other value answered.
  */
 export const TASK_CONTEXT_INCLUDES = [
+  'state',
   'ticket',
   'artifacts',
   'feedback',

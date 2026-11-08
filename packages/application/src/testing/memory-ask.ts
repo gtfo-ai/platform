@@ -6,12 +6,19 @@
  * | # | Divergence | Direction | Justification |
  * |---|---|---|---|
  * | 1 | It ignores the `Transaction` handle entirely, so nothing rolls back. | **different** | Every in-memory store in this repository does; the e2e tier is where a rollback means anything. Stated here rather than inherited silently. |
- * | 2 | `runsForTask` and `auditForTask` read **arrays this store owns**, not the `runs` and `human_actions` tables the SQL adapter joins. | **different** | The two projections have no in-memory source of truth to read — `MemoryPipelineStore` holds runs in a shape of its own and nothing holds `human_actions` at all — so the fake is *given* the rows through {@link MemoryAskStore.seedRun} / {@link MemoryAskStore.seedAudit}. The shared contract suite runs the same cases against PostgreSQL, which is what keeps the two answering alike. |
+ * | 2 | `runsForTask`, `runEndings` and `auditForTask` read **arrays this store owns**, not the `runs` and `human_actions` tables the SQL adapter joins. | **different** | The two projections have no in-memory source of truth to read — `MemoryPipelineStore` holds runs in a shape of its own and nothing holds `human_actions` at all — so the fake is *given* the rows through {@link MemoryAskStore.seedRun} / {@link MemoryAskStore.seedAudit}. The shared contract suite runs the same cases against PostgreSQL, which is what keeps the two answering alike. |
  * | 3 | A `ui` ask never collides; a second `ticket` ask for the same `(project, comment)` answers `'duplicate'`. | **same** | This is the `task_asks_ticket_comment_unique` index, reproduced rather than approximated — it is the thing that makes a redelivered webhook cost nothing, and a fake that let the second one through would make that property untested. |
  * | 4 | The three status invariants of migration 0024 (`answered` ⇔ an answer and an instant; `refused`/`failed` ⇔ a reason) are **enforced here too**, by throwing. | **stricter** | They are `check` constraints in the database, so a caller that broke one would fail in production and pass here. Stricter is the direction a fake may take (standing rule 1). |
  */
 import type { AskAnswerCitation, Id, IsoDateTime } from '@platform/contracts';
-import type { AskAuditLine, AskRunLine, AskStore, NewAsk, StoredAsk } from '../ask/store.js';
+import type {
+  AskAuditLine,
+  AskRunEnding,
+  AskRunLine,
+  AskStore,
+  NewAsk,
+  StoredAsk,
+} from '../ask/store.js';
 import type { Transaction } from '../ports/transaction.js';
 
 export class MemoryAskStoreError extends Error {
@@ -126,6 +133,15 @@ export const createMemoryAskStore = (): MemoryAskStore => {
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
         .slice(0, limit)
         .map(clone),
+    runEndings: async (_tx, runIds) =>
+      runs
+        .filter((run) => runIds.includes(run.runId))
+        .map((run) => ({
+          runId: run.runId,
+          status: run.status,
+          // Seeded as the SQL column holds it; a value outside the enum is the seeder's fault.
+          terminalReason: run.terminalReason as AskRunEnding['terminalReason'],
+        })),
     auditForTask: async (_tx, taskId, limit) =>
       audit
         .filter((entry) => entry.taskId === taskId)

@@ -98,6 +98,87 @@
           "weight": 0.2
         }
       ]
+    },
+    {
+      "id": "ask-why-needs-me-ci-timeout",
+      "description": "S-25.17: 'why does this need me' on a CI-timeout stop is answered from get_task_context's state — what stopped it, what it waits for, what the person can do — in plain sentences with no Markdown and no raw id",
+      "vars": {
+        "question": "The task says it needs me. What am I supposed to decide?",
+        "record": "get_task_context state: {task_state: 'needs_human', current_stage: 'ci_gate', stop: {status: 'ok', stage: 'ci_gate', attempt: 2, cause: 'no_answer', ci_ending: 'ci_timed_out', recorded: 'CI did not finish within 60 minutes'}, escalation: {status: 'ok', reason: 'ci_timed_out', brief: 'CI did not finish within 60 minutes: pipeline 812 was still held at the manual job deploy. Start the job in GitLab and retry \"ci_gate\" from the task page, or cancel the task.'}, last_gate_wait: {status: 'ok', pipeline_id: '812', status: 'manual', held_job: 'deploy', timeout_minutes: 60}}. run 0199a0b0-1111-7000-8000-000000000006 (stage implementation, attempt 1, completed)."
+      },
+      "expect_fields": ["answer", "citations", "confidence"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/ask-answer.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "/deploy/i.test(JSON.parse(output).answer) && /60 minutes|timed? ?out|did not finish/i.test(JSON.parse(output).answer) && /retry|start the job|cancel/i.test(JSON.parse(output).answer)"
+        },
+        {
+          "type": "javascript",
+          "value": "!/\\*\\*|^#|`/m.test(JSON.parse(output).answer) && !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i.test(JSON.parse(output).answer)"
+        },
+        {
+          "type": "javascript",
+          "value": "['high','medium','low'].includes(JSON.parse(output).confidence) && Array.isArray(JSON.parse(output).citations)"
+        }
+      ]
+    },
+    {
+      "id": "ask-why-needs-me-expired-approval",
+      "description": "S-25.17: 'why does this need me' on an expired plan approval says nobody decided it in time and names the way on — retry the stage or cancel — rather than telling the person to approve it",
+      "vars": {
+        "question": "Why is this waiting for me?",
+        "record": "get_task_context state: {task_state: 'needs_human', current_stage: 'plan_approval', stop: {status: 'refused', reason: 'the stopped attempt does not record why in a shape the platform words; the escalation says why'}, escalation: {status: 'ok', reason: 'the approval expired', brief: 'Nobody decided the plan approval for ACME-12 in time, and an expired approval can no longer be approved or rejected. To go on, retry \"plan_approval\" from the task page to have the plan written and asked for again — or cancel the task.'}, gate_wait: {status: 'refused'}}. run 0199a0b0-1111-7000-8000-000000000007 (stage architecture, attempt 1, completed) produced ImplementationPlan v1."
+      },
+      "expect_fields": ["answer", "confidence"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/ask-answer.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "/expired|in time|nobody decided/i.test(JSON.parse(output).answer) && /retry/i.test(JSON.parse(output).answer)"
+        },
+        {
+          "type": "javascript",
+          "value": "!/\\b(please|you can|you should|go and|just)\\s+approve\\b/i.test(JSON.parse(output).answer) && !/\\*\\*|`/.test(JSON.parse(output).answer)"
+        },
+        {
+          "type": "javascript",
+          "value": "['high','medium','low'].includes(JSON.parse(output).confidence)"
+        }
+      ]
+    },
+    {
+      "id": "ask-holds-the-fields-apart",
+      "description": "S-25.17 (AUT-6655): the citations, the unanswered list and the confidence are fields of the result, never tags or a closing section inside `answer`",
+      "vars": {
+        "question": "Why did the review send it back?",
+        "record": "run 0199a0b0-1111-7000-8000-000000000008 (stage code_review, attempt 1, completed) produced ReviewVerdict v1: verdict request_changes, findings: ['the migration is not reversible']. The record does not say who asked for the migration."
+      },
+      "expect_fields": ["answer", "citations", "unanswered", "confidence"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/ask-answer.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "!/<\\/?(citations|unanswered|confidence)>|\\b(citations|unanswered|confidence)\\s*:/i.test(JSON.parse(output).answer)"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).citations.length >= 1 && Array.isArray(JSON.parse(output).unanswered) && ['high','medium','low'].includes(JSON.parse(output).confidence)"
+        },
+        {
+          "type": "javascript",
+          "value": "/reversible|migration/i.test(JSON.parse(output).answer)"
+        }
+      ]
     }
   ]
 }

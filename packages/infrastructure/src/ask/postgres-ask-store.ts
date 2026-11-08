@@ -21,6 +21,7 @@
  */
 import type {
   AskAuditLine,
+  AskRunEnding,
   AskRunLine,
   AskStatus,
   AskStore,
@@ -255,6 +256,27 @@ export const createPostgresAskStore = (): AskStore => ({
       terminalReason: row.terminal_reason,
       costUsd: usd(row.usd),
       createdAt: iso(row.created_at),
+    }));
+  },
+
+  /**
+   * S-25.17: how each of the thread's runs ended. `runs.terminal_reason` is the `run_terminal_reason`
+   * enum, which `test/integration/db/enums.integration.test.ts` holds to the contract's list, so the
+   * value is the contract's; an empty list reads nothing.
+   */
+  runEndings: async (tx, runIds): Promise<readonly AskRunEnding[]> => {
+    if (runIds.length === 0) {
+      return [];
+    }
+    const { rows } = await sqlOf(tx).query<{
+      id: string;
+      status: string;
+      terminal_reason: string | null;
+    }>('select id, status, terminal_reason from runs where id = any($1::uuid[])', [[...runIds]]);
+    return rows.map((row) => ({
+      runId: row.id as Id,
+      status: row.status as RunStatus,
+      terminalReason: row.terminal_reason as AskRunEnding['terminalReason'],
     }));
   },
 

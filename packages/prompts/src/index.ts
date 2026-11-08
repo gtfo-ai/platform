@@ -123,7 +123,9 @@ export const ROLE_PROMPT_VERSIONS = {
   discovery: '8',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
-  ask: '3',
+  // S-25.17 (AUT-6655): `get_task_context`'s `state` first for a why/what-next question; plain
+  // sentences with no Markdown and no raw ids; the four fields as fields, never inside `answer`.
+  ask: '4',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
   historian: '3',

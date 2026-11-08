@@ -296,6 +296,11 @@
 > `POST /api/tasks/:id/ask` requires an `Idempotency-Key` — a repeat starts a second run the project
 > pays for — and asking is `task.ask` (**member**, the shipped capability map) while reading the
 > thread is `task.read` (viewer) and reading the task audit is `org.audit.read` (maintainer).
+> **Since S-25.17** each thread entry also carries `run_terminal_reason` — the `runs.terminal_reason`
+> of the ask's run, read beside the thread in the same transaction and never stored on the ask
+> (`null` with no run, a live run, or an ending that recorded none) — so the thread says why a failed
+> or cancelled ask got no answer, links its run and offers *Ask again*; nothing is salvaged from a
+> result the `AskAnswer` contract refused.
 > **WP-30 removed `GET/PUT /api/projects/:id/budgets`** and added four endpoints this table did not
 > name: `GET/PUT /api/projects/:id/autonomy` (the materialised dial, BD-027), `GET /api/projects/:id/audit`
 > (the `human_actions` rows of a project's settings — the table row 8 promises an audit of and that

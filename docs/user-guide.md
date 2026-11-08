@@ -1271,6 +1271,13 @@ such, and so are the failing jobs past the fifth.
   An ask starts a run and spends the project's money, which is why it needs a member rather than a
   viewer; reading the thread needs only a viewer. It is a project feature (**Ask the task** among the operating-mode features), on by default.
   Like any run it needs an instance whose runner is configured (section 13).
+  Ask *why did it stop?* or *what am I supposed to decide?* and the answer starts from where the task
+  is now — its stop, the escalation's reason and brief, the CI wait it is on or that ran out — in
+  plain sentences that name a run by its stage and attempt. The page shows the answer exactly as
+  written, so it never renders Markdown. A question that got no answer says why in words (*The
+  answer didn't come back in the expected shape*, *The run was cancelled before it answered*, …),
+  links the run that tried, and offers **Ask again** with your question filled in; the platform
+  never shows a half-shaped answer it could not check.
 
 ## 5. Run detail and the transcript
 

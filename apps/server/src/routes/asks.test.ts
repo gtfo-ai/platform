@@ -17,7 +17,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
-import { type AskQueries, registerAskRoutes } from './asks.js';
+import { type AskQueries, registerAskRoutes, toWireAsk } from './asks.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
 
 const TASK = '00000000-0000-4000-8000-0000000000a1';
@@ -54,6 +54,7 @@ const ask = (overrides: Partial<TaskAsk> = {}): TaskAsk => ({
   asked_by_user_id: USER,
   question: 'why did you choose a column?',
   run_id: null,
+  run_terminal_reason: null,
   status: 'answered',
   answer: 'Because a join on every read is worse.',
   citations: [],
@@ -437,6 +438,26 @@ describe('GET /api/tasks/:task_id/asks', () => {
     expect(Object.keys(body.items[0].citations[0])).not.toContain('url');
   });
 
+  it('serves a failed ask with its run and the reason that run ended (S-25.17)', async () => {
+    world.thread = [
+      ask({
+        status: 'failed',
+        answer: null,
+        answered_at: null,
+        run_id: '00000000-0000-4000-8000-0000000000e1',
+        run_terminal_reason: 'error_max_structured_output_retries',
+        refusal_reason: 'the run ended "failed"',
+      }),
+    ];
+    const response = await world.app.inject({ method: 'GET', url: `/api/tasks/${TASK}/asks` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items[0]).toMatchObject({
+      status: 'failed',
+      run_id: '00000000-0000-4000-8000-0000000000e1',
+      run_terminal_reason: 'error_max_structured_output_retries',
+    });
+  });
+
   it('404s an unknown task rather than answering an empty thread', async () => {
     const response = await world.app.inject({
       method: 'GET',
@@ -496,5 +517,35 @@ describe('GET /api/tasks/:task_id/audit (criterion 10, PROGRESS backlog 52)', ()
     expect(
       (await world.app.inject({ method: 'GET', url: `/api/tasks/${TASK}/asks` })).statusCode,
     ).toBe(200);
+  });
+});
+
+/** S-25.17: the one mapping the composition and the route share carries the run's ending. */
+describe('toWireAsk', () => {
+  const stored = {
+    id: ASK,
+    taskId: TASK,
+    source: 'ui' as const,
+    askedByUserId: USER,
+    question: 'what am I supposed to decide?',
+    runId: '00000000-0000-4000-8000-0000000000e1',
+    status: 'failed' as const,
+    answer: null,
+    citations: [],
+    droppedCitations: 0,
+    answerArtifactId: null,
+    refusalReason: 'the run ended "failed"',
+    mirroredAt: null,
+    createdAt: '2026-06-01T09:00:00.000Z',
+    answeredAt: null,
+  };
+
+  it('publishes the run’s terminal reason when it was read, and null when it was not', () => {
+    expect(
+      toWireAsk(stored, { terminalReason: 'error_max_structured_output_retries' })
+        .run_terminal_reason,
+    ).toBe('error_max_structured_output_retries');
+    expect(toWireAsk(stored, { terminalReason: null }).run_terminal_reason).toBeNull();
+    expect(toWireAsk(stored).run_terminal_reason).toBeNull();
   });
 });

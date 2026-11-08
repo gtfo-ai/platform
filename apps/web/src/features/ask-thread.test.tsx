@@ -12,12 +12,17 @@
  *  - `dropped_citations` is shown rather than swallowed, because a reader who can see that two
  *    claims lost their evidence knows how much of the answer to trust (product/11:30).
  */
-import type { TaskAsk, TaskDetailResponse } from '@platform/contracts';
+import {
+  runTerminalReasonSchema,
+  type TaskAsk,
+  type TaskDetailResponse,
+} from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { ASK_ENDED_BECAUSE, ASK_WRONG_SHAPE, askEnding } from './ask-thread.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -143,6 +148,7 @@ const ANSWERED: TaskAsk = {
   asked_by_user_id: SESSION.user.id,
   question: 'why did you choose a column instead of <b>a table</b>?',
   run_id: RUN,
+  run_terminal_reason: 'success',
   status: 'answered',
   answer: 'The plan says a join on every read of the task page would be worse. <script>x</script>',
   citations: [
@@ -285,6 +291,111 @@ describe('the ask-the-task thread', () => {
       expect(container.textContent).toContain('has spent its 5 USD cap');
     });
     expect(container.textContent).toContain('not run');
+  });
+
+  /**
+   * **S-25.17** (AUT-6655): the ask whose model put its citations inside `answer` failed the
+   * contract, and the thread said only *the run ended "failed"*. It now says why in words, links its
+   * run and offers to ask again with the question filled in — and shows no answer it did not get.
+   */
+  it('says why a failed ask got no answer, links its run, and asks again with the question filled in', async () => {
+    const failed: TaskAsk = {
+      ...ANSWERED,
+      question: 'what am I supposed to decide?',
+      status: 'failed',
+      run_terminal_reason: 'error_max_structured_output_retries',
+      answer: null,
+      answered_at: null,
+      citations: [],
+      dropped_citations: 0,
+      refusal_reason: 'the run ended "failed"',
+    };
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor([failed]), realtime: false }).element,
+    );
+    await screen.findByText('Ask the task');
+    await waitFor(() => {
+      expect(container.textContent).toContain(ASK_WRONG_SHAPE);
+    });
+    expect(container.textContent).toContain('The answer didn’t come back in the expected shape.');
+    const runLink = screen.getByRole('link', { name: 'Open this ask’s run' });
+    expect(runLink.getAttribute('href')).toContain(`/runs/${RUN}`);
+    const field = screen.getByLabelText('Your question') as HTMLTextAreaElement;
+    expect(field.value).toBe('');
+    await userEvent.click(screen.getByRole('button', { name: 'Ask again' }));
+    expect(field.value).toBe('what am I supposed to decide?');
+    expect(document.activeElement).toBe(field);
+  });
+
+  it('says a cancelled ask was cancelled, and offers it again', async () => {
+    const cancelled: TaskAsk = {
+      ...ANSWERED,
+      status: 'refused',
+      run_terminal_reason: 'cancelled',
+      answer: null,
+      answered_at: null,
+      citations: [],
+      dropped_citations: 0,
+      refusal_reason: 'the run was cancelled',
+    };
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor([cancelled]), realtime: false }).element,
+    );
+    await screen.findByText('Ask the task');
+    await waitFor(() => {
+      expect(container.textContent).toContain('The run was cancelled before it answered.');
+    });
+    expect(screen.getByRole('button', { name: 'Ask again' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open this ask’s run' })).toBeTruthy();
+  });
+
+  it('offers no Ask again on an answered ask, nor on a refusal no run was started for', async () => {
+    const capped: TaskAsk = {
+      ...ANSWERED,
+      id: '00000000-0000-4000-8000-0000000000d2',
+      status: 'refused',
+      run_id: null,
+      run_terminal_reason: null,
+      answer: null,
+      answered_at: null,
+      citations: [],
+      dropped_citations: 0,
+      refusal_reason: 'the task has spent its 5 USD cap',
+    };
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor([ANSWERED, capped]), realtime: false }).element,
+    );
+    await screen.findByText('Ask the task');
+    await waitFor(() => {
+      expect(container.textContent).toContain('has spent its 5 USD cap');
+    });
+    expect(container.textContent).toContain('a join on every read');
+    expect(screen.queryByRole('button', { name: 'Ask again' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open this ask’s run' })).toBeNull();
+  });
+
+  it('words every way a run can end, and the schema failure in the row’s own words', () => {
+    for (const reason of runTerminalReasonSchema.options) {
+      expect(ASK_ENDED_BECAUSE[reason], reason).toMatch(/\.$/);
+    }
+    const failed = (run_terminal_reason: TaskAsk['run_terminal_reason']) =>
+      askEnding({ ...ANSWERED, status: 'failed', answer: null, run_terminal_reason });
+    expect(failed('error_max_structured_output_retries')?.words).toBe(ASK_WRONG_SHAPE);
+    // A run that finished but whose result the contract refused is the same failure.
+    expect(failed('success')?.words).toBe(ASK_WRONG_SHAPE);
+    expect(failed('lease_expired')?.words).toBe('The run lost its worker before it answered.');
+    expect(failed(null)?.words).toContain('ended before it wrote an answer');
+    expect(askEnding(ANSWERED)).toBeNull();
+    // A refusal whose run ended well, or had no recorded ending, is not worded as a run failure.
+    expect(askEnding({ ...ANSWERED, status: 'refused', answer: null })).toBeNull();
+    expect(
+      askEnding({ ...ANSWERED, status: 'refused', answer: null, run_terminal_reason: null }),
+    ).toBeNull();
+    expect(
+      askEnding({ ...ANSWERED, status: 'refused', answer: null, run_terminal_reason: 'cancelled' })
+        ?.words,
+    ).toBe('The run was cancelled before it answered.');
+    expect(askEnding({ ...ANSWERED, status: 'pending', answer: null })).toBeNull();
   });
 
   it('sends one question with an Idempotency-Key the server can recognise', async () => {

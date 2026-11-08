@@ -78,12 +78,19 @@ export const composeAsks = (options: AskCompositionOptions): AskComposition => {
               ),
           },
     queries: {
+      // S-25.17: each ask with how its run ended, read in the same transaction, so the thread can
+      // say why a failed ask failed rather than only that it did.
       listAsks: async (taskId, limit) =>
-        (
-          await unitOfWork.transaction(async (scope) =>
-            store.listForTask(scope.tx, taskId as Id, limit),
-          )
-        ).map(toWireAsk),
+        unitOfWork.transaction(async (scope) => {
+          const asks = await store.listForTask(scope.tx, taskId as Id, limit);
+          const runIds = asks.flatMap((ask) => (ask.runId === null ? [] : [ask.runId]));
+          const endings = new Map(
+            (await store.runEndings(scope.tx, runIds)).map((ending) => [ending.runId, ending]),
+          );
+          return asks.map((ask) =>
+            toWireAsk(ask, ask.runId === null ? null : (endings.get(ask.runId) ?? null)),
+          );
+        }),
       taskAudit: async (taskId, limit) =>
         (
           await unitOfWork.transaction(async (scope) =>

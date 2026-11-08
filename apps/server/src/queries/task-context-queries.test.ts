@@ -11,7 +11,9 @@ import {
   TASK_CONTEXT_MAX_CHARS,
   TASK_CONTEXT_TICKET_SHARE,
   type TaskContextInclude,
+  type TaskStateSource,
   taskContextShares,
+  taskStateSectionOf,
 } from './task-context-queries.js';
 
 const artifact = (type: string, chars: number) => ({
@@ -79,6 +81,7 @@ describe('the task-context bound', () => {
 
   it('guarantees the ticket a full-size share, and keeps the total within the cap', () => {
     const all: TaskContextInclude[] = [
+      'state',
       'ticket',
       'artifacts',
       'feedback',
@@ -102,6 +105,7 @@ describe('the task-context bound', () => {
    */
   it('gives what the small values leave to the large ones, and never more than the cap', () => {
     const all: TaskContextInclude[] = [
+      'state',
       'ticket',
       'artifacts',
       'feedback',
@@ -111,6 +115,7 @@ describe('the task-context bound', () => {
       'audit',
     ];
     const sizes = {
+      state: 700,
       ticket: 9_000,
       artifacts: 60_000,
       feedback: 300,
@@ -120,7 +125,7 @@ describe('the task-context bound', () => {
       audit: 900,
     };
     const shares = taskContextShares(all, sizes);
-    for (const value of ['ticket', 'feedback', 'mr', 'ci', 'runs', 'audit'] as const) {
+    for (const value of ['state', 'ticket', 'feedback', 'mr', 'ci', 'runs', 'audit'] as const) {
       expect(shares[value], value).toBeGreaterThanOrEqual(sizes[value]);
     }
     expect(shares.artifacts).toBeGreaterThanOrEqual(sizes.artifacts);
@@ -227,5 +232,142 @@ describe('what each return was for', () => {
       kind: 'gate',
       stage: 'rebase_gate',
     });
+  });
+});
+
+/**
+ * **`state`** (S-25.17, AUT-6655): a person asked the task *"what am I supposed to decide?"* and the
+ * ask could not see why it stopped — `ci` answered `refused` and nothing carried the stop. The
+ * section is the task read's own fields; each optional one is served or refused by name, never a
+ * `null` (rule 2 of the module's docblock).
+ */
+describe('where the task is and why it stopped (S-25.17)', () => {
+  const ESCALATION = {
+    at: '2026-11-06T10:00:00.000Z',
+    reason: 'ci_timed_out',
+    brief:
+      'CI did not finish within 60 minutes: pipeline 812 was still held at the manual job deploy',
+    brief_original_chars: null,
+  } as const;
+  const WAIT = {
+    pipeline_id: '812',
+    pipeline_url: 'https://git.example.test/acme/api/-/pipelines/812',
+    status: 'manual',
+    held_job: 'deploy',
+    held_job_url: null,
+    draft: false,
+    checked_at: '2026-11-06T09:59:00.000Z',
+    waiting_since: '2026-11-06T09:00:00.000Z',
+    timeout_minutes: 60,
+  } as const;
+  const STOP = {
+    stage: 'ci_gate',
+    attempt: 2,
+    cause: 'no_answer',
+    loop: null,
+    ci_failure: null,
+    recorded: 'CI did not finish within 60 minutes',
+    recorded_cut: false,
+    ci_ending: 'ci_timed_out',
+  } as const;
+  const source = (overrides: Partial<TaskStateSource> = {}): TaskStateSource => ({
+    task: {
+      state: 'needs_human',
+      current_stage: 'ci_gate',
+      paused_reason: null,
+      paused_budget_scope: null,
+    },
+    stop: STOP,
+    escalation: ESCALATION,
+    gate_wait: null,
+    last_gate_wait: WAIT,
+    ...overrides,
+  });
+  const sub = (section: unknown, key: string) =>
+    (section as Record<string, Record<string, unknown>>)[key];
+
+  it('serves a stopped task’s state, stage, stop, escalation and parked CI wait as the task read has them', () => {
+    const section = taskStateSectionOf(source());
+    expect(section).toMatchObject({
+      status: 'ok',
+      task_state: 'needs_human',
+      current_stage: 'ci_gate',
+      stop: { status: 'ok', cause: 'no_answer', ci_ending: 'ci_timed_out', attempt: 2 },
+      escalation: { status: 'ok', reason: 'ci_timed_out', brief: ESCALATION.brief },
+      last_gate_wait: { status: 'ok', held_job: 'deploy', timeout_minutes: 60 },
+    });
+    // The absent ones are refused by name, never `null` (rule 2).
+    expect(sub(section, 'gate_wait')).toEqual({
+      status: 'refused',
+      reason: expect.stringContaining('not waiting on CI'),
+    });
+    expect(sub(section, 'paused')).toEqual({
+      status: 'refused',
+      reason: 'the task is needs_human, not paused',
+    });
+  });
+
+  it('refuses the stop and the escalation of a task that is not waiting for a person, naming its state', () => {
+    const section = taskStateSectionOf(
+      source({
+        task: {
+          state: 'active',
+          current_stage: 'ci_gate',
+          paused_reason: null,
+          paused_budget_scope: null,
+        },
+        stop: null,
+        escalation: null,
+        gate_wait: WAIT,
+        last_gate_wait: null,
+      }),
+    );
+    for (const key of ['stop', 'escalation']) {
+      expect(sub(section, key), key).toEqual({
+        status: 'refused',
+        reason: 'the task is active, not waiting for a person',
+      });
+    }
+    expect(sub(section, 'gate_wait')).toMatchObject({ status: 'ok', pipeline_id: '812' });
+    expect(sub(section, 'last_gate_wait')).toMatchObject({ status: 'refused' });
+  });
+
+  it('says a waiting task’s stop is unworded, and its escalation unrecorded, rather than inventing either', () => {
+    const section = taskStateSectionOf(source({ stop: null, escalation: null }));
+    expect(sub(section, 'stop')).toEqual({
+      status: 'refused',
+      reason: expect.stringContaining('the escalation says why'),
+    });
+    expect(sub(section, 'escalation')).toEqual({
+      status: 'refused',
+      reason: 'no escalation with both a reason and a brief is recorded for this task',
+    });
+  });
+
+  it('serves a paused task’s reason and budget scope', () => {
+    const section = taskStateSectionOf(
+      source({
+        task: {
+          state: 'paused',
+          current_stage: 'implementation',
+          paused_reason: 'budget',
+          paused_budget_scope: 'task',
+        },
+        stop: null,
+        escalation: null,
+        last_gate_wait: null,
+      }),
+    );
+    expect(sub(section, 'paused')).toEqual({
+      status: 'ok',
+      reason: 'budget',
+      budget_scope: 'task',
+    });
+  });
+
+  it('is a single document: one that does not fit is refused, never cut', () => {
+    const section = taskStateSectionOf(source());
+    expect(boundTaskContextSection('state', section, 100).status).toBe('refused');
+    expect(boundTaskContextSection('state', section, TASK_CONTEXT_MAX_CHARS)).toBe(section);
   });
 });

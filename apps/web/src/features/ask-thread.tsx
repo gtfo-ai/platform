@@ -17,10 +17,24 @@
  * `dropped_citations` is **shown** rather than hidden: it counts the claims whose evidence named
  * another task or another project and was refused (product/11:30). A reader who can see that two
  * claims lost their evidence knows how much of the answer to trust.
+ *
+ * ## An ask that did not answer still tells the asker what happened (S-25.17)
+ *
+ * On Autix (AUT-6655) a failed ask showed only *the run ended "failed"*: no reason, no run, no way
+ * to try again. A failed ask, and one whose run was cancelled, now says **why in words** — from the
+ * run's own `terminal_reason`, which the thread carries as `run_terminal_reason` — links **its run**,
+ * and offers **Ask again** with the question filled in. Nothing is salvaged from the run's refused
+ * text: an answer the contract refused is not shown, even when it looked readable, because a
+ * half-shaped answer the platform did not check is an answer it would be inventing.
  */
-import type { ArtifactRef, AskAnswerCitation, TaskAsk } from '@platform/contracts';
+import type {
+  ArtifactRef,
+  AskAnswerCitation,
+  RunTerminalReason,
+  TaskAsk,
+} from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
-import { type ReactElement, useState } from 'react';
+import { type ReactElement, useRef, useState } from 'react';
 import { useAskTask, useTaskAsks } from '../app/queries.js';
 import {
   Badge,
@@ -48,6 +62,57 @@ const STATUS_LABEL = {
   refused: 'not run',
   failed: 'failed',
 } as const;
+
+/** The answer the contract refused (S-25.17): the words the plan row fixed. */
+export const ASK_WRONG_SHAPE = 'The answer didn’t come back in the expected shape.';
+
+/**
+ * Why the run behind an ask ended without an answer, in a sentence (S-25.17) — one per
+ * `runs.terminal_reason`, so a reason added to the contract fails the build here until it is worded.
+ * `success` is reached only for a **failed** ask: the run finished and its result did not match the
+ * `AskAnswer` contract, which is the same thing the structured-output retries running out says.
+ */
+export const ASK_ENDED_BECAUSE: Readonly<Record<RunTerminalReason, string>> = {
+  success: ASK_WRONG_SHAPE,
+  error_max_structured_output_retries: ASK_WRONG_SHAPE,
+  error_max_turns: 'The run ran out of turns before it wrote an answer.',
+  error_max_budget_usd: 'The run hit its budget before it wrote an answer.',
+  error_during_execution: 'The run failed while it was answering.',
+  permission_denied: 'The run was refused a permission it needed.',
+  cancelled: 'The run was cancelled before it answered.',
+  stalled: 'The run stopped responding before it answered.',
+  timed_out: 'The run took too long and was stopped.',
+  crash: 'The run crashed before it answered.',
+  lease_expired: 'The run lost its worker before it answered.',
+  shutdown: 'The platform’s runner was stopped while it was answering.',
+  rate_limited: 'The run hit a usage limit before it answered.',
+};
+
+/**
+ * What the card says about an ask that got no answer, or `null` when it is not that kind of ask:
+ * a **failed** ask, and a **refused** one whose run ended without succeeding (a cancelled run
+ * refuses its ask). A refusal no run was started for — a spent cap, the feature off — keeps its
+ * recorded reason alone, since asking again would meet the same refusal.
+ */
+export const askEnding = (ask: TaskAsk): { readonly words: string } | null => {
+  if (ask.status === 'failed') {
+    return {
+      words:
+        ask.run_terminal_reason === null
+          ? 'The run that answers it ended before it wrote an answer.'
+          : ASK_ENDED_BECAUSE[ask.run_terminal_reason],
+    };
+  }
+  if (
+    ask.status === 'refused' &&
+    ask.run_id !== null &&
+    ask.run_terminal_reason !== null &&
+    ask.run_terminal_reason !== 'success'
+  ) {
+    return { words: ASK_ENDED_BECAUSE[ask.run_terminal_reason] };
+  }
+  return null;
+};
 
 /**
  * One citation, as a link this application built.
@@ -136,48 +201,72 @@ const citationKey = (citation: AskAnswerCitation): string =>
 const AskCard = ({
   ask,
   artifacts,
+  onAskAgain,
 }: {
   readonly ask: TaskAsk;
   readonly artifacts: readonly ArtifactRef[];
-}): ReactElement => (
-  <Card className="flex flex-col gap-2">
-    <div className="flex items-center gap-2">
-      <Badge tone={STATUS_TONE[ask.status]}>{STATUS_LABEL[ask.status]}</Badge>
-      <span className="text-xs text-fg-muted">
-        {ask.source === 'ticket' ? 'from the ticket thread' : 'from this page'}
-      </span>
-      <span className="ml-auto text-xs text-fg-muted">{formatDateTime(ask.created_at)}</span>
-    </div>
-    {/* A human's own words, rendered and never executed (BD-022). */}
-    <UntrustedProse value={ask.question} className="font-medium" />
-    {ask.answer === null ? null : <UntrustedProse value={ask.answer} />}
-    {ask.refusal_reason === null ? null : (
-      <p className="text-xs text-fg-muted">
-        <UntrustedText value={ask.refusal_reason} />
-      </p>
-    )}
-    {ask.citations.length === 0 ? null : (
-      <ul className="flex flex-col gap-1">
-        {ask.citations.map((citation) => (
-          // Keyed by what the citation **says**, not by its position: a citation carries no
-          // identity of its own, and an index key would make two answers' lists collide in React's
-          // reconciliation if the thread ever re-sorted. Two identical citations in one answer are
-          // the only collision this can have, and they render identically.
-          <Citation key={citationKey(citation)} citation={citation} artifacts={artifacts} />
-        ))}
-      </ul>
-    )}
-    {ask.dropped_citations === 0 ? null : (
-      <p className="text-xs text-fg-muted">
-        {ask.dropped_citations} citation(s) named a run or an artifact outside this task and were
-        dropped.
-      </p>
-    )}
-    {ask.mirrored_at === null ? null : (
-      <p className="text-xs text-fg-muted">Also posted in the ticket thread.</p>
-    )}
-  </Card>
-);
+  /** Fills the form with this question again (S-25.17). */
+  readonly onAskAgain: (question: string) => void;
+}): ReactElement => {
+  const ending = askEnding(ask);
+  return (
+    <Card className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <Badge tone={STATUS_TONE[ask.status]}>{STATUS_LABEL[ask.status]}</Badge>
+        <span className="text-xs text-fg-muted">
+          {ask.source === 'ticket' ? 'from the ticket thread' : 'from this page'}
+        </span>
+        <span className="ml-auto text-xs text-fg-muted">{formatDateTime(ask.created_at)}</span>
+      </div>
+      {/* A human's own words, rendered and never executed (BD-022). */}
+      <UntrustedProse value={ask.question} className="font-medium" />
+      {ask.answer === null ? null : <UntrustedProse value={ask.answer} />}
+      {ending === null ? null : <p className="text-sm">{ending.words}</p>}
+      {ask.refusal_reason === null ? null : (
+        <p className="text-xs text-fg-muted">
+          <UntrustedText value={ask.refusal_reason} />
+        </p>
+      )}
+      {ending === null ? null : (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            size="sm"
+            onClick={() => {
+              onAskAgain(ask.question);
+            }}
+          >
+            Ask again
+          </Button>
+          {ask.run_id === null ? null : (
+            <Link to="/runs/$runId" params={{ runId: ask.run_id }} className="text-xs underline">
+              Open this ask’s run
+            </Link>
+          )}
+        </div>
+      )}
+      {ask.citations.length === 0 ? null : (
+        <ul className="flex flex-col gap-1">
+          {ask.citations.map((citation) => (
+            // Keyed by what the citation **says**, not by its position: a citation carries no
+            // identity of its own, and an index key would make two answers' lists collide in React's
+            // reconciliation if the thread ever re-sorted. Two identical citations in one answer are
+            // the only collision this can have, and they render identically.
+            <Citation key={citationKey(citation)} citation={citation} artifacts={artifacts} />
+          ))}
+        </ul>
+      )}
+      {ask.dropped_citations === 0 ? null : (
+        <p className="text-xs text-fg-muted">
+          {ask.dropped_citations} citation(s) named a run or an artifact outside this task and were
+          dropped.
+        </p>
+      )}
+      {ask.mirrored_at === null ? null : (
+        <p className="text-xs text-fg-muted">Also posted in the ticket thread.</p>
+      )}
+    </Card>
+  );
+};
 
 export const AskThread = ({
   taskId,
@@ -190,6 +279,11 @@ export const AskThread = ({
   const asks = useTaskAsks(taskId);
   const ask = useAskTask(taskId);
   const [question, setQuestion] = useState('');
+  const field = useRef<HTMLTextAreaElement>(null);
+  const askAgain = (previous: string): void => {
+    setQuestion(previous);
+    field.current?.focus();
+  };
 
   return (
     <section className="flex flex-col gap-3">
@@ -217,6 +311,7 @@ export const AskThread = ({
           Your question
         </label>
         <textarea
+          ref={field}
           id="ask-question"
           className="min-h-20 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
           value={question}
@@ -252,7 +347,7 @@ export const AskThread = ({
         />
       ) : null}
       {(asks.data?.items ?? []).map((entry) => (
-        <AskCard key={entry.id} ask={entry} artifacts={artifacts} />
+        <AskCard key={entry.id} ask={entry} artifacts={artifacts} onAskAgain={askAgain} />
       ))}
     </section>
   );

@@ -25,6 +25,7 @@
  *
  * | value | answered from | refused when |
  * |---|---|---|
+ * | `state` | the task read's own projections (`findTaskDetail`, S-25.17): `task_state` and `current_stage`, and — each refused by name when absent — `paused` (`paused_reason`, `paused_budget_scope`), `stop` (`stopOf`), `escalation` (`escalationFor`: the reason key and the brief), `gate_wait` and `last_gate_wait` | never as a whole; per value: the task is not in the state the value describes, or the row does not say (see {@link taskStateSectionOf}) |
  * | `ticket` | `tasks.ticket_snapshot` (bounded and redacted at the write, WP-15f) | the platform has not read the ticket |
  * | `artifacts` | the latest version of each type, `findArtifactBody` | per artifact: stored before redaction existed (migration 0038) |
  * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`), the reason and — since WP-105 — its `cause` ({@link returnCauseOf}), and — since WP-166 — the gate excerpt a person chose to send with their return (`attached: {reason, original_chars}`, absent when none was sent) — escalations excluded (WP-55) | never; an empty list is an answer |
@@ -46,7 +47,13 @@
  * it), so a per-task list of pipelines would be a second resolution of that join written here.
  */
 import type { PromptHolds } from '@platform/application';
-import type { ArtifactType, Id, JsonObject, TicketSnapshot } from '@platform/contracts';
+import type {
+  ArtifactType,
+  Id,
+  JsonObject,
+  TaskDetailRecord,
+  TicketSnapshot,
+} from '@platform/contracts';
 import { isBuiltinGateStageId } from '@platform/contracts';
 import { isPromptExcludedArtifact, orderArtifactData } from '@platform/domain';
 import { ask as askAdapters, db as dbAdapters } from '@platform/infrastructure';
@@ -58,6 +65,7 @@ const { MANUAL_START_ACTION_ID_SQL } = askAdapters;
 
 /** Every value `get_task_context`'s `include` accepts (`getTaskContextInputSchema`). */
 export type TaskContextInclude =
+  | 'state'
   | 'ticket'
   | 'artifacts'
   | 'feedback'
@@ -437,6 +445,85 @@ const listTaskAudit = async (database: Database, taskId: string, limit: number) 
     .orderBy(desc(humanActions.createdAt))
     .limit(limit);
 
+/** What {@link taskStateSectionOf} reads: the task read's own fields, nothing re-derived. */
+export interface TaskStateSource {
+  readonly task: Pick<
+    TaskDetailRecord['task'],
+    'state' | 'current_stage' | 'paused_reason' | 'paused_budget_scope'
+  >;
+  readonly stop: TaskDetailRecord['stop'];
+  readonly escalation: TaskDetailRecord['escalation'];
+  readonly gate_wait: TaskDetailRecord['gate_wait'];
+  readonly last_gate_wait: TaskDetailRecord['last_gate_wait'];
+}
+
+/** One value of the `state` section: the projection's own answer, or a refusal saying why not. */
+const servedOr = (value: object | null | undefined, reason: string): Record<string, unknown> =>
+  value === null || value === undefined
+    ? { status: 'refused', reason }
+    : { status: 'ok', ...(value as Record<string, unknown>) };
+
+/**
+ * **Where the task is and why it stopped** — `get_task_context`'s `state` (S-25.17).
+ *
+ * On Autix (AUT-6655, 2026-11-06) a person asked the task *"what am I supposed to decide?"* and the
+ * ask could not say: `ci` answered `refused` and no value carried the task's state at all, while the
+ * task page beside the thread showed the stop, the escalation's brief and the CI wait. So this is
+ * that page's answer, **the same projections** (`findTaskDetail`'s `stop`, `escalation`,
+ * `gate_wait`, `last_gate_wait`, the task record's state and pause), never a second reading of the
+ * rows. Each optional value is served `{status: 'ok', …}` or refused by name with the reason it is
+ * absent — never a `null` standing in for "the platform does not know" (rule 2 above):
+ *
+ *  - `paused` — only a `paused` task has one; its `reason` is `null` when no reason was recorded;
+ *  - `stop` and `escalation` — only a `needs_human` task has either; `stop` is refused when the
+ *    stopped attempt's row does not say why in a shape the platform words (the escalation's brief is
+ *    then the reason), and `escalation` when no `task.escalated` carries both a reason and a brief;
+ *  - `gate_wait` — only an `active` task at `ci_gate` with an open, read CI wait;
+ *    `last_gate_wait` — only a task parked at `ci_gate` by a CI wait that got no answer.
+ *
+ * Pure over the read, so every branch is a unit case. The brief, the recorded sentence and the job
+ * names are platform text that quotes provider text: data, redacted again with everything else by
+ * `platform-mcp.ts` before the model reads it.
+ */
+export const taskStateSectionOf = (source: TaskStateSource): TaskContextSection => {
+  const { task } = source;
+  const waiting = task.state === 'needs_human';
+  const notWaiting = `the task is ${task.state}, not waiting for a person`;
+  return {
+    status: 'ok',
+    task_state: task.state,
+    current_stage: task.current_stage,
+    paused:
+      task.state === 'paused'
+        ? {
+            status: 'ok',
+            reason: task.paused_reason,
+            budget_scope: task.paused_budget_scope,
+          }
+        : { status: 'refused', reason: `the task is ${task.state}, not paused` },
+    stop: servedOr(
+      source.stop,
+      waiting
+        ? 'the stopped attempt does not record why in a shape the platform words (a spent loop, a repeated failure or a check with no answer); the escalation says why'
+        : notWaiting,
+    ),
+    escalation: servedOr(
+      source.escalation,
+      waiting
+        ? 'no escalation with both a reason and a brief is recorded for this task'
+        : notWaiting,
+    ),
+    gate_wait: servedOr(
+      source.gate_wait,
+      'the task is not waiting on CI: that needs an active task at ci_gate whose open attempt has read a pipeline',
+    ),
+    last_gate_wait: servedOr(
+      source.last_gate_wait,
+      'the task was not stopped by a CI wait that got no answer: that needs a task waiting for a person at ci_gate',
+    ),
+  };
+};
+
 /**
  * Answers one `get_task_context` call for the task the run belongs to.
  *
@@ -467,6 +554,8 @@ export const readTaskContext = async (
 
   const section = async (value: TaskContextInclude): Promise<TaskContextSection> => {
     switch (value) {
+      case 'state':
+        return taskStateSectionOf(detail);
       case 'ticket': {
         if (holds?.ticket === true) {
           return {

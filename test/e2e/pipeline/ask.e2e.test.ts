@@ -278,11 +278,18 @@ describe('ask-the-task, through a composed instance', () => {
     expect(audit.body.items.map((item) => item.action)).toContain('task.ask');
 
     // ── The thread the SPA renders ────────────────────────────────────────────────────────────
-    const thread = await client.json<{ items: { answer: string | null; status: string }[] }>(
-      `/api/tasks/${waiting.id}/asks`,
-    );
+    const thread = await client.json<{
+      items: { answer: string | null; status: string; run_terminal_reason: string | null }[];
+    }>(`/api/tasks/${waiting.id}/asks`);
     expect(thread.status, JSON.stringify(thread.body)).toBe(200);
     expect(thread.body.items[0]?.answer).toBe(ANSWER);
+    // S-25.17: the thread carries how the ask's run ended, read off the run row itself.
+    const [ended] = await pipeline.query<{ terminal_reason: string | null }>(
+      'select terminal_reason from runs where id = $1',
+      [ask?.run_id ?? ''],
+    );
+    expect(ended?.terminal_reason).not.toBeNull();
+    expect(thread.body.items[0]?.run_terminal_reason).toBe(ended?.terminal_reason);
 
     // ── Criterion 4: the mirror is a `pipeline.outbound` duty, not a handler ──────────────────
     //

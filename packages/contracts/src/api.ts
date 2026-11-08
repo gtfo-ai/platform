@@ -41,6 +41,7 @@ import {
   nonEmptyStringSchema,
   pathPatternSchema,
   runStatusSchema,
+  runTerminalReasonSchema,
   sequenceSchema,
   severitySchema,
   sizeSchema,
@@ -2452,6 +2453,13 @@ export const taskAskSchema = z.strictObject({
   asked_by_user_id: idSchema,
   question: z.string(),
   run_id: idSchema.nullable(),
+  /**
+   * Why the run behind this ask ended (S-25.17) — `runs.terminal_reason`, read beside the thread and
+   * never stored on the ask: `null` while the run has not ended, for an ask no run was started for,
+   * and for a run whose ending recorded none. The thread words a failed or cancelled ask from it, so
+   * a person sees *why* rather than only that it failed (AUT-6655).
+   */
+  run_terminal_reason: runTerminalReasonSchema.nullable(),
   status: z.enum(['pending', 'answered', 'refused', 'failed']),
   answer: z.string().nullable(),
   citations: z.array(askAnswerCitationSchema),

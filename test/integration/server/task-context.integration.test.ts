@@ -43,6 +43,7 @@ let foreign: Seeded;
 let bare: Seeded;
 
 const ALL: readonly TaskContextInclude[] = [
+  'state',
   'ticket',
   'artifacts',
   'feedback',
@@ -176,6 +177,8 @@ describe('get_task_context, scoped to the run’s own task', () => {
       const text = JSON.stringify(section);
       // The run's own task, positively — the half an empty answer would fail.
       const own: Record<TaskContextInclude, string> = {
+        // The seeded task is active at `code_review`; the stage is its own record of where it is.
+        state: '"current_stage":"code_review"',
         ticket: 'title MINE',
         artifacts: 'goal MINE',
         feedback: 'return reason MINE',
@@ -356,6 +359,71 @@ describe('get_task_context, scoped to the run’s own task', () => {
     expect(JSON.stringify(returns)).not.toContain('src/Header.php');
     // `cause` is unchanged (backlog 353 stays closed): the gate's return still names the gate.
     expect(returns[1]?.cause).toEqual({ kind: 'gate', stage: 'ci_gate' });
+  });
+
+  /**
+   * **S-25.17** (AUT-6655): a task parked at `ci_gate` by a CI wait that got no answer — the shape
+   * of the Autix task whose ask could not say why it stopped. `state` answers the task read's own
+   * stop, escalation and parked wait over the real rows, and refuses what the task does not have.
+   */
+  it('answers why a task stopped, as the task read has it (S-25.17)', async () => {
+    const task = await one<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'KEY-STOPPED', 'https://jira.example.test/browse/S', 'feature',
+               'needs_human', 'ci_gate')
+       returning id`,
+      [mine.projectId],
+    );
+    await pool.query(
+      `insert into task_stages (task_id, stage, attempt, state, outcome, return_reason, exited_at)
+       values ($1, 'ci_gate', 1, 'failed', 'undecided', 'CI did not finish within 60 minutes', now())`,
+      [task.id],
+    );
+    await pool.query(
+      `insert into events (id, stream_type, stream_id, stream_seq, type, payload, actor)
+       values (gen_random_uuid(), 'task', $1, 1, 'task.escalated', $2::jsonb, $3::jsonb)`,
+      [
+        task.id,
+        JSON.stringify({
+          project_id: mine.projectId,
+          task_id: task.id,
+          reason: 'ci_timed_out',
+          blocker_brief: 'CI did not finish within 60 minutes: pipeline 812 was still held',
+        }),
+        JSON.stringify({ kind: 'system', component: 'test' }),
+      ],
+    );
+    const scope = { projectId: mine.projectId, taskId: task.id as Id };
+    const state = (await readTaskContext(drizzled, ['state'], scope)).sections
+      .state as unknown as Record<string, Record<string, unknown>>;
+    expect(state).toMatchObject({
+      status: 'ok',
+      task_state: 'needs_human',
+      current_stage: 'ci_gate',
+      stop: {
+        status: 'ok',
+        cause: 'no_answer',
+        attempt: 1,
+        recorded: 'CI did not finish within 60 minutes',
+      },
+      escalation: {
+        status: 'ok',
+        reason: 'ci_timed_out',
+        brief: 'CI did not finish within 60 minutes: pipeline 812 was still held',
+      },
+      gate_wait: { status: 'refused' },
+      paused: { status: 'refused' },
+    });
+    // The attempt recorded no read, so there is no parked wait to describe: refused, not `null`.
+    expect(state.last_gate_wait).toMatchObject({ status: 'refused' });
+
+    // …and the active task beside it has neither a stop nor an escalation (rule 42).
+    const active = (await readTaskContext(drizzled, ['state'], mine)).sections
+      .state as unknown as Record<string, Record<string, unknown>>;
+    expect(active.stop).toMatchObject({ status: 'refused' });
+    expect(active.escalation).toMatchObject({ status: 'refused' });
+    expect(JSON.stringify(active)).not.toContain('KEY-STOPPED');
   });
 
   it('serves the latest version of each artifact type, not every version', async () => {

@@ -182,6 +182,43 @@ describe('handling one call', () => {
     expect(result.text).toContain('[REDACTED:integration:gitlab_token]');
   });
 
+  /**
+   * S-25.17: `state` is a value the tool's strict input accepts, and the escalation brief it
+   * carries — platform text that can quote a provider — reaches the model through the run's
+   * redactor like every other value.
+   */
+  it('accepts get_task_context’s `state` and redacts the brief it answers', async () => {
+    const seen: unknown[] = [];
+    const tools = recordingTools({
+      getTaskContext: async (input) => {
+        seen.push(input);
+        return {
+          sections: {
+            state: {
+              status: 'ok',
+              task_state: 'needs_human',
+              escalation: {
+                status: 'ok',
+                reason: 'ci_timed_out',
+                brief: `held: ${FIXTURE_INJECTED_SECRET}`,
+              },
+            },
+          },
+        };
+      },
+    });
+    const [getTaskContext] = definitionsFor(runtime({ tools }), ['get_task_context']);
+    const result = await callTool(getTaskContext!, { include: ['state'] });
+    expect(result.isError).toBe(false);
+    expect(seen).toEqual([{ include: ['state'] }]);
+    expect(result.text).toContain('needs_human');
+    expect(result.text).not.toContain(FIXTURE_INJECTED_SECRET);
+    expect(result.text).toContain('[REDACTED:integration:gitlab_token]');
+    // …and a value the enum does not name is still refused (rule 42: the acceptance is the enum's).
+    const refused = await callTool(getTaskContext!, { include: ['why'] });
+    expect(refused.isError).toBe(true);
+  });
+
   it('redacts the failure path too — the branch WP-07’s review found missing', async () => {
     const tools = recordingTools({
       kbSearch: async () => {
