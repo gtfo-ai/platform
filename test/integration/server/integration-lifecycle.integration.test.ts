@@ -175,6 +175,8 @@ describe('retiring an integration (WP-114, backlog 331)', () => {
       statusCode: 409,
       code: 'integration_bound',
       message: expect.stringContaining('bound to project acme'),
+      // S-25.18: the projects by key, for the screen's sentence.
+      details: [{ path: 'projects', message: 'acme' }],
     });
     expect(await secretRowCount(sealed)).toBe(2);
     await replaceProjectBindings(db, projectId, [], { egress: allowAnyIntegrationHost() });
@@ -196,6 +198,10 @@ describe('retiring an integration (WP-114, backlog 331)', () => {
       statusCode: 409,
       code: 'integration_has_live_credential',
       message: expect.stringContaining('minted 1 run credential'),
+      details: [
+        { path: 'live_credentials', message: '1' },
+        { path: 'latest_expiry', message: expect.any(String) },
+      ],
     });
     await audit(id, 'revoke_credential', {
       status: 'ok',

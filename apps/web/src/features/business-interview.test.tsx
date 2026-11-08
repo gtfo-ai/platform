@@ -54,6 +54,8 @@ const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 let sent: { body: unknown; key: string | null }[];
+/** S-25.18: when set, the interview's POST answers this refusal. */
+let interviewRefusal: { readonly status: number; readonly code: string } | null;
 
 const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = String(input);
@@ -63,6 +65,12 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
       body: JSON.parse(String(init.body ?? '{}')),
       key: new Headers(init.headers).get('idempotency-key'),
     });
+    if (interviewRefusal !== null) {
+      return json(
+        { error: { code: interviewRefusal.code, message: 'diagnostic for the log' } },
+        interviewRefusal.status,
+      );
+    }
     return json(
       {
         performed: true,
@@ -139,6 +147,7 @@ afterEach(() => {
 
 beforeEach(() => {
   sent = [];
+  interviewRefusal = null;
   vi.spyOn(console, 'error').mockImplementation(() => {});
   window.history.pushState({}, '', '/onboarding?project=acme_api&step=business');
 });
@@ -218,5 +227,26 @@ describe('the business interview', () => {
     // The server's path is text: no element was built from it.
     expect(container.querySelector('img')).toBeNull();
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
+  });
+});
+
+describe('the interview’s refusal says why (S-25.18)', () => {
+  it('shows the server’s reason, and what to do, under the notice’s title', async () => {
+    interviewRefusal = { status: 409, code: 'project_stream_contended' };
+    render(createApp({ fetchImpl, realtime: false }).element);
+    fireEvent.change(await screen.findByLabelText('Glossary'), {
+      target: { value: 'Ledger — the book of record.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Propose the page' }));
+    let alert: HTMLElement | undefined;
+    await waitFor(() => {
+      alert = screen
+        .getAllByRole('alert')
+        .find((each) => each.textContent?.includes('The interview could not be recorded.'));
+      expect(alert).toBeDefined();
+    });
+    expect(alert?.textContent).toContain(
+      'Other changes to this project kept getting in first, and nothing was saved. Send it again.',
+    );
   });
 });

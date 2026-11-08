@@ -393,6 +393,11 @@ export const registerSettingsRoutes = async (
           409,
           'autonomy_above_organisation',
           `the organisation's autonomy maximum is ${maximum}, so ${request.body.autonomy} cannot be selected for project ${projectId}; an administrator raises the maximum with PATCH /api/org`,
+          // S-25.18: the maximum as a field, so the screen's sentence names it.
+          [
+            { path: 'organisation_maximum', message: maximum },
+            { path: 'autonomy', message: request.body.autonomy },
+          ],
         );
       }
       return (await settingsWrite({

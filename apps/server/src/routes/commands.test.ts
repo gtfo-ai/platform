@@ -871,6 +871,22 @@ describe('what each refusal maps to', () => {
       expect(world.actions).toEqual([]);
     });
   }
+  // S-25.18: the refusal names the state and the command as fields, so the screen can say "this
+  // task is paused, so it cannot be retried — resume it first" without parsing the message.
+  it('names the aggregate, the state and the refused command in an illegal_transition', async () => {
+    world.throws = new IllegalTransitionError('Task', 'paused', 'active');
+    const reply = await post(world, `/api/tasks/${TASK}/pause`, {});
+    expect(reply.status).toBe(409);
+    expect(reply.body.error).toMatchObject({
+      code: 'illegal_transition',
+      details: [
+        { path: 'aggregate', message: 'Task' },
+        { path: 'from', message: 'paused' },
+        { path: 'to', message: 'active' },
+        { path: 'command', message: 'task.pause' },
+      ],
+    });
+  });
 });
 
 /**

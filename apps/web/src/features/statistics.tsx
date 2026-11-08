@@ -169,13 +169,7 @@ export const StatisticsScreen = (): ReactElement => {
     return <Skeleton label="Loading statistics" lines={4} />;
   }
   if (stats.isError || stats.data === undefined) {
-    return (
-      <ErrorNotice
-        title="Statistics could not be loaded"
-        error={stats.error}
-        detail={stats.error instanceof Error ? stats.error.message : 'unknown error'}
-      />
-    );
+    return <ErrorNotice title="Statistics could not be loaded" error={stats.error} />;
   }
 
   const measured = stats.data.metrics.filter((metric) => metric.absent === null);

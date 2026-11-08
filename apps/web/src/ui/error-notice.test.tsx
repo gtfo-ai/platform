@@ -116,21 +116,23 @@ describe('ErrorNotice keeps the server’s text behind Technical details (S-23.2
       new ApiError(403, 'forbidden', 'role member may not perform task.cancel'),
       'Your role does not allow this.',
     ],
+    // S-25.18: a refusal with no state to name says so, and never offers a reload as the fix.
     [
       new ApiError(409, 'illegal_transition', 'task in state merged cannot cancel'),
-      'This is not possible in the state it is in now.',
+      'This cannot be done in the state it is in now. Open it to see where it stands',
     ],
     [new ApiError(404, 'not_found', 'no task 1f'), 'It was not found.'],
-    [new ApiError(409, 'some_new_code', 'x'), 'This is not possible in the state it is in now.'],
+    [new ApiError(409, 'some_new_code', 'x'), 'This cannot be done in the state it is in now.'],
     // Review of PR #51: these read only the status's sentence before.
     [
       new ApiError(400, 'missing_secret', 'JIRA_TOKEN is not set'),
       'An environment variable you named is not set on the server.',
     ],
     [new ApiError(409, 'ticket_has_task', 'ACME-1 has task 1f'), 'That ticket already has a task.'],
+    // S-25.18: `discovery_in_flight` is the gate's read, never a refusal; this is one.
     [
-      new ApiError(409, 'discovery_in_flight', 'task 1f is running'),
-      'A discovery is already running for this project.',
+      new ApiError(409, 'discovery_not_started', 'no discovery for project 1f'),
+      'This project has never run discovery.',
     ],
     [
       new ApiError(409, 'project_has_live_tasks', '3 live tasks'),

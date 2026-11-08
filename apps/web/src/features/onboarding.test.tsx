@@ -229,6 +229,8 @@ interface World {
   /** Whether a history bootstrap batch exists (`HISTORY_BOOTSTRAPS` has one). */
   readonly historyStarted: boolean;
   readonly sent: { url: string; method: string; body: unknown; key: string | null }[];
+  /** S-25.18: the readiness read fails with this instead of answering. */
+  readonly readinessRefusal?: { readonly status: number; readonly code: string };
 }
 
 const world = (over: Partial<World> = {}): World => ({
@@ -263,6 +265,12 @@ const fetchFor = (readiness: 'recorded' | 'absent', over: Partial<World> = {}) =
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
     if (url.includes('/api/projects/') && url.includes('/readiness')) {
+      if (state.readinessRefusal !== undefined) {
+        return json(
+          { error: { code: state.readinessRefusal.code, message: 'diagnostic for the log' } },
+          state.readinessRefusal.status,
+        );
+      }
       return readiness === 'recorded'
         ? json(READINESS)
         : json(
@@ -824,6 +832,24 @@ describe('the wizard’s technical discovery', () => {
     // The 409 is an answer. Nothing here is an error notice, and nothing crashed.
     expect(await screen.findByText(/No readiness evaluation yet/)).toBeTruthy();
     expect(screen.queryByTestId('error-fallback')).toBeNull();
+  });
+
+  it('says any other readiness failure as itself, never as "no evaluation yet" (S-25.18)', async () => {
+    openAt(
+      wizardOf('discovery'),
+      fetchFor('absent', { readinessRefusal: { status: 403, code: 'forbidden' } }),
+    );
+    let alert: HTMLElement | undefined;
+    await waitFor(() => {
+      alert = screen
+        .getAllByRole('alert')
+        .find((each) =>
+          each.textContent?.includes('The readiness evaluation could not be loaded.'),
+        );
+      expect(alert).toBeDefined();
+    });
+    expect(alert?.textContent).toContain('Your role does not allow this.');
+    expect(screen.queryByText(/No readiness evaluation yet/)).toBeNull();
   });
 
   it('renders the level as a meter, the criteria by name and the cheapest improvements', async () => {

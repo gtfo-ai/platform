@@ -48,6 +48,7 @@
 import type { ProjectSummary, ReadinessResponse } from '@platform/contracts';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { type ReactElement, type ReactNode, useRef } from 'react';
+import { ApiError } from '../api/http.js';
 import {
   useHistoryBootstraps,
   useKbProposals,
@@ -297,14 +298,25 @@ const DiscoveryStep = ({
       {/* WP-142: beside the readiness panel, the provider's default when it is not the stored one. */}
       <DefaultBranchMismatch projectId={project.id} />
       {readiness.isSuccess ? <ReadinessPanel readiness={readiness.data} /> : null}
-      {readiness.isError ? (
+      {/* S-25.18: only the 409 that says so is "no evaluation yet"; any other failure is itself. */}
+      {readiness.isError && isNotEvaluated(readiness.error) ? (
         <p className="text-sm text-fg-muted">
           No readiness evaluation yet — running discovery is what records one.
         </p>
       ) : null}
+      {readiness.isError && !isNotEvaluated(readiness.error) ? (
+        <ErrorNotice
+          title="The readiness evaluation could not be loaded."
+          error={readiness.error}
+        />
+      ) : null}
     </div>
   );
 };
+
+/** The readiness read's one expected refusal: the project has not been evaluated yet. */
+const isNotEvaluated = (error: unknown): boolean =>
+  error instanceof ApiError && error.code === 'readiness_not_evaluated';
 
 // ── Review and finish ────────────────────────────────────────────────────────
 

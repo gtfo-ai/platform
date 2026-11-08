@@ -258,6 +258,12 @@ const refuseWipAboveOrganisation = async (
         409,
         'wip_above_organisation',
         `pipeline.wip.${key} is ${value}, above the organisation's maximum of ${bound}; a project may lower a WIP limit, never raise it past the organisation's`,
+        // S-25.18: which limit, and the maximum, so the screen's sentence names both.
+        [
+          { path: 'limit', message: key },
+          { path: 'value', message: String(value) },
+          { path: 'organisation_maximum', message: String(bound) },
+        ],
       );
     }
   }

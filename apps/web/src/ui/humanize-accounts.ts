@@ -12,6 +12,7 @@
  * neither entry's initial graph.
  */
 import { ApiError } from '../api/http.js';
+import { LINK_REFUSAL_WORDS } from '../api/read-error.js';
 import { titleCase } from './humanize.js';
 
 /**
@@ -133,32 +134,12 @@ export const YOUR_ACCOUNTS_WORDS = {
 } as const;
 
 /**
- * The refusals of S-26.6's routes, said plainly — keyed by the server's code; one this table does
- * not hold falls back to `errorSentence`'s (`api/read-error.ts`). A `link_code_voided` refusal is
- * said by its `void_reason` ({@link LINK_VOID_REASON_WORDS}).
+ * The refusals of S-26.6's routes, said plainly — keyed by the server's code. Since S-25.18 the
+ * table lives in `api/read-error.ts`, because every notice says these codes (the error-code census
+ * holds each server code to a sentence there); it is re-exported here for the two account screens.
+ * A `link_code_voided` refusal is said by its `void_reason` ({@link LINK_VOID_REASON_WORDS}).
  */
-export const LINK_REFUSAL_WORDS: Readonly<Record<string, string>> = {
-  link_code_rate_limited:
-    'You have asked for five codes in the last hour. Use the newest one, or try again later.',
-  identity_links_unavailable:
-    'Linking accounts is not available on this server right now. An administrator can tell why.',
-  link_match_not_found: 'That match no longer belongs to your code. Reload the page.',
-  link_code_expired: 'The code expired before you confirmed. Get a new code and comment again.',
-  link_code_used: 'This code has already linked an account.',
-  link_code_voided: 'This code no longer links anybody. Get a new code.',
-  identity_linked_elsewhere:
-    'That account is linked to another person. An administrator can unlink it.',
-  identity_is_machine: 'An administrator declared that account a machine, so it links nobody.',
-  identity_is_binding_account:
-    'That is the account an integration acts as, so it links nobody. An administrator can link it if it is yours.',
-  identity_link_read_not_permitted:
-    'The platform reads a ticket for you only in a project where you are a member or above.',
-  link_thread_not_found:
-    'No task of that project has that ticket or merge request. Name one the platform has a task for.',
-  link_thread_no_binding: 'That project has no connection that reads those comments.',
-  link_thread_unavailable: 'The provider could not be read just now. Try again in a moment.',
-  identity_not_found: 'That account is not linked any more.',
-};
+export { LINK_REFUSAL_WORDS };
 
 /** *Linked accounts*' (the administrator's) new words: Unlink and the unlinked assignees. */
 export const LINKED_ACCOUNTS_WORDS = {

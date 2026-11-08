@@ -121,12 +121,25 @@ const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 const requested: string[] = [];
+/** S-25.18: when set, the statistics read answers this refusal. */
+let statsRefusal: {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
+} | null = null;
 
 const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   const url = String(input);
   requested.push(url);
   if (url.includes('/api/auth/get-session')) return json(SESSION);
-  if (url.includes('/api/org/stats')) return json(STATS);
+  if (url.includes('/api/org/stats')) {
+    return statsRefusal === null
+      ? json(STATS)
+      : json(
+          { error: { code: statsRefusal.code, message: statsRefusal.message } },
+          statsRefusal.status,
+        );
+  }
   if (url.endsWith('/api/projects')) return json({ items: [] });
   return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
 }) as typeof fetch;
@@ -135,6 +148,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   requested.length = 0;
+  statsRefusal = null;
 });
 
 beforeEach(() => {
@@ -261,5 +275,27 @@ describe('the statistics screen', () => {
     expect(link).not.toBeNull();
     expect(link?.getAttribute('href')).toContain('range=30d');
     expect(link?.getAttribute('href')).toContain('bucket=day');
+  });
+});
+
+describe('a statistics read that fails (S-25.18)', () => {
+  it('says why in its own words, and keeps the server’s message behind Technical details', async () => {
+    const message = 'stats over 400 days need 1 200 000 rows; the bound is 500 000 (stats-queries)';
+    statsRefusal = { status: 409, code: 'stats_range_too_large', message };
+    render(createApp({ fetchImpl, realtime: false }).element);
+    let alert: HTMLElement | undefined;
+    await waitFor(() => {
+      alert = screen
+        .getAllByRole('alert')
+        .find((each) => each.textContent?.includes('Statistics could not be loaded'));
+      expect(alert).toBeDefined();
+    });
+    const visible = alert?.cloneNode(true) as HTMLElement;
+    for (const details of visible.querySelectorAll('details')) {
+      details.remove();
+    }
+    expect(visible.textContent).toContain('That period holds too much to add up at once.');
+    expect(visible.textContent).not.toContain(message);
+    expect(alert?.querySelector('details')?.textContent).toContain(message);
   });
 });

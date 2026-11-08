@@ -72,6 +72,9 @@ interface WorldOptions {
   /** The batch's coverage pair; the batch is rendered only when `detail` is given. */
   readonly claimed?: number | null;
   readonly claimedOf?: number;
+  /** S-25.18: the list read, or the start, answers this refusal instead. */
+  readonly readRefusal?: { readonly status: number; readonly code: string };
+  readonly startRefusal?: { readonly status: number; readonly code: string };
 }
 
 let asked: (string | null)[];
@@ -84,10 +87,22 @@ const fetchFor = (options: WorldOptions = {}) =>
     if (url.includes('/history-bootstraps')) {
       if ((init?.method ?? 'GET') === 'POST') {
         started.push(JSON.parse(String(init?.body ?? '{}')));
+        if (options.startRefusal !== undefined) {
+          return json(
+            { error: { code: options.startRefusal.code, message: 'diagnostic for the log' } },
+            options.startRefusal.status,
+          );
+        }
         return json({
           batch_id: '00000000-0000-4000-8000-0000000000b9',
           estimate: estimateFor(200),
         });
+      }
+      if (options.readRefusal !== undefined) {
+        return json(
+          { error: { code: options.readRefusal.code, message: 'diagnostic for the log' } },
+          options.readRefusal.status,
+        );
       }
       const requested = new URL(url, 'https://app.example.test').searchParams.get('merge_requests');
       asked.push(requested);
@@ -262,5 +277,41 @@ describe('the history bootstrap panel', () => {
     // The string appears verbatim and creates no element: the app builds no markup from a string.
     expect(container.querySelector('img')).toBeNull();
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
+  });
+});
+
+/** The alert whose text carries `title` — the page may show others. */
+const alertWith = async (title: string): Promise<HTMLElement> => {
+  let found: HTMLElement | undefined;
+  await waitFor(() => {
+    found = screen.getAllByRole('alert').find((alert) => alert.textContent?.includes(title));
+    expect(found).toBeDefined();
+  });
+  return found as HTMLElement;
+};
+
+/** S-25.18: a notice that says *what* failed also says why, from the error the screen was handed. */
+describe('the history bootstrap’s failures say why (S-25.18)', () => {
+  it('says why the list could not be read', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor({ readRefusal: { status: 503, code: 'bootstrap_unavailable' } }),
+        realtime: false,
+      }).element,
+    );
+    const alert = await alertWith('The history bootstrap could not be loaded.');
+    expect(alert.textContent).toContain('This server cannot mine the history right now.');
+  });
+
+  it('says why a start was refused, and what to do', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor({ startRefusal: { status: 409, code: 'bootstrap_already_running' } }),
+        realtime: false,
+      }).element,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Mine the history' }));
+    const alert = await alertWith('The history bootstrap could not be started.');
+    expect(alert.textContent).toContain('already being mined. Wait for that to finish.');
   });
 });

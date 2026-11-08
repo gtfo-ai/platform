@@ -232,7 +232,7 @@ export const registerBreakdownRoutes = async (
               reason: request.body.reason ?? null,
             });
           } catch (error) {
-            const refusal = commandRefusal(error);
+            const refusal = commandRefusal(error, { command: 'task.breakdown.decide' });
             if (refusal === null) {
               throw error;
             }

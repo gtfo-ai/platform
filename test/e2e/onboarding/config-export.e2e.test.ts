@@ -197,7 +197,9 @@ describe('the configuration export and the repository layer', () => {
     expect(bounded.body.not_applied.map((item) => item.key)).toContain(
       'pipeline.wip.max_parallel_tasks',
     );
-    const above = await send<{ error: { code: string; message: string } }>(
+    const above = await send<{
+      error: { code: string; message: string; details?: { path: string; message: string }[] };
+    }>(
       client,
       `/api/projects/${projectId}/config`,
       { config: { version: 1, pipeline: { wip: { max_parallel_tasks: 4 } } } },
@@ -205,6 +207,12 @@ describe('the configuration export and the repository layer', () => {
     );
     expect(above.status).toBe(409);
     expect(above.body.error.code).toBe('wip_above_organisation');
+    // S-25.18: which limit and the maximum, for the screen's sentence.
+    expect(above.body.error.details).toEqual([
+      { path: 'limit', message: 'max_parallel_tasks' },
+      { path: 'value', message: '4' },
+      { path: 'organisation_maximum', message: '2' },
+    ]);
     await pipeline.query(
       `update organizations set settings = settings - 'pipeline'
         where id = (select org_id from projects where id = $1)`,

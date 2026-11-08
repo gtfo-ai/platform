@@ -806,6 +806,11 @@ describe('the organisation autonomy maximum on the dial (WP-93)', () => {
     const refused = await put(`/api/projects/${PROJECT}/autonomy`, { autonomy: 'autonomous' });
     expect(refused.statusCode).toBe(409);
     expect(codeOf(refused)).toBe('autonomy_above_organisation');
+    // S-25.18: the maximum as a field, for the screen's sentence.
+    expect((refused.json() as { error: { details?: unknown } }).error.details).toEqual([
+      { path: 'organisation_maximum', message: 'supervised' },
+      { path: 'autonomy', message: 'autonomous' },
+    ]);
     expect(world.calls).toHaveLength(0);
     expect(world.actions).toHaveLength(0);
 

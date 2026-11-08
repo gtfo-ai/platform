@@ -152,6 +152,16 @@
 > `findIdempotentAttempt`: two accounts sending one key perform two commands, which the aggregate,
 > not the header, is what refuses.
 >
+> **S-25.18 — a refusal carries its specifics as `details`**, so the SPA says why and what to do
+> without parsing the message: `illegal_transition` names `aggregate`, `from`, `to` and — on the
+> command routes — `command` (the audit action, e.g. `task.retry_stage`); `policy_violation` names
+> `policy`; every `500 internal_error` names `request_id`; `integration_bound` one `projects` entry
+> per bound project key; `integration_has_live_credential` `live_credentials` and `latest_expiry`;
+> `autonomy_above_organisation` `organisation_maximum` and `autonomy`; `wip_above_organisation`
+> `limit`, `value` and `organisation_maximum`. Each is a `{path, message}` entry of the one error
+> shape; the message is unchanged. `apps/web/src/api/error-code-census.test.ts` holds every code the
+> server raises to a sentence in `apps/web/src/api/read-error.ts`, both directions.
+>
 > **WP-15i served the eleven task and run commands** — `POST /api/tasks/:id/{pause,resume,cancel,
 > retry-stage,return-to-stage,rework,feedback}`, `POST /api/tasks/:id/questions/:qid/answer`,
 > `POST /api/tasks/:id/approvals/:aid/decide` and `POST /api/runs/:id/{retry,cancel}`. Each loads

@@ -885,6 +885,8 @@ export const retireIntegration = async (
           .join(
             ', ',
           )}; remove it from each project's bindings (PUT /api/projects/:id/bindings) before retiring it`,
+        // S-25.18: the projects by key, so the screen names them in its sentence.
+        bound.map((binding) => ({ path: 'projects', message: binding.key })),
       );
     }
     // WP-114 pre-review, backlog 387: the organisation's flagged chat account. Read after this
@@ -908,6 +910,12 @@ export const retireIntegration = async (
         409,
         'integration_has_live_credential',
         `integration ${input.integrationId} minted ${live.count} run credential${live.count === 1 ? '' : 's'} that nothing has confirmed revoked and that ${live.count === 1 ? 'has' : 'have'} not expired (the latest expires ${live.latestExpiry ?? 'at an unreadable instant'}); it is where a revoke is sent (TD-028 decision 10), so it cannot be retired until ${live.count === 1 ? 'that credential is' : 'they are'} revoked or expired`,
+        [
+          { path: 'live_credentials', message: String(live.count) },
+          ...(live.latestExpiry === null
+            ? []
+            : [{ path: 'latest_expiry', message: live.latestExpiry }]),
+        ],
       );
     }
     const destroyed =

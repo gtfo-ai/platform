@@ -158,7 +158,10 @@ export class TooManyRequestsError extends HttpError {
  * does — the caller is a person who can press the button again, and escalating from a request would
  * park a task in `needs_human` for a race the human never saw.
  */
-export const commandRefusal = (error: unknown): HttpError | null => {
+export const commandRefusal = (
+  error: unknown,
+  context: { readonly command?: string } = {},
+): HttpError | null => {
   // Before its parent class: a merged task's refusal has its own fix (WP-152, backlog 497).
   if (error instanceof TaskMergedError) {
     return new HttpError(409, 'task_merged', error.message);
@@ -171,13 +174,24 @@ export const commandRefusal = (error: unknown): HttpError | null => {
     ]);
   }
   if (error instanceof IllegalTransitionError) {
-    return new HttpError(409, 'illegal_transition', error.message);
+    // S-25.18: the parts the message carries, as fields, so the screen can say "this task is
+    // paused, so it cannot be retried — resume it first" without parsing prose. `to` is the
+    // aggregate's own spelling (a state, or a state with a parenthesis), never shown raw.
+    return new HttpError(409, 'illegal_transition', error.message, [
+      { path: 'aggregate', message: error.aggregate },
+      { path: 'from', message: error.from },
+      { path: 'to', message: error.to },
+      ...(context.command === undefined ? [] : [{ path: 'command', message: context.command }]),
+    ]);
   }
   if (error instanceof InvariantViolationError) {
     return new HttpError(409, 'invariant_violation', error.message);
   }
   if (error instanceof PolicyViolationError) {
-    return new HttpError(409, 'policy_violation', error.message);
+    // S-25.18: which policy refused, so the sentence names it (`budget.exhausted`, `command.policy`).
+    return new HttpError(409, 'policy_violation', error.message, [
+      { path: 'policy', message: error.policy },
+    ]);
   }
   if (error instanceof StageNotCurrentError) {
     return new HttpError(409, 'stage_not_current', error.message);
@@ -276,6 +290,9 @@ export interface MappedError {
   readonly unexpected: boolean;
 }
 
+/** The request id a `500 internal_error` names, as the `details` entry the SPA quotes (S-25.18). */
+const requestIdDetail = (requestId: string) => ({ path: 'request_id', message: requestId });
+
 /** Maps any thrown value onto the wire shape. The only place a status code is chosen. */
 export const toApiError = (error: unknown, requestId: string): MappedError => {
   if (hasZodFastifySchemaValidationErrors(error)) {
@@ -296,6 +313,12 @@ export const toApiError = (error: unknown, requestId: string): MappedError => {
   }
 
   if (error instanceof HttpError) {
+    // An explicit `internal_error` is the platform's own failure too: it carries the request id
+    // the person quotes when they report it (S-25.18), as the unexpected one below does.
+    const details =
+      error.code === 'internal_error'
+        ? [...(error.details ?? []), requestIdDetail(requestId)]
+        : error.details;
     return {
       statusCode: error.statusCode,
       unexpected: false,
@@ -303,7 +326,7 @@ export const toApiError = (error: unknown, requestId: string): MappedError => {
         error: {
           code: error.code,
           message: error.message,
-          ...(error.details === undefined ? {} : { details: error.details }),
+          ...(details === undefined ? {} : { details }),
         },
       },
     };
@@ -345,6 +368,8 @@ export const toApiError = (error: unknown, requestId: string): MappedError => {
         code: 'internal_error',
         // Deliberately not the cause: see the module note.
         message: `the request failed; quote request id ${requestId} when reporting it`,
+        // S-25.18: the id as a field too, so the screen's sentence can quote it without parsing.
+        details: [requestIdDetail(requestId)],
       },
     },
   };

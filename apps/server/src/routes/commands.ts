@@ -190,11 +190,12 @@ export interface CommandRoutesOptions {
  *
  * Anything else is rethrown untouched, including the `HttpError`s this module raises itself.
  */
-const performing = async <T>(perform: () => Promise<T>): Promise<T> => {
+const performing = async <T>(command: string, perform: () => Promise<T>): Promise<T> => {
   try {
     return await perform();
   } catch (error) {
-    const refusal = commandRefusal(error);
+    // The audit action names the command, so an `illegal_transition` says which one was refused.
+    const refusal = commandRefusal(error, { command });
     if (refusal === null) {
       throw error;
     }
@@ -361,7 +362,7 @@ export const registerCommandRoutes = async (
     // Under the claim: a refusal from `perform` releases the key, the audit row completes it, and
     // a failure after `perform` returned leaves it held (`./idempotency.ts`, WP-67 round 1).
     const result = await replay.run(async (effectReturned) => {
-      const performed = await performing(async () => input.perform(key));
+      const performed = await performing(input.action, async () => input.perform(key));
       effectReturned();
       const taskId = typeof input.taskId === 'function' ? input.taskId(performed) : input.taskId;
       await options.queries.recordAction({

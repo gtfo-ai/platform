@@ -105,7 +105,9 @@ export const HistoryBootstrap = ({
     return <Loading label="Loading the history bootstrap…" />;
   }
   if (bootstraps.isError || bootstraps.data === undefined) {
-    return <ErrorNotice title="The history bootstrap could not be loaded." />;
+    return (
+      <ErrorNotice title="The history bootstrap could not be loaded." error={bootstraps.error} />
+    );
   }
   const { estimate, items, can_start, blocked_reason, max_merge_requests } = bootstraps.data;
 
@@ -171,7 +173,10 @@ export const HistoryBootstrap = ({
         </p>
       )}
       {commands.start.isError ? (
-        <ErrorNotice title="The history bootstrap could not be started." />
+        <ErrorNotice
+          title="The history bootstrap could not be started."
+          error={commands.start.error}
+        />
       ) : null}
 
       {items.length === 0 ? (

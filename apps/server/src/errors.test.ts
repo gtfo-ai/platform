@@ -85,6 +85,29 @@ describe('toApiError', () => {
     expect(mapped.body.error.message).toContain('req-1');
   });
 
+  // S-25.18: the screen quotes the id in its sentence, so it travels as a field too.
+  it('names the request id of an unexpected failure as a detail', () => {
+    const mapped = map(new Error('boom'));
+    expect(mapped.body.error).toMatchObject({
+      code: 'internal_error',
+      details: [{ path: 'request_id', message: 'req-1' }],
+    });
+    expect(apiErrorSchema.safeParse(mapped.body).success).toBe(true);
+  });
+
+  it('adds the request id to an explicit internal_error, and to nothing else', () => {
+    expect(
+      map(new HttpError(500, 'internal_error', 'the row was not created')).body.error.details,
+    ).toEqual([{ path: 'request_id', message: 'req-1' }]);
+    expect(
+      map(new HttpError(503, 'onboarding_unavailable', 'no workers')).body.error.details,
+    ).toBeUndefined();
+    expect(
+      map(new BadRequestError('invalid_request', 'bad', [{ path: 'a', message: 'b' }])).body.error
+        .details,
+    ).toEqual([{ path: 'a', message: 'b' }]);
+  });
+
   it('carries a 4xx message through, because the client caused it', () => {
     expect(map(new NotFoundError('project x')).body.error.message).toBe('project x does not exist');
   });
@@ -158,6 +181,31 @@ describe('commandRefusal', () => {
       statusCode: 409,
       code: 'policy_violation',
     });
+  });
+
+  // S-25.18: the specifics a screen's sentence needs, as `details` within the one error shape.
+  it('names the transition’s parts, and the command when the route gives it', () => {
+    const error = new IllegalTransitionError('Task', 'paused', 'active');
+    expect(commandRefusal(error, { command: 'task.retry_stage' })?.details).toEqual([
+      { path: 'aggregate', message: 'Task' },
+      { path: 'from', message: 'paused' },
+      { path: 'to', message: 'active' },
+      { path: 'command', message: 'task.retry_stage' },
+    ]);
+    // No command named: the three parts the error itself carries, and no invented fourth.
+    expect(commandRefusal(error)?.details).toEqual([
+      { path: 'aggregate', message: 'Task' },
+      { path: 'from', message: 'paused' },
+      { path: 'to', message: 'active' },
+    ]);
+    expect(apiErrorSchema.safeParse(map(commandRefusal(error)).body).success).toBe(true);
+  });
+
+  it('names the policy that refused', () => {
+    expect(
+      commandRefusal(new PolicyViolationError('budget.exhausted', 'project budget p1 is spent'))
+        ?.details,
+    ).toEqual([{ path: 'policy', message: 'budget.exhausted' }]);
   });
 
   it('answers null for everything else, so a real failure stays a 500', () => {

@@ -187,7 +187,10 @@ export const BusinessInterview = ({
         </Button>
       </div>
       {commands.recordInterview.isError ? (
-        <ErrorNotice title="The interview could not be recorded." />
+        <ErrorNotice
+          title="The interview could not be recorded."
+          error={commands.recordInterview.error}
+        />
       ) : null}
       {commands.recordInterview.isSuccess ? (
         <div className="flex flex-col gap-1">

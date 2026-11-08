@@ -241,6 +241,12 @@ describe('Retry run’s model select (WP-159)', () => {
   it('offers Configured, the run’s model and Other… with a notice when the list cannot be read', async () => {
     const { world, user, select } = await open('claude-fake-b', null);
     await screen.findByText('The model list could not be loaded.');
+    // S-25.18: the notice says why (the fake answers a bare 500) before what is still offered.
+    expect(
+      screen.getByText(
+        "The server could not do this right now. Try again in a moment. The configured model, this run's own model and Other… are still offered.",
+      ),
+    ).toBeTruthy();
     expect(optionLabels(select)).toEqual(['Configured (claude-fake-b)', 'claude-fake-b', 'Other…']);
     expect(select.value).toBe(CONFIGURED_MODEL);
     expect(await retry(world, user)).toEqual({});

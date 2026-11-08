@@ -21,6 +21,7 @@
  * Every id rendered here is text in an `<option>` — a React text node, never markup (BD-022).
  */
 import type { ReactElement } from 'react';
+import { errorSentence } from '../api/read-error.js';
 import { useOrgModels } from '../app/queries.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
@@ -138,7 +139,8 @@ export const RetryModelField = ({
       {models.isError ? (
         <ErrorNotice
           title="The model list could not be loaded."
-          detail="The configured model, this run's own model and Other… are still offered."
+          error={models.error}
+          detail={`${errorSentence(models.error).sentence} The configured model, this run's own model and Other… are still offered.`}
         />
       ) : null}
     </>
