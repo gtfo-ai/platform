@@ -15,7 +15,9 @@
  *   through the one rule (`ciHeldNow` over the read's `gate_wait`, active tasks only). And while
  *   its run waits for a machine nobody has (S-26.8b part 2, `./waiting-words.tsx`), why, in the
  *   long form: "Waiting for Vojtěch’s machine. It’s offline (last seen 2 h ago)." — the callout
- *   says it again with the next steps.
+ *   says it again with the next steps. A **queued** task has no strip; its *Now* line says what it
+ *   waits for (S-25.16, the read's `queue_wait`, `./queue-words.ts`): "Queued · Now: Waiting for a
+ *   place · 2nd in queue · 5 of 5 places taken", and the callout says what frees it.
  * - **One primary action, chosen by the state** — the page's, decided once by `./page-primary.ts`
  *   and shared with the callout (S-25.15): *Hand back…* while a take-over is in force, *Answer*
  *   for an open question (it moves focus into the callout's answer box), *Review plan* for a
@@ -94,6 +96,7 @@ import {
 } from './gate-wait.js';
 import { liveStageRun } from './live-stage.js';
 import type { TaskPrimaryAction } from './page-primary.js';
+import { queueShort } from './queue-words.js';
 import { setbackShort } from './setback.js';
 import { takeOverFinished } from './take-over.js';
 import { answerInputId } from './task-callout.js';
@@ -195,6 +198,11 @@ export const TaskHeader = ({
   // A task that has entered no stage has no strip to draw; the Overview says it has none.
   const phase = phaseStagesFor(null, stages, currentStage);
   const queued = task.state === 'queued';
+  // S-25.16: why it has not started, in the card's short form ("2nd in queue · 5 of 5 places taken").
+  const queueNow =
+    queued && phase.length === 0 && detail.queue_wait !== null && detail.queue_wait !== undefined
+      ? `Waiting for a place · ${queueShort(detail.queue_wait)}`
+      : null;
   // S-23.23: and only what the caller's role may do — the read's `can_*` flags, each the command
   // route's own permission. A command the caller may not use is left out of the menu.
   const canPause = detail.can_pause && !merged && !finished && !queued && task.state !== 'paused';
@@ -461,6 +469,13 @@ export const TaskHeader = ({
           <TicketClaimAndQa task={task} />
           {phase.length === 0 ? null : (
             <PhaseTrack stages={phase} activity={doing.activity} detail={now ?? doing.detail} />
+          )}
+          {/* S-25.16: a queued task has no strip, so its *Now* line says what it waits for. */}
+          {queueNow === null ? null : (
+            <p data-queue-now="" className="truncate text-sm text-fg-muted">
+              <span className="font-medium text-fg">Queued</span>
+              {` · Now: ${queueNow}`}
+            </p>
           )}
         </div>
       }

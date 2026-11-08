@@ -126,6 +126,8 @@ export const TASK_CALLER_FACT_ACTIONS = {
   can_rework: 'task.rework',
   // The decide route's own gate (`task.approve_plan`); the aggregate checks the approval's kind.
   can_decide_approval: 'task.approve_plan',
+  // S-25.16: *Change the limit* — the gate of `PUT /api/projects/:id/config`, which writes them.
+  can_change_limits: 'project.settings.write',
 } as const satisfies Record<TaskCallerFactKey, PermissionAction>;
 
 /**

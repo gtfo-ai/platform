@@ -19,6 +19,11 @@
  * both views read the filtered page; it is remembered per person (`./board-owner-filter.ts`). A card
  * shows its owner's avatar (`./board-card.tsx`); the *Needs you* rule does not change with it.
  *
+ * **The *Queued* column says what holds it** (S-25.16, the items' `queue_wait`): the limit that is
+ * full and what frees a place, once, as the column's note (`queueColumnNote`); each queued card its
+ * own place ("2nd in queue · 5 of 5 places taken"). The column is the anchor Home's *Needs you*
+ * links to when stopped tasks hold the queue.
+ *
  * Drag is not supported by design: the pipeline owns state (product/10).
  */
 import { createTaskRequestSchema, type TaskListItem, type TaskState } from '@platform/contracts';
@@ -71,6 +76,7 @@ import {
   storeOwnerFilter,
   type UrlOwnerFilter,
 } from './board-owner-filter.js';
+import { QUEUED_COLUMN_ANCHOR, queueNote } from './queue-words.js';
 
 /**
  * The columns, in pipeline order, and the column each state belongs to when nothing waits on a
@@ -97,6 +103,37 @@ export const columnFor = (state: string): string =>
 
 /** The *Needs you* column's id. */
 export const NEEDS_YOU_COLUMN = 'waiting';
+
+/** The *Queued* column's id; its anchor (`QUEUED_COLUMN_ANCHOR`) is what Home links to (S-25.16). */
+export const QUEUED_COLUMN = 'queued';
+
+/**
+ * The *Queued* column's note (S-25.16): what holds the queue and what frees a place, said **once**
+ * for the column — the same for every queued task, read off the first one the limits hold; each
+ * card says its own place. Nothing when no queued task waits (none, or the limits have room).
+ */
+export const queueColumnNote = (tasks: readonly TaskListItem[]): string | null => {
+  for (const task of tasks) {
+    const wait = task.state === 'queued' ? task.queue_wait : null;
+    if (wait !== null && wait !== undefined && wait.status === 'waiting') {
+      return queueNote(wait);
+    }
+  }
+  return null;
+};
+
+const QueueColumnNote = ({
+  tasks,
+}: {
+  readonly tasks: readonly TaskListItem[];
+}): ReactElement | null => {
+  const note = queueColumnNote(tasks);
+  return note === null ? null : (
+    <p data-queue-note="" className="px-1 text-xs text-fg-muted">
+      {note}
+    </p>
+  );
+};
 
 /**
  * The column a task is drawn in (S-25.4, product/10's 2026-11-06 Board amendment): *Needs you*
@@ -415,6 +452,8 @@ const Columns = ({
           key={column.id}
           aria-label={column.title}
           data-column={column.id}
+          // S-25.16: Home's "tickets can't start until you decide these" links here.
+          id={column.id === QUEUED_COLUMN ? QUEUED_COLUMN_ANCHOR : undefined}
           className={cx(
             'flex w-72 shrink-0 snap-start flex-col gap-2 rounded-lg border bg-subtle p-2 xl:w-auto',
             beacon ? 'border-running/50' : 'border-line',
@@ -434,6 +473,7 @@ const Columns = ({
               label={`${tasks.length} task${tasks.length === 1 ? '' : 's'}`}
             />
           </h3>
+          {column.id === QUEUED_COLUMN ? <QueueColumnNote tasks={tasks} /> : null}
           {tasks.map((task) => (
             <TaskCard
               key={task.id}

@@ -658,6 +658,7 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_return: false,
       can_rework: false,
       can_decide_approval: false,
+      can_change_limits: false,
     },
     member: {
       can_raise_budget: false,
@@ -668,6 +669,7 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_return: false,
       can_rework: false,
       can_decide_approval: false,
+      can_change_limits: false,
     },
     maintainer: {
       can_raise_budget: true,
@@ -678,6 +680,7 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_return: true,
       can_rework: true,
       can_decide_approval: true,
+      can_change_limits: false,
     },
     admin: {
       can_raise_budget: true,
@@ -688,6 +691,7 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_return: true,
       can_rework: true,
       can_decide_approval: true,
+      can_change_limits: true,
     },
   };
 
@@ -728,6 +732,8 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_return: 'task.return_to_stage',
       can_rework: 'task.rework',
       can_decide_approval: 'task.approve_plan',
+      // S-25.16: the configuration write's own gate (`PUT /api/projects/:id/config`).
+      can_change_limits: 'project.settings.write',
     });
   });
 });

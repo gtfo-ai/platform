@@ -1,4 +1,4 @@
-import { taskStateSchema } from '@platform/contracts';
+import { type TaskState, taskStateSchema } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
@@ -9,8 +9,11 @@ import {
   DEFAULT_WIP_LIMITS,
   evaluateRunAdmission,
   evaluateTaskAdmission,
+  holdsPlace,
   orderQueue,
   type QueuedTask,
+  queueAdmissionOf,
+  wipCountsOf,
 } from './wip.js';
 
 describe('BD-010 defaults', () => {
@@ -146,4 +149,79 @@ describe('queue order (priority, then age)', () => {
     },
     PROPERTY_TEST_TIMEOUT_MS,
   );
+});
+
+describe('why a queued task waits (S-25.16)', () => {
+  /** The scheduler's own count: the memory store's two filters over the project's task states. */
+  const schedulerCounts = (states: readonly TaskState[]) => ({
+    activeTasks: states.filter(countsAsActive).length,
+    tasksInPipeline: states.filter(countsInPipeline).length,
+  });
+  const states = fc.array(fc.constantFrom(...taskStateSchema.options), { maxLength: 30 });
+  const limits = fc.record({
+    maxParallelTasks: fc.integer({ min: 1, max: 8 }),
+    maxTasksInPipeline: fc.integer({ min: 1, max: 12 }),
+    maxParallelRuns: fc.integer({ min: 1, max: 8 }),
+  });
+
+  it(
+    'gives the verdict the scheduler gives, over any multiset of task states and any limits',
+    () => {
+      fc.assert(
+        fc.property(states, limits, (taskStates, wip) => {
+          const verdict = queueAdmissionOf(wipCountsOf(taskStates), wip);
+          const scheduler = evaluateTaskAdmission(schedulerCounts(taskStates), wip);
+          expect(verdict.status === 'admitted').toBe(scheduler.admitted);
+          if (verdict.status === 'waiting' && !scheduler.admitted) {
+            expect(verdict.reason).toBe(scheduler.reason);
+            expect(verdict.limit).toBe(scheduler.limit);
+            // The count it names is the places held under that limit, and it reached the limit.
+            expect(verdict.count).toBe(
+              taskStates.filter((state) => holdsPlace(verdict.reason, state)).length,
+            );
+            expect(verdict.count).toBeGreaterThanOrEqual(verdict.limit);
+          }
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  it('names the pipeline limit when stopped tasks fill it — the Autix shape', () => {
+    const autix: TaskState[] = [
+      ...Array.from({ length: 5 }, () => 'needs_human' as const),
+      ...Array.from({ length: 5 }, () => 'queued' as const),
+    ];
+    expect(queueAdmissionOf(wipCountsOf(autix))).toEqual({
+      status: 'waiting',
+      reason: 'max_tasks_in_pipeline',
+      count: 5,
+      limit: 5,
+    });
+  });
+
+  it('names the parallel limit before the pipeline limit, as the scheduler checks them', () => {
+    expect(queueAdmissionOf(wipCountsOf(['active', 'returned', 'needs_human']))).toEqual({
+      status: 'waiting',
+      reason: 'max_parallel_tasks',
+      count: 2,
+      limit: 2,
+    });
+  });
+
+  it('answers admitted, from both sides of each limit', () => {
+    expect(queueAdmissionOf(wipCountsOf(['active', 'needs_human', 'queued', 'done']))).toEqual({
+      status: 'admitted',
+    });
+    expect(queueAdmissionOf(wipCountsOf(['active', 'active'])).status).toBe('waiting');
+    expect(queueAdmissionOf(wipCountsOf(Array(4).fill('needs_human'))).status).toBe('admitted');
+    expect(queueAdmissionOf(wipCountsOf(Array(5).fill('needs_human'))).status).toBe('waiting');
+  });
+
+  it('counts a stopped task as holding a pipeline place and no parallel one', () => {
+    expect(holdsPlace('max_tasks_in_pipeline', 'needs_human')).toBe(true);
+    expect(holdsPlace('max_parallel_tasks', 'needs_human')).toBe(false);
+    expect(holdsPlace('max_parallel_tasks', 'returned')).toBe(true);
+    expect(holdsPlace('max_tasks_in_pipeline', 'queued')).toBe(false);
+  });
 });

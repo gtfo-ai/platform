@@ -43,6 +43,7 @@ import {
   DefaultBranchChangedError,
   LeaseLostError,
   PAUSE_ENDING_EVENTS,
+  priorityRankOf,
   silentLogger,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
@@ -298,31 +299,10 @@ const pipelineDialOf = (row: TaskRow): TaskPipelineDial | null => {
  *
  * Derived rather than stored: `tasks.priority` holds the provider's own word, and a second column
  * holding the platform's reading of it would be a projection nothing keeps in step when the
- * mapping changes.
+ * mapping changes. The application's `priorityRankOf` — one table, so the board's `queue_wait`
+ * (S-25.16) orders the queue as this store does.
  */
-const priorityRank = (priority: string | null): number => {
-  switch (priority?.trim().toLowerCase()) {
-    case 'highest':
-    case 'blocker':
-    case 'critical':
-    case 'p0':
-      return 0;
-    case 'high':
-    case 'major':
-    case 'p1':
-      return 1;
-    case 'low':
-    case 'minor':
-    case 'p3':
-      return 3;
-    case 'lowest':
-    case 'trivial':
-    case 'p4':
-      return 4;
-    default:
-      return 2;
-  }
-};
+const priorityRank = priorityRankOf;
 
 export interface PostgresPipelineStoreOptions {
   /**

@@ -117,6 +117,84 @@ export const evaluateTaskAdmission = (
   return { admitted: true };
 };
 
+/** The two counts {@link evaluateTaskAdmission} reads, over a project's task states (BD-010). */
+export interface WipCounts {
+  readonly activeTasks: number;
+  readonly tasksInPipeline: number;
+}
+
+/**
+ * The counts the store's `TaskRepository.counts` answers, as a function of the project's task
+ * states — the same two predicates ({@link countsAsActive}, {@link countsInPipeline}), so a reader
+ * that holds the states counts what the scheduler counts (S-25.16).
+ */
+export const wipCountsOf = (states: Iterable<TaskState>): WipCounts => {
+  let activeTasks = 0;
+  let tasksInPipeline = 0;
+  for (const state of states) {
+    if (countsAsActive(state)) {
+      activeTasks += 1;
+    }
+    if (countsInPipeline(state)) {
+      tasksInPipeline += 1;
+    }
+  }
+  return { activeTasks, tasksInPipeline };
+};
+
+/** The project limit a queued task waits behind — the two {@link evaluateTaskAdmission} refuses. */
+export type QueueWaitReason = 'max_parallel_tasks' | 'max_tasks_in_pipeline';
+
+/**
+ * **Why a queued task has not started** (S-25.16): the scheduler's own admission
+ * ({@link evaluateTaskAdmission}) over the same counts and the same resolved limits, with the count
+ * it compared. `admitted` is the honest third state — the limits have room and the scheduler has
+ * not run since (it runs when a task leaves the active set) — never a guess at a wait.
+ */
+export type QueueAdmission =
+  | { readonly status: 'admitted' }
+  | {
+      readonly status: 'waiting';
+      readonly reason: QueueWaitReason;
+      /** The count the limit was compared with: active tasks, or tasks in the pipeline. */
+      readonly count: number;
+      readonly limit: number;
+    };
+
+export const queueAdmissionOf = (
+  counts: WipCounts,
+  limits: WipLimits = DEFAULT_WIP_LIMITS,
+): QueueAdmission => {
+  const decision = evaluateTaskAdmission(counts, limits);
+  if (decision.admitted) {
+    return { status: 'admitted' };
+  }
+  switch (decision.reason) {
+    case 'max_parallel_tasks':
+      return {
+        status: 'waiting',
+        reason: decision.reason,
+        count: counts.activeTasks,
+        limit: decision.limit,
+      };
+    case 'max_tasks_in_pipeline':
+      return {
+        status: 'waiting',
+        reason: decision.reason,
+        count: counts.tasksInPipeline,
+        limit: decision.limit,
+      };
+    default:
+      // Deliberately unreachable: `evaluateTaskAdmission` refuses on the two project limits only;
+      // `max_parallel_runs` is `evaluateRunAdmission`'s. Thrown rather than read as a wait.
+      throw new Error(`task admission refused on ${decision.reason}, which it never decides`);
+  }
+};
+
+/** Whether a task in `state` holds one of the places `reason` counts (S-25.16). */
+export const holdsPlace = (reason: QueueWaitReason, state: TaskState): boolean =>
+  reason === 'max_parallel_tasks' ? countsAsActive(state) : countsInPipeline(state);
+
 /** May another run start anywhere in the organisation? */
 export const evaluateRunAdmission = (
   counts: { readonly activeRuns: number },

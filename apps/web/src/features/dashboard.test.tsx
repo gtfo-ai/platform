@@ -17,6 +17,7 @@ import type {
   InboxResponse,
   IntegrationSummary,
   QuestionRecord,
+  QueueWait,
   RunRecord,
   SseFrame,
   TaskDetailResponse,
@@ -265,6 +266,8 @@ interface World {
   escalated?: InboxResponse['escalated'];
   /** S-25.15 part B: each list item's `escalation_reason`, by task id; absent, `null`. */
   escalationReasons?: Readonly<Record<string, string>>;
+  /** S-25.16: each list item's `queue_wait`, by task id; absent, `null`. */
+  queueWaits?: Readonly<Record<string, QueueWait>>;
   runs: RunRecord[];
   /** `readiness` per project id: 200 when evaluated, 409 when not. */
   evaluated: Set<string>;
@@ -434,6 +437,7 @@ const fetchFor = (world: World) =>
               latest_return: null,
               stop: null,
               escalation_reason: world.escalationReasons?.[item.id] ?? null,
+              queue_wait: world.queueWaits?.[item.id] ?? null,
             })),
           next_cursor: null,
           can_start_task: true,
@@ -819,6 +823,63 @@ describe('Home, needs you first', () => {
     expect(needs.querySelector('img')).toBeNull();
     expect(needs.querySelector('strong')).toBeNull();
     expect(needs.querySelector('a[href^="javascript"]')).toBeNull();
+  });
+});
+
+describe('Home, a queue the stopped tasks hold (S-25.16)', () => {
+  const waiting = (
+    needsHuman: number,
+    reason: 'max_tasks_in_pipeline' | 'max_parallel_tasks',
+  ): QueueWait => ({
+    status: 'waiting',
+    reason,
+    count: 5,
+    limit: 5,
+    position: 1,
+    queued: 5,
+    holders: {
+      total: 5,
+      needs_human: needsHuman,
+      items: [{ task_id: TASK(3), ticket_key: 'ACME-3', state: 'needs_human' }],
+    },
+  });
+
+  it('says how many tickets cannot start, linked to the board’s queue', async () => {
+    const world = newWorld({
+      tasks: [task(3, { state: 'needs_human' }), task(11, { state: 'queued' })],
+      queueWaits: { [TASK(11)]: waiting(5, 'max_tasks_in_pipeline') },
+    });
+    start(world);
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    const line = await within(needs).findByRole('link', {
+      name: '5 tickets can’t start until you decide these',
+    });
+    expect(line.getAttribute('href')).toBe('/projects/p1#queued-tasks');
+    expect(needs.querySelector('[data-home-queue="p1"]')).not.toBeNull();
+  });
+
+  it.each<readonly [string, QueueWait]>([
+    ['a parallel-tasks wait (running tasks hold it)', waiting(0, 'max_parallel_tasks')],
+    ['a pipeline wait nobody stopped holds', waiting(0, 'max_tasks_in_pipeline')],
+    ['a queue the limits admit', { status: 'admitted', position: 1, queued: 1 }],
+  ])('says nothing for %s', async (_name, wait) => {
+    // Project 2's queue is held: its line proves the queued reads answered before the assertion.
+    const world = newWorld({
+      projects: [project(1), project(2)],
+      tasks: [
+        task(3, { state: 'needs_human' }),
+        task(11, { state: 'queued' }),
+        task(21, { state: 'needs_human', project_id: PROJECT(2) }),
+        task(22, { state: 'queued', project_id: PROJECT(2) }),
+      ],
+      queueWaits: { [TASK(11)]: wait, [TASK(22)]: waiting(1, 'max_tasks_in_pipeline') },
+    });
+    start(world);
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(needs.querySelector('[data-home-queue="p2"]')).not.toBeNull();
+    });
+    expect(needs.querySelector('[data-home-queue="p1"]')).toBeNull();
   });
 });
 

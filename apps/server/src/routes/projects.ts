@@ -100,6 +100,7 @@ import {
   findProjectTicketLifecycle,
   listProjectSummaries,
 } from '../queries/project-queries.js';
+import type { WipLimitsReader } from '../queries/queue-wait.js';
 import { appliedTicketLifecycle, type ProjectTicketLifecycle } from '../ticket-lifecycle.js';
 
 export interface ProjectRoutesOptions {
@@ -120,6 +121,11 @@ export interface ProjectRoutesOptions {
    * is counted as able to claim.
    */
   readonly coreDigests?: () => RunImageDigests | null;
+  /**
+   * The project's WIP limits as the scheduler is given them (S-25.16): what a queued board item's
+   * `queue_wait` is read with. Absent: `queue_wait` is `null`.
+   */
+  readonly wipLimits?: WipLimitsReader;
 }
 
 const projectParamsSchema = z.strictObject({ project_id: z.uuid() });
@@ -718,7 +724,10 @@ export const registerProjectRoutes = async (
               ? { owner: { kind: 'none' as const } }
               : { owner: { kind: 'user' as const, userId: callerOf(request) } }),
         },
-        { coreDigests: options.coreDigests?.() ?? null },
+        {
+          coreDigests: options.coreDigests?.() ?? null,
+          ...(options.wipLimits === undefined ? {} : { wipLimits: options.wipLimits }),
+        },
       );
       if (page === null) {
         // The same answer `/config`, `/budgets` and `/readiness` give for the same id: an empty page

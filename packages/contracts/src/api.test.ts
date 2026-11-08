@@ -20,6 +20,7 @@ import {
   listTasksQuerySchema,
   MAX_CI_MANUAL_NOT_RUN_JOBS,
   MAX_INBOX_ESCALATED,
+  MAX_QUEUE_WAIT_HOLDERS,
   MAX_TASK_STOP_RECORDED_CHARS,
   MAX_TICKET_KEY_CHARS,
   orgAuditQuerySchema,
@@ -35,6 +36,7 @@ import {
   projectsResponseSchema,
   putKbDocRequestSchema,
   putProjectBindingsRequestSchema,
+  queueWaitSchema,
   readinessResponseSchema,
   runActivitySchema,
   runMessagesQuerySchema,
@@ -1391,5 +1393,57 @@ describe('the inbox lists escalated tasks', () => {
     const many = (n: number) => ({ ...inbox, escalated: Array.from({ length: n }, () => row) });
     expect(inboxResponseSchema.safeParse(many(MAX_INBOX_ESCALATED)).success).toBe(true);
     expect(inboxResponseSchema.safeParse(many(MAX_INBOX_ESCALATED + 1)).success).toBe(false);
+  });
+});
+
+describe('queue_wait (S-25.16)', () => {
+  const holder = (n: number) => ({
+    task_id: `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`,
+    ticket_key: `AUT-${n}`,
+    state: 'needs_human',
+  });
+  const waiting = {
+    status: 'waiting',
+    reason: 'max_tasks_in_pipeline',
+    count: 5,
+    limit: 5,
+    position: 2,
+    queued: 5,
+    holders: { total: 5, needs_human: 5, items: [1, 2, 3, 4, 5].map(holder) },
+  };
+
+  it('parses a wait and the honest admitted state', () => {
+    expect(queueWaitSchema.parse(waiting)).toEqual(waiting);
+    expect(queueWaitSchema.parse({ status: 'admitted', position: 1, queued: 1 })).toEqual({
+      status: 'admitted',
+      position: 1,
+      queued: 1,
+    });
+  });
+
+  it('refuses an unknown key, a wait without its counts, and a run-limit reason', () => {
+    expect(queueWaitSchema.safeParse({ ...waiting, guessed: true }).success).toBe(false);
+    expect(
+      queueWaitSchema.safeParse({ status: 'admitted', position: 1, queued: 1, holders: {} })
+        .success,
+    ).toBe(false);
+    const { count: _count, ...noCount } = waiting;
+    expect(queueWaitSchema.safeParse(noCount).success).toBe(false);
+    expect(queueWaitSchema.safeParse({ ...waiting, reason: 'max_parallel_runs' }).success).toBe(
+      false,
+    );
+    expect(queueWaitSchema.safeParse({ ...waiting, position: 0 }).success).toBe(false);
+  });
+
+  it('lists at most the cap of holders, with the total beside it', () => {
+    const items = Array.from({ length: MAX_QUEUE_WAIT_HOLDERS }, (_, n) => holder(n + 1));
+    const full = { ...waiting, holders: { total: 12, needs_human: 12, items } };
+    expect(queueWaitSchema.safeParse(full).success).toBe(true);
+    expect(
+      queueWaitSchema.safeParse({
+        ...full,
+        holders: { ...full.holders, items: [...items, holder(99)] },
+      }).success,
+    ).toBe(false);
   });
 });

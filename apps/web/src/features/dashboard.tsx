@@ -9,6 +9,9 @@
  * **background failures** (S-25.6, product/10's 2026-11-06 amendment, research/21 F14): a row for the
  * stuck events and one for the failed background jobs, each only while its count is above zero —
  * the two reads' own `total`s, which nobody else is asked for (the server refuses them below admin).
+ * And when tasks stopped for a person hold a project's queue (S-25.16, the queued page's
+ * `queue_wait`), *Needs you* says how many tickets that keeps from starting, in one line linked to
+ * the board's *Queued* column ("5 tickets can’t start until you decide these").
  * A brand-new instance gets none of that: for an admin with no project, or no integration, Home
  * **is** the setup checklist (`home-setup.ts`), a Stepper whose every ✓ is read from the server and
  * whose one primary button continues at the first step that is not done. Once a project exists the
@@ -23,7 +26,7 @@
  * refreshes the boxes without a reload. Every string a person or an agent wrote — a question, a
  * progress line, a ticket title, a project name, a model id — renders through `ui/untrusted.tsx`.
  */
-import type { ApprovalView } from '@platform/contracts';
+import type { ApprovalView, TaskListItem } from '@platform/contracts';
 import { RepoIcon } from '@primer/octicons-react/RepoIcon';
 import { Link } from '@tanstack/react-router';
 import { Fragment, type ReactElement, type ReactNode } from 'react';
@@ -94,6 +97,7 @@ import {
   setupChecklist,
   setupProjectOf,
 } from './home-setup.js';
+import { QUEUED_COLUMN_ANCHOR } from './queue-words.js';
 import { ReadinessLabel } from './readiness-label.js';
 import { WaitingWords, waitingShort } from './waiting-words.js';
 import { useWorkerNeed, useWorkersWhen } from './worker-need.js';
@@ -276,6 +280,42 @@ const Where = ({
 
 // ── Needs you ────────────────────────────────────────────────────────────────
 
+/** A project whose queue waits on tasks stopped for a person (S-25.16). */
+export interface HeldQueue {
+  readonly projectKey: string;
+  readonly projectName: string;
+  /** Every queued task of the project (`queue_wait.queued`), not only the page's. */
+  readonly tickets: number;
+}
+
+/**
+ * The projects whose queued tasks wait for a pipeline place that tasks stopped for a person hold
+ * (S-25.16): the queued page's first `queue_wait` that is a `max_tasks_in_pipeline` wait with a
+ * holder at *Needs you*. A parallel-tasks wait is not one — running tasks hold it, not a decision —
+ * and neither is `admitted`, which nothing holds.
+ */
+export const heldQueuesOf = (
+  projects: readonly { readonly id: string; readonly key: string; readonly name: string }[],
+  queuedPages: readonly (readonly TaskListItem[])[],
+): readonly HeldQueue[] =>
+  projects.flatMap((project, index) => {
+    const wait = (queuedPages[index] ?? [])
+      .filter((task) => task.state === 'queued')
+      .map((task) => task.queue_wait)
+      .find((entry) => entry !== null && entry !== undefined);
+    return wait !== undefined &&
+      wait !== null &&
+      wait.status === 'waiting' &&
+      wait.reason === 'max_tasks_in_pipeline' &&
+      wait.holders.needs_human > 0
+      ? [{ projectKey: project.key, projectName: project.name, tickets: wait.queued }]
+      : [];
+  });
+
+/** "5 tickets can't start until you decide these". */
+export const heldQueueLine = (tickets: number): string =>
+  `${tickets === 1 ? '1 ticket' : `${formatInteger(tickets)} tickets`} can’t start until you decide these`;
+
 interface NeedsYouItem {
   readonly id: string;
   /** `ci_held`: a CI check held at a manual job a person must start (BACKLOG 1300). */
@@ -375,6 +415,15 @@ const NeedsYouBox = ({
   const escalated = useProjectsTasks(
     projects.map((project) => project.id),
     'needs_human',
+  );
+  // S-25.16: whether stopped tasks hold a project's queue — its queued page's `queue_wait`.
+  const queuedReads = useProjectsTasks(
+    projects.map((project) => project.id),
+    'queued',
+  );
+  const heldQueues = heldQueuesOf(
+    projects,
+    queuedReads.map((read) => read.data?.items ?? []),
   );
 
   // When each stopped task stopped (the Inbox read's `escalated`, S-25.15 part B): the row's time,
@@ -548,6 +597,29 @@ const NeedsYouBox = ({
         {items.length > shown.length ? (
           <QuietLine>{`${formatInteger(items.length - shown.length)} more in the inbox.`}</QuietLine>
         ) : null}
+        {/* S-25.16: the tickets these stopped tasks keep from starting, linked to the queue. */}
+        {heldQueues.map((held) => (
+          <li
+            key={held.projectKey}
+            data-home-queue={held.projectKey}
+            className="px-4 py-3 text-sm text-fg-muted"
+          >
+            <Link
+              to="/projects/$key"
+              params={{ key: held.projectKey }}
+              hash={QUEUED_COLUMN_ANCHOR}
+              className="text-link underline"
+            >
+              {heldQueueLine(held.tickets)}
+            </Link>
+            {heldQueues.length > 1 ? (
+              <>
+                {' in '}
+                <UntrustedText value={held.projectName} />
+              </>
+            ) : null}
+          </li>
+        ))}
         {/* After the people's rows and never cut by `HOME_ROWS`: a queue of questions must not
             hide that the platform itself is stuck. */}
         {background.unchecked ? (

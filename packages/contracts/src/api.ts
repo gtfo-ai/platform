@@ -1737,6 +1737,56 @@ export const ciManualNotRunSchema = z.strictObject({
 });
 export type CiManualNotRun = z.infer<typeof ciManualNotRunSchema>;
 
+/** The most holding tasks {@link queueWaitSchema} lists; `holders.total` counts them all. */
+export const MAX_QUEUE_WAIT_HOLDERS = 10;
+
+/**
+ * **Why a queued task has not started, and what frees it** (S-25.16, BD-010) — never stored: the
+ * scheduler's own admission (`queueAdmissionOf` over `evaluateTaskAdmission`) over the project's
+ * task states at this read and the limits the scheduler is given (`ProjectSettings.wip`, the
+ * organisation's bound applied). `null` unless the task is `queued`.
+ *
+ * - `admitted`: the limits have room now. The scheduler starts the head of the queue when a task
+ *   leaves the active set, and none has since — the honest third state, never a guessed wait.
+ * - `waiting`: `reason` is the limit that refused (`max_parallel_tasks` is checked first, as the
+ *   scheduler checks it), `count` the places it counted against `limit`, and `holders` the tasks
+ *   holding those places — at most {@link MAX_QUEUE_WAIT_HOLDERS}, the ones waiting for a person
+ *   first, then the oldest; `total` counts them all and `needs_human` those waiting for a person
+ *   (`needs_human`), so a reader can say *5 of them wait for you* past the cut.
+ *
+ * `position` is the task's 1-based place in `orderQueue` (ticket priority, then age, then id) among
+ * the project's `queued` tasks, `queued` their number. A ticket key is the provider's text (BD-022).
+ */
+export const queueWaitSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('admitted'),
+    position: z.int().positive(),
+    queued: z.int().positive(),
+  }),
+  z.strictObject({
+    status: z.literal('waiting'),
+    reason: z.enum(['max_parallel_tasks', 'max_tasks_in_pipeline']),
+    count: z.int().nonnegative(),
+    limit: z.int().positive(),
+    position: z.int().positive(),
+    queued: z.int().positive(),
+    holders: z.strictObject({
+      total: z.int().nonnegative(),
+      needs_human: z.int().nonnegative(),
+      items: z
+        .array(
+          z.strictObject({
+            task_id: idSchema,
+            ticket_key: nonEmptyStringSchema,
+            state: taskStateSchema,
+          }),
+        )
+        .max(MAX_QUEUE_WAIT_HOLDERS),
+    }),
+  }),
+]);
+export type QueueWait = z.infer<typeof queueWaitSchema>;
+
 /**
  * One task of the board's page (S-23.9a): the {@link taskRecordSchema} record plus what a card says
  * at a glance — which phase, for how long, and whether it waits on a person. Read over the page's
@@ -1786,6 +1836,12 @@ export const taskListItemSchema = taskRecordSchema.extend({
    * *CI held* and the board's *Needs you* read it.
    */
   gate_wait: gateWaitSchema.nullable(),
+  /**
+   * Why a `queued` task waits, and what frees it (S-25.16): {@link queueWaitSchema}, read once per
+   * page; `null` for every other state. Optional on the wire because the SPA's fixtures predate it;
+   * the board's read always sends it.
+   */
+  queue_wait: queueWaitSchema.nullable().optional(),
 });
 export type TaskListItem = z.infer<typeof taskListItemSchema>;
 
@@ -1998,6 +2054,12 @@ export const taskCallerFactsShape = {
    * again by the aggregate, and every kind needs the same role today.
    */
   can_decide_approval: z.boolean(),
+  /**
+   * `project.settings.write` (S-25.16): whether the caller may change the project's limits, so a
+   * queued task's callout offers *Change the limit* only then. Optional on the wire because the
+   * SPA's fixtures predate it; the task read always sends it.
+   */
+  can_change_limits: z.boolean().optional(),
 } as const;
 
 /**
@@ -2107,6 +2169,12 @@ export const taskDetailResponseSchema = z.strictObject({
    * item's `gate_wait` is; the task read always sends it.
    */
   ci_manual_not_run: ciManualNotRunSchema.nullable().optional(),
+  /**
+   * Why a `queued` task waits, and what frees it (S-25.16): {@link queueWaitSchema}; `null` for
+   * every other state, and for a reader that does not ask (an agent's `get_task_context`). Optional
+   * on the wire as `ci_manual_not_run` is; `GET /api/tasks/:id` always sends it.
+   */
+  queue_wait: queueWaitSchema.nullable().optional(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,

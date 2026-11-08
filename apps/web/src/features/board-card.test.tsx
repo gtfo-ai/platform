@@ -1000,3 +1000,64 @@ describe('a card stopped for a person says why it waits', () => {
     );
   });
 });
+
+describe('the Queued column says what holds it (S-25.16)', () => {
+  const HOLDERS = [31, 32, 33, 34, 35].map((n) => ({
+    task_id: id(n),
+    ticket_key: `ACME-${n}`,
+    state: 'needs_human' as const,
+  }));
+  const waitAt = (position: number): NonNullable<TaskListItem['queue_wait']> => ({
+    status: 'waiting',
+    reason: 'max_tasks_in_pipeline',
+    count: 5,
+    limit: 5,
+    position,
+    queued: 2,
+    holders: { total: 5, needs_human: 5, items: HOLDERS },
+  });
+  const FIRST = task(41, { state: 'queued', queue_wait: waitAt(1) });
+  const SECOND = task(42, { state: 'queued', queue_wait: waitAt(2) });
+  const STOPPED = HOLDERS.map((_holder, index) =>
+    task(31 + index, { state: 'needs_human', current_stage: 'refinement' }),
+  );
+  const NOTE =
+    'Waiting for a place: this project runs at most 5 tasks at once, and 5 are in the pipeline — ' +
+    '5 of them wait for you. A place frees when one of them finishes or is cancelled, so decide ' +
+    'them or cancel one.';
+
+  it('says the sentence once, as the column’s note, and each card its own place', async () => {
+    open({ items: [FIRST, SECOND, ...STOPPED], agents: false });
+    await card('ACME-42');
+    const column = screen.getByRole('region', { name: 'Queued' });
+    expect(column.id).toBe('queued-tasks');
+    const notes = column.querySelectorAll('[data-queue-note]');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.textContent).toBe(NOTE);
+    // No other column carries it.
+    expect(document.querySelectorAll('[data-queue-note]')).toHaveLength(1);
+    expect((await card('ACME-41')).querySelector('[data-card-queue]')?.textContent).toBe(
+      '1st in queue · 5 of 5 places taken',
+    );
+    expect((await card('ACME-42')).querySelector('[data-card-queue]')?.textContent).toBe(
+      '2nd in queue · 5 of 5 places taken',
+    );
+  });
+
+  it('draws no note and the state’s word for a queued task the read gives no wait', async () => {
+    const plain = task(43, { state: 'queued' });
+    const admitted = task(44, {
+      state: 'queued',
+      queue_wait: { status: 'admitted', position: 1, queued: 2 },
+    });
+    open({ items: [plain, admitted], agents: false });
+    const bare = await card('ACME-43');
+    expect(bare.querySelector('[data-card-queue]')).toBeNull();
+    expect(bare.textContent).toContain('Queued');
+    // Admitted: nothing holds it, so no note; the card says a place is free.
+    expect((await card('ACME-44')).querySelector('[data-card-queue]')?.textContent).toBe(
+      '1st in queue · a place is free',
+    );
+    expect(document.querySelector('[data-queue-note]')).toBeNull();
+  });
+});

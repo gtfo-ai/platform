@@ -71,6 +71,7 @@ import type {
   PipelineTemplate,
   PromptsWithheldRecord,
   QuestionRecord,
+  QueueWait,
   RunCommandRecord,
   RunLatestProgress,
   RunModelUsageRecord,
@@ -150,6 +151,7 @@ import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summar
 import { latestActivityFor, newestEntryPerRun, seatsFor } from './live-view-queries.js';
 import { waitingForRuns, waitingForTasks } from './offer-waiting.js';
 import { frozenLimits } from './pipeline-graph.js';
+import { queueWaitsFor, type WipLimitsReader } from './queue-wait.js';
 import { returnsOf, type SetbackStageRow, stopOf } from './task-setback.js';
 
 const {
@@ -2176,6 +2178,12 @@ export interface WaitingReadOptions {
    * Absent or `true`: it is read.
    */
   readonly waiting?: boolean;
+  /**
+   * The project's WIP limits as the scheduler is given them (S-25.16) — `queue_wait` is read with
+   * them for a `queued` task. Absent: `queue_wait` is `null` (a reader that does not ask, as an
+   * agent's `get_task_context` does not); the routes always pass it.
+   */
+  readonly wipLimits?: WipLimitsReader;
 }
 
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
@@ -2231,6 +2239,7 @@ export const findTaskDetail = async (
     owners,
     waiting,
     escalation,
+    queueWaits,
   ] = await Promise.all([
     modelUsageFor(
       database,
@@ -2254,6 +2263,10 @@ export const findTaskDetail = async (
       ? null
       : waitingForTasks(database, [taskId], options.coreDigests ?? null),
     escalationFor(database, task),
+    // S-25.16: why a queued task waits — the scheduler's admission, its limits and its order.
+    options.wipLimits === undefined || task.state !== 'queued'
+      ? new Map<string, QueueWait>()
+      : queueWaitsFor(database, task.projectId, [task.id], options.wipLimits),
   ]);
 
   const setbackRows = stageRows.map(setbackRowOf);
@@ -2276,6 +2289,7 @@ export const findTaskDetail = async (
     last_gate_wait: lastGateWaitOf(task, stageRows),
     // S-27.2: the manual jobs the latest CI pass left unstarted.
     ci_manual_not_run: ciManualNotRunOf(stageRows),
+    queue_wait: queueWaits.get(task.id) ?? null,
     // S-25.11: the returns and the stop, off the same rows.
     returns: returnsOf(setbackRows, compiledPipelineOf(task)),
     stop: stopOf(task, setbackRows),
@@ -2786,6 +2800,7 @@ export const listProjectTasks = async (
     owners,
     waiting,
     escalations,
+    queueWaits,
   ] = await Promise.all([
     conflictsFor(
       database,
@@ -2825,6 +2840,15 @@ export const listProjectTasks = async (
       database,
       page.filter((row) => row.task.state === 'needs_human').map((row) => row.task.id),
     ),
+    // S-25.16: why each queued task of the page waits — one read of the project, never per item.
+    options.wipLimits === undefined
+      ? new Map<string, QueueWait>()
+      : queueWaitsFor(
+          database,
+          projectId,
+          page.filter((row) => row.task.state === 'queued').map((row) => row.task.id),
+          options.wipLimits,
+        ),
   ]);
   return {
     items: page.map((row) => ({
@@ -2848,6 +2872,7 @@ export const listProjectTasks = async (
       pending_approvals: asks.approvals.get(row.task.id) ?? 0,
       loop_limits: frozenLimits(row.task.iterationLimits),
       gate_wait: gateWaitOf(row.task, stageRows.get(row.task.id)?.gate ?? []),
+      queue_wait: queueWaits.get(row.task.id) ?? null,
     })),
     ...(rows.length > query.limit && last !== undefined
       ? { next: { createdAt: last.cursorAt, id: last.task.id } }

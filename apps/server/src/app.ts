@@ -654,6 +654,10 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         ? null
         : { run: release.digests.platform_runtime, egress: release.digests.platform_egress };
     };
+    // S-25.16: a queued task's `queue_wait` is read with the limits the scheduler is given — the
+    // same settings port's `wip`, the organisation's bound applied — never a second resolution.
+    const wipLimits = async (projectId: string) =>
+      (await options.projectSettings.forProject(projectId as Id)).wip;
     await registerOrgRoutes(app, {
       coreDigests: coreRunDigests,
       database: options.database,
@@ -782,6 +786,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     await registerProjectRoutes(app, {
       database: options.database,
       coreDigests: coreRunDigests,
+      wipLimits,
       // The `invalid_stored_config` refusal quotes `projects.config` back at the caller — text an
       // operator typed, which can carry a pasted credential (`describeConfigIssues`).
       redactor: redactionAdapters.patternRedactor(),
@@ -1087,7 +1092,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     await registerTaskRoutes(app, {
       queries: {
         taskDetail: async (taskId) =>
-          findTaskDetail(options.database, taskId, { coreDigests: coreRunDigests() }),
+          findTaskDetail(options.database, taskId, { coreDigests: coreRunDigests(), wipLimits }),
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),

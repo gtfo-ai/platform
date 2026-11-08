@@ -54,6 +54,11 @@
  * it* / *Assign…* through the header's owner control, *Open Workers* for the machine's owner,
  * *Open Instance* or *Link account…* for an administrator. Information, never *Needs you*: it is
  * drawn above whatever else the slot says, and nothing for `reason: null`.
+ *
+ * **While it is queued, what holds it and what frees it** (S-25.16, the read's `queue_wait`,
+ * `./queue-wait-notice.tsx`): the limit that is full, how many of the tasks holding it wait for a
+ * person, those tasks as links, this task's place in the queue and *Change the limit* for a reader
+ * who may. Neutral information, never *Needs you*.
  */
 import type {
   ApprovalView,
@@ -72,6 +77,7 @@ import { BreakdownPanel } from './breakdown-panel.js';
 import { ReadyBlockedNotice, readyBlockedPipeline } from './ci-manual-not-run.js';
 import { CiWaitStop, GateWaitNotice, gateWaitHeld, openGateWait } from './gate-wait.js';
 import { type TaskPrimaryAction, taskPagePrimary } from './page-primary.js';
+import { QueueWaitNotice } from './queue-wait-notice.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
@@ -365,6 +371,17 @@ const CalloutSlot = ({
   // S-25.14: the ticket is somebody else's — the callout says whose, with the ways out in the box.
   const heldElsewhere = reasons.includes('escalation') && heldElsewhereStop(detail);
   if (first === undefined) {
+    // S-25.16: a queued task says what holds it and what frees it — information, no action.
+    if (task.state === 'queued' && detail.queue_wait !== null && detail.queue_wait !== undefined) {
+      return (
+        <QueueWaitNotice
+          wait={detail.queue_wait}
+          ticketKey={task.ticket.key}
+          projectKey={projectKey}
+          canChangeLimits={detail.can_change_limits === true}
+        />
+      );
+    }
     if (gateWait !== null) {
       // S-25.12: CI is still running — information, no action; nothing is asked of the reader.
       return (

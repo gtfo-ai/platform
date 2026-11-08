@@ -589,7 +589,9 @@ answers three questions in this order: what needs you, what is moving, and where
   pushed out by them: *3 events are stuck* (events whose handler failed every retry) and *1
   background job failed*, each only while its count is above zero, and each **Review** opens its
   section of Settings (*Stuck events*, *Failed background jobs*). Nobody else is shown them, or asked
-  for them.
+  for them. **When tasks stopped for a person hold a project's queue** — its tickets cannot start
+  because those tasks fill the places the project allows — one more line says so: *5 tickets can’t
+  start until you decide these*, linked to the board's **Queued** column.
 - **Running now (N)**: every run that is running — its stage and role (the link to the run), the
   project, the ticket, what it is doing in the words the Agents page uses (*Working: Reading files*,
   *Thinking*, *Stuck: No activity for 12 min*), how long it has run, what it has cost so far and the
@@ -754,6 +756,18 @@ pipeline still reads left to right.
 - *touches ACME-12 · 3 files* when the rebase gate found that another active task changes the same
   files (the comparison runs at the rebase gate, so no badge means *not compared yet*).
 
+**Why a queued ticket has not started.** A project runs at most so many tasks at once (*Parallel
+tasks* in *Settings → Rules & limits*: 2 moving at once and 5 in the pipeline unless a setting says
+otherwise, and never above the organisation's maximum), and a task stopped for a person still holds
+its pipeline place until it finishes or is cancelled. When the places are full, the **Queued**
+column says so once, at its top — *Waiting for a place: this project runs at most 5 tasks at once,
+and 5 are in the pipeline — 5 of them wait for you. A place frees when one of them finishes or is
+cancelled, so decide them or cancel one.* — and each queued card says its own place instead of
+*Queued*: *2nd in queue · 5 of 5 places taken* (*2 of 2 running* when it is the moving tasks that
+are full). The queue is ordered by the ticket's priority, then by age. *1st in queue · a place is
+free* means the limits have room and the queue moves on at the next change — a task finishing,
+stopping for a person, being paused or cancelled.
+
 **The `···` menu on a card** offers **Pause** or **Resume**, **Return to stage…**, **Cancel…**,
 **Open ticket** and **Open merge request** — the task page's own commands. *Cancel…* asks first and says what
 cancelling does (it ends the task for good); *Return to stage…* asks which stage the task has
@@ -912,6 +926,15 @@ would have nowhere to run.
   that has entered no stage, a take-over of a finished task — and what would do nothing useful:
   Pause and Work on it yourself on a queued task, Work on it yourself on a task somebody paused, Cancel once the task
   is merged or in its retrospective.
+- **A queued task** has no phase strip yet, so its *Now* line says what it waits for — *Queued ·
+  Now: Waiting for a place · 2nd in queue · 5 of 5 places taken* — and a neutral note under the
+  header says it in full: the limit that is full, how many of the tasks holding it wait for you,
+  what frees a place, and when this one starts (*AUT-6862 is 2nd in the queue and starts once 2
+  places are free.*). The tasks holding the places are listed as links, those waiting for you first
+  (ten, then *and N more*); for the parallel-tasks limit they are the tasks running now. **Change the
+  limit** opens *Settings → Rules & limits*, and is shown only to whoever may change the project's
+  settings (an administrator). Deciding a stopped task moves it on; its place frees when it finishes
+  or is cancelled.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
   question with its answer box, each pending approval with *Approve* and *Reject…* (see *Deciding an
   approval* below), an escalation

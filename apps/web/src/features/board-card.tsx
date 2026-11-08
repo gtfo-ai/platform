@@ -22,7 +22,9 @@
  *    the one rule (`ui/task-status.ts`' `ciHeldNow`, active tasks only);
  *  - **why it waits** (S-26.8b part 2, the M26 UX spec § 4, `./waiting-words.tsx`): an open offer
  *    nobody takes now is the `waiting` activity's sub-label in short form — *Waiting · Vojtěch’s
- *    machine is offline*, *your machine* when it is the reader's — and nothing for `reason: null`.
+ *    machine is offline*, *your machine* when it is the reader's — and nothing for `reason: null`;
+ *  - while it is **queued**, its place and what holds it (S-25.16, the item's `queue_wait`,
+ *    `./queue-words.ts`): *2nd in queue · 5 of 5 places taken* in place of the state's word.
  *
  * The menu's commands are the task page's, through the same `useTaskCommands` hook, so each sends
  * the same body with the same `Idempotency-Key` semantics: *Pause*, *Resume* and *Cancel* with the
@@ -89,6 +91,7 @@ import { OWNER_WORDS } from '../ui/words/owners.js';
 import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
 import { escalationShort } from './escalation-short.js';
 import { CI_HELD_SHORT } from './gate-wait-words.js';
+import { queueShort } from './queue-words.js';
 import { openReturn, setbackShort } from './setback.js';
 import { WaitingWords, waitingPlain, waitingShort, waitingTail } from './waiting-words.js';
 
@@ -511,6 +514,7 @@ export const Phase = ({
   // The waiting words take the state word's place only when nobody is needed: a task with an
   // open ask keeps its *Needs you* (the one rule's word) whatever its run waits for.
   const waiting = !needsYou(task) && waitingShort(task.waiting, viewerId) !== null;
+  const queue = task.state === 'queued' ? (task.queue_wait ?? null) : null;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       {stages.length === 0 ? null : (
@@ -525,6 +529,11 @@ export const Phase = ({
           <StatusIcon status={ACTIVITY_META[activity.activity].icon} decorative size={12} />
           {waiting ? (
             <WaitingLine task={task} viewerId={viewerId} />
+          ) : queue !== null ? (
+            // S-25.16: why it has not started — "2nd in queue · 5 of 5 places taken".
+            <span data-card-queue={queue.status} className="text-fg-muted">
+              {queueShort(queue)}
+            </span>
           ) : (
             <span className="text-fg-muted">{cardStateLabel(task)}</span>
           )}
