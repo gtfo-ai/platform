@@ -97,11 +97,31 @@ const CASES: readonly (readonly [string, ActivityInput, string, string | null])[
     'done',
     null,
   ],
+  // S-25.19: the reason's short form beside *Failed*.
   [
     'a failed run',
     { run: { status: 'failed', terminal_reason: 'crash' }, now: NOW },
     'failed',
-    null,
+    'Crashed',
+  ],
+  [
+    'a run that lost its worker',
+    { run: { status: 'failed', terminal_reason: 'lease_expired' }, now: NOW },
+    'failed',
+    'Lost its worker',
+  ],
+  [
+    'a run whose workspace never started',
+    {
+      run: {
+        status: 'failed',
+        terminal_reason: 'error_during_execution',
+        start_failure: { kind: 'not_started' },
+      },
+      now: NOW,
+    },
+    'failed',
+    'Did not start',
   ],
   ['a run over budget', { run: { status: 'budget_exceeded' }, now: NOW }, 'failed', null],
   ['a timed-out run', { run: { status: 'timed_out' }, now: NOW }, 'failed', null],

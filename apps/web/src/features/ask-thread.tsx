@@ -36,6 +36,7 @@ import type {
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useRef, useState } from 'react';
 import { useAskTask, useTaskAsks } from '../app/queries.js';
+import { TERMINAL_REASON_MEANING } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -78,25 +79,17 @@ export const ASK_HELD_BACK =
 const HELD_BACK_REFUSAL = 'the answer put a secret';
 
 /**
- * Why the run behind an ask ended without an answer, in a sentence (S-25.17) — one per
- * `runs.terminal_reason`, so a reason added to the contract fails the build here until it is worded.
- * `success` is reached only for a **failed** ask: the run finished and its result did not match the
- * `AskAnswer` contract, which is the same thing the structured-output retries running out says.
+ * Why the run behind an ask ended without an answer, in a sentence (S-25.17) — the run page's own
+ * table (`ui/words/terminal-reasons.ts`'s `TERMINAL_REASON_MEANING`, S-25.19: one table, not two),
+ * so a reason added to the contract fails the build there until it is worded. Two entries are the
+ * ask's own: `success` is reached only for a **failed** ask — the run finished and its result did
+ * not match the `AskAnswer` contract — which is the same thing the structured-output retries running
+ * out says, so both read {@link ASK_WRONG_SHAPE}.
  */
 export const ASK_ENDED_BECAUSE: Readonly<Record<RunTerminalReason, string>> = {
+  ...TERMINAL_REASON_MEANING,
   success: ASK_WRONG_SHAPE,
   error_max_structured_output_retries: ASK_WRONG_SHAPE,
-  error_max_turns: 'The run ran out of turns before it wrote an answer.',
-  error_max_budget_usd: 'The run hit its budget before it wrote an answer.',
-  error_during_execution: 'The run failed while it was answering.',
-  permission_denied: 'The run was refused a permission it needed.',
-  cancelled: 'The run was cancelled before it answered.',
-  stalled: 'The run stopped responding before it answered.',
-  timed_out: 'The run took too long and was stopped.',
-  crash: 'The run crashed before it answered.',
-  lease_expired: 'The run lost its worker before it answered.',
-  shutdown: 'The platform’s runner was stopped while it was answering.',
-  rate_limited: 'The run hit a usage limit before it answered.',
 };
 
 /**

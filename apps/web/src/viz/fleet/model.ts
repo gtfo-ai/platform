@@ -298,6 +298,7 @@ export const fleetOf = (input: FleetInput): Fleet => {
       run: {
         status: run.status,
         terminal_reason: run.terminal_reason ?? null,
+        start_failure: run.start_failure,
         started_at: run.started_at ?? null,
       },
       seat: entry.seat !== null,

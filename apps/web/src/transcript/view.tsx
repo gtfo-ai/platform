@@ -31,6 +31,7 @@ import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import type { ToolBlock, TranscriptBlock } from './blocks.js';
 import { ToolBody } from './renderers.js';
 import { stepOpenByDefault, stepStatus, stepSummary, stepTiming, stepTitle } from './steps.js';
+import { systemWords } from './system-words.js';
 
 /** Everything a block says, as one searchable string. Pure, so search is testable. */
 export const blockText = (block: TranscriptBlock): string => {
@@ -50,8 +51,10 @@ export const blockText = (block: TranscriptBlock): string => {
       return block.message;
     case 'compaction':
       return `compaction ${block.phase}`;
-    case 'system':
-      return `${block.subtype} ${block.model ?? ''}`;
+    case 'system': {
+      const words = systemWords(block);
+      return `${block.subtype} ${words.label} ${words.detail ?? ''} ${block.model ?? ''}`;
+    }
     case 'result':
       return block.terminalReason;
     case 'progress':
@@ -153,8 +156,14 @@ const Step = ({
 };
 
 /** A tool call: the step's summary line, the existing renderer when it is opened. */
-const ToolStep = ({ block }: { readonly block: ToolBlock }): ReactElement => {
-  const status = stepStatus(block);
+const ToolStep = ({
+  block,
+  ended,
+}: {
+  readonly block: ToolBlock;
+  readonly ended: boolean;
+}): ReactElement => {
+  const status = stepStatus(block, ended);
   const summary = stepSummary(block);
   return (
     <Step
@@ -162,7 +171,11 @@ const ToolStep = ({ block }: { readonly block: ToolBlock }): ReactElement => {
       defaultOpen={stepOpenByDefault(block)}
       summary={
         <>
-          <StatusIcon status={status} size={16} />
+          <StatusIcon
+            status={status}
+            size={16}
+            {...(status === 'skipped' ? { label: 'No result' } : {})}
+          />
           <span
             className={cx(
               'shrink-0 font-mono text-xs font-semibold',
@@ -182,7 +195,7 @@ const ToolStep = ({ block }: { readonly block: ToolBlock }): ReactElement => {
             data-step-timing=""
             className="ml-auto shrink-0 pl-2 font-mono text-xs text-fg-muted tabular-nums"
           >
-            {stepTiming(block)}
+            {stepTiming(block, ended)}
           </span>
         </>
       }
@@ -192,7 +205,7 @@ const ToolStep = ({ block }: { readonly block: ToolBlock }): ReactElement => {
         renderChildren={(parent: ToolBlock) => (
           <div className="flex flex-col gap-1">
             {parent.children.map((child) => (
-              <BlockView key={child.id} block={child} />
+              <BlockView key={child.id} block={child} ended={ended} />
             ))}
           </div>
         )}
@@ -201,7 +214,14 @@ const ToolStep = ({ block }: { readonly block: ToolBlock }): ReactElement => {
   );
 };
 
-const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement => {
+const BlockView = ({
+  block,
+  ended,
+}: {
+  readonly block: TranscriptBlock;
+  /** The run has ended: a call with no result will never get one (S-25.19). */
+  readonly ended: boolean;
+}): ReactElement => {
   switch (block.kind) {
     case 'text':
       // The model's words stay prose lines, as an Actions log prints a step's output.
@@ -232,7 +252,7 @@ const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement
         </LogRow>
       );
     case 'tool':
-      return <ToolStep block={block} />;
+      return <ToolStep block={block} ended={ended} />;
     case 'hook':
       return (
         <LogRow kind="hook" label={`Hook · ${block.hook}`}>
@@ -268,19 +288,27 @@ const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement
           </span>
         </LogRow>
       );
-    case 'system':
+    case 'system': {
+      // S-25.19: the row says what happened and why on the row itself; the record stays below.
+      const words = systemWords(block);
       return (
         <Step
           kind="system"
           summary={
-            <span className="text-xs text-fg-muted">
-              {`System · ${sanitiseUntrusted(block.subtype)}`}
+            <span data-system-row={block.subtype} className="min-w-0 truncate text-xs">
+              <span className="font-semibold text-fg-muted">{words.label}</span>
+              {/* Built from the row's data — filtered, one line, bounded — and still plain text:
+                  nothing interactive sits inside <summary>. */}
+              {words.detail === null ? null : (
+                <span className="text-fg">{` · ${words.detail}`}</span>
+              )}
             </span>
           }
         >
           <JsonView value={block.data} />
         </Step>
       );
+    }
     case 'progress':
       return (
         <LogRow kind="progress" label="Progress" tone="border-l-2 border-link">
@@ -335,12 +363,25 @@ export interface TranscriptViewProps {
    * page does not grow (technical/09's follow-tail); the task page's panel bounds it by its box.
    */
   readonly scrollerClassName?: string;
+  /**
+   * The run has ended (S-25.19): a tool call with no result reads *no result*, never *running*. A
+   * transcript whose last row is the run's result is ended whatever this says; the run page passes
+   * its record's status, because a lost or crashed run writes no result row.
+   */
+  readonly ended?: boolean;
+  /**
+   * Bumped by the run page's *Jump to the last lines*: the search is cleared, the pane follows its
+   * end again and takes focus, so the last lines are what is in view.
+   */
+  readonly jumpToEnd?: number;
 }
 
 export const TranscriptView = ({
   blocks,
   emptyHint,
   scrollerClassName,
+  ended: endedProp = false,
+  jumpToEnd = 0,
 }: TranscriptViewProps): ReactElement => {
   const [query, setQuery] = useState('');
   const [following, setFollowing] = useState(true);
@@ -362,6 +403,24 @@ export const TranscriptView = ({
     }
   }, [tail, blocks.length, following]);
 
+  // A jump is a request, not a state: only a change of the counter acts, never the first render.
+  const jumped = useRef(jumpToEnd);
+  useEffect(() => {
+    if (jumped.current === jumpToEnd) {
+      return;
+    }
+    jumped.current = jumpToEnd;
+    setQuery('');
+    setFollowing(true);
+    setSeen(blocks.length);
+    const element = scroller.current;
+    if (element !== null) {
+      element.scrollTop = element.scrollHeight;
+      element.focus();
+    }
+  }, [jumpToEnd, blocks.length]);
+
+  const ended = endedProp || blocks.some((block) => block.kind === 'result');
   const behind = Math.max(0, blocks.length - seen);
 
   return (
@@ -398,6 +457,8 @@ export const TranscriptView = ({
 
       <div
         ref={scroller}
+        // Focusable only by *Jump to the last lines*, so the jump lands the reader in the log.
+        tabIndex={-1}
         data-testid="transcript-scroller"
         className={cx(
           'flex min-h-0 flex-col gap-0.5 overflow-y-auto rounded-md border border-line bg-default py-1',
@@ -420,7 +481,7 @@ export const TranscriptView = ({
               : 'No block matches that search.'}
           </p>
         ) : (
-          visible.map((block) => <BlockView key={block.id} block={block} />)
+          visible.map((block) => <BlockView key={block.id} block={block} ended={ended} />)
         )}
       </div>
     </div>

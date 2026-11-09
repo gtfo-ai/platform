@@ -677,6 +677,7 @@ const homeActivity = (entry: AgentEntry, now: number) =>
     run: {
       status: entry.run.status,
       terminal_reason: entry.run.terminal_reason ?? null,
+      start_failure: entry.run.start_failure,
       started_at: entry.run.started_at ?? null,
     },
     seat: entry.seat !== null,

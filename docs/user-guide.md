@@ -696,7 +696,9 @@ somebody:
   first — project, ticket and title, the stage, what the agent is doing, where it runs, the
   stage strip, how long and how much (the model is in the run's dialog) — with a `···` menu: **Open run**, **Open task** and **Cancel
   run…**, which asks before it stops the agent. A run that has just ended stays at the end of the
-  list as *just finished* or *just ended* for as long as the map and the office keep it at its desk.
+  list as *just finished* or *just ended* for as long as the map and the office keep it at its desk;
+  one that failed says why beside *Failed* — *Failed: Lost its worker*, *Failed: Did not start* —
+  the same words the board card and the task's run list use.
   Below it, what needs you and every seat with its slots.
   This is the view that always tells the whole story; the other two never say anything it does not.
 
@@ -945,8 +947,8 @@ would have nowhere to run.
   spent and where it is raised, and an epic's proposed breakdown
   while a maintainer has something left to decide on it.
 - **Four tabs**: *Overview* (the flow — the graph, or its list: the stage timeline — the running
-  stage, Ask the task and feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status,
-  model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
+  stage, Ask the task and feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status —
+  and why one ended, *Failed · Lost its worker*, *Failed · Did not start* — model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
   so a link opens the same tab; a link to an artifact opens the Artifacts tab on it.
 - **On the right, Checks** — the merge box (below) — then the cost against the task's cap.
 
@@ -1333,6 +1335,19 @@ laid out like a GitHub Actions job:
   platform estimated it), the elapsed time, the turns and the tokens (in, out, and read from the prompt cache). Hover or focus a label for
   what its number means. The transcript's last row, *The run ended*, gives the same reason in the
   same words.
+- **Once a run that started has ended without succeeding**, a box under the summary strip, *This run
+  ended: …*, says what that ending means in one sentence (*Lost its worker*: the machine running it
+  stopped checking in, so the platform ended the run — which says nothing about whether the agent
+  itself failed), what the platform did next — *The stage was run again: attempt 2* with a link to
+  that run, *The task stopped for a person*, or *Nothing else has happened since* — and what you can
+  do: **Re-run as configured** and **Work on it yourself…** (a member; neither is offered to a
+  viewer, and *Work on it yourself…* not on a finished task), **Open the task**, and **Jump to the
+  last lines**, which opens the transcript at its end with the search cleared. A run ended by a
+  refused permission names the tool it was refused when the transcript recorded it, and **See the
+  run’s settings** opens the Settings tab. A run you cancelled, one handed back at a shutdown and one
+  that hit a usage limit get a plain box rather than a red one: nothing went wrong in them. A run
+  whose workspace never started keeps its own box, *This run did not start*, in the transcript's
+  place.
 - **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and
   the Agents screen use (*Reading files*, *Running a command*, *No activity for 6 min*), with its
   last few steps listed under it (a list a screen reader names *Live activity*). When it says *Now:
@@ -1345,15 +1360,19 @@ Then four tabs:
   icon, the tool, what it was called with and how long it took, collapsed until you open it.
   Opening it shows the call itself — the change as removed and added text, the command and its
   output, the file it read, or a sub-agent's own transcript nested inside. The step the agent is on
-  and any step that failed are open already. The model's words are prose between the steps, and its
+  and any step that failed are open already. A call the run never answered — its last, when it crashed or lost its
+  worker — reads **no result** once the run has ended, never *running*. The model's words are prose between the steps, and its
   thinking stays folded under *Thinking*. The log scrolls in a pane of its own, sized to the window:
   at the bottom it follows the end; scroll up and it stays where you are, with **Paused updates, N
   behind**, until you press **Follow tail**. Everything in it is rendered as **text**; the
   application has no markdown-to-HTML step anywhere, on purpose, because all of it — model output,
   tool results, file contents — is untrusted
-  ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)). The first row, **System ·
-  init**, folded like a step, is the Claude Code CLI's own start-up message, shown as the CLI sent
-  it. Its `skills` list is everything the CLI found, including its own bundled skills
+  ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)). The platform's and the CLI's
+  own rows say what happened on the row — *The platform stopped the run · it stopped producing
+  anything for too long*, *The model API failed; retrying · attempt 2 of 10 · rate limited*, *The CLI
+  reported an error · …* — and fold open onto the record as it was written. The first row, **The
+  session started**, folded like a step, is the Claude Code CLI's own start-up message, shown as the
+  CLI sent it. Its `skills` list is everything the CLI found, including its own bundled skills
   (`deep-research`, `update-config` and others), and it is **not** what this run could use: the run
   was handed only its role's platform skills (`agentic:kb` and the like) — the only skills written
   into its workspace — and the CLI refuses any other.

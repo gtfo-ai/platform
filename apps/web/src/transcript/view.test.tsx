@@ -435,3 +435,85 @@ describe('TranscriptView', () => {
     expect(scroller.scrollTop).toBe(1900);
   });
 });
+
+/** S-25.19: what a row of an ended run says. */
+describe('an ended run’s rows', () => {
+  const system = (subtype: string, data: Record<string, unknown>): TranscriptBlock => ({
+    kind: 'system',
+    id: `s-${subtype}`,
+    seq: 9,
+    at: AT,
+    subtype,
+    model: null,
+    data,
+  });
+
+  it.each([
+    ['run_stopped', { reason: 'stalled' }, 'The platform stopped the run · it stopped producing'],
+    [
+      'api_retry',
+      { attempt: 1, max_retries: 3, error: 'rate_limit' },
+      'The model API failed; retrying · attempt 1 of 3 · rate limited',
+    ],
+    ['stderr', { text: 'error: spawn ENOENT' }, 'The CLI reported an error · error: spawn ENOENT'],
+  ])(
+    'words a %s row with its reason on the row, not only in the JSON view',
+    (subtype, data, words) => {
+      const { container } = render(<TranscriptView blocks={[system(subtype, data)]} />);
+      const summary = container.querySelector(`[data-system-row="${subtype}"]`);
+      expect(summary?.textContent).toContain(words);
+      expect(summary?.textContent).not.toContain(subtype);
+      // The record stays one click away.
+      expect(container.querySelector('[data-block-kind="system"] details')).not.toBeNull();
+    },
+  );
+
+  it('renders the row’s words as text: markup in the CLI’s stderr stays characters', () => {
+    const { container } = render(
+      <TranscriptView blocks={[system('stderr', { text: '<img src=x onerror=alert(1)>' })]} />,
+    );
+    expect(container.querySelector('[data-system-row="stderr"]')?.textContent).toContain(
+      '<img src=x onerror=alert(1)>',
+    );
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('says no result, never running, for a call an ended run never answered', () => {
+    const unanswered = tool({ result: null });
+    const live = render(<TranscriptView blocks={[unanswered]} />);
+    expect(live.container.querySelector('[data-step-timing]')?.textContent).toBe('running');
+    live.unmount();
+
+    const ended = render(<TranscriptView blocks={[unanswered]} ended />);
+    expect(ended.container.querySelector('[data-step-timing]')?.textContent).toBe('no result');
+    expect(ended.container.querySelector('[data-status="running"]')).toBeNull();
+    expect(screen.getByRole('img', { name: 'No result' })).toBeTruthy();
+    ended.unmount();
+
+    // A transcript that ends in the run's result is ended whatever the caller says.
+    const result: TranscriptBlock = {
+      kind: 'result',
+      id: 'r',
+      seq: 5,
+      at: AT,
+      terminalReason: 'error_during_execution',
+      numTurns: 1,
+      durationMs: 10,
+      costUsd: 0,
+      isEstimate: false,
+    };
+    const withResult = render(<TranscriptView blocks={[unanswered, result]} />);
+    expect(withResult.container.querySelector('[data-step-timing]')?.textContent).toBe('no result');
+  });
+
+  it('jumps to the end on request: the search cleared, the log following and focused', async () => {
+    const user = userEvent.setup();
+    const view = render(<TranscriptView blocks={[tool()]} jumpToEnd={0} />);
+    await user.type(screen.getByRole('searchbox', { name: 'Search transcript' }), 'nothing');
+    expect(screen.getByText('No block matches that search.')).toBeTruthy();
+    view.rerender(<TranscriptView blocks={[tool()]} jumpToEnd={1} />);
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('');
+    expect(document.activeElement).toBe(screen.getByTestId('transcript-scroller'));
+    expect(screen.getByRole('button', { name: 'Following' })).toBeTruthy();
+  });
+});

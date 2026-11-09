@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolBlock } from './blocks.js';
 import {
   formatStepDuration,
+  NO_RESULT,
   stepDurationMs,
   stepOpenByDefault,
   stepStatus,
@@ -58,6 +59,21 @@ describe('a step’s line', () => {
     expect(stepStatus(tool())).toBe('running');
     expect(stepStatus(tool({ result: { isError: false, content: '' } }))).toBe('success');
     expect(stepStatus(tool({ result: { isError: true, content: '' } }))).toBe('failure');
+  });
+
+  // S-25.19: an ended run's unanswered call will never be answered.
+  it('reads a call an ended run never answered as no result, never running', () => {
+    expect(stepStatus(tool(), true)).toBe('skipped');
+    expect(stepTiming(tool(), true)).toBe(NO_RESULT);
+    expect(NO_RESULT).toBe('no result');
+    // An answered call reads the same whether the run ended or not.
+    expect(stepStatus(tool({ result: { isError: true, content: '' } }), true)).toBe('failure');
+    expect(
+      stepTiming(
+        tool({ at: '2026-11-05T10:01:04.200Z', result: { isError: false, content: '' } }),
+        true,
+      ),
+    ).toBe('1m 04s');
   });
 
   it('times the call from its own row to its result’s', () => {

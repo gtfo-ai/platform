@@ -22,6 +22,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { TERMINAL_REASON_MEANING } from '../ui/humanize.js';
 import { ASK_ENDED_BECAUSE, ASK_HELD_BACK, ASK_WRONG_SHAPE, askEnding } from './ask-thread.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
@@ -374,7 +375,7 @@ describe('the ask-the-task thread', () => {
     );
     await screen.findByText('Ask the task');
     await waitFor(() => {
-      expect(container.textContent).toContain('The run was cancelled before it answered.');
+      expect(container.textContent).toContain(TERMINAL_REASON_MEANING.cancelled);
     });
     expect(screen.getByRole('button', { name: 'Ask again' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open this ask’s run' })).toBeTruthy();
@@ -414,7 +415,7 @@ describe('the ask-the-task thread', () => {
     expect(failed('error_max_structured_output_retries')?.words).toBe(ASK_WRONG_SHAPE);
     // A run that finished but whose result the contract refused is the same failure.
     expect(failed('success')?.words).toBe(ASK_WRONG_SHAPE);
-    expect(failed('lease_expired')?.words).toBe('The run lost its worker before it answered.');
+    expect(failed('lease_expired')?.words).toBe(TERMINAL_REASON_MEANING.lease_expired);
     expect(failed(null)?.words).toContain('ended before it wrote an answer');
     expect(askEnding(ANSWERED)).toBeNull();
     // A refusal whose run ended well, or had no recorded ending, is not worded as a run failure.
@@ -425,7 +426,7 @@ describe('the ask-the-task thread', () => {
     expect(
       askEnding({ ...ANSWERED, status: 'refused', answer: null, run_terminal_reason: 'cancelled' })
         ?.words,
-    ).toBe('The run was cancelled before it answered.');
+    ).toBe(TERMINAL_REASON_MEANING.cancelled);
     expect(askEnding({ ...ANSWERED, status: 'pending', answer: null })).toBeNull();
   });
 

@@ -30,7 +30,8 @@
  *    → `idle`, everything else → `waiting`.
  *
  * Pure and total: every input yields one activity, which a property test holds. Its runtime imports
- * are `./untrusted-text.js` (pure, dependency-free) and `./status.js`'s types, so `ui/` stays
+ * are `./untrusted-text.js` (pure, dependency-free), `./words/terminal-reasons.js` (a word table the
+ * worker page already carries) and `./status.js`'s types, so `ui/` stays
  * dependency-free for the worker entry.
  *
  * **A tool name is the run's text, not the platform's.** The agents read bounds it to an identifier,
@@ -49,6 +50,7 @@ import type {
 import type { TranscriptBlock } from '../transcript/blocks.js';
 import type { Status } from './status.js';
 import { sanitiseUntrusted } from './untrusted-text.js';
+import { runEndedShort } from './words/terminal-reasons.js';
 
 export const ACTIVITIES = [
   'working',
@@ -131,6 +133,8 @@ export interface ActivityInput {
     readonly status: RunStatus;
     readonly terminal_reason?: RunTerminalReason | null;
     readonly started_at?: string | null;
+    /** The run's `start_failure`: its workspace was never created (S-25.19, *Did not start*). */
+    readonly start_failure?: object | null;
   } | null;
   /** A worker seat is shown (the office, the fleet map, the worker's page). */
   readonly seat?: boolean;
@@ -289,7 +293,8 @@ export const activityOf = (input: ActivityInput): ActivityResult => {
     if (run.status === 'cancelled') {
       return result('idle', 'Cancelled');
     }
-    return result('failed');
+    // S-25.19: the reason's short form beside *Failed* — *Lost its worker*, *Did not start*.
+    return result('failed', runEndedShort(run));
   }
 
   // 4. A live run.

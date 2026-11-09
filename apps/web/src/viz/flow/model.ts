@@ -217,6 +217,7 @@ export const taskFlow = (input: TaskFlowInput): FlowGraph => {
                     status: run.status,
                     terminal_reason: run.terminal_reason ?? null,
                     started_at: run.started_at ?? null,
+                    start_failure: run.start_failure,
                   },
             latest: run !== null && LIVE.includes(run.status) ? input.latest : null,
             role: node.role,

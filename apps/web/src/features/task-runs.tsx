@@ -2,12 +2,13 @@
  * The task page's **Runs** tab (S-23.9b): every run of the task — one agent working one stage — as
  * a list box with a status icon, the stage and role, the model, what it cost and how long it took,
  * each leading to its run page. A run nobody measured says *not measured*, never `$0.00` (WP-119),
- * and a run whose unfinished work was pushed says so (backlog 467).
+ * and a run whose unfinished work was pushed says so (backlog 467). A run that ended badly says why
+ * beside its status — *Failed · Lost its worker*, *Failed · Did not start* (S-25.19).
  */
 import type { RunRecord, RunStatus } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
-import { RUN_STATUS_LABEL, runSubject } from '../ui/humanize.js';
+import { RUN_STATUS_LABEL, runEndedShort, runSubject } from '../ui/humanize.js';
 import { Badge, EmptyState, formatElapsed, formatRunCost } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { rowLink } from '../ui/row-link.js';
@@ -25,6 +26,20 @@ const RUN_STATUS: Readonly<Record<RunStatus, Status>> = {
   budget_exceeded: 'failure',
   timed_out: 'failure',
   stalled: 'failure',
+};
+
+/**
+ * The row's status words: the status, and the reason's short form when it adds something
+ * (`runEndedShort`) and is not the status said again (*Timed out* ended *Timed out*).
+ */
+export const runStatusWords = (
+  run: Pick<RunRecord, 'status' | 'terminal_reason' | 'start_failure'>,
+): string => {
+  const status = RUN_STATUS_LABEL[run.status];
+  const short = runEndedShort(run);
+  return short === null || short.toLowerCase() === status.toLowerCase()
+    ? status
+    : `${status} · ${short}`;
 };
 
 /** How long a run took — start to end, or to now while it is live; `—` before it started. */
@@ -63,9 +78,7 @@ export const TaskRuns = ({
       {runs.map((run) => (
         <ListRow
           key={run.id}
-          leading={
-            <StatusIcon status={RUN_STATUS[run.status]} label={RUN_STATUS_LABEL[run.status]} />
-          }
+          leading={<StatusIcon status={RUN_STATUS[run.status]} label={runStatusWords(run)} />}
           title={
             <Link to="/runs/$runId" params={{ runId: run.id }} {...rowLink('hover:underline')}>
               {runSubject(run)}
@@ -73,7 +86,7 @@ export const TaskRuns = ({
           }
           meta={
             <span className="flex flex-wrap items-center gap-2">
-              <span>{RUN_STATUS_LABEL[run.status]}</span>
+              <span data-run-status="">{runStatusWords(run)}</span>
               <UntrustedText value={run.model} />
               {/* Backlog 467: the run's unfinished work is on the task's branch. */}
               {run.saved_work?.pushed === true ? (

@@ -32,9 +32,22 @@ export const stepTitle = (toolName: string): string => {
 export const stepSummary = (block: Pick<ToolBlock, 'input'>): string =>
   argumentSummary(block.input);
 
-/** Running until a result arrives; failed when the result says so. */
-export const stepStatus = (block: Pick<ToolBlock, 'result'>): Status =>
-  block.result === null ? 'running' : block.result.isError ? 'failure' : 'success';
+/**
+ * Running until a result arrives; failed when the result says so. A call with no result in a run
+ * that **ended** will never get one (S-25.19, the Autix walk: a crashed run's last call still read
+ * *running*), so it is `skipped` — the step's timing says *no result*.
+ */
+export const stepStatus = (block: Pick<ToolBlock, 'result'>, ended = false): Status =>
+  block.result === null
+    ? ended
+      ? 'skipped'
+      : 'running'
+    : block.result.isError
+      ? 'failure'
+      : 'success';
+
+/** What a call with no result says once its run has ended. */
+export const NO_RESULT = 'no result';
 
 /**
  * How long the call took, in milliseconds: from its own row to the row of its result. `null` while
@@ -65,18 +78,25 @@ export const formatStepDuration = (ms: number): string => {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 };
 
-/** The step's right-aligned text: its duration, `running`, or nothing when it cannot be said. */
-export const stepTiming = (block: Pick<ToolBlock, 'result' | 'startedAt' | 'at'>): string => {
+/**
+ * The step's right-aligned text: its duration, `running` — or {@link NO_RESULT} once the run ended
+ * without one — or nothing when it cannot be said.
+ */
+export const stepTiming = (
+  block: Pick<ToolBlock, 'result' | 'startedAt' | 'at'>,
+  ended = false,
+): string => {
   if (block.result === null) {
-    return 'running';
+    return ended ? NO_RESULT : 'running';
   }
   const ms = stepDurationMs(block);
   return ms === null ? '' : formatStepDuration(ms);
 };
 
 /**
- * Open on arrival when it is what the agent is doing now (no result yet) or when it failed — as an
- * Actions job opens its running and its failed step — and collapsed otherwise.
+ * Open on arrival when it is what the agent is doing now (no result yet, in a live run) or when it
+ * failed — as an Actions job opens its running and its failed step — and collapsed otherwise; a
+ * call an ended run never answered is the run's last act and stays open, as a failure does.
  */
 export const stepOpenByDefault = (block: Pick<ToolBlock, 'result'>): boolean =>
   block.result === null || block.result.isError;

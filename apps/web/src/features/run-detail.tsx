@@ -17,7 +17,9 @@
  * - **The main column**: a summary strip (status, model, effort, cost, elapsed, turns, tokens); while
  *   the run is live a *Now:* line from the one activity vocabulary (`ui/activity.ts`) — linking, when
  *   it says *Needs you*, to what the task waits for (`waitingItemOf`) — and the newest
- *   rows of the stage dialog's *Live activity* list (`viz/flow/activity-list.tsx`); then four tabs —
+ *   rows of the stage dialog's *Live activity* list (`viz/flow/activity-list.tsx`); once a run that
+ *   started has ended without succeeding, the *Ended* panel (`./run-ended.tsx`, S-25.19) — what the
+ *   ending means, what the platform did next, the next step and *Jump to the last lines*; then four tabs —
  *   the transcript as **log steps** (`transcript/view.tsx`) in a pane of its own sized to the
  *   viewport, the exact prompt, the context pack, and the settings it was planned with
  *   (`features/run-settings.tsx`).
@@ -97,6 +99,7 @@ import { reviewVerb } from './approval-text.js';
 import { FeedbackForm } from './feedback.js';
 import { PromptsWithheldExplanation } from './prompts-withheld.js';
 import { RunCommandLog } from './run-command-log.js';
+import { endedPanelReason, mayRerunAndWork, RunEndedPanel } from './run-ended.js';
 import { isFailedRun, isLiveRun, jobLabel, jobsInStageOrder, RUN_STATUS_ICON } from './run-jobs.js';
 import { isStoppedRun, RunNotStartedPanel } from './run-not-started.js';
 import {
@@ -666,6 +669,8 @@ export const RunDetailScreen = ({
   const [tab, setTab] = useState<Tab>('transcript');
   const [steer, setSteer] = useState('');
   const [dialog, setDialog] = useState<'cancel' | 'retry' | 'take_over' | null>(null);
+  // S-25.19: *Jump to the last lines* — a counter the transcript acts on when it changes.
+  const [jumpToEnd, setJumpToEnd] = useState(0);
 
   // The run's task: its key and title for the back link, its runs for the job list, and the
   // take-over control — `taken_over` lives on the task, not on a run.
@@ -707,6 +712,8 @@ export const RunDetailScreen = ({
     detail !== undefined &&
     (detail.taken_over !== null ||
       (detail.task.state !== 'done' && detail.task.state !== 'cancelled'));
+
+  const endedReason = endedPanelReason(record);
 
   const retry = (choice: RetryModelChoice, effort: Effort): void => {
     commands.retry.mutate(
@@ -891,6 +898,37 @@ export const RunDetailScreen = ({
 
         <div className="flex min-w-0 flex-col gap-3">
           <RunSummary record={record} nowMs={nowMs} />
+          {/* S-25.19: a run that started and did not succeed says what that means, what the
+              platform did next and what you can do — the never-started panel's shape. */}
+          {endedReason === null ? null : (
+            <RunEndedPanel
+              record={record}
+              reason={endedReason}
+              detail={detail}
+              blocks={snapshot.blocks}
+              mayAct={mayRerunAndWork(detail)}
+              takeOverOffered={takeOverOffered && detail?.taken_over === null}
+              rerunPending={commands.retry.isPending}
+              openTask={(children, className) => (
+                <TaskLink taskId={record.task_id} projectKey={projectKey} className={className}>
+                  {children}
+                </TaskLink>
+              )}
+              onRerun={() => {
+                retry(INITIAL_RETRY_MODEL_CHOICE, '');
+              }}
+              onTakeOver={() => {
+                setDialog('take_over');
+              }}
+              onJump={() => {
+                setTab('transcript');
+                setJumpToEnd((count) => count + 1);
+              }}
+              onSettings={() => {
+                setTab('settings');
+              }}
+            />
+          )}
           {live ? (
             <LiveNow
               record={record}
@@ -926,6 +964,8 @@ export const RunDetailScreen = ({
                   box and the page's bottom padding, so scrolled to it the whole pane is in view. */}
               <TranscriptView
                 blocks={snapshot.blocks}
+                ended={!live}
+                jumpToEnd={jumpToEnd}
                 scrollerClassName="h-[max(20rem,calc(100dvh-var(--app-sticky-height)-6.5rem))]"
               />
               {/* `created` is live but has no session yet: the server refuses a steer there

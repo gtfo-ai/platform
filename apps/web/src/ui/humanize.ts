@@ -56,7 +56,14 @@ export {
 } from './words/claim-policy.js';
 export { ROLE_LABEL } from './words/roles.js';
 export { type ShippedStageId, STAGE_LABEL, stageLabel, titleCase } from './words/stages.js';
-export { TERMINAL_REASON_LABEL } from './words/terminal-reasons.js';
+export {
+  DID_NOT_START,
+  type EndedRun,
+  runEndedShort,
+  TERMINAL_REASON_LABEL,
+  TERMINAL_REASON_MEANING,
+  TERMINAL_REASON_SHORT,
+} from './words/terminal-reasons.js';
 export {
   type ClaimBlockerWords,
   UPDATER_FIX,
