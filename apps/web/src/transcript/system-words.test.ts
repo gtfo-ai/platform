@@ -53,7 +53,7 @@ describe('systemWords', () => {
   it('puts the CLI’s stderr on the row, one line and bounded', () => {
     const long = `fatal: ${'x'.repeat(400)}\nsecond line`;
     const words = systemWords(row('stderr', { text: long }));
-    expect(words.label).toBe('The CLI reported an error');
+    expect(words.label).toBe('The CLI wrote to its error output');
     expect(words.detail?.length).toBe(SYSTEM_DETAIL_MAX_CHARS);
     expect(words.detail?.endsWith('…')).toBe(true);
     expect(words.detail).not.toContain('\n');

@@ -44,7 +44,7 @@ describe('the task’s Runs tab', () => {
     [{ status: 'failed', terminal_reason: 'lease_expired' }, 'Failed · Lost its worker'],
     [{ status: 'failed', terminal_reason: 'crash' }, 'Failed · Crashed'],
     [{ status: 'failed', terminal_reason: 'permission_denied' }, 'Failed · Permission denied'],
-    [{ status: 'cancelled', terminal_reason: 'shutdown' }, 'Cancelled · Handed back on shutdown'],
+    [{ status: 'failed', terminal_reason: 'shutdown' }, 'Failed · Handed back on shutdown'],
     [{ status: 'cancelled', terminal_reason: 'cancelled' }, 'Cancelled'],
     // The status already says it: never *Timed out · Timed out*.
     [{ status: 'timed_out', terminal_reason: 'timed_out' }, 'Timed out'],

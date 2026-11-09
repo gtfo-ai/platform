@@ -455,7 +455,11 @@ describe('an ended run’s rows', () => {
       { attempt: 1, max_retries: 3, error: 'rate_limit' },
       'The model API failed; retrying · attempt 1 of 3 · rate limited',
     ],
-    ['stderr', { text: 'error: spawn ENOENT' }, 'The CLI reported an error · error: spawn ENOENT'],
+    [
+      'stderr',
+      { text: 'error: spawn ENOENT' },
+      'The CLI wrote to its error output · error: spawn ENOENT',
+    ],
   ])(
     'words a %s row with its reason on the row, not only in the JSON view',
     (subtype, data, words) => {

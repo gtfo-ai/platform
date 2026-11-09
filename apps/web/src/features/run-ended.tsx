@@ -12,8 +12,10 @@
  *    `cost_unreported` is the fault, not an overspend (`stop-reasons.ts` in the application ring),
  *    and a `permission_denied` run names the tool it was refused when the transcript recorded it.
  * 2. **What the platform did next** ({@link endedFollowUp}) — read off the task, never assumed from
- *    the reason: a newer attempt of the same stage (linked), the task stopped for a person, paused,
- *    ended — or nothing yet, said as such.
+ *    the reason: a newer run of the same stage (linked — a higher attempt, or the **same** attempt
+ *    started again, which is how a hand-back and a usage limit are re-run), the task stopped for a
+ *    person, paused, ended — or nothing yet, said as such, with the stage named when the task has
+ *    moved on from this run's. *Re-run* is not offered while that newer run is live.
  * 3. **The next step** — *Re-run as configured*, *Work on it yourself…* and *Open the task*, each
  *    only for a reader who may ({@link mayRerunAndWork}); *See the run’s settings* for a refused
  *    tool; and *Jump to the last lines*, which opens the transcript at its end.
@@ -35,6 +37,7 @@ import { Button } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import {
   RUN_STATUS_LABEL,
+  stageLabel,
   TERMINAL_REASON_LABEL,
   TERMINAL_REASON_MEANING,
 } from '../ui/humanize.js';
@@ -129,20 +132,72 @@ export const endedMeaning = (
 
 /** What the platform did after the run ended, read off the task. */
 export type EndedFollowUp =
-  | { readonly kind: 'ran_again'; readonly run: RunRecord }
-  | { readonly kind: 'needs_person' }
-  | { readonly kind: 'paused' }
-  | { readonly kind: 'finished' }
-  | { readonly kind: 'ask' }
-  | { readonly kind: 'nothing' };
+  | {
+      readonly kind: 'ran_again';
+      readonly run: RunRecord;
+      /** The newer run is the **same** attempt — a hand-back's or a usage limit's re-run. */
+      readonly sameAttempt: boolean;
+    }
+  | {
+      readonly kind: 'needs_person' | 'paused' | 'finished' | 'nothing';
+      /**
+       * The stage the task is at now when it is **not** this run's: the state is the task's today,
+       * so a later stop elsewhere is named as there rather than read as this run's consequence.
+       */
+      readonly movedTo: string | null;
+    }
+  | { readonly kind: 'ask' };
+
+const timeOf = (iso: string | null | undefined): number | null => {
+  if (iso === null || iso === undefined) {
+    return null;
+  }
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? null : at;
+};
+
+/**
+ * Is `other` a run of the same stage started **after** `run`? A higher attempt always is. The same
+ * attempt is too when it started later — `settleRun` re-runs a hand-back at shutdown and a usage
+ * limit's re-plan **as the same attempt** (`enqueueFollowOn`, `attempt: run.attempt`) — or when it
+ * has not started yet and is still live (an offer nobody has claimed).
+ */
+export const startedAfter = (
+  run: Pick<RunRecord, 'id' | 'stage' | 'attempt' | 'started_at'>,
+  other: Pick<RunRecord, 'id' | 'stage' | 'attempt' | 'started_at' | 'status'>,
+): boolean => {
+  if (other.id === run.id || other.stage !== run.stage || other.attempt < run.attempt) {
+    return false;
+  }
+  if (other.attempt > run.attempt) {
+    return true;
+  }
+  const mine = timeOf(run.started_at);
+  const theirs = timeOf(other.started_at);
+  if (theirs === null) {
+    return isLiveRun(other.status);
+  }
+  return mine !== null && theirs > mine;
+};
+
+/** Newest first: the higher attempt, then the later start, an unstarted run newest of all. */
+const newestFirst = (left: RunRecord, right: RunRecord): number => {
+  if (left.attempt !== right.attempt) {
+    return right.attempt - left.attempt;
+  }
+  const l = timeOf(left.started_at);
+  const r = timeOf(right.started_at);
+  return l === r ? 0 : l === null ? -1 : r === null ? 1 : r - l;
+};
 
 /**
  * `null` until the task read answers. A run with no stage is an ask, which runs beside the pipeline
- * and moves nothing. Otherwise: the newest **later** attempt of the same stage, if there is one;
- * else what the task's state says — stopped for a person, paused, finished — else nothing yet.
+ * and moves nothing. Otherwise: the newest run of the same stage started after this one
+ * ({@link startedAfter}), if there is one; else what the task's state says — stopped for a person,
+ * paused, finished — else nothing yet, with the stage named when the task is no longer at this one.
  */
 export const endedFollowUp = (
-  run: Pick<RunRecord, 'id' | 'stage' | 'attempt'>,
+  run: Pick<RunRecord, 'id' | 'stage' | 'attempt' | 'started_at'>,
   detail: Pick<TaskDetailResponse, 'runs' | 'task'> | undefined,
 ): EndedFollowUp | null => {
   if (detail === undefined) {
@@ -151,35 +206,68 @@ export const endedFollowUp = (
   if (run.stage === null) {
     return { kind: 'ask' };
   }
-  const later = detail.runs
-    .filter(
-      (entry) => entry.id !== run.id && entry.stage === run.stage && entry.attempt > run.attempt,
-    )
-    .sort((left, right) => right.attempt - left.attempt)[0];
+  const later = detail.runs.filter((entry) => startedAfter(run, entry)).sort(newestFirst)[0];
   if (later !== undefined) {
-    return { kind: 'ran_again', run: later };
+    return { kind: 'ran_again', run: later, sameAttempt: later.attempt === run.attempt };
   }
+  const current = detail.task.current_stage;
+  const movedTo = current === null || current === run.stage ? null : current;
   switch (detail.task.state) {
     case 'needs_human':
-      return { kind: 'needs_person' };
+      return { kind: 'needs_person', movedTo };
     case 'paused':
-      return { kind: 'paused' };
+      return { kind: 'paused', movedTo };
     case 'done':
     case 'cancelled':
-      return { kind: 'finished' };
+      return { kind: 'finished', movedTo: null };
     default:
-      return { kind: 'nothing' };
+      return { kind: 'nothing', movedTo };
   }
 };
 
-const FOLLOW_UP_WORDS: Readonly<Record<Exclude<EndedFollowUp['kind'], 'ran_again'>, string>> = {
-  needs_person:
-    'The task stopped for a person: it waits on the task page for somebody to decide what happens next.',
-  paused: 'The task is paused; nothing runs until somebody resumes it.',
-  finished: 'The task has ended since.',
-  ask: 'This run answered a question about the task, so the task’s pipeline did not move.',
-  nothing:
-    'Nothing else has happened since: no newer attempt of this stage, and the task has not stopped for a person.',
+/** The follow-up in words, for every kind but a newer run (which links it). */
+export const followUpWords = (
+  followUp: Exclude<EndedFollowUp, { readonly kind: 'ran_again' }>,
+): string => {
+  if (followUp.kind === 'ask') {
+    return 'This run answered a question about the task, so the task’s pipeline did not move.';
+  }
+  const there = followUp.movedTo === null ? null : stageLabel(followUp.movedTo);
+  switch (followUp.kind) {
+    case 'needs_person':
+      return there === null
+        ? 'The task stopped for a person: it waits on the task page for somebody to decide what happens next.'
+        : `The task has since moved on to ${there}, and stopped for a person there.`;
+    case 'paused':
+      return there === null
+        ? 'The task is paused; nothing runs until somebody resumes it.'
+        : `The task has since moved on to ${there}, and is paused there.`;
+    case 'finished':
+      return 'The task has ended since.';
+    case 'nothing':
+      return there === null
+        ? 'Nothing else has happened since: no newer run of this stage, and the task has not stopped for a person.'
+        : `The task has since moved on to ${there}.`;
+  }
+};
+
+/** The newer run, in words: the attempt when it is a new one, *started again* when it is the same. */
+export const ranAgainWords = (followUp: Extract<EndedFollowUp, { readonly kind: 'ran_again' }>) => {
+  const live = isLiveRun(followUp.run.status);
+  if (followUp.sameAttempt) {
+    return {
+      text: live
+        ? 'The stage was started again and is running. '
+        : `The stage was started again: ${RUN_STATUS_LABEL[followUp.run.status].toLowerCase()}. `,
+      link: 'Open the new run',
+    };
+  }
+  return {
+    text: live
+      ? `The stage is running again: attempt ${followUp.run.attempt}. `
+      : `The stage was run again: attempt ${followUp.run.attempt}, ${RUN_STATUS_LABEL[followUp.run.status].toLowerCase()}. `,
+    link: `Open attempt ${followUp.run.attempt}`,
+  };
 };
 
 const LINK = cx('rounded-sm text-link underline', FOCUS_RING);
@@ -217,7 +305,12 @@ export const RunEndedPanel = ({
   const handedBack = HANDED_BACK.has(reason);
   const followUp = endedFollowUp(record, detail);
   const denied = reason === 'permission_denied' ? deniedToolOf(blocks) : null;
-  const rerun = mayAct && record.stage !== null;
+  // A newer run of the stage that is still live is the re-run already: offering another would
+  // start a second beside it.
+  const rerun =
+    mayAct &&
+    record.stage !== null &&
+    !(followUp?.kind === 'ran_again' && isLiveRun(followUp.run.status));
   const work = mayAct && takeOverOffered;
   return (
     <section
@@ -250,15 +343,13 @@ export const RunEndedPanel = ({
         <p data-run-ended-next={followUp.kind} className="text-fg-muted">
           {followUp.kind === 'ran_again' ? (
             <>
-              {isLiveRun(followUp.run.status)
-                ? `The stage is running again: attempt ${followUp.run.attempt}. `
-                : `The stage was run again: attempt ${followUp.run.attempt}, ${RUN_STATUS_LABEL[followUp.run.status].toLowerCase()}. `}
+              {ranAgainWords(followUp).text}
               <Link to="/runs/$runId" params={{ runId: followUp.run.id }} className={LINK}>
-                {`Open attempt ${followUp.run.attempt}`}
+                {ranAgainWords(followUp).link}
               </Link>
             </>
           ) : (
-            FOLLOW_UP_WORDS[followUp.kind]
+            followUpWords(followUp)
           )}
         </p>
       )}

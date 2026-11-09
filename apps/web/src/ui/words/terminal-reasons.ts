@@ -1,7 +1,7 @@
 /**
  * **Why a run ended**, in words (TD-033 decision 6) — the one table every surface reads (S-25.19).
  *
- * Three columns, each a `Record` over the contract's `runTerminalReasonSchema`, so a reason added to
+ * Three columns (two here, one beside it), each a `Record` over the contract's `runTerminalReasonSchema`, so a reason added to
  * the contract fails the build here until it is worded (and `terminal-reasons.test.ts` holds every
  * entry to its shape):
  *
@@ -9,7 +9,9 @@
  * - {@link TERMINAL_REASON_SHORT} — the short form beside *Failed* or *Cancelled* where a run is
  *   listed: the task's Runs tab, the board card's activity, Home and the Agents rows
  *   ({@link runEndedShort});
- * - {@link TERMINAL_REASON_MEANING} — one sentence of what the ending means, for the run page's
+ * - `TERMINAL_REASON_MEANING` — **in `./terminal-reason-meanings.ts`**, a module of its own so the
+ *   worker page (which imports this one through `ui/activity.ts`) never carries the sentences — one
+ *   sentence of what the ending means, for the run page's
  *   *Ended* panel and, with its own wording for the schema failure, the ask thread's
  *   (`features/ask-thread.tsx`'s `ASK_ENDED_BECAUSE`, which overrides two entries and keeps the
  *   rest). Each sentence is true of any run, a stage run or an ask: it says what the platform
@@ -59,28 +61,6 @@ export const TERMINAL_REASON_SHORT: Readonly<Record<RunTerminalReason, string>> 
 
 /** What a run whose workspace was never created says where it is listed. */
 export const DID_NOT_START = 'Did not start';
-
-/** One sentence of what the ending means, true of a stage run and of an ask alike. */
-export const TERMINAL_REASON_MEANING: Readonly<Record<RunTerminalReason, string>> = {
-  success: 'The run finished and reported its result.',
-  error_max_turns: 'The agent used every turn it was allowed before it finished.',
-  error_max_budget_usd: 'The run reached its budget cap before it finished.',
-  error_max_structured_output_retries:
-    'The agent could not produce its result in the expected shape, even after retrying.',
-  error_during_execution: 'The agent’s session ended with an error before it finished.',
-  permission_denied:
-    'The agent was refused a tool its settings do not allow, and its session ended with an error.',
-  cancelled: 'The run was stopped before it finished — a person cancelled it or took the work.',
-  stalled: 'The agent stopped producing anything for too long, so the platform stopped the run.',
-  timed_out: 'The run went past its time limit, so the platform stopped it.',
-  crash: 'The agent’s process ended unexpectedly, without reporting a result.',
-  lease_expired:
-    'The machine running it stopped checking in, so the platform ended the run. That says nothing about whether the agent itself failed.',
-  shutdown:
-    'The runner it was on was shutting down, so the run was handed back before it finished.',
-  rate_limited:
-    'The Claude account it ran on reached a usage limit, so the run was handed back before it finished.',
-};
 
 const LIVE: ReadonlySet<RunStatus> = new Set(['created', 'starting', 'running']);
 

@@ -54,7 +54,7 @@ const STATUS_OF: Readonly<Record<RunTerminalReason, RunRecord['status']>> = {
   timed_out: 'timed_out',
   crash: 'failed',
   lease_expired: 'failed',
-  shutdown: 'cancelled',
+  shutdown: 'failed', // WP-144: a hand-back ends `failed`, not `cancelled`
   rate_limited: 'failed',
 };
 
@@ -367,6 +367,68 @@ describe('what the platform did next', () => {
     expect(within(region).getByRole('link', { name: 'Open attempt 2' }).getAttribute('href')).toBe(
       `/runs/${LATER}`,
     );
+  });
+
+  /**
+   * The review of #125: `settleRun` re-runs a hand-back at shutdown and a usage limit's re-plan as
+   * the **same** attempt (`enqueueFollowOn`, `attempt: run.attempt`), so a higher attempt alone
+   * missed exactly those, said *Nothing else has happened since* beside a live replacement and still
+   * offered *Re-run*.
+   */
+  it.each(['shutdown', 'rate_limited'] as const)(
+    'links the same attempt started again after %s, and offers no Re-run while it is live',
+    async (reason) => {
+      const again = runOf(null, { id: LATER, attempt: 1, started_at: '2026-11-05T10:06:00.000Z' });
+      open(runOf(reason), detail({ runs: [again] }));
+      const region = await settledPanel();
+      expect(
+        region.querySelector('[data-run-ended-next]')?.getAttribute('data-run-ended-next'),
+      ).toBe('ran_again');
+      expect(region.textContent).toContain('The stage was started again and is running.');
+      expect(region.textContent).not.toContain('attempt 1');
+      expect(region.textContent).not.toContain('Nothing else has happened since');
+      expect(
+        within(region).getByRole('link', { name: 'Open the new run' }).getAttribute('href'),
+      ).toBe(`/runs/${LATER}`);
+      expect(within(region).queryByRole('button', { name: 'Re-run as configured' })).toBeNull();
+    },
+  );
+
+  it('offers Re-run again once the same attempt’s re-run has ended too', async () => {
+    const again = runOf('shutdown', {
+      id: LATER,
+      attempt: 1,
+      started_at: '2026-11-05T10:06:00.000Z',
+    });
+    open(runOf('shutdown'), detail({ runs: [again] }));
+    const region = await settledPanel();
+    expect(region.textContent).toContain('The stage was started again: failed.');
+    expect(within(region).getByRole('button', { name: 'Re-run as configured' })).toBeTruthy();
+  });
+
+  it('counts a run of the same stage only when it started after this one', () => {
+    const run = runOf('shutdown');
+    const same = (over: Partial<RunRecord>) =>
+      endedFollowUp(run, detail({ runs: [runOf('crash', { id: LATER, attempt: 1, ...over })] }))
+        ?.kind;
+    expect(same({ started_at: '2026-11-05T10:06:00.000Z' })).toBe('ran_again');
+    // The same attempt started earlier — the run this one replaced — is not "again".
+    expect(same({ started_at: '2026-11-05T09:00:00.000Z' })).toBe('nothing');
+    // Not started yet: again only while it is live (an offer nobody claimed).
+    expect(same({ started_at: null, status: 'created', terminal_reason: null })).toBe('ran_again');
+    expect(same({ started_at: null })).toBe('nothing');
+    // Another stage's run never is.
+    expect(same({ stage: 'review', started_at: '2026-11-05T10:06:00.000Z' })).toBe('nothing');
+  });
+
+  it('names the stage the task is at when it is no longer this run’s', async () => {
+    const moved = detail({}, 'needs_human');
+    open(runOf('crash'), { ...moved, task: { ...moved.task, current_stage: 'code_review' } });
+    const region = await settledPanel();
+    expect(region.textContent).toContain(
+      'The task has since moved on to Code review, and stopped for a person there.',
+    );
+    expect(region.textContent).not.toContain('The task stopped for a person:');
   });
 
   it('says the task stopped for a person, or that nothing has happened since', async () => {

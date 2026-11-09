@@ -1370,7 +1370,7 @@ Then four tabs:
   ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)). The platform's and the CLI's
   own rows say what happened on the row — *The platform stopped the run · it stopped producing
   anything for too long*, *The model API failed; retrying · attempt 2 of 10 · rate limited*, *The CLI
-  reported an error · …* — and fold open onto the record as it was written. The first row, **The
+  wrote to its error output · …* — and fold open onto the record as it was written. The first row, **The
   session started**, folded like a step, is the Claude Code CLI's own start-up message, shown as the
   CLI sent it. Its `skills` list is everything the CLI found, including its own bundled skills
   (`deep-research`, `update-config` and others), and it is **not** what this run could use: the run

@@ -6,11 +6,11 @@
  */
 import { runStatusSchema, runTerminalReasonSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { TERMINAL_REASON_MEANING } from './terminal-reason-meanings.js';
 import {
   DID_NOT_START,
   runEndedShort,
   TERMINAL_REASON_LABEL,
-  TERMINAL_REASON_MEANING,
   TERMINAL_REASON_SHORT,
 } from './terminal-reasons.js';
 
@@ -61,7 +61,7 @@ describe('runEndedShort — the short form beside a listed run’s status', () =
     ['failed', 'permission_denied', 'Permission denied'],
     ['stalled', 'stalled', 'Stalled'],
     ['budget_exceeded', 'error_max_budget_usd', 'Hit its budget'],
-    ['cancelled', 'shutdown', 'Handed back on shutdown'],
+    ['failed', 'shutdown', 'Handed back on shutdown'],
     ['failed', 'rate_limited', 'Hit a usage limit'],
   ] as const)('reads %s / %s as %j', (status, reason, words) => {
     expect(runEndedShort({ status, terminal_reason: reason, start_failure: null })).toBe(words);
@@ -86,7 +86,7 @@ describe('runEndedShort — the short form beside a listed run’s status', () =
       runEndedShort({ status: 'cancelled', terminal_reason: 'cancelled', start_failure: FAILURE }),
     ).toBeNull();
     expect(
-      runEndedShort({ status: 'cancelled', terminal_reason: 'shutdown', start_failure: FAILURE }),
+      runEndedShort({ status: 'failed', terminal_reason: 'shutdown', start_failure: FAILURE }),
     ).toBe('Handed back on shutdown');
   });
 

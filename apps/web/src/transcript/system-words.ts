@@ -121,7 +121,7 @@ export const systemWords = (
     case 'api_retry':
       return { label: 'The model API failed; retrying', detail: apiRetry(data) };
     case 'stderr':
-      return { label: 'The CLI reported an error', detail: text(data, 'text') };
+      return { label: 'The CLI wrote to its error output', detail: text(data, 'text') };
     case 'permission_denied':
       return {
         label: 'A tool was refused',
