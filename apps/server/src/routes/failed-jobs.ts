@@ -22,7 +22,9 @@
  * reading the same kind of record across every project. `error` is the failure's message, which may
  * quote a provider, a URL or a credential, so it is **redacted by the platform's patterns and then
  * bounded** (redact-then-slice, `routes/dead-letters.ts`'s order) and the SPA renders it as text
- * (BD-022). The job's **payload is never read**, let alone published (`readFailedJobs`).
+ * (BD-022). Of the job's **payload** one field is read, `task_id`, joined to `tasks` so the card
+ * links the task a person acts on (S-25.20); the rest is never read, let alone published
+ * (`readFailedJobs`).
  *
  * ## What it does not do
  *
@@ -45,6 +47,7 @@ import {
   type FailedJob,
   failedJobsQuerySchema,
   failedJobsResponseSchema,
+  type Id,
   type IsoDateTime,
   MAX_FAILED_JOB_ERROR_CHARS,
 } from '@platform/contracts';
@@ -65,6 +68,12 @@ export interface FailedJobRecord {
   readonly createdAt: string;
   readonly failedAt: string;
   readonly error: string | null;
+  /** The task the job's payload names, when it exists (S-25.20, `readFailedJobs`). */
+  readonly task: {
+    readonly id: string;
+    readonly ticketKey: string;
+    readonly projectKey: string;
+  } | null;
   /** The keyset position the next page starts after (`readFailedJobs`, WP-114). */
   readonly position: FailedJobPosition;
 }
@@ -127,6 +136,14 @@ export const toWireFailedJob = (row: FailedJobRecord, redactor: SecretRedactor):
     failed_at: row.failedAt as IsoDateTime,
     error: redacted === null ? null : redacted.slice(0, MAX_FAILED_JOB_ERROR_CHARS),
     error_truncated: redacted !== null && redacted.length > MAX_FAILED_JOB_ERROR_CHARS,
+    task:
+      row.task === null
+        ? null
+        : {
+            id: row.task.id as Id,
+            ticket_key: row.task.ticketKey,
+            project_key: row.task.projectKey,
+          },
     exhaustion:
       census === null
         ? null

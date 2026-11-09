@@ -143,6 +143,13 @@ const HealthFacts = ({
           {call === null
             ? 'None yet'
             : `${call.ok ? 'Succeeded' : 'Failed'} ${agoText(call.at, nowMs)}`}
+          {/* S-25.20: what failed, as the platform recorded it (redacted; provider words, BD-022). */}
+          {call === null || call.ok || call.error === null ? null : (
+            <span className="block text-fg-muted" data-health-call-error="">
+              <UntrustedText value={call.error.message} />
+              {call.error.message_cut ? ' (shortened)' : null}
+            </span>
+          )}
         </dd>
         <dt className="text-fg-muted">Last delivery</dt>
         <dd data-health-fact="delivery">

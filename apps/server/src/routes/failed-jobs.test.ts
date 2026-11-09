@@ -7,6 +7,9 @@
  * census row beside each job (and `null` for a queue this build does not declare), the limit, and
  * the `503` of a process that reads no job queue.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { JOB_QUEUES } from '@platform/application';
 import type { UserRole } from '@platform/contracts';
 import { MAX_FAILED_JOB_ERROR_CHARS } from '@platform/contracts';
 import { redaction } from '@platform/infrastructure';
@@ -32,6 +35,7 @@ const record = (overrides: Partial<FailedJobRecord> = {}): FailedJobRecord => ({
   createdAt: '2026-09-30T08:00:00.000Z',
   failedAt: '2026-09-30T08:48:00.000Z',
   error: `provider answered 401 for token ${FAKE_TOKEN}`,
+  task: null,
   position: { at: '2026-09-30T08:48:00.000000Z', id: '00000000-0000-4000-8000-000000000f01' },
   ...overrides,
 });
@@ -145,6 +149,26 @@ describe('GET /api/org/failed-jobs (WP-108, backlog 325)', () => {
     expect(job).toMatchObject({ queue: 'budget.window.reset', error: null, exhaustion: null });
   });
 
+  it('publishes the task the job names, and null for a job that names none (S-25.20)', async () => {
+    world.rows = [
+      record({
+        task: {
+          id: '00000000-0000-4000-8000-0000000000b7',
+          ticketKey: 'AUT-6655',
+          projectKey: 'autix',
+        },
+      }),
+      record({ id: '00000000-0000-4000-8000-000000000f02', task: null }),
+    ];
+    const [named, none] = (await list()).json().items;
+    expect(named.task).toEqual({
+      id: '00000000-0000-4000-8000-0000000000b7',
+      ticket_key: 'AUT-6655',
+      project_key: 'autix',
+    });
+    expect(none.task).toBeNull();
+  });
+
   it('passes the caller’s limit and refuses one past the page', async () => {
     await list('?limit=5');
     expect(asked).toEqual([{ limit: 6 }]);
@@ -185,5 +209,23 @@ describe('GET /api/org/failed-jobs (WP-108, backlog 325)', () => {
     const response = await list();
     expect(response.statusCode).toBe(503);
     expect(codeOf(response.body)).toBe('failed_jobs_unavailable');
+  });
+});
+
+/**
+ * S-25.20: the *Failed background jobs* list says each queue in words, from a table in the web app
+ * (`apps/web/src/ui/words/job-queues.ts`) — which cannot import the application ring, so the table
+ * is read off disk here and held to `JOB_QUEUES` in both directions.
+ */
+describe('the job queues’ words', () => {
+  it('names every queue this build declares, and no other', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../../../web/src/ui/words/job-queues.ts', import.meta.url)),
+      'utf8',
+    );
+    const table = source.slice(source.indexOf('JOB_QUEUE_LABEL'), source.indexOf('};'));
+    const named = [...table.matchAll(/^\s*'([a-z.]+)':/gm)].map((match) => match[1]);
+    expect(named.length).toBeGreaterThan(0);
+    expect([...named].sort()).toEqual([...Object.values(JOB_QUEUES)].sort());
   });
 });

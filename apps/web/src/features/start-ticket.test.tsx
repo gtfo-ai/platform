@@ -15,7 +15,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { EMPTY_BOARD_TITLE, emptyBoardHint } from './board.js';
+import {
+  EMPTY_BOARD_TITLE,
+  emptyBoardHint,
+  hasNoTracker,
+  NO_TRACKER_TITLE,
+  noTrackerHint,
+} from './board.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const EVENT = '00000000-0000-4000-8000-0000000000e1';
@@ -58,6 +64,8 @@ interface Sent {
 
 const open = (options: {
   readonly canStart: boolean;
+  /** The project's connections (S-25.20); left out, the read is refused and the board falls back. */
+  readonly bindings?: readonly { readonly type: string; readonly provider: string }[];
   readonly refusal?: { readonly status: number; readonly code: string; readonly message: string };
 }) => {
   const sent: Sent[] = [];
@@ -102,6 +110,17 @@ const open = (options: {
       });
     }
     if (path === '/api/projects') return json({ items: [PROJECT_ROW] });
+    if (path === `/api/projects/${PROJECT}/bindings` && options.bindings !== undefined) {
+      return json({
+        items: options.bindings.map((binding, n) => ({
+          integration_id: `00000000-0000-4000-8000-0000000000c${n}`,
+          type: binding.type,
+          provider: binding.provider,
+          name: `${binding.provider} account`,
+          config: {},
+        })),
+      });
+    }
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
   const view = render(createApp({ fetchImpl, realtime: false }).element);
@@ -224,7 +243,7 @@ describe('starting a ticket by hand (WP-122, S-23.9a)', () => {
       member.view.container.querySelector('[data-blankslate] [data-pose="sleeping"]'),
     ).not.toBeNull();
     const rules = member.view.getByRole('link', { name: 'Open start rules' });
-    expect(rules.getAttribute('href')).toBe('/projects/acme/settings');
+    expect(rules.getAttribute('href')).toBe('/projects/acme/settings/connections');
     cleanup();
     const viewer = open({ canStart: false });
     await viewer.view.findByText(EMPTY_BOARD_TITLE);
@@ -238,5 +257,37 @@ describe('starting a ticket by hand (WP-122, S-23.9a)', () => {
     }
     expect(emptyBoardHint(true)).toContain('start one by its key');
     expect(emptyBoardHint(false)).toContain('A member of the project');
+  });
+
+  // S-25.20: an empty board said "Tickets you label for agents appear here" to a project that had
+  // no tracker to label one in.
+  it('says no tracker is connected, and links connecting one, when the connections hold none', async () => {
+    const bare = open({ canStart: true, bindings: [{ type: 'git', provider: 'gitlab' }] });
+    await bare.view.findByText(NO_TRACKER_TITLE);
+    expect(bare.view.container.textContent).toContain(noTrackerHint(true));
+    expect(bare.view.queryByText(EMPTY_BOARD_TITLE)).toBeNull();
+    const connect = bare.view.getByRole('link', { name: 'Connect a tracker' });
+    expect(connect.getAttribute('href')).toBe('/projects/acme/settings/connections');
+    expect(connect.getAttribute('data-board-empty')).toBe('no_tracker');
+    cleanup();
+    // A tracker is connected: the start rule is why the board is empty.
+    const bound = open({
+      canStart: true,
+      bindings: [
+        { type: 'git', provider: 'gitlab' },
+        { type: 'task_management', provider: 'jira-cloud' },
+      ],
+    });
+    await bound.view.findByText(EMPTY_BOARD_TITLE);
+    expect(bound.view.getByRole('link', { name: 'Open start rules' })).toBeTruthy();
+    expect(bound.view.queryByText(NO_TRACKER_TITLE)).toBeNull();
+  });
+
+  it('reads no tracker only from connections it has read', () => {
+    expect(hasNoTracker(undefined)).toBe(false);
+    expect(hasNoTracker([])).toBe(true);
+    expect(hasNoTracker([{ type: 'git' }, { type: 'communication' }])).toBe(true);
+    expect(hasNoTracker([{ type: 'task_management' }])).toBe(false);
+    expect(noTrackerHint(false)).toContain('A maintainer connects one');
   });
 });

@@ -286,7 +286,10 @@ describe('the integrations list', () => {
     const checked: IntegrationSummary = {
       ...JIRA,
       health: { status: 'ok', checked_at: '2026-10-01T09:00:00.000Z', detail: null },
-      activity: { last_call: { at: '2026-10-01T09:00:00.000Z', ok: true }, last_delivery_at: null },
+      activity: {
+        last_call: { at: '2026-10-01T09:00:00.000Z', ok: true, error: null },
+        last_delivery_at: null,
+      },
       current_health: { status: 'working', basis: 'call', at: '2026-10-01T09:00:00.000Z' },
     };
     renderApp(recorder({ items: [checked] }).fetchImpl);
@@ -779,7 +782,7 @@ describe('the integrations list — identity, health now and use (S-25.3)', () =
     const stale: IntegrationSummary = {
       ...JIRA,
       current_health: { status: 'not_checked_recently', basis: 'call', at: DAYS_32 },
-      activity: { last_call: { at: DAYS_32, ok: true }, last_delivery_at: null },
+      activity: { last_call: { at: DAYS_32, ok: true, error: null }, last_delivery_at: null },
     };
     const working: IntegrationSummary = {
       ...JIRA,
@@ -812,7 +815,7 @@ describe('the integrations list — identity, health now and use (S-25.3)', () =
     const working = (ageMs: number): IntegrationSummary => ({
       ...JIRA,
       current_health: { status: 'working', basis: 'call', at: at(ageMs) },
-      activity: { last_call: { at: at(ageMs), ok: true }, last_delivery_at: null },
+      activity: { last_call: { at: at(ageMs), ok: true, error: null }, last_delivery_at: null },
     });
     // Just inside the bound, the server's word stands; just past it, it does not.
     expect(currentHealthStatus(working(BOUND_MS - 60_000), NOW)).toBe('working');
@@ -862,7 +865,7 @@ describe('the integrations list — identity, health now and use (S-25.3)', () =
     const failing: IntegrationSummary = {
       ...JIRA,
       activity: {
-        last_call: { at: new Date(NOW - 2 * 3_600_000).toISOString(), ok: false },
+        last_call: { at: new Date(NOW - 2 * 3_600_000).toISOString(), ok: false, error: null },
         last_delivery_at: null,
       },
       current_health: {
@@ -1023,7 +1026,7 @@ describe('an integration’s page', () => {
         detail: null,
       },
       activity: {
-        last_call: { at: new Date(NOW - 10 * 60_000).toISOString(), ok: false },
+        last_call: { at: new Date(NOW - 10 * 60_000).toISOString(), ok: false, error: null },
         last_delivery_at: new Date(NOW - 3 * 3_600_000).toISOString(),
       },
       current_health: {
@@ -1044,6 +1047,54 @@ describe('an integration’s page', () => {
     expect(container.querySelector('[data-health-stale]')).toBeNull();
   });
 
+  it('says what the failed last call failed with, as text (S-25.20)', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const message = 'JiraError: 401 for token [REDACTED:integration:token] <b>not markup</b>';
+    const failed: IntegrationSummary = {
+      ...JIRA,
+      activity: {
+        last_call: {
+          at: new Date(NOW - 3 * 3_600_000).toISOString(),
+          ok: false,
+          error: { message, message_cut: true },
+        },
+        last_delivery_at: null,
+      },
+      current_health: {
+        status: 'failing',
+        basis: 'call',
+        at: new Date(NOW - 3 * 3_600_000).toISOString(),
+      },
+    };
+    const { container } = renderApp(recorder({ items: [failed] }).fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    const call = container.querySelector('[data-health-fact="call"]');
+    expect(call?.textContent).toContain('Failed 3 h ago');
+    const shown = call?.querySelector('[data-health-call-error]');
+    expect(shown?.textContent).toBe(`${message} (shortened)`);
+    // Provider words, never markup (BD-022).
+    expect(shown?.querySelector('b')).toBeNull();
+  });
+
+  it('shows no error for a last call that succeeded', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    renderApp(
+      recorder({
+        items: [
+          {
+            ...JIRA,
+            activity: {
+              last_call: { at: new Date(NOW - 60_000).toISOString(), ok: true, error: null },
+              last_delivery_at: null,
+            },
+          },
+        ],
+      }).fetchImpl,
+    );
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    expect(document.querySelector('[data-health-call-error]')).toBeNull();
+  });
+
   it('says a stale integration’s health is not known now, naming the bound', async () => {
     window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
     const stale: IntegrationSummary = {
@@ -1053,7 +1104,10 @@ describe('an integration’s page', () => {
         basis: 'call',
         at: '2026-09-01T09:00:00.000Z',
       },
-      activity: { last_call: { at: '2026-09-01T09:00:00.000Z', ok: true }, last_delivery_at: null },
+      activity: {
+        last_call: { at: '2026-09-01T09:00:00.000Z', ok: true, error: null },
+        last_delivery_at: null,
+      },
     };
     const { container } = renderApp(recorder({ items: [stale] }).fetchImpl);
     expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();

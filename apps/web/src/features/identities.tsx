@@ -65,6 +65,7 @@ import {
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { IDENTITY_KIND_LABEL } from '../ui/words/records.js';
 
 /** The providers whose normaliser resolves an author through this table on this build. */
 export const IDENTITY_PROVIDERS = ['slack', 'jira-cloud', 'gitlab'] as const;
@@ -209,7 +210,9 @@ export const IdentityMappings = (): ReactElement => {
                 </span>
               )}
               <span aria-hidden="true">→</span>
-              <Badge tone={mapping.kind === 'machine' ? 'warning' : 'accent'}>{mapping.kind}</Badge>
+              <Badge tone={mapping.kind === 'machine' ? 'warning' : 'accent'}>
+                {IDENTITY_KIND_LABEL[mapping.kind]}
+              </Badge>
               <UntrustedText value={describeUser(mapping, emailOf)} />
               <Button
                 className="ml-auto"

@@ -785,9 +785,11 @@ followed.
 **List** (the toggle above the columns, or `?view=list`) shows the same tasks as a list, newest
 first, with filters for the **state**, the **template** and **Needs you**.
 
-**An empty board** says how tickets arrive — a ticket that matches the project's **pickup rule** (a
-label, a status, an epic or a query) — with **Open start rules**, which goes to the project's
-settings, and, if you may start one, **Start a ticket by hand**.
+**An empty board** says why it is empty. A project with **no tracker connected** says so — *No
+tracker is connected* — with **Connect a tracker**, which opens the project's *Connections*; otherwise
+it says how tickets arrive — a ticket that matches the project's **start rule** (a label, a status, an
+epic or a query) — with **Open start rules**. Either way, if you may start one, **Start a ticket by
+hand** is beside it.
 
 The columns are task **states**, not pipeline stages, and that is deliberate for now: the column list
 in the product spec is "the stages of the project's pipeline template, plus Queued / Needs human /
@@ -945,7 +947,10 @@ would have nowhere to run.
   with the word its stage was closed with (*"Needs you: the gate could not decide in its allotted
   checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, a budget pause with whose cap is
   spent and where it is raised, and an epic's proposed breakdown
-  while a maintainer has something left to decide on it.
+  while a maintainer has something left to decide on it. An escalation leads with **why it
+  stopped** and the next step; the sentence listing every way out comes last, beside its buttons.
+- **A task a person paused** says so in the same place, as information: who paused it and when —
+  or that their *Cancel run* did — the reason they gave, if any, and **Resume** for whoever may.
 - **Four tabs**: *Overview* (the flow — the graph, or its list: the stage timeline — the running
   stage, Ask the task and feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status —
   and why one ended, *Failed · Lost its worker*, *Failed · Did not start* — model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
@@ -1178,7 +1183,8 @@ not to obey. A shadow task posts none of this: each write is recorded as what it
 
 The checks are a **merge box**, as on a pull request: one line on top — *All required checks pass*,
 *2 checks need you* (a check failed, or a gate stopped for a person), or *3 required checks are not
-decided yet* — and one row per check with a status icon, its name and its value. **The line counts
+decided yet* — or, while the task is at a stage before any check can run (Refinement,
+Architecture…), *Checks start at Implementation.*, with no clock and no count — and one row per check with a status icon, its name and its value. **The line counts
 checks only**: an open question or a pending approval is the needs-you box's, above, so it is not
 counted as a check; while one waits, a second line says so (*Questions and approvals waiting for a
 person are in the box above*), and their rows read *1 · see above*. Point at (or tab to)

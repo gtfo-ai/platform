@@ -11,7 +11,8 @@
  *   delivery as its activity; bound to two projects, each with its own use.
  * - *Old probe*: a passed *Test connection* two days ago and nothing since — `not_checked_recently`,
  *   never `working`.
- * - *Flaky*: a success three hours ago and a failure one hour ago — `degraded`.
+ * - *Flaky*: a success three hours ago and a failure one hour ago — `degraded`, and since S-25.20
+ *   the failure's own redacted message (its `integration.action.failed` event) as `error`.
  * - *Failed probe*: `integrations.health` reads `down` at T and the prober's own `test_connection`
  *   row is `ok` at T + 1 s (a provider answering `ok: false` is a successful *test*) — `failing`,
  *   because the probe's actions are not traffic (review of PR #75).
@@ -89,6 +90,40 @@ const call = async (
   );
 };
 
+/**
+ * S-25.20: a failed call's `integration.action.failed` event, as the audit log appends it beside the
+ * row — the executor's message already redacted (the placeholder stands in for the secret).
+ */
+let failedSeq = 0;
+const failedEvent = async (
+  integrationId: string,
+  hours: number,
+  error: string,
+  action = 'read_ticket',
+): Promise<void> => {
+  failedSeq += 1;
+  await pool.query(
+    `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
+     values ('integration', $1, $2, 'integration.action.failed', $3::jsonb, $4::jsonb,
+             now() - make_interval(secs => $5::float8 * 3600))`,
+    [
+      integrationId,
+      failedSeq,
+      JSON.stringify({
+        project_id: null,
+        task_id: null,
+        integration_id: integrationId,
+        action,
+        payload_redacted: {},
+        error,
+        duration_ms: 12,
+      }),
+      JSON.stringify({ kind: 'integration', integration_id: integrationId, provider: 'gitlab' }),
+      hours,
+    ],
+  );
+};
+
 const delivery = async (
   integrationId: string,
   deliveryId: string,
@@ -158,6 +193,13 @@ beforeAll(async () => {
   });
   await call(ids.flaky, 'ok', 3);
   await call(ids.flaky, 'failed', 1);
+  // S-25.20: the failed call's own event, and an older failure's, which the newest one replaces.
+  await failedEvent(ids.flaky, 2, 'IntegrationProviderError: an older failure');
+  await failedEvent(
+    ids.flaky,
+    1,
+    'IntegrationAuthError: GitLab answered 401 for token [REDACTED:integration:token]',
+  );
   // Review of PR #75: a probe the provider answered `ok: false` — `integrations.health` reads
   // `down` at T, and the prober's own audit row is `ok` at T + 1 s (a successful *test*).
   const probedAt = Date.now() - 3_600_000;
@@ -226,6 +268,8 @@ describe('GET /api/integrations — health from traffic (S-25.3)', () => {
     expect(jira?.current_health.basis).toBe('call');
     expect(hoursAgo(jira?.current_health.at)).toBe(1);
     expect(jira?.activity.last_call?.ok).toBe(true);
+    // A call that succeeded publishes no error, though an older one failed (S-25.20).
+    expect(jira?.activity.last_call?.error).toBeNull();
     expect(hoursAgo(jira?.activity.last_call?.at)).toBe(1);
     expect(hoursAgo(jira?.activity.last_delivery_at)).toBe(2);
   });
@@ -241,6 +285,11 @@ describe('GET /api/integrations — health from traffic (S-25.3)', () => {
     const flaky = (await listed()).get(ids.flaky);
     expect(flaky?.current_health).toMatchObject({ status: 'degraded', basis: 'call' });
     expect(flaky?.activity.last_call?.ok).toBe(false);
+    // S-25.20: the failed call says what failed — the newest failure's redacted message.
+    expect(flaky?.activity.last_call?.error).toEqual({
+      message: 'IntegrationAuthError: GitLab answered 401 for token [REDACTED:integration:token]',
+      message_cut: false,
+    });
   });
 
   it('reads a failed probe as failing, though the probe’s own audit row is a later ok (review of PR #75)', async () => {

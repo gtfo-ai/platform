@@ -12,10 +12,12 @@
  * the enum's own spelling for "nobody has checked" rather than a value this projection made up.
  */
 import type { JsonObject } from '@platform/contracts';
+import { MAX_INTEGRATION_CALL_ERROR_CHARS } from '@platform/contracts';
 import { findShippedProvider } from '@platform/integrations';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import {
+  callErrorOf,
   currentHealthOf,
   factsOf,
   healthOf,
@@ -299,6 +301,27 @@ describe('currentHealthOf', () => {
   });
 });
 
+describe('callErrorOf (S-25.20)', () => {
+  it('publishes a failed call’s redacted message, cut at the bound, and nothing for a success', () => {
+    expect(
+      callErrorOf({ ok: false, error: 'GitLabError: 401 [REDACTED:integration:token]' }),
+    ).toEqual({ message: 'GitLabError: 401 [REDACTED:integration:token]', message_cut: false });
+    const long = 'x'.repeat(MAX_INTEGRATION_CALL_ERROR_CHARS + 1);
+    expect(callErrorOf({ ok: false, error: long })).toEqual({
+      message: long.slice(0, MAX_INTEGRATION_CALL_ERROR_CHARS),
+      message_cut: true,
+    });
+    expect(
+      callErrorOf({ ok: false, error: 'y'.repeat(MAX_INTEGRATION_CALL_ERROR_CHARS) })?.message_cut,
+    ).toBe(false);
+    // A success never carries one, whatever a stale read handed it; a failure with none is null.
+    expect(callErrorOf({ ok: true, error: 'an older failure' })).toBeNull();
+    expect(callErrorOf({ ok: false, error: null })).toBeNull();
+    expect(callErrorOf({ ok: false, error: '   ' })).toBeNull();
+    expect(callErrorOf({ ok: false })).toBeNull();
+  });
+});
+
 describe('factsOf', () => {
   it('publishes the newest call and delivery as instants, and none as null', () => {
     const facts = factsOf(
@@ -308,9 +331,13 @@ describe('factsOf', () => {
       NOW,
     );
     expect(facts.activity).toEqual({
-      last_call: { at: isoAgo(1), ok: false },
+      last_call: { at: isoAgo(1), ok: false, error: null },
       last_delivery_at: isoAgo(2),
     });
+    expect(
+      factsOf(row(), traffic({ lastCall: { atMs: ago(1), ok: false, error: 'boom' } }), [], NOW)
+        .activity.last_call?.error,
+    ).toEqual({ message: 'boom', message_cut: false });
     expect(factsOf(row(), NO_TRAFFIC, [], NOW).activity).toEqual({
       last_call: null,
       last_delivery_at: null,

@@ -78,6 +78,12 @@
  * provider call that failed after its retries — a ticket that is not there (`not_found`) as much as
  * a revoked token (`unauthorised`). One request's fault after a success therefore reads `degraded`
  * rather than `failing`, and the next successful call clears it (BACKLOG 1220).
+ *
+ * **A failed last call says what failed** (S-25.20): `last_call.error` is the message of the newest
+ * `integration.action.failed` event on the integration's stream — written by the executor in the
+ * same transaction as the audit row, **already redacted** and bounded there, so nothing here reads
+ * provider text again. A fourth lateral, over the events' stream, run only when the newest call
+ * failed and within the same lookback; a probe's failures are left out as its rows are.
  */
 
 import { REFUSED_DELIVERY_REASONS } from '@platform/application';
@@ -94,6 +100,7 @@ import type {
 import {
   INTEGRATION_HEALTH_STALE_AFTER_HOURS,
   integrationSummarySchema,
+  MAX_INTEGRATION_CALL_ERROR_CHARS,
   MAX_REFUSED_DELIVERIES,
 } from '@platform/contracts';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
@@ -332,8 +339,15 @@ export const LAST_CALL_LOOKBACK_DAYS = 90;
 
 /** One integration's traffic, as {@link readIntegrationTraffic} reads it; instants in epoch ms. */
 export interface IntegrationTraffic {
-  /** The newest outbound call that reached the provider, of any age. */
-  readonly lastCall: { readonly atMs: number; readonly ok: boolean } | null;
+  /**
+   * The newest outbound call that reached the provider, of any age; `error` is the newest failed
+   * call's redacted message (its `integration.action.failed` event), kept only when it failed.
+   */
+  readonly lastCall: {
+    readonly atMs: number;
+    readonly ok: boolean;
+    readonly error?: string | null;
+  } | null;
   /** Inside the stale bound only: the newest `ok` call and the newest `failed` one. */
   readonly lastOkInWindowMs: number | null;
   readonly lastFailedInWindowMs: number | null;
@@ -440,12 +454,34 @@ export const factsOf = (
     last_call:
       traffic.lastCall === null
         ? null
-        : { at: iso(traffic.lastCall.atMs), ok: traffic.lastCall.ok },
+        : {
+            at: iso(traffic.lastCall.atMs),
+            ok: traffic.lastCall.ok,
+            error: callErrorOf(traffic.lastCall),
+          },
     last_delivery_at: traffic.lastDeliveryMs === null ? null : iso(traffic.lastDeliveryMs),
   },
   current_health: currentHealthOf(healthOf(row), traffic, nowMs),
   used_by: users,
 });
+
+/**
+ * What a failed last call published (S-25.20): the executor's own redacted message, cut at
+ * {@link MAX_INTEGRATION_CALL_ERROR_CHARS}. `null` for a success, or a failure with no message.
+ */
+export const callErrorOf = (call: {
+  readonly ok: boolean;
+  readonly error?: string | null;
+}): { readonly message: string; readonly message_cut: boolean } | null => {
+  const message = call.error?.trim() ?? '';
+  if (call.ok || message === '') {
+    return null;
+  }
+  return {
+    message: message.slice(0, MAX_INTEGRATION_CALL_ERROR_CHARS),
+    message_cut: message.length > MAX_INTEGRATION_CALL_ERROR_CHARS,
+  };
+};
 
 /** A `float8` epoch-milliseconds column as a number, `null` kept (pg may hand a string back). */
 const msOf = (value: unknown): number | null => {
@@ -479,6 +515,7 @@ export const readIntegrationTraffic = async (
     integration_id: string;
     last_call_ms: unknown;
     last_call_status: string | null;
+    failed_error: unknown;
     ok_ms: unknown;
     failed_ms: unknown;
     delivery_ms: unknown;
@@ -486,6 +523,7 @@ export const readIntegrationTraffic = async (
     select i.id as integration_id,
            (extract(epoch from c.created_at) * 1000)::float8 as last_call_ms,
            c.status as last_call_status,
+           f.error as failed_error,
            (extract(epoch from w.ok_at) * 1000)::float8 as ok_ms,
            (extract(epoch from w.failed_at) * 1000)::float8 as failed_ms,
            (extract(epoch from d.received_at) * 1000)::float8 as delivery_ms
@@ -511,6 +549,20 @@ export const readIntegrationTraffic = async (
            and a.action <> all(${probeActions}::text[])
       ) w on true
       left join lateral (
+        -- S-25.20: the newest failed call's message, as the executor wrote it (redacted, bounded)
+        -- into the event committed with its audit row; read only when the newest call failed.
+        select e.payload ->> 'error' as error
+          from events e
+         where c.status = 'failed'
+           and e.stream_type = 'integration'
+           and e.stream_id = i.id
+           and e.type = 'integration.action.failed'
+           and e.occurred_at > ${lookback}::timestamptz
+           and coalesce(e.payload ->> 'action', '') <> all(${probeActions}::text[])
+         order by e.occurred_at desc, e.position desc
+         limit 1
+      ) f on true
+      left join lateral (
         select b.received_at
           from inbox b
          where b.integration_id = i.id
@@ -526,7 +578,13 @@ export const readIntegrationTraffic = async (
         row.integration_id,
         {
           lastCall:
-            lastCallMs === null ? null : { atMs: lastCallMs, ok: row.last_call_status === 'ok' },
+            lastCallMs === null
+              ? null
+              : {
+                  atMs: lastCallMs,
+                  ok: row.last_call_status === 'ok',
+                  error: typeof row.failed_error === 'string' ? row.failed_error : null,
+                },
           lastOkInWindowMs: msOf(row.ok_ms),
           lastFailedInWindowMs: msOf(row.failed_ms),
           lastDeliveryMs: msOf(row.delivery_ms),

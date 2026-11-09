@@ -1709,7 +1709,7 @@ export const integrations = {
       credentials_readable: null,
       credentials_consequence: null,
       // S-25.3: health from traffic, and who uses it.
-      activity: { last_call: { at: now, ok: true }, last_delivery_at: null },
+      activity: { last_call: { at: now, ok: true, error: null }, last_delivery_at: null },
       current_health: { status: 'working', basis: 'call', at: now },
       used_by: [
         {
@@ -2106,6 +2106,7 @@ export const failedJobs = failedJobsResponseSchema.parse({
       // Handler text is untrusted: it is shown as characters.
       error: `outbound ${HOSTILE.script}`,
       error_truncated: false,
+      task: null,
       exhaustion: {
         kind: 'relies_on_retries',
         shape: 'per_duty',

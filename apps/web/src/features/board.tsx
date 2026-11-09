@@ -42,6 +42,7 @@ import {
 import { START_TICKET_ANCHOR, useStartTicketRequests } from '../app/project-frame.js';
 import {
   useAgents,
+  useProjectBindings,
   useProjectByKey,
   useProjectTasks,
   useSession,
@@ -77,6 +78,7 @@ import {
   type UrlOwnerFilter,
 } from './board-owner-filter.js';
 import { QUEUED_COLUMN_ANCHOR, queueNote } from './queue-words.js';
+import { FIRST_PROJECT_SECTION } from './settings-sections.js';
 
 /**
  * The columns, in pipeline order, and the column each state belongs to when nothing waits on a
@@ -154,6 +156,23 @@ const STATES_IN_ORDER: readonly TaskState[] = BOARD_COLUMNS.flatMap((column) => 
 
 /** The empty board's title and what it teaches (product/10: "empty states teach"). */
 export const EMPTY_BOARD_TITLE = 'Tickets you label for agents appear here';
+
+/** An empty board whose project has no tracker connected (S-25.20). */
+export const NO_TRACKER_TITLE = 'No tracker is connected';
+
+/**
+ * Why an empty board is empty, when the project's connections say (S-25.20): with no
+ * task-management connection no ticket can match a start rule, so the board says to connect one.
+ * `null` while the connections are unread or could not be read — the start rule's words then.
+ */
+export const noTrackerHint = (canStart: boolean): string =>
+  canStart
+    ? 'Tasks start from tickets in a tracker, and this project has none connected. Connect one and the tickets that match its start rule appear here — or start one by its key.'
+    : 'Tasks start from tickets in a tracker, and this project has none connected. A maintainer connects one in the project’s settings.';
+
+/** Whether the project's connections are read and hold no tracker (`task_management`). */
+export const hasNoTracker = (bindings: readonly { readonly type: string }[] | undefined): boolean =>
+  bindings !== undefined && !bindings.some((binding) => binding.type === 'task_management');
 
 /**
  * What an empty board says — **only what exists** (WP-122, PROGRESS backlog 379). The pick-up rules
@@ -631,6 +650,8 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
     true,
   );
   const agents = useAgents();
+  // The connections (S-25.20): read for the empty state's *why*; a failed read leaves the old words.
+  const bindings = useProjectBindings(project?.id ?? null);
   const { now } = useServices();
   const view: BoardView = search.view === 'list' ? 'list' : 'board';
   const navigate = useNavigate();
@@ -688,6 +709,8 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
 
   const nowMs = now();
   const items = tasks.data?.items ?? [];
+  // S-25.20: an empty board says why — no tracker connected is a different fact from no match.
+  const noTracker = hasNoTracker(bindings.data?.items);
   const ownerControl = <OwnerFilterControl value={owner} onChange={chooseOwner} />;
   // The live run per task; the read is the organisation's, so a run of another project is ignored.
   const live = new Map<string, AgentEntry>();
@@ -738,15 +761,17 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
         <Blankslate
           size="spacious"
           icon={<Bot pose="sleeping" scale={2} />}
-          title={EMPTY_BOARD_TITLE}
-          hint={emptyBoardHint(canStart)}
+          title={noTracker ? NO_TRACKER_TITLE : EMPTY_BOARD_TITLE}
+          hint={noTracker ? noTrackerHint(canStart) : emptyBoardHint(canStart)}
           action={
+            // S-25.20: with no tracker connected the way on is to connect one, not a start rule.
             <Link
-              to="/projects/$key/settings"
-              params={{ key: project.key }}
+              to="/projects/$key/settings/$section"
+              params={{ key: project.key, section: FIRST_PROJECT_SECTION }}
               className={buttonClassName('default')}
+              data-board-empty={noTracker ? 'no_tracker' : 'start_rule'}
             >
-              Open start rules
+              {noTracker ? 'Connect a tracker' : 'Open start rules'}
             </Link>
           }
           {...(canStart

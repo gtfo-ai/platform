@@ -4,13 +4,13 @@
  * that whatever the words promise ("starts then") is what the scheduler's admission does after the
  * event the words name.
  */
-import type { QueueWait, TaskState } from '@platform/contracts';
+import type { IsoDateTime, QueueWait, TaskState } from '@platform/contracts';
 import { taskStateSchema } from '@platform/contracts';
 import {
   countsInPipeline,
   evaluateTaskAdmission,
-  holdsPlace,
-  queueAdmissionOf,
+  type QueueLiveTask,
+  queueWaitsOver,
   type WipLimits,
   wipCountsOf,
 } from '@platform/domain';
@@ -27,30 +27,37 @@ import {
 
 const LIMITS: WipLimits = { maxParallelTasks: 2, maxTasksInPipeline: 5, maxParallelRuns: 4 };
 
-/** The read's `queue_wait` for the task at `position`, as the server builds it (`queue-wait.ts`). */
+/**
+ * The read's `queue_wait` for the task at `position`, built through **the server's own function**
+ * (the domain's `queueWaitsOver`, which `apps/server/src/queries/queue-wait.ts` calls — the S-25.16
+ * review: a copy here could agree with the words and disagree with the server). `position` queued
+ * tickets are added behind the live `states`, oldest first, and the last of them is asked about.
+ */
 const waitFor = (states: readonly TaskState[], limits: WipLimits, position = 1): QueueWait => {
-  const counts = wipCountsOf(states);
-  const admission = queueAdmissionOf(counts, limits);
-  const running = { count: counts.activeTasks, limit: limits.maxParallelTasks };
-  const pipeline = { count: counts.tasksInPipeline, limit: limits.maxTasksInPipeline };
-  const queued = Math.max(position, states.filter((state) => state === 'queued').length);
-  if (admission.status === 'admitted') {
-    return { status: 'admitted', position, queued, running, pipeline };
+  const at = (n: number): IsoDateTime =>
+    new Date(Date.UTC(2026, 10, 9, 8, 0, n)).toISOString() as IsoDateTime;
+  const live: QueueLiveTask[] = [
+    ...states.map((state, n) => ({
+      id: `00000000-0000-4000-8000-${(n + 1).toString(16).padStart(12, '0')}`,
+      state,
+      ticketKey: `AUT-${100 + n}`,
+      priorityRank: 2,
+      createdAt: at(n),
+    })),
+    ...Array.from({ length: position }, (_, n) => ({
+      id: `00000000-0000-4000-9000-${(n + 1).toString(16).padStart(12, '0')}`,
+      state: 'queued' as const,
+      ticketKey: `AUT-${900 + n}`,
+      priorityRank: 2,
+      createdAt: at(100 + n),
+    })),
+  ];
+  const asked = live.at(-1)?.id ?? '';
+  const wait = queueWaitsOver(live, [asked], limits).get(asked);
+  if (wait === undefined) {
+    throw new Error('the queued task has no queue_wait');
   }
-  const basis = pipeline.count >= pipeline.limit ? 'max_tasks_in_pipeline' : 'max_parallel_tasks';
-  const holders = states.filter((state) => holdsPlace(basis, state));
-  return {
-    ...admission,
-    position,
-    queued,
-    running,
-    pipeline,
-    holders: {
-      total: holders.length,
-      needs_human: holders.filter((state) => state === 'needs_human').length,
-      items: [],
-    },
-  };
+  return wait;
 };
 
 const repeat = (state: TaskState, n: number): TaskState[] => Array.from({ length: n }, () => state);
@@ -150,6 +157,19 @@ describe('the queue’s words', () => {
     expect(queueShort(wait)).toBe('1st in queue · 2 of 2 running');
   });
 
+  it('names the pipeline when its limit is below the running limit (S-25.16 review)', () => {
+    // 3 at once, 2 in the pipeline: two running tasks fill the pipeline and not the running places.
+    const limits = { ...LIMITS, maxParallelTasks: 3, maxTasksInPipeline: 2 };
+    const wait = waitFor(repeat('active', 2), limits);
+    expect(wait).toMatchObject({ status: 'waiting', reason: 'max_tasks_in_pipeline' });
+    expect(queueRelief(wait)).toEqual({ freedBy: 'pipeline_finishes', startsNext: true });
+    expect(queueNote(wait, true)).toBe(
+      'Waiting for a place: this project holds at most 2 tasks in its pipeline, and 2 are in it. ' +
+        'A place frees when one of them finishes or is cancelled.',
+    );
+    expect(evaluateTaskAdmission(wipCountsOf(['active', 'done']), limits).admitted).toBe(true);
+  });
+
   it('says there is room, and invents no wait, for an admitted task', () => {
     const admitted = waitFor(['active'], LIMITS, 3);
     expect(admitted.status).toBe('admitted');
@@ -191,12 +211,14 @@ describe('what the words promise is what the scheduler does (review of #124)', (
       fc.property(
         fc.array(fc.constantFrom(...others), { maxLength: 14 }),
         fc.integer({ min: 1, max: 4 }),
+        // Independent of the running limit (the S-25.16 review): a pipeline limit at or below it
+        // is a configuration the scheduler accepts, and the words must hold for it too.
         fc.integer({ min: 1, max: 8 }),
-        (states, parallel, extra) => {
+        (states, parallel, inPipeline) => {
           const limits = {
             ...LIMITS,
             maxParallelTasks: parallel,
-            maxTasksInPipeline: parallel + extra,
+            maxTasksInPipeline: inPipeline,
           };
           const wait = waitFor(states, limits);
           const relief = queueRelief(wait);

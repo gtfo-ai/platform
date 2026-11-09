@@ -21,20 +21,8 @@
  * `admitted` — the scheduler runs when a task leaves the active set, and none has since.
  */
 import { priorityRankOf } from '@platform/application';
-import {
-  type Id,
-  type IsoDateTime,
-  MAX_QUEUE_WAIT_HOLDERS,
-  type QueueWait,
-  type TaskState,
-} from '@platform/contracts';
-import {
-  holdsPlace,
-  orderQueue,
-  queueAdmissionOf,
-  type WipLimits,
-  wipCountsOf,
-} from '@platform/domain';
+import type { IsoDateTime, QueueWait, TaskState } from '@platform/contracts';
+import { queueWaitsOver, type WipLimits } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, eq, notInArray } from 'drizzle-orm';
 
@@ -57,16 +45,6 @@ interface LiveTask {
   readonly priority: string | null;
   readonly createdAt: Date;
 }
-
-/** Waiting-for-a-person first (what a reader can act on), then the oldest, then the id. */
-const holderOrder = (a: LiveTask, b: LiveTask): number => {
-  const human = Number(b.state === 'needs_human') - Number(a.state === 'needs_human');
-  if (human !== 0) {
-    return human;
-  }
-  const age = a.createdAt.getTime() - b.createdAt.getTime();
-  return age !== 0 ? age : a.id.localeCompare(b.id);
-};
 
 /**
  * The `queue_wait` of every **queued** task among `taskIds`, all of project `projectId` — keyed by
@@ -98,67 +76,25 @@ export const queueWaitsFor = async (
   return queueWaitsOf(rows, taskIds, limits);
 };
 
-/** The pure half of {@link queueWaitsFor}, over the project's live tasks. Exported for its test. */
+/**
+ * The pure half of {@link queueWaitsFor}, over the project's live tasks: the ticket's priority
+ * ranked as the scheduler ranks it, then the domain's `queueWaitsOver` — the one function the web
+ * app's word tests build `queue_wait` through too (S-25.20). Exported for its test.
+ */
 export const queueWaitsOf = (
   live: readonly LiveTask[],
   taskIds: readonly string[],
   limits: WipLimits,
-): ReadonlyMap<string, QueueWait> => {
-  const counts = wipCountsOf(live.map((task) => task.state));
-  const admission = queueAdmissionOf(counts, limits);
-  // Both limits, as the scheduler checks both on every event (review of #124): a reader that knew
-  // only the refusing one would promise a start the other limit then refuses.
-  const running = { count: counts.activeTasks, limit: limits.maxParallelTasks };
-  const pipeline = { count: counts.tasksInPipeline, limit: limits.maxTasksInPipeline };
-  const queue = orderQueue(
-    live
-      .filter((task) => task.state === 'queued')
-      .map((task) => ({
-        id: task.id as Id,
-        priorityRank: priorityRankOf(task.priority),
-        // The store's resolution (`queued` reads `created_at` into a `Date`), so ties break alike.
-        createdAt: task.createdAt.toISOString() as IsoDateTime,
-      })),
+): ReadonlyMap<string, QueueWait> =>
+  queueWaitsOver(
+    live.map((task) => ({
+      id: task.id,
+      state: task.state,
+      ticketKey: task.ticketKey,
+      priorityRank: priorityRankOf(task.priority),
+      // The store's resolution (`queued` reads `created_at` into a `Date`), so ties break alike.
+      createdAt: task.createdAt.toISOString() as IsoDateTime,
+    })),
+    taskIds,
+    limits,
   );
-  const position = new Map(queue.map((task, index) => [task.id as string, index + 1]));
-  // The places a reader must see freed: the pipeline's whenever it is full (it holds the running
-  // tasks too, and only a task that finishes or is cancelled leaves it), else the running ones.
-  const basis = pipeline.count >= pipeline.limit ? 'max_tasks_in_pipeline' : 'max_parallel_tasks';
-  const holders =
-    admission.status === 'admitted'
-      ? null
-      : live.filter((task) => holdsPlace(basis, task.state)).sort(holderOrder);
-
-  const answers = new Map<string, QueueWait>();
-  for (const taskId of taskIds) {
-    const at = position.get(taskId);
-    if (at === undefined) {
-      continue;
-    }
-    answers.set(
-      taskId,
-      admission.status === 'admitted' || holders === null
-        ? { status: 'admitted', position: at, queued: queue.length, running, pipeline }
-        : {
-            status: 'waiting',
-            reason: admission.reason,
-            count: admission.count,
-            limit: admission.limit,
-            position: at,
-            queued: queue.length,
-            running,
-            pipeline,
-            holders: {
-              total: holders.length,
-              needs_human: holders.filter((task) => task.state === 'needs_human').length,
-              items: holders.slice(0, MAX_QUEUE_WAIT_HOLDERS).map((task) => ({
-                task_id: task.id as Id,
-                ticket_key: task.ticketKey,
-                state: task.state,
-              })),
-            },
-          },
-    );
-  }
-  return answers;
-};

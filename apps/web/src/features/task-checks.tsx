@@ -24,6 +24,9 @@
  * (S-25.4, product/10's Checks amendment): *Questions pending* and *Approvals pending* stay rows —
  * product/10:38 lists them — but they are the needs-you callout's, so the line leaves them out of
  * its count and says they are above instead of reading "3 checks need you" for one question.
+ * **Before any check can run** (S-25.20: the task is at a stage before the checks start, and no
+ * gate has a row) the line says when they start — *"Checks start at Implementation."* — neutral,
+ * with no clock and no count of checks nobody could have decided yet.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
 import { acceptanceVerdictDataSchema, reviewVerdictDataSchema } from '@platform/contracts';
@@ -41,6 +44,7 @@ import { unmeasuredRunsText } from './cost-text.js';
 import {
   CRITERION_STATUS,
   checklistsAppliedLines,
+  checksNotStartedText,
   checksSummary,
   coverageBasisText,
   coverageStatus,
@@ -466,7 +470,8 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
 /** The merge box: the summary line, then the rows. */
 const ChecksBox = ({ detail }: { readonly detail: TaskDetailResponse }): ReactElement => {
   const rows = useCheckRows(detail);
-  const summary = checksSummary(rows);
+  // S-25.20: before any check can run, the line says when they start — neutral, not a count.
+  const summary = checksSummary(rows, checksNotStartedText(detail.task, detail.stages));
   return (
     <section
       aria-labelledby="task-checks-heading"

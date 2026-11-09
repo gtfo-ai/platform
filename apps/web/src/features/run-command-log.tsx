@@ -15,6 +15,7 @@ import type { RunCommandRecord } from '@platform/contracts';
 import type { ReactElement } from 'react';
 import { Badge, formatDateTime, SectionHeading } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { RUN_COMMAND_STATE_LABEL } from '../ui/words/records.js';
 
 /** The sentence that says where one command stands — never a bare state name (standing rule 18). */
 export const runCommandStateText = (
@@ -74,7 +75,7 @@ export const RunCommandLog = ({
         {commands.map((command) => (
           <li key={command.id} className="flex flex-col gap-0.5" data-command-state={command.state}>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={TONE[command.state]}>{command.state}</Badge>
+              <Badge tone={TONE[command.state]}>{RUN_COMMAND_STATE_LABEL[command.state]}</Badge>
               <span className="font-medium">{LABEL[command.kind]}</span>
               <span className="text-fg-muted">{formatDateTime(command.created_at)}</span>
             </div>

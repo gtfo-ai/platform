@@ -1653,9 +1653,9 @@ left no audit row.
 
 The job queue (pg-boss) retries a job whose handler throws up to its queue's retry limit and then
 marks it **failed**. **Settings → Failed background jobs** (admin only; `GET /api/org/failed-jobs`,
-WP-108; *Failed jobs* before S-25.6, and counted on an administrator's Home) lists them, newest first (**Show older** pages back to the oldest, WP-114): the queue, how many times it was tried, the retry limit, when it failed and
+WP-108; *Failed jobs* before S-25.6, and counted on an administrator's Home) lists them, newest first (**Show older** pages back to the oldest, WP-114): what the job was doing, in words (S-25.20), how many times it was tried, the retry limit, when it failed and
 the failure's message (redacted by the platform's patterns and cut at 2 000 characters; the job's
-payload is never shown). Beside each one is the platform's own census of that queue — whether it
+payload is never shown — except that a job naming a task links that task, the one to act on). Beside each one is the platform's own census of that queue — whether it
 ends its own failures or relies on the retries, what a failed job of it drops, and, since WP-124,
 its **shape** (TD-004's M7 amendment), which is what the card's last sentence reads:
 

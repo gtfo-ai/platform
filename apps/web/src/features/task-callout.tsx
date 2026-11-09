@@ -59,11 +59,20 @@
  * `./queue-wait-notice.tsx`): the limit that is full, how many of the tasks holding it wait for a
  * person, those tasks as links, this task's place in the queue and *Change the limit* for a reader
  * who may. Neutral information, never *Needs you*.
+ *
+ * **While a person has paused it, who, when and why** (S-25.20, the read's `manual_pause`): who
+ * paused it — or that a *Cancel run* did — when, what they gave as the reason, and *Resume* for a
+ * reader who may. Neutral information, never *Needs you*.
+ *
+ * **The escalation's order** (S-25.20): the cause leads (the brief, or the stop's sentence), then
+ * its next step, and the options sentence ("This task is waiting for a person. Send it back…")
+ * comes last, beside the buttons it describes — AUT-6655 read generic-first.
  */
 import type {
   ApprovalView,
   QuestionRecord,
   TaskDetailResponse,
+  TaskManualPause,
   TaskRecord,
 } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
@@ -244,6 +253,81 @@ export const budgetReason = (
   }
 };
 
+/**
+ * The reasons the platform's own buttons send with a pause (`./task-header.tsx`,
+ * `./board-card.tsx`): a person typed none, so the notice says no *why* for them.
+ */
+const UI_PAUSE_REASONS: ReadonlySet<string> = new Set(['paused from the UI']);
+
+/** The person's own reason, or `null` for none or for the words the platform's button sent. */
+export const pauseWhy = (pause: TaskManualPause | null): string | null =>
+  pause === null || pause.reason === null || UI_PAUSE_REASONS.has(pause.reason.trim())
+    ? null
+    : pause.reason;
+
+/**
+ * **A task a person paused** (S-25.20, the read's `manual_pause`): who paused it, when, why if they
+ * said, and how it goes on — neutral information, never *Needs you*: a person chose it. A *Cancel
+ * run* pauses the task too, and the notice says that is what happened. With no row to say who, it
+ * says so rather than naming anybody.
+ */
+const PausedNotice = ({
+  pause,
+  mayResume,
+  pending,
+  onResume,
+}: {
+  readonly pause: TaskManualPause | null;
+  readonly mayResume: boolean;
+  readonly pending: boolean;
+  readonly onResume: () => void;
+}): ReactElement => {
+  const why = pauseWhy(pause);
+  const who = pause?.by?.name ?? null;
+  return (
+    <section aria-label="Paused" data-testid="paused-notice">
+      <Flash tone="info" title="Paused by a person">
+        <div className="flex flex-col gap-2 pt-1">
+          <p data-paused-by={pause === null ? 'unknown' : pause.via}>
+            {pause === null ? (
+              'A person paused this task; the record does not say who.'
+            ) : (
+              <>
+                {pause.via === 'run_cancel' ? 'Paused when ' : 'Paused by '}
+                {/* A person's own name (BD-022). */}
+                {who === null ? 'a person' : <UntrustedText value={who} />}
+                {pause.via === 'run_cancel'
+                  ? ` cancelled its run, ${formatDateTime(pause.at)}. Cancelling a run pauses its task.`
+                  : `, ${formatDateTime(pause.at)}.`}
+              </>
+            )}
+          </p>
+          {why === null || pause === null ? null : (
+            <p data-paused-why="">
+              {'Why: '}
+              {/* What the person typed, redacted by the command (BD-022). */}
+              <UntrustedText value={why} />
+              {pause.reason_cut ? ' (shortened)' : null}
+            </p>
+          )}
+          <p>
+            {mayResume
+              ? 'Nothing runs until it is resumed: it goes on at the stage it stopped at, with no round used.'
+              : 'Nothing runs until a member of the project resumes it.'}
+          </p>
+          {mayResume ? (
+            <div>
+              <Button data-paused-action="resume" disabled={pending} onClick={onResume}>
+                Resume
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </Flash>
+    </section>
+  );
+};
+
 /** Whether the callout has anything to say — the page draws nothing in its place otherwise. */
 export const calloutReasons = (input: {
   readonly state: TaskRecord['state'];
@@ -371,6 +455,19 @@ const CalloutSlot = ({
   // S-25.14: the ticket is somebody else's — the callout says whose, with the ways out in the box.
   const heldElsewhere = reasons.includes('escalation') && heldElsewhereStop(detail);
   if (first === undefined) {
+    // S-25.20: a task a person paused says who, when and why, and how it goes on — information.
+    if (task.state === 'paused' && task.paused_reason === 'manual') {
+      return (
+        <PausedNotice
+          pause={detail.manual_pause ?? null}
+          mayResume={detail.can_resume}
+          pending={commands.resume.isPending}
+          onResume={() => {
+            commands.resume.mutate('resumed from the UI');
+          }}
+        />
+      );
+    }
     // S-25.16: a queued task says what holds it and what frees it — information, no action.
     if (task.state === 'queued' && detail.queue_wait !== null && detail.queue_wait !== undefined) {
       return (
@@ -516,11 +613,6 @@ const CalloutSlot = ({
                   {briefText(escalation)}
                 </div>
               )}
-              <EscalationText
-                merged={merged}
-                maySendBack={detail.can_return || detail.can_rework}
-                mayResume={detail.can_resume}
-              />
               {stop !== null && lastRead !== null ? (
                 <CiWaitStop stop={stop} read={lastRead} provider={provider} />
               ) : stop === null || stopped === null ? null : (
@@ -568,6 +660,12 @@ const CalloutSlot = ({
                   <UntrustedText value={reason} />
                 </p>
               )}
+              {/* S-25.20: the cause and its next step first; the options sentence last. */}
+              <EscalationText
+                merged={merged}
+                maySendBack={detail.can_return || detail.can_rework}
+                mayResume={detail.can_resume}
+              />
               {hasStages ? (
                 <div className="flex flex-wrap gap-2">
                   {merged || !detail.can_return ? null : (

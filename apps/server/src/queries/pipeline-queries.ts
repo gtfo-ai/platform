@@ -67,6 +67,7 @@ import type {
   HumanTimeSummary,
   Id,
   InboxResponse,
+  IsoDateTime,
   JsonObject,
   PipelineTemplate,
   PromptsWithheldRecord,
@@ -84,6 +85,7 @@ import type {
   TaskDetailResponse,
   TaskEscalation,
   TaskListItem,
+  TaskManualPause,
   TaskRecord,
   TaskStageOutcome,
   TaskStageState,
@@ -98,6 +100,7 @@ import {
   contextPackRecordSchema,
   MAX_INBOX_ESCALATED,
   MAX_RUN_COMMANDS,
+  MAX_TASK_PAUSE_REASON_CHARS,
   MAX_TASK_STOP_RECORDED_CHARS,
   pausedBudgetScopeSchema,
   promptsWithheldSchema,
@@ -2268,6 +2271,12 @@ export const findTaskDetail = async (
       ? new Map<string, QueueWait>()
       : queueWaitsFor(database, task.projectId, [task.id], options.wipLimits),
   ]);
+  // S-25.20: who paused it by hand, when and why — read only for a `manual` pause.
+  const manualPause = await manualPauseFor(
+    database,
+    task,
+    pausedReasons.get(task.id)?.reason ?? null,
+  );
 
   const setbackRows = stageRows.map(setbackRowOf);
   return {
@@ -2290,6 +2299,7 @@ export const findTaskDetail = async (
     // S-27.2: the manual jobs the latest CI pass left unstarted.
     ci_manual_not_run: ciManualNotRunOf(stageRows),
     queue_wait: queueWaits.get(task.id) ?? null,
+    manual_pause: manualPause,
     // S-25.11: the returns and the stop, off the same rows.
     returns: returnsOf(setbackRows, compiledPipelineOf(task)),
     stop: stopOf(task, setbackRows),
@@ -2357,6 +2367,74 @@ export const escalationFor = async (
     .limit(1);
   const row = rows[0];
   return row === undefined ? null : escalationOfRow(row);
+};
+
+/**
+ * **Who paused a task by hand, when and why** (S-25.20, {@link taskManualPauseSchema}): read only for
+ * a task `paused` for the `manual` reason — a budget's or a take-over's pause has its own words.
+ *
+ * The pause is the newest `task.pause` or `run.cancel` row of `human_actions` for the task (a run's
+ * *Cancel run* pauses its task), and only one written **at or after** the task's newest
+ * `task.paused` event: the command writes its row after its transaction committed the event, so an
+ * older row is an earlier pause the task has since left. A minute of slack absorbs the two clocks
+ * (the event's instant is the process's, the row's the database's); a pause and a resume and a
+ * second pause inside one minute could name the first one's row, which says the same person and
+ * the same kind of pause. `reason` is the command's own redacted text (`pipeline/commands.ts`'s
+ * `auditedReason`), cut here at {@link MAX_TASK_PAUSE_REASON_CHARS}. No row: `null`, never a guess.
+ */
+export const manualPauseFor = async (
+  database: Database,
+  task: { readonly id: string; readonly state: string },
+  pausedReason: string | null,
+): Promise<TaskManualPause | null> => {
+  if (task.state !== 'paused' || pausedReason !== 'manual') {
+    return null;
+  }
+  const { rows } = await database.execute<{
+    action: string;
+    user_id: string | null;
+    user_name: string | null;
+    reason: unknown;
+    at_ms: unknown;
+  }>(sql`
+    with paused as (
+      select e.occurred_at
+        from events e
+       where e.stream_type = 'task'
+         and e.stream_id = ${task.id}::uuid
+         and e.type = 'task.paused'
+       order by e.occurred_at desc, e.position desc
+       limit 1
+    )
+    select h.action, h.user_id::text as user_id, u.name as user_name,
+           h.params -> 'reason' as reason,
+           (extract(epoch from h.created_at) * 1000)::float8 as at_ms
+      from human_actions h
+      join paused p on h.created_at >= p.occurred_at - interval '1 minute'
+      left join users u on u.id = h.user_id
+     where h.task_id = ${task.id}::uuid
+       and h.action in ('task.pause', 'run.cancel')
+     order by h.created_at desc, h.id desc
+     limit 1`);
+  const row = rows[0];
+  const atMs = row === undefined ? null : Number(row.at_ms);
+  if (row === undefined || atMs === null || !Number.isFinite(atMs)) {
+    return null;
+  }
+  const reason = typeof row.reason === 'string' && row.reason.trim() !== '' ? row.reason : null;
+  return {
+    at: new Date(atMs).toISOString() as IsoDateTime,
+    by:
+      row.user_id === null
+        ? null
+        : {
+            user_id: row.user_id as Id,
+            name: row.user_name === null || row.user_name === '' ? null : row.user_name,
+          },
+    via: row.action === 'run.cancel' ? 'run_cancel' : 'pause',
+    reason: reason === null ? null : reason.slice(0, MAX_TASK_PAUSE_REASON_CHARS),
+    reason_cut: reason !== null && reason.length > MAX_TASK_PAUSE_REASON_CHARS,
+  };
 };
 
 /**

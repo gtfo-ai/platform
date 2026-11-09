@@ -13,9 +13,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { taskPrimaryAction } from './page-primary.js';
+import { stageLabel } from '../ui/humanize.js';
+import { legacyApprovalExpired, taskPagePrimary, taskPrimaryAction } from './page-primary.js';
+import { pauseWhy } from './task-callout.js';
 import {
   CHECKS_CALLOUT_POINTER,
+  CHECKS_START_STAGE,
+  checksNotStartedText,
   checksSummary,
   dependencyStatus,
   gateStatus,
@@ -209,6 +213,32 @@ const ciTimedOut = (over: Partial<TaskDetailResponse> = {}) =>
     { state: 'needs_human', current_stage: 'ci_gate', mr_ref: GITLAB_MR },
   );
 
+/**
+ * S-25.20: AUT-6639 on Autix — a plan approval that expired before S-27.1. No structured stop; the
+ * escalation's reason is the saga's sentence and its brief says to retry the stage.
+ */
+const legacyApprovalExpiredTask = (over: Partial<TaskDetailResponse> = {}) =>
+  detail(
+    {
+      stop: null,
+      stages: [
+        stage('refinement', 1, 'completed', 'approve'),
+        stage('architecture', 1, 'completed', 'approve'),
+      ],
+      escalation: {
+        at: '2026-11-06T14:47:56.803Z',
+        reason: 'the approval expired',
+        brief:
+          'Nobody decided the plan approval for AUT-6639 in time, and an expired approval can no ' +
+          'longer be approved or rejected. To go on, retry "architecture" from the task page to ' +
+          'have the plan written and asked for again — or cancel the task.',
+        brief_original_chars: null,
+      },
+      ...over,
+    },
+    { state: 'needs_human', current_stage: 'architecture' },
+  );
+
 /** S-25.14's stop: the ticket is assigned to somebody else, nobody owns the task. */
 const heldElsewhereTask = (over: Partial<TaskDetailResponse> = {}) =>
   detail(
@@ -224,6 +254,9 @@ const heldElsewhereTask = (over: Partial<TaskDetailResponse> = {}) =>
     },
     { state: 'needs_human' },
   );
+
+/** The page's own facts for `taskPagePrimary`: a stage to retry, nothing owned, not merged. */
+const PAGE_CONTEXT = { ownerOffers: [], stageOptions: 1, merged: false } as const;
 
 const QUESTION_ROW: TaskDetailResponse['questions'][number] = {
   id: QUESTION,
@@ -494,6 +527,12 @@ describe('one primary action per state', () => {
     ['an escalated task', detail({}, { state: 'needs_human' }), ['Resume']],
     // S-25.15: the primary is the callout's own next step, never a Resume beside it.
     ['a task stopped because CI did not finish (AUT-6655)', ciTimedOut(), ['Retry stage…']],
+    // S-25.20: a stop written before S-27.1 by an approval that expired is a retry stop too.
+    [
+      'a legacy stop whose approval expired (AUT-6639)',
+      legacyApprovalExpiredTask(),
+      ['Retry stage…'],
+    ],
     [
       'a task whose ticket somebody else holds, for a reader who may take it',
       heldElsewhereTask(),
@@ -534,6 +573,45 @@ describe('one primary action per state', () => {
     await user.click(screen.getByRole('button', { name: 'Task actions' }));
     const resume = await screen.findByRole('menuitem', { name: 'Resume' });
     expect(resume.className).not.toContain('border-primary-line');
+  });
+
+  it('reads AUT-6639’s legacy expired approval as a retry stop, and nothing else as one (S-25.20)', () => {
+    expect(legacyApprovalExpired(legacyApprovalExpiredTask())).toBe(true);
+    expect(
+      legacyApprovalExpired(
+        legacyApprovalExpiredTask({
+          escalation: {
+            at: AT,
+            reason: 'approval.expired',
+            brief: 'An approval expired undecided.',
+            brief_original_chars: null,
+          },
+        }),
+      ),
+    ).toBe(true);
+    // Another reason, no escalation, or a task no longer waiting for a person: not one.
+    expect(
+      legacyApprovalExpired(
+        legacyApprovalExpiredTask({
+          escalation: {
+            at: AT,
+            reason: 'ticket_claim_failed',
+            brief: 'The tracker refused.',
+            brief_original_chars: null,
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(legacyApprovalExpired(legacyApprovalExpiredTask({ escalation: null }))).toBe(false);
+    const paused = legacyApprovalExpiredTask();
+    expect(legacyApprovalExpired({ ...paused, task: { ...paused.task, state: 'paused' } })).toBe(
+      false,
+    );
+    expect(taskPagePrimary(legacyApprovalExpiredTask(), PAGE_CONTEXT)).toBe('retry_stage');
+    // A merged task's way out is its retrospective, through Resume.
+    expect(taskPagePrimary(legacyApprovalExpiredTask(), { ...PAGE_CONTEXT, merged: true })).toBe(
+      'resume',
+    );
   });
 
   it('draws no primary for a stop when the caller may neither resume nor retry', async () => {
@@ -1131,6 +1209,114 @@ describe('the needs-you callout', () => {
     await screen.findByText('Checks');
     expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
     expect(document.querySelector('[data-state-label="paused"]')?.textContent).toBe('Paused');
+    // S-25.20: a pause the read records nothing about still says it was a person's, and no name.
+    const notice = await screen.findByRole('region', { name: 'Paused' });
+    expect(notice.querySelector('[data-paused-by="unknown"]')?.textContent).toBe(
+      'A person paused this task; the record does not say who.',
+    );
+  });
+
+  // S-25.20: only a budget pause had words; a person's pause said nothing about who, when or why.
+  it('says who paused a task, when and why, with Resume, as information (S-25.20)', async () => {
+    const user = userEvent.setup();
+    const { sent } = start(
+      detail(
+        {
+          manual_pause: {
+            at: AT,
+            by: { user_id: '00000000-0000-4000-8000-0000000000e1', name: 'Pat <b>Pauser</b>' },
+            via: 'pause',
+            reason: 'waiting for the API freeze <i>x</i>',
+            reason_cut: false,
+          },
+        },
+        { state: 'paused', paused_reason: 'manual' },
+      ),
+    );
+    const notice = await screen.findByRole('region', { name: 'Paused' });
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    const by = notice.querySelector('[data-paused-by="pause"]');
+    expect(by?.textContent).toContain('Paused by Pat <b>Pauser</b>, ');
+    // A person's name and words, never markup (BD-022).
+    expect(by?.querySelector('b')).toBeNull();
+    expect(notice.querySelector('[data-paused-why]')?.textContent).toBe(
+      'Why: waiting for the API freeze <i>x</i>',
+    );
+    expect(notice.querySelector('i')).toBeNull();
+    // Its Resume is plain: the header's is the page's one amber primary.
+    await waitFor(() => {
+      expect(primaries()).toEqual(['Resume']);
+    });
+    const resume = within(notice).getByRole('button', { name: 'Resume' });
+    expect(resume.className).not.toContain('border-primary-line');
+    await user.click(resume);
+    await waitFor(() => {
+      expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/resume`]);
+    });
+  });
+
+  it('says a Cancel run paused it, gives no why for the button’s own words, and no Resume for a reader who may not', async () => {
+    start(
+      detail(
+        {
+          can_resume: false,
+          manual_pause: {
+            at: AT,
+            by: { user_id: '00000000-0000-4000-8000-0000000000e1', name: null },
+            via: 'run_cancel',
+            reason: null,
+            reason_cut: false,
+          },
+        },
+        { state: 'paused', paused_reason: 'manual' },
+      ),
+    );
+    const notice = await screen.findByRole('region', { name: 'Paused' });
+    expect(notice.querySelector('[data-paused-by="run_cancel"]')?.textContent).toMatch(
+      /^Paused when a person cancelled its run, .+\. Cancelling a run pauses its task\.$/,
+    );
+    expect(notice.querySelector('[data-paused-why]')).toBeNull();
+    expect(within(notice).queryByRole('button', { name: 'Resume' })).toBeNull();
+    expect(notice.textContent).toContain('Nothing runs until a member of the project resumes it.');
+    cleanup();
+    // The platform's own Pause button sends "paused from the UI": that is no reason a person gave.
+    expect(
+      pauseWhy({
+        at: AT,
+        by: null,
+        via: 'pause',
+        reason: 'paused from the UI',
+        reason_cut: false,
+      }),
+    ).toBeNull();
+    expect(
+      pauseWhy({ at: AT, by: null, via: 'pause', reason: 'release freeze', reason_cut: false }),
+    ).toBe('release freeze');
+  });
+
+  // S-25.20: AUT-6655 read the generic options sentence first and the cause after it.
+  it('leads with the cause, then the next step, and says the options last (S-25.20)', async () => {
+    start(ciTimedOut());
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const text = callout.textContent ?? '';
+    const cause = callout.querySelector('[data-stop-sentence]')?.textContent ?? '';
+    const next = callout.querySelector('[data-stop-next]')?.textContent ?? '';
+    const options = 'This task is waiting for a person.';
+    expect(cause).not.toBe('');
+    expect(next).not.toBe('');
+    expect(text.indexOf(cause)).toBeGreaterThan(-1);
+    expect(text.indexOf(cause)).toBeLessThan(text.indexOf(next));
+    expect(text.indexOf(next)).toBeLessThan(text.indexOf(options));
+  });
+
+  it('puts the options sentence after the escalation’s own brief too (S-25.20)', async () => {
+    start(legacyApprovalExpiredTask());
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const text = callout.textContent ?? '';
+    expect(text.indexOf('Why it stopped')).toBeGreaterThan(-1);
+    expect(text.indexOf('Nobody decided the plan approval')).toBeLessThan(
+      text.indexOf('This task is waiting for a person.'),
+    );
   });
 
   it('is not drawn for a task nothing waits on', async () => {
@@ -1560,6 +1746,56 @@ describe('the merge box', () => {
     expect(document.querySelector('[data-check="tamper"]')?.getAttribute('data-check-status')).toBe(
       'skipped',
     );
+  });
+
+  // S-25.20: at Architecture nothing can have run, so the box says when the checks start.
+  it('reads neutral before any check can run: when they start, no clock, no count (S-25.20)', async () => {
+    start(
+      detail(
+        { stages: [stage('architecture', 1, 'running', null)] },
+        { state: 'active', current_stage: 'architecture' },
+      ),
+    );
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        `Checks start at ${stageLabel(CHECKS_START_STAGE)}.`,
+      );
+    });
+    expect(
+      document.querySelector('[data-checks-summary]')?.getAttribute('data-checks-summary'),
+    ).toBe('queued');
+    expect(document.body.textContent).not.toContain('not decided yet');
+  });
+
+  it('words the checks’ start from the stage the task is at, and steps aside once a gate ran', () => {
+    expect(CHECKS_START_STAGE).toBe('implementation');
+    const before = { state: 'active' as const, current_stage: 'refinement' };
+    expect(checksNotStartedText(before, [])).toBe('Checks start at Implementation.');
+    expect(checksNotStartedText({ state: 'needs_human', current_stage: 'architecture' }, [])).toBe(
+      'Checks start at Implementation.',
+    );
+    expect(checksNotStartedText({ state: 'active', current_stage: 'implementation' }, [])).toBe(
+      'Checks start when Implementation is done.',
+    );
+    // A gate has a row (a return to an earlier stage after CI ran): the rows say what they say.
+    expect(checksNotStartedText(before, [stage('ci_gate', 1, 'completed', 'pass')])).toBeNull();
+    // At or past the first gate, a project's own stage, a finished task, or no stage: nothing.
+    expect(checksNotStartedText({ state: 'active', current_stage: 'ci_gate' }, [])).toBeNull();
+    expect(checksNotStartedText({ state: 'active', current_stage: 'code_review' }, [])).toBeNull();
+    expect(checksNotStartedText({ state: 'active', current_stage: 'design_spike' }, [])).toBeNull();
+    expect(
+      checksNotStartedText({ state: 'cancelled', current_stage: 'refinement' }, []),
+    ).toBeNull();
+    expect(checksNotStartedText({ state: 'queued', current_stage: null }, [])).toBeNull();
+    // The box: neutral, and a check that needs a person still says so first.
+    expect(checksSummary([{ status: 'queued', required: true }], 'Checks start at X.')).toEqual({
+      status: 'queued',
+      text: 'Checks start at X.',
+      callout: null,
+    });
+    expect(
+      checksSummary([{ status: 'needs_you', required: true }], 'Checks start at X.').text,
+    ).toBe('1 check needs you');
   });
 
   it('draws the cost against the cap as a meter, with no inline style', async () => {

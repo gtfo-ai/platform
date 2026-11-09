@@ -45,6 +45,17 @@
  * | Shadow, shadow batch, shadow mode, claim (shadow) | **Trial**, *a trial run*, **Trial runs** |
  * | N observations | *From N tasks* (what the samples count) |
  *
+ * **S-25.20 adds the shape that printed a code value**: a record's enum field rendered bare as a
+ * JSX child — `<Badge>{item.status}</Badge>`, `>{mapping.kind}<` — which put `review_only`,
+ * `not_a_file` and `applied` on screens. {@link rawEnumsInJsx} refuses a child that is nothing but
+ * a member access ending in `.status`, `.state`, `.kind`, `.mode`, `.type`, `.role`, `.outcome` or
+ * `.cause`, on one line after a tag's `>` or alone on its line; the value goes through a label map
+ * in `ui/words/*` instead (`STATUS_LABEL[item.status]` is not refused: the child is an index, not
+ * the member). **Its limits**: a value given another name first (`const s = item.status`), a field
+ * called anything else (`entry.action`, `block.decision` — free-form or another slice's, and
+ * filed), a value inside a template literal or a prop, and a child split across lines with other
+ * text are not seen; it is a census of the spelling that shipped, not a type check.
+ *
  * **What it cannot see, stated**: a word assembled at run time, a server-written string (the
  * server's catalogues are their own census's), and a concept spelled a way this table does not
  * list. A word that is also a code identifier (`claimant_kind`, `escalated` as an enum value) is
@@ -115,6 +126,14 @@ export const RETIRED_WORDS: readonly { readonly pattern: RegExp; readonly use: s
   { pattern: /\bobservations\b/, use: 'From N tasks' },
 ];
 
+/** The enum-valued fields a record carries whose bare value is a code word, never a label. */
+const ENUM_FIELDS = 'status|state|kind|mode|type|role|outcome|cause';
+const MEMBER = `[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\.(?:${ENUM_FIELDS})`;
+/** After a tag's `>` on one line: `<Badge>{item.status}</Badge>`, `<span>{x.kind}</span>{' '}`. */
+const RAW_ENUM_AFTER_TAG = new RegExp(`>\\s*\\{\\s*${MEMBER}\\s*\\}`);
+/** Alone on its line, between a multi-line element's tags. */
+const RAW_ENUM_ALONE = new RegExp(`^\\s*\\{\\s*${MEMBER}\\s*\\}\\s*$`);
+
 /** Each line of `source` outside comments; a `//` that follows a non-space is kept (a URL). */
 const codeLines = (source: string): string[] => {
   const kept = withoutComments(source, { keepLineComments: true }).split('\n');
@@ -132,6 +151,38 @@ export const retiredWords = (source: string): string[] =>
       ({ pattern, use }) => `${index + 1}: ${pattern.source} → ${use}`,
     ),
   );
+
+/** Every bare enum value rendered as a JSX child in `source`, outside a comment (S-25.20). */
+export const rawEnumsInJsx = (source: string): string[] =>
+  codeLines(source).flatMap((text, index) =>
+    RAW_ENUM_AFTER_TAG.test(text) || RAW_ENUM_ALONE.test(text)
+      ? [`${index + 1}: ${text.trim()}`]
+      : [],
+  );
+
+describe('the raw-enum scanner (S-25.20)', () => {
+  it.each([
+    ['a badge', '<Badge>{record.mode}</Badge>'],
+    ['a toned badge', '<Badge tone={TONE[command.state]}>{command.state}</Badge>'],
+    ['a span before a space', '<span className="text-fg-muted">{citation.kind}</span>{\' \'}'],
+    ['a deep member', '<Badge>{detail.task.state}</Badge>'],
+    ['a child alone on its line', '<Badge tone="accent">\n  {mapping.kind}\n</Badge>'],
+    ['a spaced child', '<p> { page.status } </p>'],
+  ])('finds a raw enum in %s', (_name, source) => {
+    expect(rawEnumsInJsx(source)).not.toEqual([]);
+  });
+
+  it.each([
+    ['a label map', '<Badge>{RUN_MODE_LABEL[record.mode]}</Badge>'],
+    ['an attribute', '<li data-command-state={command.state}>'],
+    ['a comparison', "{record.mode === 'normal' ? null : <Badge>{label}</Badge>}"],
+    ['a comment', '/* <Badge>{item.status}</Badge> */\nconst a = 1;'],
+    ['another field', '<span>{entry.title}</span>'],
+    ['a function of it', '<span>{statusWord(item.status)}</span>'],
+  ])('ignores %s', (_name, source) => {
+    expect(rawEnumsInJsx(source)).toEqual([]);
+  });
+});
 
 describe('the vocabulary scanner', () => {
   it.each([
@@ -205,6 +256,13 @@ describe('the screens use one word per concept (S-23.23)', () => {
     const offenders = files.flatMap((file) =>
       retiredWords(file.contents).map((found) => `${file.path}:${found}`),
     );
+    expect(offenders).toEqual([]);
+  });
+
+  it('renders no bare enum value as a JSX child (S-25.20)', () => {
+    const offenders = files
+      .filter((file) => file.path.endsWith('.tsx'))
+      .flatMap((file) => rawEnumsInJsx(file.contents).map((found) => `${file.path}:${found}`));
     expect(offenders).toEqual([]);
   });
 });

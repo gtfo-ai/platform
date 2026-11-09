@@ -48,6 +48,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { ASK_CITATION_KIND_LABEL } from '../ui/words/records.js';
 
 /** The four states an ask can be in, as one line a person can read. */
 const STATUS_TONE = {
@@ -188,7 +189,7 @@ const Citation = ({
   }
   return (
     <li className="text-xs">
-      <span className="text-fg-muted">{citation.kind}</span>{' '}
+      <span className="text-fg-muted">{ASK_CITATION_KIND_LABEL[citation.kind]}</span>{' '}
       <UntrustedText value={citation.reference ?? '(unnamed)'} /> —{' '}
       <UntrustedText value={citation.detail} />
     </li>

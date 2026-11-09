@@ -149,4 +149,51 @@ describe('readFailedJobs (WP-108, backlog 325)', () => {
     });
     expect(after).toEqual({ items: [], total: 6 });
   });
+
+  /**
+   * S-25.20: a failed job whose payload names a task that exists is published with that task, as a
+   * dead letter is — the one payload field the read looks at, joined inside the statement. A
+   * `task_id` that is not a uuid, or names no task, joins nothing; neither fails the read.
+   */
+  it('names the task a failed job carries, when that task exists (S-25.20)', async () => {
+    const org = await handle.pool.query<{ id: string }>(
+      "insert into organizations (name) values ('failed-jobs') returning id",
+    );
+    const project = await handle.pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'fj', 'Failed jobs', 'https://git.example.test/acme/fj.git') returning id`,
+      [org.rows[0]?.id],
+    );
+    const task = await handle.pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode, state)
+       values ($1, 'fake-jira', 'FJ-7', 'https://tickets.example.test/browse/FJ-7',
+               'feature', 'normal', 'needs_human') returning id`,
+      [project.rows[0]?.id],
+    );
+    const taskId = task.rows[0]?.id as string;
+    const named = await handle.pool.query<{ id: string; v: string }>(
+      `insert into pgboss.job
+       select (jsonb_populate_record(null::pgboss.job,
+                 to_jsonb(j) || jsonb_build_object('id', gen_random_uuid(),
+                                                   'completed_on', '2030-01-01T00:00:02Z',
+                                                   'data', jsonb_build_object('task_id', p.v)))).*
+         from (select * from pgboss.job where state = 'failed' limit 1) j,
+              unnest($1::text[]) with ordinality as p(v, n)
+       returning id::text as id, data ->> 'task_id' as v`,
+      [[taskId, 'not-a-uuid', '00000000-0000-4000-8000-00000000dead']],
+    );
+    expect(named.rows).toHaveLength(3);
+    const page = await jobs.readFailedJobs(handle.pool, 'pgboss', { limit: 3 });
+    const byId = new Map(page.items.map((item) => [item.id, item.task]));
+    const read = (value: string) => byId.get(named.rows.find((row) => row.v === value)?.id ?? '');
+    const withTask = read(taskId);
+    const malformed = read('not-a-uuid');
+    const missing = read('00000000-0000-4000-8000-00000000dead');
+    expect(withTask).not.toBeUndefined();
+    expect(withTask).toEqual({ id: taskId, ticketKey: 'FJ-7', projectKey: 'fj' });
+    expect(malformed).toBeNull();
+    expect(missing).toBeNull();
+    // Still nothing else of the payload.
+    expect(JSON.stringify(page)).not.toContain(PAYLOAD_MARKER);
+  });
 });

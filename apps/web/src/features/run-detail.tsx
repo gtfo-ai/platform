@@ -92,6 +92,7 @@ import { needsYou } from '../ui/task-status.js';
 import { CodeText, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
+import { RUN_MODE_LABEL } from '../ui/words/records.js';
 import { ActivityList } from '../viz/flow/activity-list.js';
 import { activityRows } from '../viz/flow/activity-rows.js';
 import { approvalCardId } from './approval-card.js';
@@ -819,7 +820,7 @@ export const RunDetailScreen = ({
           crossedBudgetCap(record) || record.mode !== 'normal' ? (
             <>
               {crossedBudgetCap(record) ? <Badge tone="warning">budget cap crossed</Badge> : null}
-              {record.mode === 'normal' ? null : <Badge>{record.mode}</Badge>}
+              {record.mode === 'normal' ? null : <Badge>{RUN_MODE_LABEL[record.mode]}</Badge>}
             </>
           ) : undefined
         }

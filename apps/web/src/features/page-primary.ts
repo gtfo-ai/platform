@@ -28,6 +28,12 @@
  * resume last. A stop beside a pending approval keeps the rule before S-25.15 (review of #118):
  * *Review plan* for a reader who may decide it, else *Resume*, which re-enters that approval's wait
  * rather than running the stage past it, else none.
+ *
+ * **A legacy expired approval is a retry stop too** (S-25.20, AUT-6639 on Autix): before S-27.1 an
+ * approval nobody decided in time expired, and the task escalated with the reason *the approval
+ * expired* and a brief that says "retry the stage" — with no structured `stop`, so the page drew
+ * *Resume* amber beside a callout whose way out is *Retry stage…*. {@link legacyApprovalExpired}
+ * reads that escalation, and the page treats it as the structured stops are treated.
  */
 import type { TaskDetailResponse, TaskState } from '@platform/contracts';
 import { gateWaitHeld, gateWaitJobUrl, openGateWait } from './gate-wait.js';
@@ -123,6 +129,22 @@ export const taskPrimaryAction = (input: PrimaryFacts): TaskPrimaryAction => {
   return resumable ? 'resume' : null;
 };
 
+/**
+ * The escalation reasons an expired approval was written with: the saga's sentence, which every
+ * build before S-27.1 wrote (`packages/application/src/pipeline/saga.ts`, *the approval expired*),
+ * and the stage outcome's key, which the rows' short form words (`./escalation-short.ts`).
+ */
+const APPROVAL_EXPIRED_REASONS: ReadonlySet<string> = new Set([
+  'the approval expired',
+  'approval.expired',
+]);
+
+/** The task waits for a person because an approval expired undecided (a pre-S-27.1 stop). */
+export const legacyApprovalExpired = (detail: TaskDetailResponse): boolean =>
+  detail.task.state === 'needs_human' &&
+  detail.escalation !== null &&
+  APPROVAL_EXPIRED_REASONS.has(detail.escalation.reason);
+
 /** The page's own facts {@link taskPrimaryAction} needs beyond the task read. */
 export interface PrimaryContext {
   /** What the owner control offers this reader (`useOwnerControl`'s `offers`). */
@@ -157,6 +179,9 @@ export const taskPagePrimary = (
     heldElsewhere: heldElsewhereStop(detail),
     canTake: (task.owner ?? null) === null && context.ownerOffers.includes('take'),
     owned: (task.owner ?? null) !== null,
-    stopRetry: detail.stop !== null && context.stageOptions > 0 && !context.merged,
+    stopRetry:
+      (detail.stop !== null || legacyApprovalExpired(detail)) &&
+      context.stageOptions > 0 &&
+      !context.merged,
   });
 };

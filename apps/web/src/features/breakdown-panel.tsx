@@ -41,6 +41,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { BREAKDOWN_ITEM_STATUS_LABEL } from '../ui/words/records.js';
 
 const STATUS_TONE = {
   queued: 'neutral',
@@ -75,7 +76,7 @@ const ChildRow = ({
         <UntrustedText value={item.title} />
       </span>
       <Badge>{item.size}</Badge>
-      <Badge tone={STATUS_TONE[item.status]}>{item.status}</Badge>
+      <Badge tone={STATUS_TONE[item.status]}>{BREAKDOWN_ITEM_STATUS_LABEL[item.status]}</Badge>
       {item.ticket_url === null ? null : (
         <ExternalLink
           url={item.ticket_url}

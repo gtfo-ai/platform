@@ -22,6 +22,7 @@ import type {
   TaskState,
   TaskStop,
 } from '@platform/contracts';
+import { BUILTIN_STAGE_IDS, isBuiltinGateStageId } from '@platform/contracts';
 import { stageLabel } from '../ui/humanize.js';
 import { formatDateTime, formatMinutes } from '../ui/kit.js';
 import type { Status } from '../ui/status.js';
@@ -784,6 +785,53 @@ export const CHECKS_CALLOUT_POINTER =
   'Questions and approvals waiting for a person are in the box above, not counted here.';
 
 /**
+ * Stages of the shipped flow that sit before the first gate in its order but are entered only from
+ * a gate's failure (`conflict_resolution`, from the up-to-date check): never where checks start.
+ */
+const REACHED_FROM_A_GATE: ReadonlySet<string> = new Set(['conflict_resolution']);
+
+/**
+ * The stage the checks start at, derived from the shipped flow's order (`BUILTIN_STAGE_IDS`): the
+ * stage before the first gate (`isBuiltinGateStageId`) that a task reaches in order — the one whose
+ * merge request the first gate checks. *Implementation* on the shipped flow.
+ */
+export const CHECKS_START_STAGE: string = (() => {
+  const firstGate = BUILTIN_STAGE_IDS.findIndex((id) => isBuiltinGateStageId(id));
+  const before = BUILTIN_STAGE_IDS.slice(0, Math.max(firstGate, 0)).filter(
+    (id) => !REACHED_FROM_A_GATE.has(id),
+  );
+  return before.at(-1) ?? 'implementation';
+})();
+
+/**
+ * **Checks before any can run** (S-25.20): the sentence the merge box says in place of its count
+ * while the task is at a stage of the shipped flow **before** the checks start, and no gate has a
+ * row — *"Checks start at Implementation."*; at that stage itself, *"…when Implementation is
+ * done."*. `null` otherwise: a project's own stage, a finished task, or a task any gate has seen,
+ * whose rows say what they say. Neutral, never a warning: nothing is late.
+ */
+export const checksNotStartedText = (
+  task: Pick<TaskRecord, 'state' | 'current_stage'>,
+  stages: readonly StageRow[],
+): string | null => {
+  const current = task.current_stage ?? null;
+  if (current === null || task.state === 'done' || task.state === 'cancelled') {
+    return null;
+  }
+  const order: readonly string[] = BUILTIN_STAGE_IDS;
+  const at = order.indexOf(current);
+  const start = order.indexOf(CHECKS_START_STAGE);
+  if (at === -1 || start === -1 || at > start || REACHED_FROM_A_GATE.has(current)) {
+    return null;
+  }
+  if (stages.some((row) => isBuiltinGateStageId(row.stage))) {
+    return null;
+  }
+  const name = stageLabel(CHECKS_START_STAGE);
+  return at === start ? `Checks start when ${name} is done.` : `Checks start at ${name}.`;
+};
+
+/**
  * The merge box's one line (GitHub's *"All checks have passed"*): how many **checks** need a
  * person, or — when none does — whether every **required** check passed. A required check that is
  * pending, not reached or not recorded is not a pass, so the line never says *pass* for a check
@@ -797,6 +845,8 @@ export const CHECKS_CALLOUT_POINTER =
  */
 export const checksSummary = (
   rows: readonly CheckOutcome[],
+  /** {@link checksNotStartedText}: said in place of the count, neutral, while no check can run. */
+  notStarted: string | null = null,
 ): { readonly status: Status; readonly text: string; readonly callout: string | null } => {
   const checks = rows.filter((row) => row.callout !== true);
   const callout = rows.some((row) => row.callout === true && row.status !== 'success')
@@ -809,6 +859,10 @@ export const checksSummary = (
       text: attention === 1 ? '1 check needs you' : `${attention} checks need you`,
       callout,
     };
+  }
+  // S-25.20: before any check can run, nothing is undecided yet — the line says when they start.
+  if (notStarted !== null) {
+    return { status: 'queued', text: notStarted, callout };
   }
   const open = checks.filter((row) => row.required && row.status !== 'success').length;
   if (open === 0) {

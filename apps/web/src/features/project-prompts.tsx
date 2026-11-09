@@ -37,6 +37,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { PROMPT_FILE_STATUS_LABEL } from '../ui/words/records.js';
 import { PromptsWithheldExplanation } from './prompts-withheld.js';
 
 type StagePrompt = EffectiveConfigResponse['stage_prompts'][number];
@@ -128,7 +129,9 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
               <code>
                 <UntrustedText value={file.path} />
               </code>
-              <Badge tone={file.status === 'file' ? 'success' : 'warning'}>{file.status}</Badge>
+              <Badge tone={file.status === 'file' ? 'success' : 'warning'}>
+                {PROMPT_FILE_STATUS_LABEL[file.status]}
+              </Badge>
               <span className="text-fg-muted">{fileLine(file, prompts.cut_at_chars)}</span>
               {file.cut ? <Badge tone="warning">cut</Badge> : null}
             </li>

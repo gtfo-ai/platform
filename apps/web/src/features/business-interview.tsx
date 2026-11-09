@@ -37,6 +37,7 @@ import { type ReactElement, useState } from 'react';
 import { useOnboardingCommands } from '../app/queries.js';
 import { Badge, Button, ErrorNotice } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { KNOWLEDGE_PROPOSAL_STATUS_LABEL } from '../ui/words/settings.js';
 import { useStepActionTone } from './step-action-tone.js';
 
 type SectionId = (typeof BUSINESS_INTERVIEW_SECTION_IDS)[number];
@@ -202,7 +203,8 @@ export const BusinessInterview = ({
           <ul className="flex flex-col gap-1">
             {commands.recordInterview.data.pages.map((page) => (
               <li key={page.proposal_id} className="text-xs">
-                <Badge>{page.status}</Badge> <UntrustedText value={page.target_path} />
+                <Badge>{KNOWLEDGE_PROPOSAL_STATUS_LABEL[page.status]}</Badge>{' '}
+                <UntrustedText value={page.target_path} />
                 {page.truncated ? ' — cut at the length limit, and the page says so' : ''}
               </li>
             ))}

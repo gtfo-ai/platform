@@ -511,7 +511,9 @@ test('org settings lists a failed job beside the dead letters, with no re-queue 
   await page.goto('/settings/failed-jobs');
   const job = page.locator(`[data-failed-job="${failedJobs.items[0]?.id ?? 'missing'}"]`);
   await expect(job).toBeVisible();
-  await expect(job.getByText('pipeline.outbound')).toBeVisible();
+  // S-25.20: the queue in words, never its code name.
+  await expect(job.getByText('A call to a connected tool')).toBeVisible();
+  await expect(job.getByText('pipeline.outbound')).toHaveCount(0);
   // Handler text is untrusted: its markup is on the screen as characters.
   await expect(job.getByText('outbound <script>window.__pwned = true;</script>')).toBeVisible();
   // WP-124: the census row's shape decides the sentence; the outbound queue's differs per duty.

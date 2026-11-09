@@ -34,6 +34,7 @@ const job = (overrides: Partial<FailedJob>): FailedJob => ({
   failed_at: '2026-09-30T08:48:00.000Z',
   error: HOSTILE_ERROR,
   error_truncated: false,
+  task: null,
   exhaustion: {
     kind: 'relies_on_retries',
     shape: 'notification_shaped',
@@ -116,7 +117,9 @@ describe('failed jobs on the settings page (WP-108)', () => {
     const first =
       container.querySelector('[data-failed-job="00000000-0000-4000-8000-0000000000a1"]')
         ?.textContent ?? '';
-    expect(first).toContain('pipeline.outbound');
+    // S-25.20: the queue in words, never its code name.
+    expect(first).toContain('A call to a connected tool');
+    expect(first).not.toContain('pipeline.outbound');
     expect(first).toContain('tried 3 times');
     expect(first).toContain(HOSTILE_ERROR);
     expect(first).toContain('one provider call the pipeline decided on');
@@ -133,9 +136,50 @@ describe('failed jobs on the settings page (WP-108)', () => {
       container.querySelector('[data-failed-job="00000000-0000-4000-8000-0000000000a3"]')
         ?.textContent ?? '';
     expect(third).toContain('does not declare that queue');
+    // A queue this build does not name keeps its name, as text, and says so.
+    expect(third).toContain('A job this build doesn’t name (gone.queue)');
     expect(container.querySelector('[data-failed-job-count]')?.textContent).toBe('3 failed jobs.');
     // A read: nothing here re-queues a job.
     expect(screen.queryAllByRole('button', { name: /re-?queue/i })).toHaveLength(0);
+  });
+
+  it('links the task a job names, and says to act on it there (S-25.20)', async () => {
+    const TASK = '00000000-0000-4000-8000-0000000000b7';
+    const fetchImpl = fetchFor({
+      items: [
+        job({
+          id: '00000000-0000-4000-8000-0000000000a4',
+          queue: 'stage.execute',
+          task: { id: TASK, ticket_key: 'AUT-6655', project_key: 'autix' },
+          exhaustion: {
+            kind: 'bounds_itself',
+            shape: 'bound_and_escalate',
+            loss: 'one stage run',
+            recovered_by: null,
+          },
+        }),
+        job({ id: '00000000-0000-4000-8000-0000000000a5', task: null }),
+      ],
+      total: 2,
+      next_cursor: null,
+    });
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector(`[data-failed-job-task="${TASK}"]`)).not.toBeNull();
+    });
+    const card = container.querySelector(
+      '[data-failed-job="00000000-0000-4000-8000-0000000000a4"]',
+    );
+    expect(card?.textContent).toContain('Running a stage');
+    expect(card?.textContent).toContain('Act on the task, linked below.');
+    const link = card?.querySelector('a');
+    expect(link?.getAttribute('href')).toBe(`/projects/autix/tasks/${TASK}`);
+    expect(link?.textContent).toBe('AUT-6655');
+    // A job that names no task links none.
+    const other = container.querySelector(
+      '[data-failed-job="00000000-0000-4000-8000-0000000000a5"]',
+    );
+    expect(other?.querySelector('[data-failed-job-task]')).toBeNull();
   });
 
   /**

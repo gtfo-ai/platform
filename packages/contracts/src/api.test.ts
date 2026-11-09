@@ -12,6 +12,7 @@ import {
   eventsQuerySchema,
   exportProjectConfigRequestSchema,
   exportProjectConfigResponseSchema,
+  failedJobSchema,
   inboxEscalatedSchema,
   inboxResponseSchema,
   integrationsResponseSchema,
@@ -20,7 +21,9 @@ import {
   listTasksQuerySchema,
   MAX_CI_MANUAL_NOT_RUN_JOBS,
   MAX_INBOX_ESCALATED,
+  MAX_INTEGRATION_CALL_ERROR_CHARS,
   MAX_QUEUE_WAIT_HOLDERS,
+  MAX_TASK_PAUSE_REASON_CHARS,
   MAX_TASK_STOP_RECORDED_CHARS,
   MAX_TICKET_KEY_CHARS,
   orgAuditQuerySchema,
@@ -51,6 +54,7 @@ import {
   TASK_CALLER_FACT_KEYS,
   taskDetailResponseSchema,
   taskExportResponseSchema,
+  taskManualPauseSchema,
   taskReturnSchema,
   taskStopSchema,
   tasksResponseSchema,
@@ -677,7 +681,7 @@ describe('the list envelopes and the KB health report', () => {
           {
             ...integration,
             activity: {
-              last_call: { at: '2026-11-06T09:00:00.000Z', ok: true },
+              last_call: { at: '2026-11-06T09:00:00.000Z', ok: true, error: null },
               last_delivery_at: null,
             },
             current_health: { status: 'working', basis: 'call', at: '2026-11-06T09:00:00.000Z' },
@@ -1460,6 +1464,68 @@ describe('queue_wait (S-25.16)', () => {
         ...full,
         holders: { ...full.holders, items: [...items, holder(99)] },
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe('S-25.20: the pause, the failed call and the failed job say what they are', () => {
+  const pause = {
+    at: '2026-11-09T09:00:00.000Z',
+    by: { user_id: '00000000-0000-4000-8000-0000000000e1', name: 'Pat' },
+    via: 'pause',
+    reason: 'release freeze',
+    reason_cut: false,
+  };
+
+  it('parses a manual pause, strictly, with its reason bounded', () => {
+    expect(taskManualPauseSchema.parse(pause)).toEqual(pause);
+    expect(taskManualPauseSchema.safeParse({ ...pause, by: null, reason: null }).success).toBe(
+      true,
+    );
+    for (const refused of [
+      { ...pause, extra: true },
+      { ...pause, via: 'cancel' },
+      { ...pause, reason: 'x'.repeat(MAX_TASK_PAUSE_REASON_CHARS + 1) },
+      { ...pause, by: { user_id: 'nope', name: null } },
+    ]) {
+      expect(taskManualPauseSchema.safeParse(refused).success).toBe(false);
+    }
+  });
+
+  it('bounds a failed call’s message and refuses an empty one', () => {
+    const lastCall = integrationsResponseSchema.shape.items.element.shape.activity.shape.last_call;
+    const at = '2026-11-09T09:00:00.000Z';
+    expect(
+      lastCall.safeParse({ at, ok: false, error: { message: 'boom', message_cut: false } }).success,
+    ).toBe(true);
+    expect(lastCall.safeParse({ at, ok: true, error: null }).success).toBe(true);
+    for (const refused of [
+      { at, ok: false },
+      { at, ok: false, error: { message: '', message_cut: false } },
+      {
+        at,
+        ok: false,
+        error: { message: 'x'.repeat(MAX_INTEGRATION_CALL_ERROR_CHARS + 1), message_cut: true },
+      },
+      { at, ok: false, error: { message: 'boom', message_cut: false, code: 'x' } },
+    ]) {
+      expect(lastCall.safeParse(refused).success).toBe(false);
+    }
+  });
+
+  it('requires a failed job’s task, null or the task it names', () => {
+    const task = failedJobSchema.shape.task;
+    expect(task.safeParse(null).success).toBe(true);
+    expect(
+      task.safeParse({
+        id: '00000000-0000-4000-8000-0000000000b7',
+        ticket_key: 'AUT-1',
+        project_key: 'autix',
+      }).success,
+    ).toBe(true);
+    expect(task.safeParse(undefined).success).toBe(false);
+    expect(
+      task.safeParse({ id: '00000000-0000-4000-8000-0000000000b7', ticket_key: 'AUT-1' }).success,
     ).toBe(false);
   });
 });

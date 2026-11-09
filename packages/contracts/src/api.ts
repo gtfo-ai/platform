@@ -228,6 +228,9 @@ export const integrationCurrentHealthSchema = z.strictObject({
   at: isoDateTimeSchema.nullable(),
 });
 
+/** The longest failed-call message an integration's activity publishes (S-25.20). */
+export const MAX_INTEGRATION_CALL_ERROR_CHARS = 500;
+
 /**
  * One project that binds an integration, and what it uses it for (S-25.3). `uses` are the
  * provider's own identifying settings for that project — its label in platform words, its value as
@@ -302,7 +305,25 @@ export const integrationSummarySchema = z.strictObject({
    * alone; this is what happened since.
    */
   activity: z.strictObject({
-    last_call: z.strictObject({ at: isoDateTimeSchema, ok: z.boolean() }).nullable(),
+    /**
+     * `error` (S-25.20): for a **failed** last call, what failed — the message of that call's
+     * `integration.action.failed` event, which `IntegrationActionExecutor` wrote **redacted** and
+     * bounded (never provider text read again), cut here at {@link MAX_INTEGRATION_CALL_ERROR_CHARS}
+     * with `message_cut` saying so; `null` for a call that succeeded, or a failed one whose event
+     * holds no message. Rendered as untrusted text (BD-022).
+     */
+    last_call: z
+      .strictObject({
+        at: isoDateTimeSchema,
+        ok: z.boolean(),
+        error: z
+          .strictObject({
+            message: z.string().min(1).max(MAX_INTEGRATION_CALL_ERROR_CHARS),
+            message_cut: z.boolean(),
+          })
+          .nullable(),
+      })
+      .nullable(),
     last_delivery_at: isoDateTimeSchema.nullable(),
   }),
   /** Derived server-side from `activity` and `health` against the stale bound (S-25.3). */
@@ -1060,6 +1081,28 @@ export const taskEscalationSchema = z.strictObject({
   brief_original_chars: z.int().positive().nullable(),
 });
 export type TaskEscalation = z.infer<typeof taskEscalationSchema>;
+
+/** The longest reason a {@link taskManualPauseSchema} carries before it is cut. */
+export const MAX_TASK_PAUSE_REASON_CHARS = 500;
+
+/**
+ * **Who paused a task by hand, when, and why** (S-25.20) — while the task is `paused` for the
+ * `manual` reason, read off its newest `task.pause` or `run.cancel` row of `human_actions` (a
+ * *Cancel run* pauses the task, so its row is the pause). `by` is the person who did it — their
+ * name `null` when the account has none — and `null` for a row with no user. `via` is which
+ * command: `pause` (the task's *Pause*) or `run_cancel` (a run's *Cancel run*). `reason` is what the
+ * person typed, **redacted by the command before it was written down** (TD-012), cut at
+ * {@link MAX_TASK_PAUSE_REASON_CHARS} with `reason_cut` saying so — `null` when none was given (a
+ * run cancel takes none). It is a person's text and is rendered as untrusted text (BD-022).
+ */
+export const taskManualPauseSchema = z.strictObject({
+  at: isoDateTimeSchema,
+  by: z.strictObject({ user_id: idSchema, name: nonEmptyStringSchema.nullable() }).nullable(),
+  via: z.enum(['pause', 'run_cancel']),
+  reason: z.string().max(MAX_TASK_PAUSE_REASON_CHARS).nullable(),
+  reason_cut: z.boolean(),
+});
+export type TaskManualPause = z.infer<typeof taskManualPauseSchema>;
 
 /**
  * `GET /api/projects/:id/rediscovery` — whether a maintainer may run discovery again, and what it
@@ -2189,6 +2232,12 @@ export const taskDetailResponseSchema = z.strictObject({
    * on the wire as `ci_manual_not_run` is; `GET /api/tasks/:id` always sends it.
    */
   queue_wait: queueWaitSchema.nullable().optional(),
+  /**
+   * Who paused the task by hand, when and why (S-25.20): {@link taskManualPauseSchema}; `null` for
+   * every task that is not `paused` for the `manual` reason, and for one whose pause no row records.
+   * Optional on the wire as `queue_wait` is; `GET /api/tasks/:id` always sends it.
+   */
+  manual_pause: taskManualPauseSchema.nullable().optional(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -3030,6 +3079,10 @@ export const jobExhaustionShapeSchema = z.enum([
  * bound cut it) and rendered as text (BD-022). The job's **payload is never published**: nothing an
  * operator decides here needs it, and it can carry provider text. There is no re-queue: what a lost
  * job left is the recovery pass's or a human's, named by `recovered_by`.
+ *
+ * `task` (S-25.20) is the task the payload's `task_id` names **when that task exists** — the one
+ * field of the payload the read looks at, as a dead letter names its task — so the card links the
+ * task to act on; `null` for a job that names none.
  */
 export const failedJobSchema = z.strictObject({
   id: nonEmptyStringSchema,
@@ -3040,6 +3093,13 @@ export const failedJobSchema = z.strictObject({
   failed_at: isoDateTimeSchema,
   error: z.string().max(MAX_FAILED_JOB_ERROR_CHARS).nullable(),
   error_truncated: z.boolean(),
+  task: z
+    .strictObject({
+      id: idSchema,
+      ticket_key: nonEmptyStringSchema,
+      project_key: nonEmptyStringSchema,
+    })
+    .nullable(),
   exhaustion: z
     .strictObject({
       kind: jobExhaustionKindSchema,
