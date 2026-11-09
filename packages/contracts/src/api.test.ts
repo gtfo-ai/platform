@@ -759,6 +759,7 @@ describe('the list envelopes and the KB health report', () => {
     }
     expect([...TASK_CALLER_FACT_KEYS].sort()).toEqual([
       'can_cancel',
+      'can_change_limits',
       'can_decide_approval',
       'can_export',
       'can_pause',

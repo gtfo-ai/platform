@@ -2071,10 +2071,9 @@ export const taskCallerFactsShape = {
   can_decide_approval: z.boolean(),
   /**
    * `project.settings.write` (S-25.16): whether the caller may change the project's limits, so a
-   * queued task's callout offers *Change the limit* only then. Optional on the wire because the
-   * SPA's fixtures predate it; the task read always sends it.
+   * queued task's callout offers *Change the limit* only then. Required, as every caller fact is.
    */
-  can_change_limits: z.boolean().optional(),
+  can_change_limits: z.boolean(),
 } as const;
 
 /**

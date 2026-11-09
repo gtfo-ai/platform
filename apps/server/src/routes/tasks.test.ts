@@ -373,6 +373,7 @@ const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({
   can_return: false,
   can_rework: false,
   can_decide_approval: false,
+  can_change_limits: false,
   can_take: false,
   can_assign: false,
   can_unassign: false,

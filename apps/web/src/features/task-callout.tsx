@@ -378,7 +378,7 @@ const CalloutSlot = ({
           wait={detail.queue_wait}
           ticketKey={task.ticket.key}
           projectKey={projectKey}
-          canChangeLimits={detail.can_change_limits === true}
+          canChangeLimits={detail.can_change_limits}
           mayDecide={detail.can_cancel}
         />
       );

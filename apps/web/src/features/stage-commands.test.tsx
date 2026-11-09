@@ -99,6 +99,7 @@ const escalatedAtCi = (state: TaskDetailResponse['task']['state']): TaskDetailRe
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_change_limits: false,
   can_take: false,
   can_assign: false,
   can_unassign: false,
