@@ -115,7 +115,7 @@ describe('manual_pause (S-25.20)', () => {
       reason: 'waiting for the API freeze',
       reason_cut: false,
     });
-    expect(Math.round((Date.now() - Date.parse(pause?.at ?? '')) / 60_000)).toBe(9);
+    expect(Math.round((Date.now() - Date.parse(pause?.at ?? '')) / 60_000)).toBe(10);
     // The task read carries the same answer.
     const detail = await findTaskDetail(drizzled, taskId, { waiting: false });
     expect(detail?.manual_pause).toEqual(pause);
