@@ -9,7 +9,9 @@
  * the project's value would then change nothing, so the callout says *Your organisation allows at
  * most N …* and, instead of the project link, sends an organisation administrator (the session's
  * role; `org.settings.write` is the organisation's admin) to the organisation's *Policies*, and tells
- * anyone else who can raise it.
+ * anyone else who can raise it. The session's role rather than a caller fact because the task
+ * read's facts are over the caller's **project** role, and this permission is the organisation's
+ * (BACKLOG 1381).
  *
  * Neutral information (`tone="info"`), never *Needs you*: nothing on this task is the reader's to
  * do. What frees it is on the tasks it lists, and their own pages ask for it. Every link is a

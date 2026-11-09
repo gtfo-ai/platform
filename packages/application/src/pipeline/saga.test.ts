@@ -819,6 +819,16 @@ describe('intake', () => {
     expect(keyed(harness, 'ACME-2')?.task.state).toBe('waiting_approval');
   });
 
+  it('starts a queued task when the active one reaches Ready for merge (BACKLOG 1379)', async () => {
+    // The happy path: ACME-1 runs every agent stage and stops at `ready_for_merge`, which holds no
+    // running place. Its stage moves before that keep it active and start nothing.
+    const harness = harnessWith({ settings: { wip: { ...ONE_RUNNING } } });
+    await harness.publish([ticketMatched(), ticketMatched('Story', 'ACME-2')]);
+    expect(keyed(harness, TICKET.key)?.task.state).toBe('ready_for_merge');
+    expect(harness.types()).toContain('task.queued');
+    expect(keyed(harness, 'ACME-2')?.task.state).toBe('ready_for_merge');
+  });
+
   it('starts queued tasks when a WIP limit is raised, as many as the new limit admits', async () => {
     // `runsAgents: false`: an admitted task holds its running place, its stage job left queued.
     const wip = { ...ONE_RUNNING };

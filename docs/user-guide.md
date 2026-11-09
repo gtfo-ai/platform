@@ -947,8 +947,9 @@ would have nowhere to run.
   *Your organisation allows at most N …* instead and offers an organisation administrator **Change
   the organisation's limit** (the organisation's *Policies*); anyone else reads that an organisation
   administrator can raise it. Deciding a stopped task moves it on; its place frees when it finishes
-  or is cancelled. A place that frees — a task finishing, stopping for a person, being paused, or a
-  limit raised on either settings screen — starts the next queued task at once.
+  or is cancelled. A place that frees — a task reaching *Ready for merge*, finishing, stopping for
+  a person, being paused, or a limit raised on either settings screen — starts the next queued task
+  at once.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
   question with its answer box, each pending approval with *Approve* and *Reject…* (see *Deciding an
   approval* below), an escalation

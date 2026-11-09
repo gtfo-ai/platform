@@ -62,6 +62,7 @@ import {
   interpret,
   isRepeatOfPreviousRound,
   isRunnableTaskState,
+  MERGED_GATE_STAGE,
   markQuestionEscalated,
   opensWithPlatformCommentMarker,
   orderQueue,
@@ -2159,10 +2160,13 @@ const defaultBranchHandler = (options: PipelineSagaOptions): EventHandler => ({
  * The events after which a WIP place **may** have freed (S-25.21, BACKLOG 1369) — the scheduler's
  * subscription. A task leaving the active set (finished, cancelled, escalated, paused); an active
  * task stopping to wait for a person (a blocking question, an approval — `waiting_answers` and
- * `waiting_approval` hold a pipeline place but no running one); and a WIP limit raised
- * (`config.changed`, which the configuration and organisation-policy writes append for a raise,
- * `pipeline/wip-raised.ts`). The scheduler asks admission again on every one, so an event that
- * freed nothing — a non-blocking question, a raise the other limit still refuses — starts nothing.
+ * `waiting_approval` hold a pipeline place but no running one); an active task entering *Ready for
+ * merge* or the merged gate (`task.stage.entered` at {@link FREEING_STAGES} — the commonest way a
+ * running place frees, since `ready_for_merge` and `merged` are not `countsAsActive`; every other
+ * stage entry is ignored); and a WIP limit raised (`config.changed`, which the configuration and
+ * organisation-policy writes append for a raise, `pipeline/wip-raised.ts`). The scheduler asks
+ * admission again on every one, so an event that freed nothing — a non-blocking question, a resume
+ * into *Ready for merge*, a raise the other limit still refuses — starts nothing.
  */
 export const SCHEDULER_EVENT_TYPES = [
   'task.completed',
@@ -2171,8 +2175,12 @@ export const SCHEDULER_EVENT_TYPES = [
   'task.paused',
   'task.question.asked',
   'task.approval.requested',
+  'task.stage.entered',
   'config.changed',
 ] as const satisfies readonly DomainEvent['type'][];
+
+/** The stage entries that take a task out of the active set (S-25.21, BACKLOG 1379). */
+const FREEING_STAGES: ReadonlySet<string> = new Set([READY_FOR_MERGE_STAGE, MERGED_GATE_STAGE]);
 
 type SchedulerEvent = Extract<DomainEvent, { type: (typeof SCHEDULER_EVENT_TYPES)[number] }>;
 
@@ -2196,6 +2204,10 @@ const schedulerHandler = (options: PipelineSagaOptions): EventHandler => ({
   handle: async (context) => {
     const event = context.event.event;
     if (!isSchedulerEvent(event)) {
+      return;
+    }
+    if (event.type === 'task.stage.entered' && !FREEING_STAGES.has(event.payload.stage)) {
+      // A move between agent stages keeps the task active: nothing freed.
       return;
     }
     const projectId = event.payload.project_id;

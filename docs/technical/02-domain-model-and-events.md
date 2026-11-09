@@ -676,7 +676,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `task.human_return` | the human-return window (WP-178) | task, stage left (`qa` \| `ready_for_merge`), forms (`status` \| `mr_diff` \| `mr_note` \| `ticket_comment`), counts, the status when one returned it | — (the return itself is `task.stage.returned`) |
 | `task.created` | Intake | task, template, mode, estimate | Workpad (110), Slack notify (210), UI (220) |
 | `task.queued` / `task.dequeued` | Scheduler | task, reason (wip) | UI |
-| `task.stage.entered` | Pipeline | task, stage, attempt | Stage executor (10), the human-return window's fifth armer for `qa` and `ready_for_merge` (10, `pipeline.review.comment`, WP-179), status mapping (110), workpad (120) |
+| `task.stage.entered` | Pipeline | task, stage, attempt | Stage executor (10), the human-return window's fifth armer for `qa` and `ready_for_merge` (10, `pipeline.review.comment`, WP-179), WIP scheduler (30, S-25.21 — only at `ready_for_merge` and `merged_gate`, the entries that leave the active set), status mapping (110), workpad (120) |
 | `task.stage.completed` | Stage executor | task, stage, artifact ids, verdict | Pipeline transition (10), the review conversation's three duties on a `ReviewVerdict` or `ImplementationNotes` (120, `pipeline.review.conversation`, WP-179, TD-029 decision 10), custom stages (300+) |
 | `task.stage.returned` | Pipeline | task, from, to, reason, feedback ref, iteration | Stage executor (10), workpad (120), Slack (210) |
 | `task.question.asked` | Stage executor | question | Ticket comment (110), Slack (210), UI inbox (220), timer (15 — the expiry and, since WP-84, the reminder) |
