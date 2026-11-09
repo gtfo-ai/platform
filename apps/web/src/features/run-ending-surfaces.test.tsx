@@ -180,10 +180,12 @@ describe('a run stopped for an unmeasured cost, wherever it is listed', () => {
     stop_reason: 'cost_unreported',
   } as const;
   const OVERSPENT = { ...UNMEASURED, stop_reason: 'budget_exceeded' } as const;
-  const FAULT = 'Stopped: the run did not report its cost';
+  /** The short form after *Failed:*; the Runs tab says the whole sentence alone. */
+  const FAULT = 'Did not report its cost';
+  const FAULT_STATUS = 'Stopped: the run did not report its cost';
 
   it('says the fault alone on the Runs tab, and Hit its budget only for an overspend', () => {
-    expect(runStatusWords(ended(1, UNMEASURED))).toBe(FAULT);
+    expect(runStatusWords(ended(1, UNMEASURED))).toBe(FAULT_STATUS);
     expect(runStatusWords(ended(1, OVERSPENT))).toBe('Over budget · Hit its budget');
     expect(runStatusWords(ended(1, { ...UNMEASURED, stop_reason: null }))).toBe(
       'Over budget · Hit its budget',
@@ -218,6 +220,7 @@ describe('a run stopped for an unmeasured cost, wherever it is listed', () => {
       ],
     });
     const rows = fleet.seats.flatMap((seat) => seat.endings);
+    // Never *Failed: Stopped: …* (review of #130).
     expect(rows.map((run) => activityWords(run))).toEqual([
       `failed: ${FAULT}`,
       'failed: Hit its budget',

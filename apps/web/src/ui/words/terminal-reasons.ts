@@ -65,9 +65,12 @@ export const DID_NOT_START = 'Did not start';
 /**
  * What a run the platform stopped because its cost could not be measured says where it is listed
  * (S-25.22, BACKLOG 1394): its terminal reason is `error_max_budget_usd`, the budget's, but it is a
- * fault and not an overspend — the run page's *Ended* panel says the same from the transcript.
+ * fault and not an overspend — the run page's *Ended* panel says the same from the transcript. The
+ * short form reads after *Failed:* (the board card, Home, the Agents rows); the Runs tab, whose
+ * *Over budget* status would be untrue, says {@link COST_UNREPORTED_STATUS} alone.
  */
-export const COST_UNREPORTED_SHORT = 'Stopped: the run did not report its cost';
+export const COST_UNREPORTED_SHORT = 'Did not report its cost';
+export const COST_UNREPORTED_STATUS = 'Stopped: the run did not report its cost';
 
 const LIVE: ReadonlySet<RunStatus> = new Set(['created', 'starting', 'running']);
 

@@ -12,9 +12,14 @@
  *   except `routes/commands.ts`' `taskCommand({ action, name })`, whose `action` is the **permission**
  *   the guard asks and whose `name` is what the row records (`action: route.name`);
  * - `const action = '<a.b>'` and `<NAME>_ACTION = '<a.b>'` — a route's constant;
- * - in a file that writes `insert into human_actions` itself (the worker writers, the pick audit),
- *   each `'worker.…'`/`'task.…'` literal, and the one template, `` `worker.device.${decision}` ``,
- *   expanded over the decision's two values.
+ * - inside an `insert into human_actions` statement itself (the worker writers, the pick audit) —
+ *   from the `insert` to the end of its SQL template, so its `values (…)` or `select …` source and
+ *   never a read elsewhere in the file (`where action = 'worker.update'`) — each `'worker.…'` /
+ *   `'task.…'` literal, and the one template, `` `worker.device.${decision}` ``, expanded over the
+ *   decision's two values;
+ * - the values of a `<NAME>_DECISION_ACTIONS = { … }` map — the chat door's
+ *   `INBOUND_DECISION_ACTIONS` (`integrations/inbound-decisions.ts`), whose rows the applier writes
+ *   under the route's own spelling.
  *
  * **Its limits, stated**: an action assembled any other way at run time, or named through a
  * variable from another module, is not seen. `sse/topic-access.ts` is excluded by name: its
@@ -40,6 +45,14 @@ const PERMISSION_THEN_NAME = new RegExp(`\\baction: '${ACTION}',\\s*name: '(${AC
 const ACTION_PROPERTY = new RegExp(`\\baction: '(${ACTION})'`, 'g');
 const ACTION_CONSTANT = new RegExp(`(?:\\bconst action|_ACTION) = '(${ACTION})'`, 'g');
 const SQL_LITERAL = /'((?:worker|task)(?:\.[a-z_]+)+)'/g;
+/**
+ * One `insert into human_actions` statement: up to the end of its SQL template (a backtick then
+ * `)`, `,` or `;`), which a nested `` `worker.device.${…}` `` template never matches.
+ */
+const INSERT_STATEMENT = /insert into human_actions[\s\S]*?(?:`[),;]|$)/g;
+/** `INBOUND_DECISION_ACTIONS = { 'task.approval.decided': 'task.approval.decide', … }`. */
+const DECISION_ACTION_MAP = /_DECISION_ACTIONS = \{([^}]*)\}/g;
+const MAP_VALUE = new RegExp(`: '(${ACTION})'`, 'g');
 /** `worker.device.${input.decision}` — `WorkerDeviceDecisionInput.decision`. */
 const DEVICE_TEMPLATE = /`worker\.device\.\$\{/;
 const DEVICE_DECISIONS = ['approve', 'deny'] as const;
@@ -57,11 +70,14 @@ export const recordedActions = (path: string, source: string): string[] => {
   });
   for (const match of rest.matchAll(ACTION_PROPERTY)) found.push(match[1] as string);
   for (const match of rest.matchAll(ACTION_CONSTANT)) found.push(match[1] as string);
-  if (/insert into human_actions/.test(code)) {
-    for (const match of rest.matchAll(SQL_LITERAL)) found.push(match[1] as string);
-    if (DEVICE_TEMPLATE.test(rest)) {
+  for (const statement of rest.matchAll(INSERT_STATEMENT)) {
+    for (const match of statement[0].matchAll(SQL_LITERAL)) found.push(match[1] as string);
+    if (DEVICE_TEMPLATE.test(statement[0])) {
       found.push(...DEVICE_DECISIONS.map((decision) => `worker.device.${decision}`));
     }
+  }
+  for (const map of rest.matchAll(DECISION_ACTION_MAP)) {
+    for (const match of (map[1] as string).matchAll(MAP_VALUE)) found.push(match[1] as string);
   }
   return found;
 };
@@ -94,6 +110,11 @@ describe('the recorded-action scanner (S-25.22)', () => {
       'insert into human_actions values (${`worker.device.${input.decision}`})',
       'worker.device.deny',
     ],
+    [
+      'the chat door’s decision map',
+      "export const INBOUND_DECISION_ACTIONS = {\n  'task.approval.decided': 'task.approval.decide',\n} as const;",
+      'task.approval.decide',
+    ],
   ])('finds %s', (_name, source, action) => {
     expect(recordedActions('apps/server/src/x.ts', source)).toContain(action);
   });
@@ -106,6 +127,16 @@ describe('the recorded-action scanner (S-25.22)', () => {
     ],
     ['a comment', "/** action: 'task.gone' */\nconst a = 1;", 'task.gone'],
     ['a literal where nothing writes the table', "where h.action = 'worker.pause'", 'worker.pause'],
+    [
+      'a read beside an insert in the same file',
+      "sql`insert into human_actions (action) values ('worker.revoke')`;\nsql`select 1 where action = 'worker.update'`;",
+      'worker.update',
+    ],
+    [
+      'the event key of the decision map',
+      "INBOUND_DECISION_ACTIONS = { 'task.approval.decided': 'task.approval.decide' }",
+      'task.approval.decided',
+    ],
     ['an integration call', "action: 'mint_credential'", 'mint_credential'],
   ])('ignores %s', (_name, source, action) => {
     expect(recordedActions('apps/server/src/x.ts', source)).not.toContain(action);
@@ -128,17 +159,27 @@ describe('every recorded action has words, both directions (S-25.22, BACKLOG 137
     ],
     include: (path) => /\.ts$/.test(path) && !/\.test\.ts$/.test(path) && !/\/testing\//.test(path),
   });
-  const recorded = new Map<string, string>();
+  /** Each recorded action → every file that records it. */
+  const recorded = new Map<string, Set<string>>();
   for (const file of files) {
     for (const action of recordedActions(file.path, file.contents)) {
-      if (!recorded.has(action)) recorded.set(action, file.path);
+      recorded.set(action, (recorded.get(action) ?? new Set()).add(file.path));
     }
   }
+  const pathsOf = (action: string): string[] => [...(recorded.get(action) ?? [])];
 
   it('has the writers to scan', () => {
     // One of each shape: a route command, a task command's name, a constant, a worker writer.
-    expect(recorded.get('run.steer')).toBe('apps/server/src/routes/commands.ts');
-    expect(recorded.get('task.budget.raise')).toBe('apps/server/src/routes/commands.ts');
+    expect(pathsOf('run.steer')).toContain('apps/server/src/routes/commands.ts');
+    expect(pathsOf('task.budget.raise')).toContain('apps/server/src/routes/commands.ts');
+    // The chat door records the route's spelling (review of #130).
+    for (const action of ['task.approval.decide', 'task.question.answer']) {
+      expect(pathsOf(action)).toContain(
+        'packages/application/src/integrations/inbound-decisions.ts',
+      );
+    }
+    // The worker writers: an insert's own literal, never the read of the same action beside it.
+    expect(pathsOf('worker.update')).toContain('apps/server/src/queries/worker-queries.ts');
     expect(recorded.has('task.start')).toBe(true);
     expect(recorded.has('worker.take_offer')).toBe(true);
     expect(recorded.has('worker.device.approve')).toBe(true);
@@ -149,7 +190,7 @@ describe('every recorded action has words, both directions (S-25.22, BACKLOG 137
   it('has words for every action the server records', () => {
     const missing = [...recorded]
       .filter(([action]) => !Object.hasOwn(HUMAN_ACTION_WORDS, action))
-      .map(([action, path]) => `${action} (${path})`);
+      .map(([action, paths]) => `${action} (${[...paths].join(', ')})`);
     expect(missing).toEqual([]);
   });
 

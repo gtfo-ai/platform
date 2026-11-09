@@ -698,7 +698,7 @@ somebody:
   run…**, which asks before it stops the agent. A run that has just ended stays at the end of the
   list as *just finished* or *just ended* for as long as the map and the office keep it at its desk;
   one that failed says why beside *Failed* — *Failed: Lost its worker*, *Failed: Did not start*,
-  and *Failed: Stopped: the run did not report its cost* for a run the platform stopped because it
+  and *Failed: Did not report its cost* for a run the platform stopped because it
   could not measure its cost, which is a fault and never *Hit its budget* —
   the same words the board card and the task's run list use.
   Below it, what needs you and every seat with its slots.

@@ -14,7 +14,7 @@ import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { rowLink } from '../ui/row-link.js';
 import { type Status, StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { COST_UNREPORTED_SHORT } from '../ui/words/terminal-reasons.js';
+import { COST_UNREPORTED_SHORT, COST_UNREPORTED_STATUS } from '../ui/words/terminal-reasons.js';
 
 const RUN_STATUS: Readonly<Record<RunStatus, Status>> = {
   created: 'queued',
@@ -42,7 +42,7 @@ export const runStatusWords = (
   // S-25.22 (BACKLOG 1394): such a run's status is `budget_exceeded` (*Over budget*), which is
   // untrue of a run nobody measured — the fault is said alone.
   if (short === COST_UNREPORTED_SHORT) {
-    return short;
+    return COST_UNREPORTED_STATUS;
   }
   return short === null || short.toLowerCase() === status.toLowerCase()
     ? status
