@@ -153,6 +153,7 @@ const detail = (
   can_rework: true,
   can_decide_approval: true,
   can_take: false,
+  can_change_limits: false,
   can_assign: false,
   can_unassign: false,
   take_writes_back: false,

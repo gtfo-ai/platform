@@ -404,21 +404,28 @@ export const TranscriptView = ({
   }, [tail, blocks.length, following]);
 
   // A jump is a request, not a state: only a change of the counter acts, never the first render.
+  // The search and the follow flag are adjusted **while rendering** (React's "adjust state when a
+  // prop changes"), so the very commit that carries the new counter shows the cleared search; the
+  // effect does only what needs the DOM — scroll to the end and take focus.
+  const [jumpSeen, setJumpSeen] = useState(jumpToEnd);
+  if (jumpSeen !== jumpToEnd) {
+    setJumpSeen(jumpToEnd);
+    setQuery('');
+    setFollowing(true);
+    setSeen(blocks.length);
+  }
   const jumped = useRef(jumpToEnd);
   useEffect(() => {
     if (jumped.current === jumpToEnd) {
       return;
     }
     jumped.current = jumpToEnd;
-    setQuery('');
-    setFollowing(true);
-    setSeen(blocks.length);
     const element = scroller.current;
     if (element !== null) {
       element.scrollTop = element.scrollHeight;
       element.focus();
     }
-  }, [jumpToEnd, blocks.length]);
+  }, [jumpToEnd]);
 
   const ended = endedProp || blocks.some((block) => block.kind === 'result');
   const behind = Math.max(0, blocks.length - seen);

@@ -210,7 +210,7 @@ export const endedFollowUp = (
   if (later !== undefined) {
     return { kind: 'ran_again', run: later, sameAttempt: later.attempt === run.attempt };
   }
-  const current = detail.task.current_stage;
+  const current = detail.task.current_stage ?? null;
   const movedTo = current === null || current === run.stage ? null : current;
   switch (detail.task.state) {
     case 'needs_human':

@@ -515,7 +515,9 @@ describe('an ended run’s rows', () => {
     const view = render(<TranscriptView blocks={[tool()]} jumpToEnd={0} />);
     await user.type(screen.getByRole('searchbox', { name: 'Search transcript' }), 'nothing');
     expect(screen.getByText('No block matches that search.')).toBeTruthy();
-    view.rerender(<TranscriptView blocks={[tool()]} jumpToEnd={1} />);
+    await act(async () => {
+      view.rerender(<TranscriptView blocks={[tool()]} jumpToEnd={1} />);
+    });
     expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('');
     expect(document.activeElement).toBe(screen.getByTestId('transcript-scroller'));
     expect(screen.getByRole('button', { name: 'Following' })).toBeTruthy();
