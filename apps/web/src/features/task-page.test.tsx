@@ -7,7 +7,11 @@
  * the routes' `taskSearchSchema` is in the path), the real query client and the real endpoint
  * parsers. The commands are asserted by what the request carried.
  */
-import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
+import {
+  RUN_CANCEL_PAUSE_REASON,
+  type TaskDetailResponse,
+  type TaskRecord,
+} from '@platform/contracts';
 import { TICKET_TEMPLATES } from '@platform/domain';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -1266,7 +1270,8 @@ describe('the needs-you callout', () => {
             at: AT,
             by: { user_id: '00000000-0000-4000-8000-0000000000e1', name: null },
             via: 'run_cancel',
-            reason: null,
+            // S-25.23: what a run cancel records — the platform's words, not a person's why.
+            reason: 'the run was cancelled',
             reason_cut: false,
           },
         },
@@ -1294,6 +1299,16 @@ describe('the needs-you callout', () => {
     expect(
       pauseWhy({ at: AT, by: null, via: 'pause', reason: 'release freeze', reason_cut: false }),
     ).toBe('release freeze');
+    // S-25.23: nor is the run cancel's recorded "the run was cancelled", which the first sentence says.
+    expect(
+      pauseWhy({
+        at: AT,
+        by: null,
+        via: 'run_cancel',
+        reason: RUN_CANCEL_PAUSE_REASON,
+        reason_cut: false,
+      }),
+    ).toBeNull();
   });
 
   // S-25.20: AUT-6655 read the generic options sentence first and the cause after it.
@@ -1329,13 +1344,27 @@ describe('the needs-you callout', () => {
 });
 
 describe('the ··· menu', () => {
-  it('pauses directly and cancels through a dialog that says what cancelling does', async () => {
+  // S-25.23 (BACKLOG 1375): Pause asks for an optional why, which is the reason it records.
+  it('pauses through a dialog with an optional why, and cancels through one that says what cancelling does', async () => {
     const user = userEvent.setup();
     const { sent } = start(detail());
     await user.click(await screen.findByRole('button', { name: 'Task actions' }));
-    await user.click(await screen.findByRole('menuitem', { name: 'Pause' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Pause…' }));
+    const pause = await screen.findByRole('dialog', { name: 'Pause ACME-12' });
+    // Nothing is sent by opening it.
+    expect(sent).toHaveLength(0);
+    await user.type(
+      within(pause).getByLabelText('Why are you pausing it? — optional'),
+      'the API freeze',
+    );
+    await user.click(within(pause).getByRole('button', { name: 'Pause' }));
     await waitFor(() => {
-      expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/pause`]);
+      expect(sent).toEqual([
+        { path: `/api/tasks/${TASK}/pause`, body: { reason: 'the API freeze' } },
+      ]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Pause ACME-12' })).toBeNull();
     });
 
     await user.click(screen.getByRole('button', { name: 'Task actions' }));
@@ -1349,6 +1378,32 @@ describe('the ··· menu', () => {
         `/api/tasks/${TASK}/pause`,
         `/api/tasks/${TASK}/cancel`,
       ]);
+    });
+  });
+
+  it('sends no reason for a blank why, and closing the dialog sends nothing (S-25.23)', async () => {
+    const user = userEvent.setup();
+    const { sent } = start(detail());
+    await user.click(await screen.findByRole('button', { name: 'Task actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Pause…' }));
+    const first = await screen.findByRole('dialog', { name: 'Pause ACME-12' });
+    await user.type(within(first).getByLabelText('Why are you pausing it? — optional'), 'drafted');
+    await user.click(within(first).getByRole('button', { name: 'Keep it running' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Pause ACME-12' })).toBeNull();
+    });
+    expect(sent).toEqual([]);
+    // Opened again, the field starts blank: what was typed and kept is not sent later.
+    await user.click(screen.getByRole('button', { name: 'Task actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Pause…' }));
+    const second = await screen.findByRole('dialog', { name: 'Pause ACME-12' });
+    expect(
+      (within(second).getByLabelText('Why are you pausing it? — optional') as HTMLTextAreaElement)
+        .value,
+    ).toBe('');
+    await user.click(within(second).getByRole('button', { name: 'Pause' }));
+    await waitFor(() => {
+      expect(sent).toEqual([{ path: `/api/tasks/${TASK}/pause`, body: {} }]);
     });
   });
 
@@ -1366,13 +1421,13 @@ describe('the ··· menu', () => {
     [
       'a queued task: no pause or take-over',
       { state: 'queued' as const },
-      ['Pause', 'Work on it yourself…'],
+      ['Pause…', 'Work on it yourself…'],
       'Cancel task…',
     ],
     [
       'a task a person paused: no take-over',
       { state: 'paused' as const, paused_reason: 'manual' as const },
-      ['Work on it yourself…', 'Pause', 'Resume'],
+      ['Work on it yourself…', 'Pause…', 'Resume'],
       'Cancel task…',
     ],
     ['a merged task: no cancel', { state: 'merged' as const }, ['Cancel task…'], 'Retry stage…'],
@@ -1394,7 +1449,7 @@ describe('the ··· menu', () => {
     const items = await menuItems(detail());
     expect(items).toEqual(
       expect.arrayContaining([
-        'Pause',
+        'Pause…',
         'Work on it yourself…',
         'Return to stage…',
         'Rework…',
@@ -1464,7 +1519,7 @@ describe('only what the caller may do', () => {
 
   it('offers a member no cancel, return or rework in the menu', async () => {
     const items = await menuOf(detail(MEMBER));
-    expect(items).toContain('Pause');
+    expect(items).toContain('Pause…');
     expect(items).toContain('Retry stage…');
     for (const absent of ['Cancel task…', 'Return to stage…', 'Rework…']) {
       expect(items).not.toContain(absent);
@@ -1473,7 +1528,7 @@ describe('only what the caller may do', () => {
 
   it('offers a viewer no pause, and no Resume as the page’s primary action', async () => {
     const running = await menuOf(detail(VIEWER));
-    expect(running).not.toContain('Pause');
+    expect(running).not.toContain('Pause…');
     cleanup();
     start(detail(VIEWER, { state: 'paused', paused_reason: 'manual' }));
     await screen.findByText('Checks');

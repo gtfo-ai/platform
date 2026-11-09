@@ -97,6 +97,7 @@ import {
   handBackRequestSchema,
   type JsonObject,
   pauseTaskRequestSchema,
+  RUN_CANCEL_PAUSE_REASON,
   raiseTaskBudgetRequestSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
@@ -151,6 +152,12 @@ export interface CommandQueries {
     readonly taskState: TaskState;
   } | null>;
   /**
+   * The task's ticket key, read **only on a refusal** (S-25.23, BACKLOG 1390): an
+   * `illegal_transition` carries it as `details.ticket_key`, so the screen says *AUT-6639 is
+   * paused, so it cannot be retried — resume it first* rather than *This task …*.
+   */
+  readonly taskTicketKey: (taskId: string) => Promise<string | null>;
+  /**
    * The `Idempotency-Key` record, for {@link claimIdempotentAttempt}: claim before the command
    * performs, release when it did not (WP-67).
    *
@@ -190,7 +197,11 @@ export interface CommandRoutesOptions {
  *
  * Anything else is rethrown untouched, including the `HttpError`s this module raises itself.
  */
-const performing = async <T>(command: string, perform: () => Promise<T>): Promise<T> => {
+const performing = async <T>(
+  command: string,
+  perform: () => Promise<T>,
+  ticketKey: () => Promise<string | null>,
+): Promise<T> => {
   try {
     return await perform();
   } catch (error) {
@@ -199,8 +210,36 @@ const performing = async <T>(command: string, perform: () => Promise<T>): Promis
     if (refusal === null) {
       throw error;
     }
-    throw refusal;
+    throw await namingTheTicket(refusal, ticketKey);
   }
+};
+
+/** The longest ticket key a refusal carries; a longer one is left out rather than cut. */
+const MAX_REFUSAL_TICKET_KEY_CHARS = 100;
+
+/**
+ * An `illegal_transition` with the task's ticket key added as `details.ticket_key` (S-25.23, BACKLOG
+ * 1390), read here, on the refusal path, so a command that performs reads nothing more. Any other
+ * refusal is returned as it is. A read that fails, a task with no key, or a key past
+ * {@link MAX_REFUSAL_TICKET_KEY_CHARS} leaves the refusal without one: the screen then says
+ * *This task …*, and a failed read never replaces the refusal the caller is owed.
+ */
+const namingTheTicket = async (
+  refusal: HttpError,
+  ticketKey: () => Promise<string | null>,
+): Promise<HttpError> => {
+  if (refusal.code !== 'illegal_transition') {
+    return refusal;
+  }
+  const key = await ticketKey().catch(() => null);
+  if (key === null || key.trim() === '' || key.length > MAX_REFUSAL_TICKET_KEY_CHARS) {
+    return refusal;
+  }
+  // The code spelled as a literal, so the error-code census reads this site as the code it is.
+  return new HttpError(409, 'illegal_transition', refusal.message, [
+    ...(refusal.details ?? []),
+    { path: 'ticket_key', message: key },
+  ]);
 };
 
 /**
@@ -297,6 +336,26 @@ export const registerCommandRoutes = async (
   };
 
   /**
+   * The ticket key of the task a refused command was aimed at (S-25.23): the route's own task id,
+   * else the task of the run its `params.run_id` names. A run command's `taskId` is a function of
+   * the result, which a refusal has none of, hence the run's position.
+   */
+  const ticketKeyOf = async (
+    taskId: string | ((result: never) => string) | undefined,
+    params: JsonObject,
+  ): Promise<string | null> => {
+    if (typeof taskId === 'string') {
+      return options.queries.taskTicketKey(taskId);
+    }
+    const runId = params.run_id;
+    if (typeof runId !== 'string') {
+      return null;
+    }
+    const position = await options.queries.runPosition(runId);
+    return position === null ? null : options.queries.taskTicketKey(position.taskId);
+  };
+
+  /**
    * The six steps every command shares.
    *
    * `perform` is called only when this request is not a replay, and the `human_actions` row is
@@ -362,7 +421,11 @@ export const registerCommandRoutes = async (
     // Under the claim: a refusal from `perform` releases the key, the audit row completes it, and
     // a failure after `perform` returned leaves it held (`./idempotency.ts`, WP-67 round 1).
     const result = await replay.run(async (effectReturned) => {
-      const performed = await performing(input.action, async () => input.perform(key));
+      const performed = await performing(
+        input.action,
+        async () => input.perform(key),
+        async () => ticketKeyOf(input.taskId, input.params),
+      );
       effectReturned();
       const taskId = typeof input.taskId === 'function' ? input.taskId(performed) : input.taskId;
       await options.queries.recordAction({
@@ -1128,8 +1191,13 @@ export const registerCommandRoutes = async (
         key: 'optional',
         subject: { run_id: runId, body },
         params: { run_id: runId },
-        // Which branch ran, for a replay's answer: the id of the recorded stop, or `null`.
-        auditResult: (result) => ({ command_id: result.commandId }),
+        // Which branch ran, for a replay's answer: the id of the recorded stop, or `null`. And why
+        // the task stopped, in the platform's words (S-25.23): a run cancel pauses its task, and
+        // this row is that pause's record (`manualPauseFor`). The body's `reason` is never read.
+        auditResult: (result) => ({
+          command_id: result.commandId,
+          reason: RUN_CANCEL_PAUSE_REASON,
+        }),
         taskId: (result) => result.taskId,
         perform: async (idempotencyKey: string | null) => {
           const { userId } = actorOf(request);

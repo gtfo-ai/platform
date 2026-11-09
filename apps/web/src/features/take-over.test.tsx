@@ -429,7 +429,7 @@ describe('a merged task (WP-194)', () => {
     await screen.findByRole('button', { name: 'Resume' });
     expect(container.textContent).toContain('nothing to take over or pause');
     const menu = await openTaskMenu(user);
-    expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Pause…' })).toBeNull();
     expect(within(menu).queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Work on it yourself' })).toBeNull();
     expect(screen.queryByRole('form', { name: `Take task ${TASK} over` })).toBeNull();
@@ -451,7 +451,7 @@ describe('a merged task (WP-194)', () => {
     await screen.findByText('A person is working on it');
     expect(container.textContent).toContain('This task was merged, so it never goes back');
     const menu = await openTaskMenu(user);
-    expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Pause…' })).toBeNull();
     expect(within(menu).queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Work on it yourself' })).toBeNull();
   });
@@ -462,7 +462,7 @@ describe('a merged task (WP-194)', () => {
       createApp({ fetchImpl: fetchFor(escalated({}), []), realtime: false }).element,
     );
     const menu = await openTaskMenu(user);
-    expect(within(menu).getByRole('menuitem', { name: 'Pause' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Pause…' })).toBeTruthy();
     await user.click(within(menu).getByRole('menuitem', { name: 'Work on it yourself…' }));
     expect(await screen.findByRole('button', { name: 'Work on it yourself' })).toBeTruthy();
     expect(screen.getByRole('form', { name: `Take task ${TASK} over` })).toBeTruthy();

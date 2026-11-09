@@ -1086,14 +1086,23 @@ export type TaskEscalation = z.infer<typeof taskEscalationSchema>;
 export const MAX_TASK_PAUSE_REASON_CHARS = 500;
 
 /**
+ * The reason a *Cancel run* records for the pause it causes (S-25.23, BACKLOG 1375): platform words
+ * written into the `run.cancel` row of `human_actions`, so the row says why the task stopped — a
+ * person typed none. The paused notice already says a run cancel paused it, so it does not repeat
+ * these words as a person's *why*.
+ */
+export const RUN_CANCEL_PAUSE_REASON = 'the run was cancelled';
+
+/**
  * **Who paused a task by hand, when, and why** (S-25.20) — while the task is `paused` for the
  * `manual` reason, read off its newest `task.pause` or `run.cancel` row of `human_actions` (a
  * *Cancel run* pauses the task, so its row is the pause). `by` is the person who did it — their
  * name `null` when the account has none — and `null` for a row with no user. `via` is which
  * command: `pause` (the task's *Pause*) or `run_cancel` (a run's *Cancel run*). `reason` is what the
  * person typed, **redacted by the command before it was written down** (TD-012), cut at
- * {@link MAX_TASK_PAUSE_REASON_CHARS} with `reason_cut` saying so — `null` when none was given (a
- * run cancel takes none). It is a person's text and is rendered as untrusted text (BD-022).
+ * {@link MAX_TASK_PAUSE_REASON_CHARS} with `reason_cut` saying so — `null` when none was given. A
+ * run cancel's is the platform's {@link RUN_CANCEL_PAUSE_REASON} (S-25.23; `null` for a row written
+ * before it). It is rendered as untrusted text (BD-022).
  */
 export const taskManualPauseSchema = z.strictObject({
   at: isoDateTimeSchema,

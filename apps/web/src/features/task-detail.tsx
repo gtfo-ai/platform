@@ -106,11 +106,9 @@ const TaskTop = ({
         primary={primary}
       />
 
-      {commands.pause.isError || commands.resume.isError ? (
-        <ErrorNotice
-          title="That command was refused."
-          error={commands.pause.error ?? commands.resume.error}
-        />
+      {/* A refused pause is said in its dialog (S-25.23), so only a resume's is said here. */}
+      {commands.resume.isError ? (
+        <ErrorNotice title="That command was refused." error={commands.resume.error} />
       ) : null}
       {/* Backlog 494: what a retry did, announced rather than only drawn. */}
       {commands.retryStage.data === undefined ? null : (
@@ -280,6 +278,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
         open={dialog}
         onOpenChange={setDialog}
         taskId={taskId}
+        ticketKey={task.ticket.key}
         capUsd={task.budget_cap_usd}
         takenOver={takenOver}
         merged={merged}

@@ -465,31 +465,58 @@ describe('the card’s menu', () => {
     return within(await screen.findByRole('menu'));
   };
 
-  it('pauses with the task page’s reason and no Idempotency-Key, then re-reads the board', async () => {
+  // S-25.23 (BACKLOG 1375): Pause opens a dialog whose optional why is the reason recorded.
+  it('pauses through a dialog with the person’s why and no Idempotency-Key, then re-reads the board', async () => {
     const user = userEvent.setup();
     const { sent, taskReads } = open();
     const menu = await menuOf(user, 'ACME-1');
     expect(menu.queryByRole('menuitem', { name: 'Resume' })).toBeNull();
     const before = taskReads();
-    await user.click(menu.getByRole('menuitem', { name: 'Pause' }));
+    await user.click(menu.getByRole('menuitem', { name: 'Pause…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Pause ACME-1' });
+    // Nothing is sent by opening it.
+    expect(sent).toHaveLength(0);
+    await user.type(
+      within(dialog).getByLabelText('Why are you pausing it? — optional'),
+      'waiting for the release freeze',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Pause' }));
     await waitFor(() => {
       expect(sent).toHaveLength(1);
     });
     expect(sent[0]).toEqual({
       path: `/api/tasks/${BUSY.id}/pause`,
-      body: { reason: 'paused from the UI' },
+      body: { reason: 'waiting for the release freeze' },
       key: null,
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Pause ACME-1' })).toBeNull();
     });
     await waitFor(() => {
       expect(taskReads()).toBeGreaterThan(before);
     });
   });
 
+  it('pauses with no reason at all when the why is left blank (S-25.23)', async () => {
+    const user = userEvent.setup();
+    const { sent } = open();
+    const menu = await menuOf(user, 'ACME-1');
+    await user.click(menu.getByRole('menuitem', { name: 'Pause…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Pause ACME-1' });
+    await user.type(within(dialog).getByLabelText('Why are you pausing it? — optional'), '   ');
+    await user.click(within(dialog).getByRole('button', { name: 'Pause' }));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    // Not the fixed "paused from the UI" the button used to send: no words, no reason.
+    expect(sent[0]).toEqual({ path: `/api/tasks/${BUSY.id}/pause`, body: {}, key: null });
+  });
+
   it('resumes a paused task, and offers no pause for it', async () => {
     const user = userEvent.setup();
     const { sent } = open();
     const menu = await menuOf(user, 'ACME-3');
-    expect(menu.queryByRole('menuitem', { name: 'Pause' })).toBeNull();
+    expect(menu.queryByRole('menuitem', { name: 'Pause…' })).toBeNull();
     await user.click(menu.getByRole('menuitem', { name: 'Resume' }));
     await waitFor(() => {
       expect(sent).toHaveLength(1);
@@ -590,7 +617,7 @@ describe('the card’s menu', () => {
     open({ may: MEMBER });
     const menu = await menuOf(user, 'ACME-1');
     expect(menu.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-      'Pause',
+      'Pause…',
       'Open ticket',
       'Open merge request',
     ]);

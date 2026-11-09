@@ -772,8 +772,9 @@ own place instead of *Queued*: *2nd in queue · 5 of 5 places taken* (*2 of 2 ru
 running tasks are full). The queue is ordered by the ticket's priority, then by age. *1st in queue ·
 a place is free* means the limits have room and the queue moves on at the next such change.
 
-**The `···` menu on a card** offers **Pause** or **Resume**, **Return to stage…**, **Cancel…**,
-**Open ticket** and **Open merge request** — the task page's own commands. *Cancel…* asks first and says what
+**The `···` menu on a card** offers **Pause…** or **Resume**, **Return to stage…**, **Cancel…**,
+**Open ticket** and **Open merge request** — the task page's own commands. *Pause…* asks *Why are you
+pausing it? — optional*, and what you write is shown on the task while it is paused. *Cancel…* asks first and says what
 cancelling does (it ends the task for good); *Return to stage…* asks which stage the task has
 entered to send it back to, and why — the stage is given your reason; a task that stopped at a gate
 which recorded a failure carries it too, as the task page's ticked *Attach the check's last failure*
@@ -925,7 +926,7 @@ would have nowhere to run.
   one amber button and Resume moves to the `···` menu; from a stop both re-run the stage as a new attempt, and Retry stage also
   stops a run of it still going. Resume is never offered past an open question
   or a pending approval: answer or decide it instead. Everything else is in the **`···`**
-  menu beside it: *Pause*, *Resume*, *Work on it yourself…*, *Retry stage…*, *Return to stage…*, *Rework…*,
+  menu beside it: *Pause…*, *Resume*, *Work on it yourself…*, *Retry stage…*, *Return to stage…*, *Rework…*,
   *Raise this task's cap…*, *Download JSON* and *Cancel task…*. A command with fields, or one you
   cannot undo, opens a dialog with those fields. The menu leaves out what the platform would refuse
   for anybody — Pause, Work on it yourself, Return and Rework on a merged task, any stage command on a task
@@ -951,6 +952,8 @@ would have nowhere to run.
   stopped** and the next step; the sentence listing every way out comes last, beside its buttons.
 - **A task a person paused** says so in the same place, as information: who paused it and when —
   or that their *Cancel run* did — the reason they gave, if any, and **Resume** for whoever may.
+- **A command the task's state refuses names the ticket**: *AUT-6639 is paused, so it cannot be
+  retried — resume it first.*
 - **Four tabs**: *Overview* (the flow — the graph, or its list: the stage timeline — the running
   stage, Ask the task and feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status —
   and why one ended, *Failed · Lost its worker*, *Failed · Did not start* — model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
@@ -1057,7 +1060,7 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 
 | Command | Who | What it does |
 |---|---|---|
-| **Pause** | member | stops the task from entering another stage. Not offered on a task that was **merged**, and refused for one (*task_merged*): there is nothing left to stop, and from a pause it could not reach its retrospective |
+| **Pause** | member | stops the task from entering another stage. It asks for an optional reason, which the task page shows while it is paused. Not offered on a task that was **merged**, and refused for one (*task_merged*): there is nothing left to stop, and from a pause it could not reach its retrospective |
 | **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged, through the rebase gate, which checks it against the target branch as it is now (a default branch that moved during the pause is not re-checked while the task is paused) and warns about another task touching the same files, spending no iteration limit (WP-105); if somebody pushed while it was paused, it goes back through the CI gate first (WP-79). It reads *paused* for the moment the platform takes to check; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge — and so does merging it while the task is paused at **QA**, on a project that has that stage (a pause at an earlier stage is escalated to a human instead). Resuming a task paused at QA takes it back to QA, not to Ready |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason — its stage list starts on the current stage. Costs a run. If the stage's run is still going, it is stopped first and the new attempt starts once it has ended; the screen says which attempt was queued and whether a run was stopped |

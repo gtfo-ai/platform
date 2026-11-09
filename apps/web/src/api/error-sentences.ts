@@ -147,9 +147,20 @@ const AGGREGATE_WORDS: Readonly<Record<string, AggregateWords>> = {
 };
 
 /**
- * "This task is paused, so it cannot be retried — resume it first." From the refusal's `details`
- * (`aggregate`, `from`, `command` — S-25.18), in the screens' own state words; a state or an
- * aggregate this build has no word for is never printed raw, it drops to {@link TRANSITION_UNKNOWN}.
+ * The subject of a task's refusal: its ticket key when the server named it (`details.ticket_key`,
+ * S-25.23) — *AUT-6639 is paused …* — else *This task*. The key is the tracker's text and the
+ * sentence is rendered as a text node like every other (BD-022).
+ */
+const subjectOf = (error: ApiError, aggregate: string, words: AggregateWords): string => {
+  const key = detailOf(error, 'ticket_key')?.trim() ?? '';
+  return aggregate === 'task' && key !== '' ? key : words.subject;
+};
+
+/**
+ * "AUT-6639 is paused, so it cannot be retried — resume it first." From the refusal's `details`
+ * (`aggregate`, `from`, `command` — S-25.18 — and `ticket_key`, S-25.23), in the screens' own state
+ * words; a state or an aggregate this build has no word for is never printed raw, it drops to
+ * {@link TRANSITION_UNKNOWN}.
  */
 const transitionSentence = (error: ApiError): string => {
   const aggregate = (detailOf(error, 'aggregate') ?? '').toLowerCase();
@@ -158,9 +169,10 @@ const transitionSentence = (error: ApiError): string => {
   if (words === undefined || !Object.hasOwn(words.state, from)) {
     return TRANSITION_UNKNOWN;
   }
+  const subject = subjectOf(error, aggregate, words);
   // A command whose target is the state the task is already in (a pause of a paused task).
   if (detailOf(error, 'to') === from) {
-    return `${words.subject} is already ${words.state[from]}.`;
+    return `${subject} is already ${words.state[from]}.`;
   }
   const command = detailOf(error, 'command');
   const done =
@@ -168,7 +180,7 @@ const transitionSentence = (error: ApiError): string => {
       ? `it cannot be ${COMMAND_PARTICIPLE[command]}`
       : 'this cannot be done to it';
   const next = Object.hasOwn(words.next, from) ? words.next[from] : words.otherwise;
-  return `${words.subject} is ${words.state[from]}, so ${done} — ${next}.`;
+  return `${subject} is ${words.state[from]}, so ${done} — ${next}.`;
 };
 
 // ── A policy that refused (`policy_violation`) ───────────────────────────────

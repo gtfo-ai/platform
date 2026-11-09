@@ -1,8 +1,8 @@
 /**
  * The task page's dialogs (S-23.9b, research/19 § 3.9 and § 5.2 "Task").
  *
- * Every command of the header's `···` menu that takes fields or cannot be undone opens one of these,
- * carrying the fields the page's inline forms had **under the same accessible names** — *Stage*,
+ * Every command of the header's `···` menu that takes fields or cannot be undone opens one of these
+ * (and *Pause* opens `./pause-dialog.tsx` for its optional why, S-25.23), carrying the fields the page's inline forms had **under the same accessible names** — *Stage*,
  * *Reason*, *Rework instructions*, *Why you are taking it over*, *New cap (USD)*, *Resume at*, *What
  * you did* — so a person, and a test, finds the same control one step further in. A dialog is only
  * ever a human's own action, opened by them; nothing an agent does opens one.
@@ -28,10 +28,12 @@ import { stageLabel } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field, formatUsd } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { PauseDialog } from './pause-dialog.js';
 import { HandBackForm, TakeOverForm } from './take-over.js';
 
 /** Which dialog is open — one at a time, held by the page so the callout and the menu share it. */
 export type TaskDialog =
+  | 'pause'
   | 'retry'
   | 'return'
   | 'rework'
@@ -261,6 +263,7 @@ export const TaskDialogs = ({
   open,
   onOpenChange,
   taskId,
+  ticketKey,
   capUsd,
   takenOver,
   merged,
@@ -271,6 +274,8 @@ export const TaskDialogs = ({
   readonly open: TaskDialog | null;
   readonly onOpenChange: (dialog: TaskDialog | null) => void;
   readonly taskId: string;
+  /** The ticket key, for the pause dialog's title (S-25.23). */
+  readonly ticketKey: string;
   readonly capUsd: number;
   readonly takenOver: TakenOver | null;
   readonly merged: boolean;
@@ -289,6 +294,22 @@ export const TaskDialogs = ({
   });
   return (
     <>
+      {/* S-25.23: mounted only while open, so its field starts blank every time it is opened. */}
+      {open === 'pause' ? (
+        <PauseDialog
+          ticketKey={ticketKey}
+          pending={commands.pause.isPending}
+          error={commands.pause.isError ? commands.pause.error : null}
+          onClose={() => {
+            commands.pause.reset();
+            close();
+          }}
+          onPause={(reason) => {
+            commands.pause.mutate(reason, { onSuccess: close });
+          }}
+        />
+      ) : null}
+
       <Dialog
         {...shown('retry')}
         title="Retry a stage"

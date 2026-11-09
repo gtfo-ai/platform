@@ -35,7 +35,7 @@ import {
   TaskNotPausedByItsCapError,
   UnknownAggregateError,
 } from '@platform/application';
-import type { JsonObject, UserRole } from '@platform/contracts';
+import { type JsonObject, RUN_CANCEL_PAUSE_REASON, type UserRole } from '@platform/contracts';
 import {
   ApprovalPendingError,
   IllegalTransitionError,
@@ -167,6 +167,8 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
         taskId === TASK ? { state: 'active', currentStage: 'refinement' } : null,
       runPosition: async (runId) =>
         runId === RUN ? { status: 'completed', taskId: TASK, taskState: 'active' } : null,
+      // `null` by default, so the cases above read the refusal without a key; S-25.23's set one.
+      taskTicketKey: async () => null,
       ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ ...input });
@@ -231,7 +233,11 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
 interface Reply {
   readonly status: number;
   readonly body: Record<string, unknown> & {
-    readonly error?: { readonly code: string; readonly message: string };
+    readonly error?: {
+      readonly code: string;
+      readonly message: string;
+      readonly details?: readonly { readonly path: string; readonly message: string }[];
+    };
   };
 }
 
@@ -890,6 +896,94 @@ describe('what each refusal maps to', () => {
 });
 
 /**
+ * S-25.23 (BACKLOG 1390): an `illegal_transition` names the task's ticket, read on the refusal path
+ * only, so the screen says *AUT-6639 is paused, so it cannot be retried — resume it first*.
+ */
+describe('an illegal_transition names the ticket (S-25.23)', () => {
+  /** A world whose ticket-key read answers `key` and counts the tasks it was asked about. */
+  const keyed = async (
+    answer: (taskId: string) => Promise<string | null>,
+  ): Promise<{ readonly world: World; readonly asked: string[] }> => {
+    const asked: string[] = [];
+    const keyedWorld = await build({
+      taskTicketKey: async (taskId) => {
+        asked.push(taskId);
+        return answer(taskId);
+      },
+    });
+    return { world: keyedWorld, asked };
+  };
+
+  it('adds the task’s ticket key to a task command’s refusal', async () => {
+    const { world: keyedWorld, asked } = await keyed(async () => 'AUT-6639');
+    keyedWorld.throws = new IllegalTransitionError('Task', 'paused', 'active');
+    const reply = await post(
+      keyedWorld,
+      `/api/tasks/${TASK}/retry-stage`,
+      { stage: 'refinement' },
+      'retry-1',
+    );
+    expect(reply.status).toBe(409);
+    expect(reply.body.error?.code).toBe('illegal_transition');
+    expect(reply.body.error?.details).toEqual([
+      { path: 'aggregate', message: 'Task' },
+      { path: 'from', message: 'paused' },
+      { path: 'to', message: 'active' },
+      { path: 'command', message: 'task.retry_stage' },
+      { path: 'ticket_key', message: 'AUT-6639' },
+    ]);
+    expect(asked).toEqual([TASK]);
+    expect(keyedWorld.actions).toEqual([]);
+  });
+
+  it('reads a run command’s ticket through the run’s task', async () => {
+    const { world: keyedWorld, asked } = await keyed(async () => 'AUT-6639');
+    keyedWorld.throws = new IllegalTransitionError('Run', 'completed', 'cancelled');
+    const reply = await post(keyedWorld, `/api/runs/${RUN}/cancel`, {});
+    expect(reply.status).toBe(409);
+    expect(reply.body.error?.details).toContainEqual({ path: 'ticket_key', message: 'AUT-6639' });
+    expect(asked).toEqual([TASK]);
+  });
+
+  it('reads nothing for a command that performs, nor for another refusal', async () => {
+    const { world: keyedWorld, asked } = await keyed(async () => 'AUT-6639');
+    const accepted = await post(keyedWorld, `/api/tasks/${TASK}/pause`, {});
+    expect(accepted.status).toBe(200);
+    keyedWorld.throws = new StageNotCurrentError('refinement' as never, 'implementation' as never);
+    const refused = await post(
+      keyedWorld,
+      `/api/tasks/${TASK}/retry-stage`,
+      { stage: 'refinement' },
+      'retry-2',
+    );
+    expect(refused.body.error?.code).toBe('stage_not_current');
+    expect(refused.body.error?.details ?? []).not.toContainEqual(
+      expect.objectContaining({ path: 'ticket_key' }),
+    );
+    expect(asked).toEqual([]);
+  });
+
+  it('keeps the refusal, without a key, when the read fails or finds an implausible one', async () => {
+    for (const answer of [
+      async (): Promise<string | null> => {
+        throw new Error('database unavailable');
+      },
+      async (): Promise<string | null> => null,
+      async (): Promise<string | null> => '   ',
+      async (): Promise<string | null> => 'K'.repeat(101),
+    ]) {
+      const { world: keyedWorld, asked } = await keyed(answer);
+      keyedWorld.throws = new IllegalTransitionError('Task', 'paused', 'active');
+      const reply = await post(keyedWorld, `/api/tasks/${TASK}/resume`, {});
+      expect(reply.status).toBe(409);
+      expect(reply.body.error?.code).toBe('illegal_transition');
+      expect(reply.body.error?.details).toHaveLength(4);
+      expect(asked).toEqual([TASK]);
+    }
+  });
+});
+
+/**
  * S-26.1 — the owner command through the real router (TD-031's 2026-11-06 amendment item 3). The
  * enumerated cases above hold its 401, its 403 below `member`, its required key, its replay and its
  * key scope; these hold what is the route's own: the role it hands the matrix, the target, the
@@ -1099,6 +1193,20 @@ describe('the routes’ own answers', () => {
   it('writes no `reason` key at all for a pause that carried none', async () => {
     await post(world, `/api/tasks/${TASK}/pause`, {});
     expect(world.actions[0]?.params).toEqual({ task_id: TASK });
+  });
+
+  // S-25.23 (BACKLOG 1375): a run cancel pauses its task, and its row says why in the platform's
+  // words — never the body's `reason`, which this route does not write down.
+  it('records the run cancel’s pause as "the run was cancelled", never the body’s words', async () => {
+    await post(world, `/api/runs/${RUN}/cancel`, { reason: 'glpat-FAKE-planted-credential' });
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]).toMatchObject({
+      action: 'run.cancel',
+      taskId: TASK,
+      params: { run_id: RUN, reason: RUN_CANCEL_PAUSE_REASON },
+    });
+    expect(RUN_CANCEL_PAUSE_REASON).toBe('the run was cancelled');
+    expect(JSON.stringify(world.actions)).not.toContain('FAKE-planted-credential');
   });
 
   it('records a take-over’s reason beside its branch, and passes it to the command', async () => {
@@ -1497,6 +1605,7 @@ describe('the routes’ own answers', () => {
         projectRole: async () => null,
         taskPosition: async () => ({ state: 'active', currentStage: 'refinement' }),
         runPosition: async () => ({ status: 'completed', taskId: TASK, taskState: 'active' }),
+        taskTicketKey: async () => null,
         ...memoryAttemptRecords(new Map()),
         recordAction: async () => undefined,
       },

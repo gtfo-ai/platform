@@ -104,7 +104,11 @@ interface CommandReply {
     readonly feedback_id?: string;
     /** A run cancel's recorded stop, or `null` when it ended the record in place (WP-101). */
     readonly command_id?: string | null;
-    readonly error?: { readonly code: string; readonly message: string };
+    readonly error?: {
+      readonly code: string;
+      readonly message: string;
+      readonly details?: readonly { readonly path: string; readonly message: string }[];
+    };
   };
 }
 
@@ -208,6 +212,16 @@ describe('the task command surface, on a task the pipeline drove', () => {
     expect(again.status).toBe(409);
     expect(again.body.error?.code).toBe('illegal_transition');
     expect(again.body.error?.message).toContain('paused');
+    // S-25.23: the refusal names the ticket, read from the task's own row on the refusal path.
+    const [keyRow] = await pipeline.query<{ ticket_key: string }>(
+      'select ticket_key from tasks where id = $1',
+      [task.id],
+    );
+    expect(keyRow?.ticket_key).toBeTruthy();
+    expect(again.body.error?.details).toContainEqual({
+      path: 'ticket_key',
+      message: keyRow?.ticket_key,
+    });
 
     // ── the run finishes into a paused task (WP-15e's ending, inverted) ─────
     // The stage executor records the run and its spend and does **not** complete the stage: the

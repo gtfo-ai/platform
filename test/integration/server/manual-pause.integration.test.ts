@@ -9,15 +9,18 @@
  *     `task.paused` event — an older row is an earlier pause the task has left;
  *  2. who did it is the row's user, with their name; a *Cancel run* is said as one; a reason is the
  *     row's own (already redacted) words, cut at the bound;
- *  3. the read answers `null`, and reads nothing, for a task not paused by hand.
+ *  3. the read answers `null`, and reads nothing, for a task not paused by hand;
+ *  4. (S-25.23) a run cancel's row carries the platform's own reason, which the read serves, and a
+ *     refused command's ticket key is the task row's own (`findTaskTicketKey`).
  */
-import { MAX_TASK_PAUSE_REASON_CHARS } from '@platform/contracts';
+import { MAX_TASK_PAUSE_REASON_CHARS, RUN_CANCEL_PAUSE_REASON } from '@platform/contracts';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   type Database,
   findTaskDetail,
+  findTaskTicketKey,
   manualPauseFor,
 } from '../../../apps/server/src/queries/pipeline-queries.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -186,5 +189,41 @@ describe('manual_pause (S-25.20)', () => {
     expect(
       await manualPauseFor(drizzled, { id: unrecorded, state: 'active' }, 'manual'),
     ).toBeNull();
+  });
+});
+
+describe('S-25.23: a pause says why, and a refusal names the ticket', () => {
+  it('serves the run cancel’s recorded reason, and no reason for a pause given none', async () => {
+    const cancelled = await pausedTask();
+    await pausedEvent(cancelled, 1, 3);
+    await action(
+      cancelled,
+      'run.cancel',
+      { run_id: '00000000-0000-4000-8000-00000000c0df', reason: RUN_CANCEL_PAUSE_REASON },
+      3,
+    );
+    expect(
+      await manualPauseFor(drizzled, { id: cancelled, state: 'paused' }, 'manual'),
+    ).toMatchObject({ via: 'run_cancel', reason: 'the run was cancelled', reason_cut: false });
+
+    // The dialog's blank why sends no reason, so the row has none and the read answers `null`.
+    const blank = await pausedTask();
+    await pausedEvent(blank, 1, 3);
+    await action(blank, 'task.pause', {}, 3);
+    expect(await manualPauseFor(drizzled, { id: blank, state: 'paused' }, 'manual')).toMatchObject({
+      via: 'pause',
+      reason: null,
+    });
+  });
+
+  it('reads a task’s ticket key, and null for a task that does not exist', async () => {
+    const taskId = await pausedTask();
+    const { ticket_key: key } = await one<{ ticket_key: string }>(
+      'select ticket_key from tasks where id = $1',
+      [taskId],
+    );
+    expect(key).toMatch(/^MP-\d+$/);
+    expect(await findTaskTicketKey(drizzled, taskId)).toBe(key);
+    expect(await findTaskTicketKey(drizzled, '00000000-0000-4000-8000-00000000dead')).toBeNull();
   });
 });

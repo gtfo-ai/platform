@@ -91,6 +91,7 @@ import { OWNER_WORDS } from '../ui/words/owners.js';
 import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
 import { escalationShort } from './escalation-short.js';
 import { CI_HELD_SHORT } from './gate-wait-words.js';
+import { PauseDialog } from './pause-dialog.js';
 import { queueShort } from './queue-words.js';
 import { openReturn, setbackShort } from './setback.js';
 import { WaitingWords, waitingPlain, waitingShort, waitingTail } from './waiting-words.js';
@@ -546,7 +547,7 @@ export const Phase = ({
 
 // ── The menu and its dialogs ─────────────────────────────────────────────────
 
-type OpenDialog = 'cancel' | 'return' | null;
+type OpenDialog = 'pause' | 'cancel' | 'return' | null;
 
 /**
  * The card's `···`. Each command is the task page's — the same hook, the same body — and a success
@@ -579,10 +580,11 @@ export const TaskMenu = ({
             leadingIcon={<PauseIcon size={16} />}
             disabled={commands.pause.isPending}
             onSelect={() => {
-              commands.pause.mutate('paused from the UI', { onSuccess: refresh });
+              // S-25.23: a dialog asks for an optional why, which the pause records.
+              setOpen('pause');
             }}
           >
-            Pause
+            Pause…
           </ActionMenuItem>
         ) : null}
         {offered.resume ? (
@@ -626,6 +628,25 @@ export const TaskMenu = ({
           <ActionMenuLinkItem url={task.mr_ref.url} label="Open merge request" />
         )}
       </ActionMenu>
+      {open === 'pause' ? (
+        <PauseDialog
+          ticketKey={key}
+          pending={commands.pause.isPending}
+          error={commands.pause.isError ? commands.pause.error : null}
+          onClose={() => {
+            setOpen(null);
+            commands.pause.reset();
+          }}
+          onPause={(reason) => {
+            commands.pause.mutate(reason, {
+              onSuccess: async () => {
+                setOpen(null);
+                await refresh();
+              },
+            });
+          }}
+        />
+      ) : null}
       {open === 'cancel' ? (
         <CancelDialog
           ticketKey={key}
@@ -673,13 +694,13 @@ export const TaskMenu = ({
   );
 };
 
-/** A refused pause or resume, said under the card or row it was pressed on. */
+/** A refused resume, said under the card or row it was pressed on (a pause's is in its dialog). */
 const Refusal = ({
   commands,
 }: {
   readonly commands: ReturnType<typeof useTaskCommands>;
 }): ReactElement | null => {
-  const error = commands.pause.error ?? commands.resume.error;
+  const error = commands.resume.error;
   return error === null ? null : <ErrorNotice title="That command was refused." error={error} />;
 };
 

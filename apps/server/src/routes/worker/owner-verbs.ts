@@ -28,6 +28,7 @@ import {
   type Id,
   type JsonObject,
   parseWorkerProtocolHeader,
+  RUN_CANCEL_PAUSE_REASON,
   type UserRole,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
@@ -242,6 +243,8 @@ export const registerWorkerOwnerVerbs = (
             via: 'worker_ui',
             worker_id: subject.workerId,
             command_id: result.commandId,
+            // S-25.23: why the task stopped, as the task page's run cancel records it.
+            reason: RUN_CANCEL_PAUSE_REASON,
             idempotency_key: key,
             ...(attempt.digest === null ? {} : { body_digest: attempt.digest }),
           };

@@ -140,6 +140,7 @@ import {
   findRunPosition,
   findTaskDetail,
   findTaskPosition,
+  findTaskTicketKey,
   listRunMessages,
   listTaskEvents,
   ownerCandidateWriteBack,
@@ -1143,7 +1144,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       breakdown: options.breakdown?.commands ?? null,
     });
     await registerCommandRoutes(app, {
-      // The eight functions the command routes need, bound to this process's database here so
+      // The nine functions the command routes need, bound to this process's database here so
       // that module names none (`routes/commands.ts`'s `CommandQueries`).
       queries: {
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
@@ -1152,6 +1153,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
           findProjectRole(options.database, projectId, userId),
         taskPosition: async (taskId) => findTaskPosition(options.database, taskId),
         runPosition: async (runId) => findRunPosition(options.database, runId),
+        taskTicketKey: async (taskId) => findTaskTicketKey(options.database, taskId),
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),

@@ -68,12 +68,13 @@
  * its next step, and the options sentence ("This task is waiting for a person. Send it back…")
  * comes last, beside the buttons it describes — AUT-6655 read generic-first.
  */
-import type {
-  ApprovalView,
-  QuestionRecord,
-  TaskDetailResponse,
-  TaskManualPause,
-  TaskRecord,
+import {
+  type ApprovalView,
+  type QuestionRecord,
+  RUN_CANCEL_PAUSE_REASON,
+  type TaskDetailResponse,
+  type TaskManualPause,
+  type TaskRecord,
 } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import type { useTaskCommands } from '../app/queries.js';
@@ -254,10 +255,15 @@ export const budgetReason = (
 };
 
 /**
- * The reasons the platform's own buttons send with a pause (`./task-header.tsx`,
- * `./board-card.tsx`): a person typed none, so the notice says no *why* for them.
+ * The platform's own words for a pause, which the notice never prints as a person's *why*: the fixed
+ * *paused from the UI* the Pause buttons sent before S-25.23 gave them a dialog (still on the rows
+ * of tasks paused then), and the *the run was cancelled* a run cancel records (S-25.23) — the
+ * notice's first sentence already says a run cancel paused it.
  */
-const UI_PAUSE_REASONS: ReadonlySet<string> = new Set(['paused from the UI']);
+const UI_PAUSE_REASONS: ReadonlySet<string> = new Set([
+  'paused from the UI',
+  RUN_CANCEL_PAUSE_REASON,
+]);
 
 /** The person's own reason, or `null` for none or for the words the platform's button sent. */
 export const pauseWhy = (pause: TaskManualPause | null): string | null =>

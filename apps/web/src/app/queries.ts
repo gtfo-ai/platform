@@ -1090,7 +1090,10 @@ export const useTaskCommands = (taskId: string) => {
 
   return {
     pause: useMutation({
-      mutationFn: (reason: string) => endpoints.pauseTask(taskId, { reason }),
+      // S-25.23: the person's own words from the pause dialog, or `null` for none — sent as no
+      // reason at all rather than the fixed words the buttons used to send.
+      mutationFn: (reason: string | null) =>
+        endpoints.pauseTask(taskId, reason === null ? {} : { reason }),
       onSuccess: invalidate,
     }),
     resume: useMutation({

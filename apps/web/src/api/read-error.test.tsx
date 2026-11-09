@@ -230,6 +230,39 @@ describe('a move the state machine does not have names the state and the way on 
     }
   });
 
+  // S-25.23 (BACKLOG 1390): the command routes add the task's ticket key to the refusal.
+  it('names the ticket when the refusal carries its key', () => {
+    const keyed = (aggregate: string, from: string, to: string, command: string): ApiError =>
+      refusal(409, 'illegal_transition', [
+        { path: 'aggregate', message: aggregate },
+        { path: 'from', message: from },
+        { path: 'to', message: to },
+        { path: 'command', message: command },
+        { path: 'ticket_key', message: 'AUT-6639' },
+      ]);
+    expect(errorSentence(keyed('Task', 'paused', 'active', 'task.retry_stage')).sentence).toBe(
+      'AUT-6639 is paused, so it cannot be retried — resume it first.',
+    );
+    expect(errorSentence(keyed('Task', 'paused', 'paused', 'task.pause')).sentence).toBe(
+      'AUT-6639 is already paused.',
+    );
+    // A run's refusal keeps its own subject: the key names the task, not the run.
+    expect(errorSentence(keyed('Run', 'completed', 'cancelled', 'run.cancel')).sentence).toBe(
+      'This run is completed, so it cannot be cancelled — it has ended; re-run it from the task page if it is still needed.',
+    );
+    // The other side: without the key, or with a blank one, it is "This task".
+    expect(errorSentence(transition('Task', 'paused', 'task.retry_stage')).sentence).toMatch(
+      /^This task is paused/,
+    );
+    const blank = refusal(409, 'illegal_transition', [
+      { path: 'aggregate', message: 'Task' },
+      { path: 'from', message: 'paused' },
+      { path: 'to', message: 'active' },
+      { path: 'ticket_key', message: '  ' },
+    ]);
+    expect(errorSentence(blank).sentence).toMatch(/^This task is paused/);
+  });
+
   it('keeps the server’s message behind Technical details', () => {
     expect(errorSentence(transition('Task', 'paused', 'task.retry_stage')).technical).toContain(
       SERVER_TEXT,

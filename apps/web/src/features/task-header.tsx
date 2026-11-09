@@ -305,10 +305,11 @@ export const TaskHeader = ({
         <ActionMenuItem
           disabled={commands.pause.isPending}
           onSelect={() => {
-            commands.pause.mutate('paused from the UI');
+            // S-25.23: a dialog asks for an optional why, which the pause records.
+            onOpen('pause');
           }}
         >
-          Pause
+          Pause…
         </ActionMenuItem>
       ) : null}
       {canResume && primary !== 'resume' ? (

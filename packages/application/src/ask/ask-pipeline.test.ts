@@ -21,6 +21,7 @@ import {
   type Id,
   MAX_ASK_CITATION_DETAIL_CHARS,
   MAX_CONTEXT_BUDGET_TOKENS,
+  runTerminalReasonSchema,
 } from '@platform/contracts';
 import {
   ASK_ROLE,
@@ -41,6 +42,8 @@ import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline
 import { askTaskCommand } from './commands.js';
 import {
   ASK_HAND_BACK_DELAY_MS,
+  ASK_RUN_ENDED_BECAUSE,
+  askRunEndedReason,
   MAX_ASK_HAND_BACKS,
   redactAskAnswer,
   scopeCitations,
@@ -1681,6 +1684,51 @@ describe('a run that ended without an answer', () => {
     expect(ask?.status).toBe('failed');
     expect(ask?.refusalReason).toContain('stalled');
     expect(ask?.refusalReason).toContain('cost_unreported');
+  });
+
+  /**
+   * S-25.23 (BACKLOG 1380): the stored reason says *why* in words — not only *the run ended
+   * "failed"* — so the row explains itself to every reader of `refusal_reason`.
+   */
+  it('names the run’s terminal reason in words', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+          costUsd: 0.1,
+        },
+        [`ask:${QUESTION}`]: {
+          status: 'failed',
+          terminalReason: 'error_max_turns',
+          structuredOutput: null,
+          costUsd: 0.02,
+        },
+      },
+    });
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('failed');
+    expect(ask?.refusalReason).toBe(
+      'the run ended "failed" because it used every turn it was allowed before it wrote an answer (error_max_turns)',
+    );
+  });
+
+  it('has words for every terminal reason, each naming the reason it words', () => {
+    for (const reason of runTerminalReasonSchema.options) {
+      expect(ASK_RUN_ENDED_BECAUSE[reason]?.trim()).toBeTruthy();
+      const sentence = askRunEndedReason('failed', reason, null);
+      expect(sentence).toBe(
+        `the run ended "failed" because ${ASK_RUN_ENDED_BECAUSE[reason]} (${reason})`,
+      );
+    }
+    // A stop reason the transcript recorded still follows, as it did before.
+    expect(askRunEndedReason('stalled', 'stalled', 'cost_unreported')).toBe(
+      'the run ended "stalled" because it stopped making progress, so the platform stopped it (stalled) (cost_unreported)',
+    );
   });
 
   /**

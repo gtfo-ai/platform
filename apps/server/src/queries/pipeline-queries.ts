@@ -2985,6 +2985,23 @@ export const findTaskPosition = async (
   return row === undefined ? null : { state: row.state, currentStage: row.currentStage };
 };
 
+/**
+ * A task's ticket key, for a command's refusal (S-25.23, BACKLOG 1390): read only on the refusal
+ * path, so an `illegal_transition` can say *AUT-6639 is paused, …* rather than *This task …*.
+ * `null` for a task that does not exist.
+ */
+export const findTaskTicketKey = async (
+  database: Database,
+  taskId: string,
+): Promise<string | null> => {
+  const rows = await database
+    .select({ ticketKey: tasks.ticketKey })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  return rows[0]?.ticketKey ?? null;
+};
+
 /** The same for a run command: the run's status and the task it belongs to (WP-15i). */
 export const findRunPosition = async (
   database: Database,

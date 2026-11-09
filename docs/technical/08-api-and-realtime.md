@@ -154,7 +154,9 @@
 >
 > **S-25.18 — a refusal carries its specifics as `details`**, so the SPA says why and what to do
 > without parsing the message: `illegal_transition` names `aggregate`, `from`, `to` and — on the
-> command routes — `command` (the audit action, e.g. `task.retry_stage`); `policy_violation` names
+> command routes — `command` (the audit action, e.g. `task.retry_stage`) and, since S-25.23,
+> `ticket_key` (the task's — for a run command, its run's task's — read only on the refusal path,
+> left out when the read fails or the key is past 100 characters); `policy_violation` names
 > `policy`; every `500 internal_error` names `request_id`; `integration_bound` one `projects` entry
 > per bound project key; `integration_has_live_credential` `live_credentials` and `latest_expiry`;
 > `autonomy_above_organisation` `organisation_maximum` and `autonomy`; `wip_above_organisation`

@@ -45,6 +45,7 @@ import type {
   Id,
   JsonValue,
   RunStartFailure,
+  RunTerminalReason,
 } from '@platform/contracts';
 import {
   askAnswerDataSchema,
@@ -110,6 +111,41 @@ import {
 } from './planner.js';
 import { askFeature } from './settings.js';
 import type { AskStore, StoredAsk } from './store.js';
+
+/**
+ * **Why an ask's run ended, in words** (S-25.23, BACKLOG 1380) — the clause the stored
+ * `refusal_reason` carries after *the run ended "failed"*, so the row explains itself to every
+ * reader, not only to the thread that words `run_terminal_reason` beside it (S-25.17). A `Record`
+ * over the contract's enum, so a reason added there fails the build here until it is worded. Each
+ * says what the platform knows and no more: a lost lease is that nobody renewed it, not that the
+ * agent failed. `success` is reached here only by a run whose status was not `completed`, which
+ * the runner does not produce; it is worded rather than left out.
+ */
+export const ASK_RUN_ENDED_BECAUSE: Readonly<Record<RunTerminalReason, string>> = {
+  success: 'it reported success but did not complete',
+  error_max_turns: 'it used every turn it was allowed before it wrote an answer',
+  error_max_budget_usd: 'it reached its budget before it wrote an answer',
+  error_max_structured_output_retries:
+    'it could not write an answer in the shape the platform reads',
+  error_during_execution: 'it hit an error while it was running',
+  permission_denied: 'a tool it needed was not permitted',
+  cancelled: 'a person cancelled it',
+  stalled: 'it stopped making progress, so the platform stopped it',
+  timed_out: 'it ran past its time limit, so the platform stopped it',
+  crash: 'its process crashed',
+  lease_expired: 'the worker running it stopped reporting, so the platform ended it',
+  shutdown: 'the worker running it was shut down',
+  rate_limited: 'the account running it hit a usage limit',
+};
+
+/** The stored reason for an ask whose run ended without succeeding (the `outcome.status` branch). */
+export const askRunEndedReason = (
+  status: string,
+  terminalReason: RunTerminalReason,
+  stopReason: string | null,
+): string =>
+  `the run ended "${status}" because ${ASK_RUN_ENDED_BECAUSE[terminalReason]} (${terminalReason})` +
+  (stopReason === null ? '' : ` (${stopReason})`);
 
 /** `task.ask` job payload — snake_case, like every other payload on the wire. */
 export interface AskExecuteData {
@@ -808,7 +844,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
               ? 'the run produced no answer the AskAnswer contract accepts'
               : outcome.terminalReason === 'shutdown'
                 ? `the platform's runner was stopped while answering this question ${String(earlierHandBacks + 1)} times; it is not started again`
-                : `the run ended "${outcome.status}"${input.stopReason === null ? '' : ` (${input.stopReason})`}`;
+                : askRunEndedReason(outcome.status, outcome.terminalReason, input.stopReason);
         const failed = failRun(
           run,
           {
