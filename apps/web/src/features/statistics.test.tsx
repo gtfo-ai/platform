@@ -11,6 +11,7 @@
  * assertions are about what a reader sees rather than about what a component was passed.
  */
 import type { OrgStatsResponse } from '@platform/contracts';
+import { QueryClient } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -282,7 +283,12 @@ describe('a statistics read that fails (S-25.18)', () => {
   it('says why in its own words, and keeps the server’s message behind Technical details', async () => {
     const message = 'stats over 400 days need 1 200 000 rows; the bound is 500 000 (stats-queries)';
     statsRefusal = { status: 409, code: 'stats_range_too_large', message };
-    render(createApp({ fetchImpl, realtime: false }).element);
+    // The app's client retries a failed read once, after a second; the refusal is the case under
+    // test, so it is said at once rather than after the retry.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+    });
+    render(createApp({ fetchImpl, realtime: false, queryClient }).element);
     let alert: HTMLElement | undefined;
     await waitFor(() => {
       alert = screen

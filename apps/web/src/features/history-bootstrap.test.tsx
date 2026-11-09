@@ -14,6 +14,8 @@
  *  - the runs' coverage claim is shown as the **pair** with the platform's count, labelled as the
  *    runs' own, never as a percentage — and *no claim yet* is words, not a zero (WP-66).
  */
+
+import { QueryClient } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -280,6 +282,10 @@ describe('the history bootstrap panel', () => {
   });
 });
 
+/** A query client that reports a failed read at once (the app's own retries it once). */
+const noRetryClient = (): QueryClient =>
+  new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+
 /** The alert whose text carries `title` — the page may show others. */
 const alertWith = async (title: string): Promise<HTMLElement> => {
   let found: HTMLElement | undefined;
@@ -297,6 +303,9 @@ describe('the history bootstrap’s failures say why (S-25.18)', () => {
       createApp({
         fetchImpl: fetchFor({ readRefusal: { status: 503, code: 'bootstrap_unavailable' } }),
         realtime: false,
+        // The app's client retries a failed read once, after a second; this read's refusal is the
+        // case under test, so it is said at once rather than after the retry.
+        queryClient: noRetryClient(),
       }).element,
     );
     const alert = await alertWith('The history bootstrap could not be loaded.');
