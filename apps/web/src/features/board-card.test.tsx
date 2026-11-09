@@ -258,6 +258,8 @@ const open = (
     readonly path?: string;
     readonly items?: readonly TaskListItem[];
     readonly may?: { readonly cancel: boolean; readonly returnToStage: boolean };
+    /** Answer every task command with this refusal instead of performing it (S-25.23). */
+    readonly refuse?: { readonly code: string; readonly message: string };
   } = {},
 ) => {
   const may = options.may ?? ALL;
@@ -275,6 +277,9 @@ const open = (
         body: JSON.parse(String(init.body ?? '{}')),
         key: new Headers(init.headers).get('idempotency-key'),
       });
+      if (options.refuse !== undefined) {
+        return json({ error: options.refuse }, 409);
+      }
       return json({ task_id: BUSY.id, state: 'paused', current_stage: null, performed: true });
     }
     if (path === `/api/projects/${PROJECT}/tasks`) {
@@ -495,6 +500,23 @@ describe('the card’s menu', () => {
     await waitFor(() => {
       expect(taskReads()).toBeGreaterThan(before);
     });
+  });
+
+  // Review of #129: a refusal is said in the dialog, beside the field, and the dialog stays open.
+  it('keeps a refused pause in its dialog, saying it was not paused', async () => {
+    const user = userEvent.setup();
+    const { sent } = open({
+      refuse: { code: 'illegal_transition', message: 'illegal transition paused -> paused' },
+    });
+    const menu = await menuOf(user, 'ACME-1');
+    await user.click(menu.getByRole('menuitem', { name: 'Pause…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Pause ACME-1' });
+    await user.click(within(dialog).getByRole('button', { name: 'Pause' }));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(await within(dialog).findByText('The task was not paused.')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Pause ACME-1' })).toBe(dialog);
   });
 
   it('pauses with no reason at all when the why is left blank (S-25.23)', async () => {

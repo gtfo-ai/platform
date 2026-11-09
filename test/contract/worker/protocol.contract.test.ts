@@ -44,6 +44,7 @@ import {
   domainEventSchemasByType,
   type Id,
   type JsonObject,
+  RUN_CANCEL_PAUSE_REASON,
   runPackageSchema,
   type UserRole,
   WORKER_API_PREFIX,
@@ -1826,6 +1827,8 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
         via: 'worker_ui',
         worker_id: w.alice.workerId,
         command_id: answer.command_id,
+        // S-25.23: the worker page's cancel records why the task stopped, as the task page's does.
+        reason: RUN_CANCEL_PAUSE_REASON,
       },
     });
     // Idempotent replay: the first attempt's answer, nothing performed, no second row.

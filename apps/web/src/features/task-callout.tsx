@@ -257,19 +257,23 @@ export const budgetReason = (
 /**
  * The platform's own words for a pause, which the notice never prints as a person's *why*: the fixed
  * *paused from the UI* the Pause buttons sent before S-25.23 gave them a dialog (still on the rows
- * of tasks paused then), and the *the run was cancelled* a run cancel records (S-25.23) — the
- * notice's first sentence already says a run cancel paused it.
+ * of tasks paused then), and — **on a run cancel's row only** — the *the run was cancelled* a run
+ * cancel records (S-25.23), since the notice's first sentence already says a run cancel paused it.
+ * A person who typed those same words into the pause dialog still sees them.
  */
-const UI_PAUSE_REASONS: ReadonlySet<string> = new Set([
-  'paused from the UI',
-  RUN_CANCEL_PAUSE_REASON,
-]);
+const UI_PAUSE_REASONS: ReadonlySet<string> = new Set(['paused from the UI']);
 
-/** The person's own reason, or `null` for none or for the words the platform's button sent. */
-export const pauseWhy = (pause: TaskManualPause | null): string | null =>
-  pause === null || pause.reason === null || UI_PAUSE_REASONS.has(pause.reason.trim())
-    ? null
-    : pause.reason;
+/** The person's own reason, or `null` for none or for the words the platform wrote. */
+export const pauseWhy = (pause: TaskManualPause | null): string | null => {
+  if (pause === null || pause.reason === null) {
+    return null;
+  }
+  const reason = pause.reason.trim();
+  if (UI_PAUSE_REASONS.has(reason)) {
+    return null;
+  }
+  return pause.via === 'run_cancel' && reason === RUN_CANCEL_PAUSE_REASON ? null : pause.reason;
+};
 
 /**
  * **A task a person paused** (S-25.20, the read's `manual_pause`): who paused it, when, why if they

@@ -1727,7 +1727,7 @@ describe('a run that ended without an answer', () => {
     }
     // A stop reason the transcript recorded still follows, as it did before.
     expect(askRunEndedReason('stalled', 'stalled', 'cost_unreported')).toBe(
-      'the run ended "stalled" because it stopped making progress, so the platform stopped it (stalled) (cost_unreported)',
+      'the run ended "stalled" because it stopped making progress, so the platform stopped it (stalled; cost_unreported)',
     );
   });
 

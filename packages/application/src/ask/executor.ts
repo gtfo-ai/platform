@@ -144,8 +144,8 @@ export const askRunEndedReason = (
   terminalReason: RunTerminalReason,
   stopReason: string | null,
 ): string =>
-  `the run ended "${status}" because ${ASK_RUN_ENDED_BECAUSE[terminalReason]} (${terminalReason})` +
-  (stopReason === null ? '' : ` (${stopReason})`);
+  `the run ended "${status}" because ${ASK_RUN_ENDED_BECAUSE[terminalReason]} ` +
+  `(${terminalReason}${stopReason === null ? '' : `; ${stopReason}`})`;
 
 /** `task.ask` job payload — snake_case, like every other payload on the wire. */
 export interface AskExecuteData {

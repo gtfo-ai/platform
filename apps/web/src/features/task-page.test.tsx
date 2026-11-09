@@ -1309,6 +1309,16 @@ describe('the needs-you callout', () => {
         reason_cut: false,
       }),
     ).toBeNull();
+    // …but a person who typed those very words into the pause dialog still sees them (review of #129).
+    expect(
+      pauseWhy({
+        at: AT,
+        by: null,
+        via: 'pause',
+        reason: RUN_CANCEL_PAUSE_REASON,
+        reason_cut: false,
+      }),
+    ).toBe('the run was cancelled');
   });
 
   // S-25.20: AUT-6655 read the generic options sentence first and the cause after it.
