@@ -107,7 +107,7 @@ describe('manual_pause (S-25.20)', () => {
     // An earlier pause the task has since left: before the newest event, so never the answer.
     await action(taskId, 'task.pause', { reason: 'an old pause' }, 120);
     await pausedEvent(taskId, 1, 10);
-    await action(taskId, 'task.pause', { reason: 'waiting for the API freeze' }, 9);
+    await action(taskId, 'task.pause', { reason: 'waiting for the API freeze' }, 10);
     const pause = await manualPauseFor(drizzled, { id: taskId, state: 'paused' }, 'manual');
     expect(pause).toMatchObject({
       by: { user_id: userId, name: 'Pat Pauser' },
@@ -167,7 +167,7 @@ describe('manual_pause (S-25.20)', () => {
 
     const long = await pausedTask();
     await pausedEvent(long, 1, 5);
-    await action(long, 'task.pause', { reason: 'z'.repeat(MAX_TASK_PAUSE_REASON_CHARS + 7) }, 4);
+    await action(long, 'task.pause', { reason: 'z'.repeat(MAX_TASK_PAUSE_REASON_CHARS + 7) }, 5);
     const cut = await manualPauseFor(drizzled, { id: long, state: 'paused' }, 'manual');
     expect(cut?.reason).toHaveLength(MAX_TASK_PAUSE_REASON_CHARS);
     expect(cut?.reason_cut).toBe(true);
