@@ -51,10 +51,12 @@
  * a member access ending in `.status`, `.state`, `.kind`, `.mode`, `.type`, `.role`, `.outcome` or
  * `.cause`, on one line after a tag's `>` or alone on its line; the value goes through a label map
  * in `ui/words/*` instead (`STATUS_LABEL[item.status]` is not refused: the child is an index, not
- * the member). **Its limits**: a value given another name first (`const s = item.status`), a field
- * called anything else (`entry.action`, `block.decision` — free-form or another slice's, and
- * filed), a value inside a template literal or a prop, and a child split across lines with other
- * text are not seen; it is a census of the spelling that shipped, not a type check.
+ * the member). **S-25.22** adds `.decision` (the transcript's permission row printed `deny`) and
+ * `.action` (the audit lists printed `task.pause`; their words are `ui/words/human-actions.ts`, held
+ * to the server by its own census). **Its limits**: a value given another name first
+ * (`const s = item.status`), a field called anything else, a value inside a template literal or a
+ * prop, and a child split across lines with other text are not seen; it is a census of the
+ * spelling that shipped, not a type check.
  *
  * **What it cannot see, stated**: a word assembled at run time, a server-written string (the
  * server's catalogues are their own census's), and a concept spelled a way this table does not
@@ -127,7 +129,7 @@ export const RETIRED_WORDS: readonly { readonly pattern: RegExp; readonly use: s
 ];
 
 /** The enum-valued fields a record carries whose bare value is a code word, never a label. */
-const ENUM_FIELDS = 'status|state|kind|mode|type|role|outcome|cause';
+const ENUM_FIELDS = 'status|state|kind|mode|type|role|outcome|cause|decision|action';
 const MEMBER = `[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\.(?:${ENUM_FIELDS})`;
 /** After a tag's `>` on one line: `<Badge>{item.status}</Badge>`, `<span>{x.kind}</span>{' '}`. */
 const RAW_ENUM_AFTER_TAG = new RegExp(`>\\s*\\{\\s*${MEMBER}\\s*\\}`);
@@ -168,6 +170,9 @@ describe('the raw-enum scanner (S-25.20)', () => {
     ['a deep member', '<Badge>{detail.task.state}</Badge>'],
     ['a child alone on its line', '<Badge tone="accent">\n  {mapping.kind}\n</Badge>'],
     ['a spaced child', '<p> { page.status } </p>'],
+    // S-25.22.
+    ['a permission decision', '<Badge tone={TONE[block.decision]}>{block.decision}</Badge>'],
+    ['an audit action', '<span className="font-medium">{entry.action}</span>'],
   ])('finds a raw enum in %s', (_name, source) => {
     expect(rawEnumsInJsx(source)).not.toEqual([]);
   });

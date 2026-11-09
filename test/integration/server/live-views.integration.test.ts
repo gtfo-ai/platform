@@ -140,6 +140,9 @@ beforeAll(async () => {
   await offer(await run('worker'), 'claimed', 'worker', workerId);
   await offer(await run('queued'), 'open', null, null);
   await run('silent');
+  // S-25.22: a run the runner stopped for an unmeasured cost — before the implementation run, which
+  // must stay the newest.
+  await run('stopped');
   await run('implementation', 'claude-haiku-4-5');
 
   const sink = runner.createPostgresTranscriptSink({ sql: pool });
@@ -195,6 +198,24 @@ beforeAll(async () => {
       content: [{ type: 'text', text: `${CANARY} in plain text` }],
     },
   ]);
+  // stopped (S-25.22): the runner's `run_stopped` row, then an older-looking text entry after it —
+  // the stop is read by its own probe, not as the newest entry.
+  await write([
+    {
+      ...envelope(runIds.stopped as string, 1),
+      kind: 'system',
+      subtype: 'run_stopped',
+      session_id: null,
+      model: null,
+      data: { reason: 'cost_unreported' },
+    },
+    {
+      ...envelope(runIds.stopped as string, 2),
+      kind: 'assistant',
+      model: 'claude-opus-5',
+      content: [{ type: 'text', text: 'after the stop' }],
+    },
+  ]);
   // implementation: a progress line whose summary is the canary.
   await write([
     {
@@ -237,6 +258,16 @@ describe('GET /api/org/agents — seat and activity (S-23.15)', () => {
     }));
     expect(JSON.stringify(withoutProgress)).not.toContain(CANARY);
     expect(JSON.stringify(agents)).not.toContain('<script>');
+  });
+
+  it('publishes the runner’s stop reason on the run it stopped, and null on every other (S-25.22)', async () => {
+    const agents = agentsResponseSchema.parse(await listRunningAgents(drizzled));
+    const stopReason = (name: string) =>
+      agents.items.find((item) => item.run.id === runIds[name])?.run.stop_reason;
+    expect(stopReason('stopped')).toBe('cost_unreported');
+    for (const name of ['server', 'worker', 'queued', 'silent', 'implementation']) {
+      expect(stopReason(name), name).toBeNull();
+    }
   });
 
   it('seats a server claim, a named worker’s claim, and leaves the queue and an offerless run unseated', async () => {

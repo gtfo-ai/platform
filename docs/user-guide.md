@@ -697,7 +697,9 @@ somebody:
   stage strip, how long and how much (the model is in the run's dialog) — with a `···` menu: **Open run**, **Open task** and **Cancel
   run…**, which asks before it stops the agent. A run that has just ended stays at the end of the
   list as *just finished* or *just ended* for as long as the map and the office keep it at its desk;
-  one that failed says why beside *Failed* — *Failed: Lost its worker*, *Failed: Did not start* —
+  one that failed says why beside *Failed* — *Failed: Lost its worker*, *Failed: Did not start*,
+  and *Failed: Stopped: the run did not report its cost* for a run the platform stopped because it
+  could not measure its cost, which is a fault and never *Hit its budget* —
   the same words the board card and the task's run list use.
   Below it, what needs you and every seat with its slots.
   This is the view that always tells the whole story; the other two never say anything it does not.
@@ -956,7 +958,7 @@ would have nowhere to run.
   retried — resume it first.*
 - **Four tabs**: *Overview* (the flow — the graph, or its list: the stage timeline — the running
   stage, Ask the task and feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status —
-  and why one ended, *Failed · Lost its worker*, *Failed · Did not start* — model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
+  and why one ended, *Failed · Lost its worker*, *Failed · Did not start*, *Stopped: the run did not report its cost* — model, cost and duration) and *Activity* (who did what, in words — *Paused the task by Pat* — with the person's name, and the recorded parameters behind *Details*). The tab is in the address (`?tab=runs`),
   so a link opens the same tab; a link to an artifact opens the Artifacts tab on it.
 - **On the right, Checks** — the merge box (below) — then the cost against the task's cap.
 
@@ -1821,7 +1823,9 @@ changes to one kind of thing (*Organisation*, *Project*, *Integration*, *Connect
 
 Every action a person takes through the product is recorded with the acting user, the command and
 its parameters — but **this screen lists only the configuration changes**; a task's own commands are
-on that task's *Activity* tab. A *refused* command records nothing.
+on that task's *Activity* tab, and a project's settings changes on its settings page's *Who changed
+what*, both in words (*Changed how much agents do alone*) with the person's name. A *refused*
+command records nothing.
 
 ## 11. Settings
 

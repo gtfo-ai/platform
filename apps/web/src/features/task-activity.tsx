@@ -12,6 +12,10 @@
  * 18) and is the one thing an `ErrorNotice` would state wrongly. **Only** a 403 (WP-122, backlog
  * 385): a 503 or a 500 was rendered as the same role sentence, so an outage read as a missing role.
  *
+ * S-25.22 (BACKLOG 1372): each entry says what was done in words (`ui/words/human-actions.ts`) and
+ * who did it by name, read off the organisation's user list (`GET /api/org/users`, `org.read`, which
+ * every reader of this tab holds) — never the action's code name or a raw `user_id`.
+ *
  * Each entry's `params` is client-supplied JSON carrying the caller's own `Idempotency-Key`, so it
  * is untrusted like everything else this screen renders (BD-022), and it is raw — collapsed behind
  * *Details* (research/19 § 3 item 6).
@@ -19,14 +23,17 @@
 import { PersonIcon } from '@primer/octicons-react/PersonIcon';
 import type { ReactElement } from 'react';
 import { isForbiddenError, readErrorDetail } from '../api/read-error.js';
-import { useTaskAudit } from '../app/queries.js';
+import { useOrgUsers, useTaskAudit } from '../app/queries.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { EmptyState, ErrorNotice, formatDateTime, Loading, SectionHeading } from '../ui/kit.js';
 import { Timeline, TimelineItem } from '../ui/timeline.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { actorName, humanActionWords } from '../ui/words/human-actions.js';
 
 export const TaskActivity = ({ taskId }: { readonly taskId: string }): ReactElement => {
   const audit = useTaskAudit(taskId);
+  // S-25.22 (BACKLOG 1372): the actor by name, as the organisation's user list has them.
+  const users = useOrgUsers();
   const items = audit.data?.items ?? [];
   return (
     <div className="flex flex-col gap-2">
@@ -64,8 +71,11 @@ export const TaskActivity = ({ taskId }: { readonly taskId: string }): ReactElem
               time={formatDateTime(entry.created_at)}
             >
               <p>
-                <span className="font-medium">{entry.action}</span>
-                <span className="text-fg-muted">{` by ${entry.user_id ?? 'unknown user'}`}</span>
+                <span className="font-medium">{humanActionWords(entry.action)}</span>
+                <span className="text-fg-muted">
+                  {' by '}
+                  <UntrustedText value={actorName(entry.user_id, users.data?.items)} />
+                </span>
               </p>
               <DetailsDisclosure summary="Details">
                 <UntrustedText className="text-xs break-all" value={JSON.stringify(entry.params)} />

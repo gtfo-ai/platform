@@ -135,6 +135,8 @@ export interface ActivityInput {
     readonly started_at?: string | null;
     /** The run's `start_failure`: its workspace was never created (S-25.19, *Did not start*). */
     readonly start_failure?: object | null;
+    /** Why the platform stopped it (`RunRecord.stop_reason`, S-25.22): `cost_unreported` is a fault. */
+    readonly stop_reason?: string | null;
   } | null;
   /** A worker seat is shown (the office, the fleet map, the worker's page). */
   readonly seat?: boolean;

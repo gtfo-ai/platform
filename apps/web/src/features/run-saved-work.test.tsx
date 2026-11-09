@@ -71,6 +71,7 @@ const runWith = (saved: RunSavedWork | null): RunRecord => ({
   settings_hash: null,
   start_failure: null,
   saved_work: saved,
+  stop_reason: null,
   latest_progress: null,
 });
 

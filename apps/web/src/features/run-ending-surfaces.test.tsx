@@ -166,3 +166,65 @@ describe('the Agents rows and Home', () => {
     ).toEqual({ activity: 'failed', detail: 'Stalled' });
   });
 });
+
+/**
+ * S-25.22 (BACKLOG 1394): a run stopped because its cost could not be measured ends
+ * `budget_exceeded` / `error_max_budget_usd`, the budget's own words — so every list read *Over
+ * budget · Hit its budget*, an overspend, where the run page said the fault. `RunRecord.stop_reason`
+ * carries the runner's word, and each list reads it.
+ */
+describe('a run stopped for an unmeasured cost, wherever it is listed', () => {
+  const UNMEASURED = {
+    status: 'budget_exceeded',
+    terminal_reason: 'error_max_budget_usd',
+    stop_reason: 'cost_unreported',
+  } as const;
+  const OVERSPENT = { ...UNMEASURED, stop_reason: 'budget_exceeded' } as const;
+  const FAULT = 'Stopped: the run did not report its cost';
+
+  it('says the fault alone on the Runs tab, and Hit its budget only for an overspend', () => {
+    expect(runStatusWords(ended(1, UNMEASURED))).toBe(FAULT);
+    expect(runStatusWords(ended(1, OVERSPENT))).toBe('Over budget · Hit its budget');
+    expect(runStatusWords(ended(1, { ...UNMEASURED, stop_reason: null }))).toBe(
+      'Over budget · Hit its budget',
+    );
+  });
+
+  it('says the fault on the board card', () => {
+    const TASK = {
+      state: 'active',
+      open_questions: 0,
+      pending_approvals: 0,
+      waiting: null,
+    } as unknown as TaskListItem;
+    const agent = (run: Partial<RunRecord>): AgentEntry =>
+      agentItem(1, { run: { ended_at: '2026-11-05T16:44:30.000Z', ...run }, activity: null });
+    expect(cardActivity(TASK, agent(UNMEASURED), NOW)).toEqual({
+      activity: 'failed',
+      detail: FAULT,
+    });
+    expect(cardActivity(TASK, agent(OVERSPENT), NOW).detail).toBe('Hit its budget');
+  });
+
+  it('says the fault on the Agents rows and Home', () => {
+    const fleet = fleetOf({
+      agents: [],
+      workers: [],
+      inbox: EMPTY_INBOX,
+      now: NOW,
+      endings: [
+        { entry: agentItem(1), run: ended(1, UNMEASURED) },
+        { entry: agentItem(2), run: ended(2, OVERSPENT) },
+      ],
+    });
+    const rows = fleet.seats.flatMap((seat) => seat.endings);
+    expect(rows.map((run) => activityWords(run))).toEqual([
+      `failed: ${FAULT}`,
+      'failed: Hit its budget',
+    ]);
+    expect(activityOf({ run: { ...UNMEASURED, started_at: null }, now: NOW })).toEqual({
+      activity: 'failed',
+      detail: FAULT,
+    });
+  });
+});

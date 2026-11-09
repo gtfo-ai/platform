@@ -163,6 +163,34 @@ describe('TranscriptView', () => {
     expect(row?.textContent).not.toContain('\u202E');
   });
 
+  // S-25.22 (BACKLOG 1373): the permission check's decision in words, never `deny`/`ask`.
+  it.each([
+    ['allow', 'Allowed'],
+    ['ask', 'Asked a person'],
+    ['deny', 'Refused'],
+  ])('says the permission decision %s as %s', (decision, words) => {
+    const { container } = render(
+      <TranscriptView
+        blocks={[
+          {
+            kind: 'hook',
+            id: 'h',
+            seq: 1,
+            at: AT,
+            hook: 'PreToolUse',
+            toolName: 'Bash',
+            decision,
+            reason: null,
+            questionId: null,
+          },
+        ]}
+      />,
+    );
+    const row = container.querySelector('[data-block-kind="hook"]');
+    expect(row?.textContent).toContain(words);
+    expect(row?.textContent).not.toMatch(new RegExp(`\\b${decision}\\b`));
+  });
+
   it('renders a progress line as untrusted text, with its percentage and a cut marked (backlog 496)', () => {
     const summary = '<b>slice 2</b> pushed';
     const { container } = render(

@@ -9,6 +9,7 @@ import {
   runCommandRecordSchema,
   runModeSchema,
   ticketBreakdownItemSchema,
+  toolDecisionSchema,
 } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -19,6 +20,7 @@ import {
   RUN_COMMAND_STATE_LABEL,
   RUN_MODE_LABEL,
 } from './records.js';
+import { TOOL_DECISION_LABEL, toolDecisionLabel } from './tool-decisions.js';
 
 /** The prompt file statuses — an inline enum of the effective-config read, so named here. */
 const promptStatuses = ['file', 'not_a_file', 'oversized'] as const;
@@ -34,6 +36,8 @@ const TABLES: readonly [string, Readonly<Record<string, string>>, readonly strin
   ],
   ['a linked account’s kind', IDENTITY_KIND_LABEL, identityKindSchema.options],
   ['an ask’s citation', ASK_CITATION_KIND_LABEL, askAnswerCitationSchema.shape.kind.options],
+  // S-25.22 (BACKLOG 1373): the transcript's permission row.
+  ['a permission decision', TOOL_DECISION_LABEL, toolDecisionSchema.options],
 ];
 
 describe('the record values’ words (S-25.20)', () => {
@@ -45,5 +49,13 @@ describe('the record values’ words (S-25.20)', () => {
       expect(label).not.toMatch(/_/);
       expect(label.charAt(0)).toBe(label.charAt(0).toUpperCase());
     }
+  });
+});
+
+describe('a permission decision this build does not know (S-25.22)', () => {
+  it('reads as Decided, never the code word', () => {
+    expect(toolDecisionLabel('deny')).toBe('Refused');
+    expect(toolDecisionLabel('escalate')).toBe('Decided');
+    expect(toolDecisionLabel('constructor')).toBe('Decided');
   });
 });

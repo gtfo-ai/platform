@@ -5,8 +5,8 @@
  * Driven through `createApp` with a fake server, so the real endpoint parser reads `can_export` and
  * the real `DownloadLink` decides whether the path may become an `href`.
  */
-import type { TaskDetailResponse } from '@platform/contracts';
-import { cleanup, render, screen } from '@testing-library/react';
+import type { TaskAuditEntry, TaskDetailResponse, UserSummary } from '@platform/contracts';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -117,6 +117,9 @@ const detail = (
 const open = (options: {
   readonly canExport: boolean;
   readonly audit?: { readonly status: number; readonly message: string };
+  /** S-25.22: the audit rows the read answers, and the organisation's user list. */
+  readonly auditItems?: readonly TaskAuditEntry[];
+  readonly users?: readonly UserSummary[];
   readonly task?: Partial<TaskDetailResponse['task']>;
   /** S-23.9b: *Who did what* is the Activity tab. */
   readonly tab?: 'activity';
@@ -136,6 +139,12 @@ const open = (options: {
         },
         options.audit.status,
       );
+    }
+    if (path === `/api/tasks/${TASK}/audit` && options.auditItems !== undefined) {
+      return json({ items: options.auditItems });
+    }
+    if (path === '/api/org/users' && options.users !== undefined) {
+      return json({ items: options.users });
     }
     if (path === '/api/projects') return json({ items: [] });
     if (path.startsWith(`/api/tasks/${TASK}/`)) return json({ items: [], next_cursor: null });
@@ -203,6 +212,56 @@ describe('Who did what, when its read fails (WP-122, backlog 385)', () => {
     });
     expect(await screen.findByText('Not shown', {}, { timeout: 5_000 })).toBeTruthy();
     expect(document.body.textContent).toContain('reading the record needs the maintainer role');
+  });
+});
+
+describe('Who did what, in words (S-25.22, BACKLOG 1372)', () => {
+  const PAUSER = '00000000-0000-4000-8000-0000000000d1';
+  const entry = (action: string, userId: string | null, n: number): TaskAuditEntry => ({
+    id: `00000000-0000-4000-8000-0000000000e${n}`,
+    action,
+    user_id: userId,
+    params: { task_id: TASK },
+    created_at: AT,
+  });
+
+  it('says what was done and who did it by name, never the code name or the user id', async () => {
+    open({
+      canExport: false,
+      tab: 'activity',
+      auditItems: [
+        entry('task.pause', PAUSER, 1),
+        entry('run.cancel', null, 2),
+        entry('task.unheard_of', PAUSER, 3),
+      ],
+      users: [
+        {
+          id: PAUSER,
+          email: 'pauser@example.invalid',
+          name: 'Pat Pauser',
+          role: 'member',
+          status: 'active',
+        },
+      ],
+    });
+    expect(await screen.findByText('Paused the task', {}, { timeout: 5_000 })).toBeTruthy();
+    // Read off the text: `UntrustedText` may split a name across nodes.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Paused the task by Pat Pauser');
+    });
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Cancelled the run by A removed account');
+    expect(text).toContain('Did something this screen has no words for by Pat Pauser');
+    expect(text).not.toContain('task.pause');
+    expect(text).not.toContain('run.cancel');
+    expect(text).not.toContain(`by ${PAUSER}`);
+  });
+
+  it('says Someone, not the id, while the user list cannot be read', async () => {
+    open({ canExport: false, tab: 'activity', auditItems: [entry('task.resume', PAUSER, 1)] });
+    expect(await screen.findByText('Resumed the task', {}, { timeout: 5_000 })).toBeTruthy();
+    expect(document.body.textContent).toContain('Resumed the task by Someone');
+    expect(document.body.textContent).not.toContain(PAUSER);
   });
 });
 

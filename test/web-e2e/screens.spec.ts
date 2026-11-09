@@ -555,7 +555,7 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
   // BD-027's *Custom* with the differences listed, and the audit row that says who moved the dial.
   await expect(page.getByText('Custom', { exact: true })).toBeVisible();
   await expect(page.getByText('preset 5, in force 2')).toBeVisible();
-  await expect(page.getByText('project.autonomy.write')).toBeVisible();
+  await expect(page.getByText('Changed how much agents do alone')).toBeVisible();
   /**
    * …and the risk-class step, which stopped being a named gap at **WP-37**: the offer is a control
    * that does something (accepting it writes `policies.risk_classes` through the configuration

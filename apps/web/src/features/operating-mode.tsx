@@ -51,6 +51,7 @@ import { type ReactElement, useState } from 'react';
 import { readErrorDetail } from '../api/read-error.js';
 import {
   useOnboardingCommands,
+  useOrgUsers,
   useProjectAudit,
   useProjectAutonomy,
   useProjectBindings,
@@ -74,6 +75,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { actorName, humanActionWords } from '../ui/words/human-actions.js';
 import { AUTONOMY_LEVEL_LABEL, BUDGET_WINDOW_LABEL } from '../ui/words/settings.js';
 import { useStepActionTone } from './step-action-tone.js';
 
@@ -1242,6 +1244,8 @@ export const Notifications = ({ projectId }: { readonly projectId: string }): Re
  */
 export const SettingsAudit = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const audit = useProjectAudit(projectId);
+  // S-25.22 (BACKLOG 1372): the actor by name, and the action in words.
+  const users = useOrgUsers();
   return (
     <Section title="Who changed what">
       {audit.isPending ? <Loading label="Loading the audit…" /> : null}
@@ -1262,8 +1266,8 @@ export const SettingsAudit = ({ projectId }: { readonly projectId: string }): Re
       <ul className="flex flex-col gap-1">
         {(audit.data?.items ?? []).map((entry) => (
           <li key={entry.id} className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge>{entry.action}</Badge>
-            <UntrustedText value={entry.user_email ?? 'account removed'} />
+            <Badge>{humanActionWords(entry.action)}</Badge>
+            <UntrustedText value={actorName(entry.user_id, users.data?.items, entry.user_email)} />
             <span className="text-fg-muted">{formatDateTime(entry.created_at)}</span>
             <code className="text-fg-muted">
               <UntrustedText value={JSON.stringify(entry.params)} />

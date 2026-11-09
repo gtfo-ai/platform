@@ -58,6 +58,7 @@ import {
 import {
   jsonObjectSchema,
   jsonValueSchema,
+  runStoppedReasonSchema,
   sha256HexSchema,
   taskOwnerViewSchema,
 } from './records.js';
@@ -1062,23 +1063,9 @@ export const terminalRunStatusSchema = z.enum([
   'stalled',
 ]);
 
-/**
- * **Why the platform stopped a run** — the closed vocabulary of the `run_stopped` transcript row's
- * `data.reason`: the runner's own stops beside a holder's (`cancelled`, `taken_over`, `shutdown`).
- * `settleRun`'s request carries it as `stopReason` (TD-031's 2026-11-04 amendment §1), so a
- * worker's stop register crosses as a closed word, validated here (WP-281); `@platform/application`
- * re-exports it from `ports/runner.ts`, its one definition.
- */
-export const RUN_STOPPED_REASONS = [
-  'stalled',
-  'timed_out',
-  'budget_exceeded',
-  'cost_unreported',
-  'cancelled',
-  'taken_over',
-  'shutdown',
-] as const;
-export const runStoppedReasonSchema = z.enum(RUN_STOPPED_REASONS);
+// `RUN_STOPPED_REASONS` / `runStoppedReasonSchema` — why the platform stopped a run — live in
+// `records.ts` since S-25.22, because `RunRecord.stop_reason` carries them and this module imports
+// `records.ts` (the other direction would be a cycle).
 
 /**
  * `POST runs/:id/cancel` (WP-292, protocol 2): a person's cancel from the worker's local page. The

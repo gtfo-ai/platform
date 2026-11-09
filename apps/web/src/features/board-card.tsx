@@ -249,6 +249,7 @@ const baseActivity = (
             status: agent.run.status,
             terminal_reason: agent.run.terminal_reason ?? null,
             start_failure: agent.run.start_failure,
+            stop_reason: agent.run.stop_reason,
             started_at: agent.run.started_at ?? null,
           },
     latest: agent === undefined ? null : latestOf(agent),

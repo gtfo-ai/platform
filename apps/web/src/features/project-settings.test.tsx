@@ -770,7 +770,9 @@ describe('the project settings page', () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain('someone@example.invalid');
     });
-    expect(document.body.textContent).toContain('project.autonomy.write');
+    // S-25.22 (BACKLOG 1372): the action in words, never its code name.
+    expect(document.body.textContent).toContain('Changed how much agents do alone');
+    expect(document.body.textContent).not.toContain('project.autonomy.write');
     expect(document.body.textContent).toContain('before_level');
   });
 

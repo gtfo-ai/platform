@@ -17,7 +17,12 @@
  * `test/e2e/server/read-api.e2e.test.ts`; there is nothing a stubbed Drizzle handle could say about
  * them that either of those does not say better.
  */
-import { runStatusSchema, taskStageStateSchema, taskStateSchema } from '@platform/contracts';
+import {
+  RUN_STOPPED_REASONS,
+  runStatusSchema,
+  taskStageStateSchema,
+  taskStateSchema,
+} from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
@@ -29,6 +34,7 @@ import {
   savedWorkOf,
   stageStateOf,
   startFailureOf,
+  stopReasonOfRow,
   TERMINAL_RUN_STATUSES,
   ticketClaimViewOf,
   ticketTitleOf,
@@ -231,6 +237,25 @@ describe('the latest progress line a run record publishes', () => {
     expect(() => latestProgressOfRow({ runId: RUN, seq: 9, ...row })).toThrow(
       `entry 9 of run ${RUN} cannot be returned`,
     );
+  });
+});
+
+/** S-25.22 (BACKLOG 1394): `RunRecord.stop_reason`, off the newest `run_stopped` row. */
+describe('stopReasonOfRow', () => {
+  it.each(RUN_STOPPED_REASONS)('publishes the runner’s word %s', (reason) => {
+    expect(stopReasonOfRow({ reason, blobId: null })).toBe(reason);
+  });
+
+  it.each([
+    ['a word outside the runner’s vocabulary', { reason: 'overspent', blobId: null }],
+    ['a missing reason', { reason: null, blobId: null }],
+    ['a number', { reason: 3, blobId: null }],
+    [
+      'a payload in blobs',
+      { reason: 'cost_unreported', blobId: '00000000-0000-4000-8000-0000000000b9' },
+    ],
+  ])('publishes null for %s — the terminal reason’s own words, nothing invented', (_name, row) => {
+    expect(stopReasonOfRow(row)).toBeNull();
   });
 });
 

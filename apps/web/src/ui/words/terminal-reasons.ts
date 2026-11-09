@@ -62,6 +62,13 @@ export const TERMINAL_REASON_SHORT: Readonly<Record<RunTerminalReason, string>> 
 /** What a run whose workspace was never created says where it is listed. */
 export const DID_NOT_START = 'Did not start';
 
+/**
+ * What a run the platform stopped because its cost could not be measured says where it is listed
+ * (S-25.22, BACKLOG 1394): its terminal reason is `error_max_budget_usd`, the budget's, but it is a
+ * fault and not an overspend — the run page's *Ended* panel says the same from the transcript.
+ */
+export const COST_UNREPORTED_SHORT = 'Stopped: the run did not report its cost';
+
 const LIVE: ReadonlySet<RunStatus> = new Set(['created', 'starting', 'running']);
 
 /** What a listed run carries that decides its short form — every list's run record has these. */
@@ -70,13 +77,16 @@ export interface EndedRun {
   readonly terminal_reason?: RunTerminalReason | null;
   /** A run whose workspace was never created (or that was stopped before its CLI started). */
   readonly start_failure?: object | null;
+  /** Why the platform stopped it (`RunRecord.stop_reason`), when it did. */
+  readonly stop_reason?: string | null;
 }
 
 /**
  * The short form beside a listed run's status, or `null` when it would add nothing: a live run, a
  * success, a run with no recorded reason, and a cancel that says *Cancelled* already. A run whose
  * workspace never started is {@link DID_NOT_START} — unless a person or a shutdown stopped it
- * first, which is its own ending and not a failure.
+ * first, which is its own ending and not a failure — and one stopped for an unmeasured cost is
+ * {@link COST_UNREPORTED_SHORT}, never *Hit its budget*.
  */
 export const runEndedShort = (run: EndedRun): string | null => {
   if (LIVE.has(run.status)) {
@@ -96,6 +106,9 @@ export const runEndedShort = (run: EndedRun): string | null => {
   }
   if (run.status === 'cancelled' && reason === 'cancelled') {
     return null;
+  }
+  if (reason === 'error_max_budget_usd' && run.stop_reason === 'cost_unreported') {
+    return COST_UNREPORTED_SHORT;
   }
   return TERMINAL_REASON_SHORT[reason];
 };

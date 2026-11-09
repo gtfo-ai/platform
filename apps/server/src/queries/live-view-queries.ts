@@ -250,7 +250,8 @@ export const activityOfEntry = (facts: ActivityFacts): RunActivity => {
 export const RUN_CLOCK_SKEW_ALLOWANCE = '1 day';
 
 /**
- * Each listed run's newest `run_messages` row (optionally its newest `progress` row) with
+ * Each listed run's newest `run_messages` row (optionally its newest `progress` row, or its newest
+ * `run_stopped` system row — S-25.22) with
  * `columns` read off it as `m`: one `lateral` probe per run, ordered by `seq` and stopped at the
  * first row. A run with no such row is absent from the answer. The ids are bound one parameter
  * each; `columns` is SQL this module writes, never caller text.
@@ -258,7 +259,7 @@ export const RUN_CLOCK_SKEW_ALLOWANCE = '1 day';
 export const newestEntryPerRun = (
   runIds: readonly string[],
   columns: SQL,
-  options: { readonly progressOnly?: boolean } = {},
+  options: { readonly progressOnly?: boolean; readonly runStoppedOnly?: boolean } = {},
 ): SQL => sql`
   select r.id as run_id, e.*
     from unnest(array[${sql.join(
@@ -272,6 +273,7 @@ export const newestEntryPerRun = (
        where m.run_id = r.id
          and m.created_at >= r.created_at - ${sql.raw(`interval '${RUN_CLOCK_SKEW_ALLOWANCE}'`)}
          ${options.progressOnly === true ? sql`and m.kind = 'progress'` : sql``}
+         ${options.runStoppedOnly === true ? sql`and m.kind = 'system' and m.subtype = 'run_stopped'` : sql``}
        order by m.seq desc
        limit 1
     ) e`;

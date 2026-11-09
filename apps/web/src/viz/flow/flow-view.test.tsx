@@ -78,6 +78,7 @@ const run: RunRecord = {
   settings_hash: null,
   start_failure: null,
   saved_work: null,
+  stop_reason: null,
   latest_progress: null,
 };
 

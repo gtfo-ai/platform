@@ -1129,6 +1129,25 @@ export const runLatestProgressSchema = z.strictObject({
   percent_complete: z.int().min(0).max(100).nullable(),
 });
 
+/**
+ * **Why the platform stopped a run** — the closed vocabulary of the `run_stopped` transcript row's
+ * `data.reason`: the runner's own stops beside a holder's (`cancelled`, `taken_over`, `shutdown`).
+ * `settleRun`'s request carries it as `stopReason` (TD-031's 2026-11-04 amendment §1), so a
+ * worker's stop register crosses as a closed word, validated at the worker protocol (WP-281);
+ * `@platform/application` re-exports it from `ports/runner.ts`, its one definition. Defined here
+ * (S-25.22) because {@link runRecordSchema}'s `stop_reason` carries it.
+ */
+export const RUN_STOPPED_REASONS = [
+  'stalled',
+  'timed_out',
+  'budget_exceeded',
+  'cost_unreported',
+  'cancelled',
+  'taken_over',
+  'shutdown',
+] as const;
+export const runStoppedReasonSchema = z.enum(RUN_STOPPED_REASONS);
+
 export const runRecordSchema = z.strictObject({
   id: idSchema,
   task_id: idSchema,
@@ -1201,6 +1220,14 @@ export const runRecordSchema = z.strictObject({
    * task page shows it beside the running stage, and newer lines arrive live on `run:<id>`.
    */
   latest_progress: runLatestProgressSchema.nullable(),
+  /**
+   * Why the platform stopped this run — the newest `run_stopped` transcript row's `data.reason`
+   * (S-25.22, BACKLOG 1394) — or `null` when it stopped none (the run ended on its own, or is
+   * running and nothing asked it to stop). It is what tells a list that a run ended
+   * `error_max_budget_usd` because its cost could not be measured (`cost_unreported`, a fault) and
+   * not because it spent its budget: the terminal reason is the same for both.
+   */
+  stop_reason: runStoppedReasonSchema.nullable(),
 });
 
 /** Precedence chain for the effective configuration (technical/12). */
@@ -1258,6 +1285,7 @@ export type EstimateBasis = z.infer<typeof estimateBasisSchema>;
 export type HumanTimeKind = z.infer<typeof humanTimeKindSchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 export type RunRecord = z.infer<typeof runRecordSchema>;
+export type RunStoppedReason = z.infer<typeof runStoppedReasonSchema>;
 export type RunLatestProgress = z.infer<typeof runLatestProgressSchema>;
 export type ConfigSource = z.infer<typeof configSourceSchema>;
 export type ProjectRecord = z.infer<typeof projectRecordSchema>;

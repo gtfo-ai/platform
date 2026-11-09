@@ -28,6 +28,7 @@ import { Badge, Button, formatInteger, formatUsd } from '../ui/kit.js';
 import { StatusIcon } from '../ui/status.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { toolDecisionLabel } from '../ui/words/tool-decisions.js';
 import type { ToolBlock, TranscriptBlock } from './blocks.js';
 import { ToolBody } from './renderers.js';
 import { stepOpenByDefault, stepStatus, stepSummary, stepTiming, stepTitle } from './steps.js';
@@ -46,7 +47,12 @@ export const blockText = (block: TranscriptBlock): string => {
         .concat(block.children.map(blockText))
         .join('\n');
     case 'hook':
-      return [block.hook, block.toolName ?? '', block.decision ?? '', block.reason ?? ''].join(' ');
+      return [
+        block.hook,
+        block.toolName ?? '',
+        block.decision === null ? '' : toolDecisionLabel(block.decision),
+        block.reason ?? '',
+      ].join(' ');
     case 'steer':
       return block.message;
     case 'compaction':
@@ -262,7 +268,10 @@ const BlockView = ({
             </span>
           )}
           {block.decision === null ? null : (
-            <Badge tone={block.decision === 'deny' ? 'danger' : 'warning'}>{block.decision}</Badge>
+            // S-25.22 (BACKLOG 1373): the decision in words, never `deny`/`ask`.
+            <Badge tone={block.decision === 'deny' ? 'danger' : 'warning'}>
+              {toolDecisionLabel(block.decision)}
+            </Badge>
           )}
           {block.reason === null ? null : (
             <span className="text-sm">

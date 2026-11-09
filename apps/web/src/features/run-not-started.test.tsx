@@ -76,6 +76,7 @@ const runWith = (startFailure: RunStartFailure | null): RunRecord => ({
   settings_hash: null,
   start_failure: startFailure,
   saved_work: null,
+  stop_reason: null,
   latest_progress: null,
 });
 

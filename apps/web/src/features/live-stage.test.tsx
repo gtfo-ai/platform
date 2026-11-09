@@ -62,6 +62,7 @@ const run = (over: Partial<RunRecord> = {}): RunRecord => ({
   settings_hash: null,
   start_failure: null,
   saved_work: null,
+  stop_reason: null,
   latest_progress: {
     seq: 12,
     at: '2026-10-06T10:08:00.000Z',

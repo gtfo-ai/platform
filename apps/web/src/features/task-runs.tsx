@@ -14,6 +14,7 @@ import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { rowLink } from '../ui/row-link.js';
 import { type Status, StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { COST_UNREPORTED_SHORT } from '../ui/words/terminal-reasons.js';
 
 const RUN_STATUS: Readonly<Record<RunStatus, Status>> = {
   created: 'queued',
@@ -30,13 +31,19 @@ const RUN_STATUS: Readonly<Record<RunStatus, Status>> = {
 
 /**
  * The row's status words: the status, and the reason's short form when it adds something
- * (`runEndedShort`) and is not the status said again (*Timed out* ended *Timed out*).
+ * (`runEndedShort`) and is not the status said again (*Timed out* ended *Timed out*) — and a run
+ * stopped for an unmeasured cost says only that, never *Over budget* (S-25.22).
  */
 export const runStatusWords = (
-  run: Pick<RunRecord, 'status' | 'terminal_reason' | 'start_failure'>,
+  run: Pick<RunRecord, 'status' | 'terminal_reason' | 'start_failure' | 'stop_reason'>,
 ): string => {
   const status = RUN_STATUS_LABEL[run.status];
   const short = runEndedShort(run);
+  // S-25.22 (BACKLOG 1394): such a run's status is `budget_exceeded` (*Over budget*), which is
+  // untrue of a run nobody measured — the fault is said alone.
+  if (short === COST_UNREPORTED_SHORT) {
+    return short;
+  }
   return short === null || short.toLowerCase() === status.toLowerCase()
     ? status
     : `${status} · ${short}`;

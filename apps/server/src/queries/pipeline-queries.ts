@@ -80,6 +80,7 @@ import type {
   RunSavedWork,
   RunStartFailure,
   RunStatus,
+  RunStoppedReason,
   TaskConflict,
   TaskDetailRecord,
   TaskDetailResponse,
@@ -106,6 +107,7 @@ import {
   promptsWithheldSchema,
   runSavedWorkSchema,
   runStartFailureSchema,
+  runStoppedReasonSchema,
   storedTicketClaimSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
@@ -349,6 +351,7 @@ const toRunRecord = (
   row: RunProjectionRow,
   modelUsage: readonly RunModelUsageRecord[],
   latestProgress: RunLatestProgress | null,
+  stopReason: RunStoppedReason | null,
 ): RunRecord => {
   const stage = runStageOf(row);
   return {
@@ -401,6 +404,9 @@ const toRunRecord = (
     start_failure: startFailureOf(row),
     saved_work: savedWorkOf(row),
     latest_progress: latestProgress,
+    // S-25.22 (BACKLOG 1394): the runner's own word for why it stopped the run, read off the
+    // transcript row it wrote; `null` when it stopped none.
+    stop_reason: stopReason,
   };
 };
 
@@ -445,6 +451,53 @@ export const latestProgressFor = async (
   }
   return byRun;
 };
+
+/**
+ * Each run's newest `run_stopped` transcript row's `data.reason` → `RunRecord.stop_reason`
+ * (S-25.22, BACKLOG 1394) — the one fact that tells a list a run ended `error_max_budget_usd`
+ * because its cost could not be measured (`cost_unreported`), not because it spent its budget; the
+ * run page read the same row out of the whole transcript. One `lateral` probe per run, as
+ * {@link latestProgressFor}; a run the platform stopped none of is absent and publishes `null`.
+ *
+ * **A word outside the runner's vocabulary publishes `null`, deliberately not a refusal** (unlike
+ * {@link latestProgressOfRow}): the row's `data` is a JSON object the transcript schema does not
+ * close — a remote worker's transcript is stored as it sent it — and this field is read by every
+ * list the run is on, the Agents screen included, so one odd row refusing would blank all of them.
+ * `null` there reads the terminal reason's own words, which is what every list said before the
+ * field existed; nothing is invented. The same for a row whose payload is in `blobs` (a stub).
+ */
+export const stopReasonsFor = async (
+  database: Database,
+  runIds: readonly string[],
+): Promise<Map<string, RunStoppedReason>> => {
+  const byRun = new Map<string, RunStoppedReason>();
+  if (runIds.length === 0) {
+    return byRun;
+  }
+  const { rows } = await database.execute<{
+    run_id: string;
+    reason: unknown;
+    blob_id: string | null;
+  }>(
+    newestEntryPerRun(runIds, sql`m.payload -> 'data' -> 'reason' as reason, m.blob_id`, {
+      runStoppedOnly: true,
+    }),
+  );
+  for (const row of rows) {
+    const reason = stopReasonOfRow({ reason: row.reason, blobId: row.blob_id });
+    if (reason !== null) {
+      byRun.set(row.run_id, reason);
+    }
+  }
+  return byRun;
+};
+
+/** One stored `run_stopped` row's reason → `RunStoppedReason`, or `null` for a word it is not. */
+export const stopReasonOfRow = (row: {
+  readonly reason: unknown;
+  readonly blobId: string | null;
+}): RunStoppedReason | null =>
+  row.blobId === null ? (runStoppedReasonSchema.safeParse(row.reason).data ?? null) : null;
 
 /** One stored `progress` row → `RunLatestProgress`, or a refusal by name. Pure, for its unit test. */
 export const latestProgressOfRow = (row: {
@@ -518,11 +571,17 @@ export const findRun = async (database: Database, runId: string): Promise<RunRec
   if (row === undefined) {
     return null;
   }
-  const [usage, progress] = await Promise.all([
+  const [usage, progress, stops] = await Promise.all([
     modelUsageFor(database, [row.id]),
     latestProgressFor(database, [row.id]),
+    stopReasonsFor(database, [row.id]),
   ]);
-  return toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null);
+  return toRunRecord(
+    row,
+    usage.get(row.id) ?? [],
+    progress.get(row.id) ?? null,
+    stops.get(row.id) ?? null,
+  );
 };
 
 /**
@@ -2233,6 +2292,7 @@ export const findTaskDetail = async (
   const [
     usage,
     progress,
+    stops,
     takenOver,
     humanTime,
     conflicts,
@@ -2249,6 +2309,10 @@ export const findTaskDetail = async (
       runRows.map((row) => row.id),
     ),
     latestProgressFor(
+      database,
+      runRows.map((row) => row.id),
+    ),
+    stopReasonsFor(
       database,
       runRows.map((row) => row.id),
     ),
@@ -2327,7 +2391,12 @@ export const findTaskDetail = async (
     // TD-035: each with what it approves and why — recorded, derived by the one exact chain, or null.
     approvals: await approvalViewsFor(database, approvalRows),
     runs: runRows.map((row) =>
-      toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null),
+      toRunRecord(
+        row,
+        usage.get(row.id) ?? [],
+        progress.get(row.id) ?? null,
+        stops.get(row.id) ?? null,
+      ),
     ),
   };
 };
@@ -2553,9 +2622,10 @@ export const listRunningAgents = async (
     .where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]))
     .orderBy(desc(runs.createdAt));
   const ids = rows.map((row) => row.id);
-  const [usage, progress, seats, activity, waiting] = await Promise.all([
+  const [usage, progress, stops, seats, activity, waiting] = await Promise.all([
     modelUsageFor(database, ids),
     latestProgressFor(database, ids),
+    stopReasonsFor(database, ids),
     seatsFor(database, ids),
     latestActivityFor(database, ids),
     // S-26.5: why each run's open offer waits — one statement for the whole list.
@@ -2563,7 +2633,12 @@ export const listRunningAgents = async (
   ]);
   return {
     items: rows.map((row) => {
-      const run = toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null);
+      const run = toRunRecord(
+        row,
+        usage.get(row.id) ?? [],
+        progress.get(row.id) ?? null,
+        stops.get(row.id) ?? null,
+      );
       return {
         run,
         project_id: run.project_id,

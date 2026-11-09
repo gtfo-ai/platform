@@ -244,6 +244,7 @@ const runRecord = (run: Record<string, unknown>) => ({
   settings_hash: null,
   start_failure: null,
   saved_work: null,
+  stop_reason: null,
   latest_progress: null,
   ...run,
 });
