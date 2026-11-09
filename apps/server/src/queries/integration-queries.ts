@@ -79,11 +79,11 @@
  * a revoked token (`unauthorised`). One request's fault after a success therefore reads `degraded`
  * rather than `failing`, and the next successful call clears it (BACKLOG 1220).
  *
- * **A failed last call says what failed** (S-25.20): `last_call.error` is the message of the newest
- * `integration.action.failed` event on the integration's stream — written by the executor in the
- * same transaction as the audit row, **already redacted** and bounded there, so nothing here reads
- * provider text again. A fourth lateral, over the events' stream, run only when the newest call
- * failed and within the same lookback; a probe's failures are left out as its rows are.
+ * **A failed last call says what failed** (S-25.20): `last_call.error` is the message of **that
+ * call's** `integration.action.failed` event — the audit log appends it in the row's transaction
+ * with the row's own instant as `occurred_at`, so the fourth lateral matches the chosen row by
+ * instant and action (review of #126) — written **already redacted** and bounded by the executor,
+ * so nothing here reads provider text again. Run only when the newest call failed.
  */
 
 import { REFUSED_DELIVERY_REASONS } from '@platform/application';
@@ -529,7 +529,7 @@ export const readIntegrationTraffic = async (
            (extract(epoch from d.received_at) * 1000)::float8 as delivery_ms
       from integrations i
       left join lateral (
-        select a.created_at, a.status
+        select a.created_at, a.status, a.action
           from integration_actions a
          where a.integration_id = i.id
            and a.direction = 'out'
@@ -549,17 +549,18 @@ export const readIntegrationTraffic = async (
            and a.action <> all(${probeActions}::text[])
       ) w on true
       left join lateral (
-        -- S-25.20: the newest failed call's message, as the executor wrote it (redacted, bounded)
-        -- into the event committed with its audit row; read only when the newest call failed.
+        -- S-25.20: the failed call's own message, as the executor wrote it (redacted, bounded)
+        -- into the event the audit log appends with that very row: the envelope's occurred_at
+        -- is the entry's instant, the row's created_at (review of #126), and the action matches.
         select e.payload ->> 'error' as error
           from events e
          where c.status = 'failed'
+           and e.occurred_at = c.created_at
            and e.stream_type = 'integration'
            and e.stream_id = i.id
            and e.type = 'integration.action.failed'
-           and e.occurred_at > ${lookback}::timestamptz
-           and coalesce(e.payload ->> 'action', '') <> all(${probeActions}::text[])
-         order by e.occurred_at desc, e.position desc
+           and e.payload ->> 'action' = c.action
+         order by e.position desc
          limit 1
       ) f on true
       left join lateral (

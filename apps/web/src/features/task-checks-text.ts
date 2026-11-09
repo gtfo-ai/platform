@@ -804,18 +804,31 @@ export const CHECKS_START_STAGE: string = (() => {
 })();
 
 /**
+ * The templates whose pipeline reaches Implementation and the checks after it — the domain's
+ * `TICKET_TEMPLATES` (feature, bug, chore), named here so the bundle carries no domain ring and held
+ * to it by `task-page.test.tsx`. A spike or an epic split never reaches a check (review of #126).
+ */
+export const CHECKED_TEMPLATES: ReadonlySet<string> = new Set(['feature', 'bug', 'chore']);
+
+/**
  * **Checks before any can run** (S-25.20): the sentence the merge box says in place of its count
  * while the task is at a stage of the shipped flow **before** the checks start, and no gate has a
  * row — *"Checks start at Implementation."*; at that stage itself, *"…when Implementation is
- * done."*. `null` otherwise: a project's own stage, a finished task, or a task any gate has seen,
+ * done."*. `null` otherwise: a template other than {@link CHECKED_TEMPLATES}, a project's own
+ * stage, a finished task, or a task any gate has seen,
  * whose rows say what they say. Neutral, never a warning: nothing is late.
  */
 export const checksNotStartedText = (
-  task: Pick<TaskRecord, 'state' | 'current_stage'>,
+  task: Pick<TaskRecord, 'state' | 'current_stage' | 'template'>,
   stages: readonly StageRow[],
 ): string | null => {
   const current = task.current_stage ?? null;
-  if (current === null || task.state === 'done' || task.state === 'cancelled') {
+  if (
+    current === null ||
+    task.state === 'done' ||
+    task.state === 'cancelled' ||
+    !CHECKED_TEMPLATES.has(task.template)
+  ) {
     return null;
   }
   const order: readonly string[] = BUILTIN_STAGE_IDS;

@@ -28,6 +28,7 @@ let pool: pg.Pool;
 let drizzled: Database;
 let projectId = '';
 let userId = '';
+let otherId = '';
 let counter = 0;
 
 const one = async <R extends Record<string, unknown>>(
@@ -60,11 +61,12 @@ const action = async (
   name: string,
   params: Record<string, unknown>,
   minutesAgo: number,
+  by: string = userId,
 ): Promise<void> => {
   await pool.query(
     `insert into human_actions (task_id, user_id, action, params, created_at)
      values ($1, $2, $3, $4::jsonb, now() - make_interval(mins => $5))`,
-    [taskId, userId, name, JSON.stringify(params), minutesAgo],
+    [taskId, by, name, JSON.stringify(params), minutesAgo],
   );
 };
 
@@ -87,6 +89,11 @@ beforeAll(async () => {
       "insert into users (email, name) values ('pauser@example.test', 'Pat Pauser') returning id",
     )
   ).id;
+  otherId = (
+    await one<{ id: string }>(
+      "insert into users (email, name) values ('canceller@example.test', 'Bob Canceller') returning id",
+    )
+  ).id;
 }, 120_000);
 
 afterAll(async () => {
@@ -95,7 +102,7 @@ afterAll(async () => {
 });
 
 describe('manual_pause (S-25.20)', () => {
-  it('names who paused the task, when, and why — the newest pause since the event', async () => {
+  it('names who paused the task, when, and why — the one row beside the event', async () => {
     const taskId = await pausedTask();
     // An earlier pause the task has since left: before the newest event, so never the answer.
     await action(taskId, 'task.pause', { reason: 'an old pause' }, 120);
@@ -112,6 +119,42 @@ describe('manual_pause (S-25.20)', () => {
     // The task read carries the same answer.
     const detail = await findTaskDetail(drizzled, taskId, { waiting: false });
     expect(detail?.manual_pause).toEqual(pause);
+  });
+
+  // Review of #126: pause, then *Cancel run* hours later on the paused task — which writes a
+  // `run.cancel` row and no new `task.paused` (`pauseForCancel`). The pause is still Pat's.
+  it('never names a later Cancel run on a task already paused as its pause', async () => {
+    const taskId = await pausedTask();
+    await pausedEvent(taskId, 1, 180);
+    await action(taskId, 'task.pause', { reason: 'waiting for the API freeze' }, 180);
+    await action(
+      taskId,
+      'run.cancel',
+      { run_id: '00000000-0000-4000-8000-00000000c0d1' },
+      2,
+      otherId,
+    );
+    const pause = await manualPauseFor(drizzled, { id: taskId, state: 'paused' }, 'manual');
+    expect(pause).toMatchObject({
+      by: { user_id: userId, name: 'Pat Pauser' },
+      via: 'pause',
+      reason: 'waiting for the API freeze',
+    });
+    expect(pause?.by?.user_id).not.toBe(otherId);
+  });
+
+  it('answers null when two rows sit beside the event, rather than guess which', async () => {
+    const taskId = await pausedTask();
+    await pausedEvent(taskId, 1, 10);
+    await action(taskId, 'task.pause', { reason: 'mine' }, 10);
+    await action(
+      taskId,
+      'run.cancel',
+      { run_id: '00000000-0000-4000-8000-00000000c0d2' },
+      10,
+      otherId,
+    );
+    expect(await manualPauseFor(drizzled, { id: taskId, state: 'paused' }, 'manual')).toBeNull();
   });
 
   it('says a run cancel paused it, with no reason, and cuts a long reason', async () => {

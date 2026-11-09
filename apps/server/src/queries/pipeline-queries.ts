@@ -2373,13 +2373,16 @@ export const escalationFor = async (
  * **Who paused a task by hand, when and why** (S-25.20, {@link taskManualPauseSchema}): read only for
  * a task `paused` for the `manual` reason — a budget's or a take-over's pause has its own words.
  *
- * The pause is the newest `task.pause` or `run.cancel` row of `human_actions` for the task (a run's
- * *Cancel run* pauses its task), and only one written **at or after** the task's newest
- * `task.paused` event: the command writes its row after its transaction committed the event, so an
- * older row is an earlier pause the task has since left. A minute of slack absorbs the two clocks
- * (the event's instant is the process's, the row's the database's); a pause and a resume and a
- * second pause inside one minute could name the first one's row, which says the same person and
- * the same kind of pause. `reason` is the command's own redacted text (`pipeline/commands.ts`'s
+ * The pause is the one `task.pause` or `run.cancel` row of `human_actions` for the task (a run's
+ * *Cancel run* pauses its task) written **within a minute either side** of the task's newest
+ * `task.paused` event — the command writes its row just after its transaction committed the event,
+ * and the minute absorbs the two clocks (the event's instant is the process's, the row's the
+ * database's). Bounded on **both** sides (review of #126): a *Cancel run* on a task already paused
+ * writes a `run.cancel` row and no new `task.paused` (`pauseForCancel`), so an unbounded "newest
+ * since the event" named the person who cancelled hours later and dropped the pauser's reason. And
+ * **exactly one** such row: two inside the window cannot be told apart, and a false *who* is worse
+ * than none, so the read then answers `null` (*the record does not say who*). `reason` is the
+ * command's own redacted text (`pipeline/commands.ts`'s
  * `auditedReason`), cut here at {@link MAX_TASK_PAUSE_REASON_CHARS}. No row: `null`, never a guess.
  */
 export const manualPauseFor = async (
@@ -2410,13 +2413,16 @@ export const manualPauseFor = async (
            h.params -> 'reason' as reason,
            (extract(epoch from h.created_at) * 1000)::float8 as at_ms
       from human_actions h
-      join paused p on h.created_at >= p.occurred_at - interval '1 minute'
+      join paused p
+        on h.created_at between p.occurred_at - interval '1 minute'
+                            and p.occurred_at + interval '1 minute'
       left join users u on u.id = h.user_id
      where h.task_id = ${task.id}::uuid
        and h.action in ('task.pause', 'run.cancel')
      order by h.created_at desc, h.id desc
-     limit 1`);
-  const row = rows[0];
+     limit 2`);
+  // Exactly one row beside the event, or no answer: two cannot be told apart (review of #126).
+  const row = rows.length === 1 ? rows[0] : undefined;
   const atMs = row === undefined ? null : Number(row.at_ms);
   if (row === undefined || atMs === null || !Number.isFinite(atMs)) {
     return null;

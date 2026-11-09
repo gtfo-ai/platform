@@ -8,6 +8,7 @@
  * parsers. The commands are asserted by what the request carried.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
+import { TICKET_TEMPLATES } from '@platform/domain';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,7 @@ import { stageLabel } from '../ui/humanize.js';
 import { legacyApprovalExpired, taskPagePrimary, taskPrimaryAction } from './page-primary.js';
 import { pauseWhy } from './task-callout.js';
 import {
+  CHECKED_TEMPLATES,
   CHECKS_CALLOUT_POINTER,
   CHECKS_START_STAGE,
   checksNotStartedText,
@@ -1767,26 +1769,74 @@ describe('the merge box', () => {
     expect(document.body.textContent).not.toContain('not decided yet');
   });
 
+  it('says nothing new for a spike at Architecture, whose pipeline reaches no check (review of #126)', async () => {
+    start(
+      detail(
+        { stages: [stage('architecture', 1, 'running', null)] },
+        { state: 'active', current_stage: 'architecture', template: 'spike' },
+      ),
+    );
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toMatch(
+        /not decided yet|check/,
+      );
+    });
+    expect(document.querySelector('[data-checks-summary]')?.textContent).not.toContain(
+      'Checks start at',
+    );
+  });
+
   it('words the checks’ start from the stage the task is at, and steps aside once a gate ran', () => {
     expect(CHECKS_START_STAGE).toBe('implementation');
-    const before = { state: 'active' as const, current_stage: 'refinement' };
+    const before = { state: 'active' as const, current_stage: 'refinement', template: 'feature' };
     expect(checksNotStartedText(before, [])).toBe('Checks start at Implementation.');
-    expect(checksNotStartedText({ state: 'needs_human', current_stage: 'architecture' }, [])).toBe(
-      'Checks start at Implementation.',
-    );
-    expect(checksNotStartedText({ state: 'active', current_stage: 'implementation' }, [])).toBe(
-      'Checks start when Implementation is done.',
-    );
+    expect(
+      checksNotStartedText(
+        { state: 'needs_human', current_stage: 'architecture', template: 'feature' },
+        [],
+      ),
+    ).toBe('Checks start at Implementation.');
+    expect(
+      checksNotStartedText(
+        { state: 'active', current_stage: 'implementation', template: 'feature' },
+        [],
+      ),
+    ).toBe('Checks start when Implementation is done.');
     // A gate has a row (a return to an earlier stage after CI ran): the rows say what they say.
     expect(checksNotStartedText(before, [stage('ci_gate', 1, 'completed', 'pass')])).toBeNull();
     // At or past the first gate, a project's own stage, a finished task, or no stage: nothing.
-    expect(checksNotStartedText({ state: 'active', current_stage: 'ci_gate' }, [])).toBeNull();
-    expect(checksNotStartedText({ state: 'active', current_stage: 'code_review' }, [])).toBeNull();
-    expect(checksNotStartedText({ state: 'active', current_stage: 'design_spike' }, [])).toBeNull();
     expect(
-      checksNotStartedText({ state: 'cancelled', current_stage: 'refinement' }, []),
+      checksNotStartedText({ state: 'active', current_stage: 'ci_gate', template: 'feature' }, []),
     ).toBeNull();
-    expect(checksNotStartedText({ state: 'queued', current_stage: null }, [])).toBeNull();
+    expect(
+      checksNotStartedText(
+        { state: 'active', current_stage: 'code_review', template: 'feature' },
+        [],
+      ),
+    ).toBeNull();
+    expect(
+      checksNotStartedText(
+        { state: 'active', current_stage: 'design_spike', template: 'feature' },
+        [],
+      ),
+    ).toBeNull();
+    expect(
+      checksNotStartedText(
+        { state: 'cancelled', current_stage: 'refinement', template: 'feature' },
+        [],
+      ),
+    ).toBeNull();
+    expect(
+      checksNotStartedText({ state: 'queued', current_stage: null, template: 'feature' }, []),
+    ).toBeNull();
+    // Review of #126: a spike or an epic split never reaches a check — no new sentence for them.
+    for (const template of ['spike', 'epic_split', 'discovery']) {
+      expect(
+        checksNotStartedText({ state: 'active', current_stage: 'architecture', template }, []),
+      ).toBeNull();
+    }
+    // The web's list is the domain's ticket templates, exactly.
+    expect([...CHECKED_TEMPLATES].sort()).toEqual(Object.keys(TICKET_TEMPLATES).sort());
     // The box: neutral, and a check that needs a person still says so first.
     expect(checksSummary([{ status: 'queued', required: true }], 'Checks start at X.')).toEqual({
       status: 'queued',

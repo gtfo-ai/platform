@@ -103,9 +103,19 @@ const failedEvent = async (
 ): Promise<void> => {
   failedSeq += 1;
   await pool.query(
+    // At the instant of the newest failed row `hours` old or older — the audit log writes the
+    // event with the row's own instant (`occurred_at` = `created_at`), which is how the read
+    // matches the two; with no such row, `hours` before now.
     `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
      values ('integration', $1, $2, 'integration.action.failed', $3::jsonb, $4::jsonb,
-             now() - make_interval(secs => $5::float8 * 3600))`,
+             coalesce((select a.created_at from integration_actions a
+                        where a.integration_id = $1 and a.status = 'failed'
+                          and a.created_at <= now() - make_interval(secs => $5::float8 * 3600)
+                                              + interval '1 minute'
+                          and a.created_at >= now() - make_interval(secs => $5::float8 * 3600)
+                                              - interval '1 minute'
+                        order by a.created_at desc limit 1),
+                      now() - make_interval(secs => $5::float8 * 3600)))`,
     [
       integrationId,
       failedSeq,
@@ -194,6 +204,8 @@ beforeAll(async () => {
   await call(ids.flaky, 'ok', 3);
   await call(ids.flaky, 'failed', 1);
   // S-25.20: the failed call's own event, and an older failure's, which the newest one replaces.
+  // A newer event than the failed row's own, of another call: never the row's message.
+  await failedEvent(ids.flaky, 0.5, 'IntegrationProviderError: a different call');
   await failedEvent(ids.flaky, 2, 'IntegrationProviderError: an older failure');
   await failedEvent(
     ids.flaky,
