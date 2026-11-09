@@ -159,7 +159,10 @@ const detail = (
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const start = (task: TaskDetailResponse, role: SessionResponse['user']['role'] = 'admin') => {
+const start = (
+  task: TaskDetailResponse,
+  role: NonNullable<SessionResponse>['user']['role'] = 'admin',
+) => {
   const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://localhost').pathname;

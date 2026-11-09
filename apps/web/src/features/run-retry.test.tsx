@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { taskDetail } from '../viz/fleet/fleet.test-fixture.js';
 import {
   CONFIGURED_MODEL,
   modelOptionValue,
@@ -111,6 +112,9 @@ const fetchFor = (world: World) =>
     if (path === `/api/runs/${RUN}/commands`) return json({ items: [] });
     if (path === `/api/runs/${RUN}`) return json({ ...world.run, retry_defaults: world.defaults });
     if (path === '/api/projects') return json({ items: [] });
+    // S-25.21: *Re-run ▾* is drawn only once the task read says the reader may (`can_retry_run`),
+    // which a member may — so the run's task is answered, as the run page reads it.
+    if (path === `/api/tasks/${TASK}`) return json(taskDetail(TASK, 'ACME-12', 'Add VAT'));
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 

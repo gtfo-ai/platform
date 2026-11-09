@@ -9,7 +9,10 @@
  *
  *  - it reaches **Ready for merge** (`task.stage.entered` at `ready_for_merge`), the commonest;
  *  - it asks a **blocking question** (`waiting_answers`);
- *  - its plan touches a risk class that needs **plan approval** (`waiting_approval`).
+ *  - its plan waits for **plan approval** (`waiting_approval`): the project's dial is set to
+ *    Supervised through `PUT …/autonomy`, whose probation parks every first plan at a person. A
+ *    risk class alone does not: a project whose dial was never materialised has no preset that
+ *    asks for one (the first CI run of this case measured ACME-1 straight to Ready for merge).
  *
  * Nothing else is published. ACME-2 reaching the same place proves the scheduler started it on
  * ACME-1's own transition; before S-25.21 it stayed `queued` in all three.
@@ -17,6 +20,7 @@
 import type { RunSpec } from '@platform/application';
 import type { JsonObject } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
   inboundEvent,
   type PipelineE2E,
@@ -69,6 +73,8 @@ const admittedAfter = async (input: {
   readonly config: JsonObject;
   /** Where ACME-1 stops counting as running — and where ACME-2, started then, stops too. */
   readonly stopsAt: string;
+  /** Set the dial to Supervised first, so probation parks each first plan at a person. */
+  readonly supervised?: boolean;
 }) => {
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => {
@@ -87,6 +93,20 @@ const admittedAfter = async (input: {
     },
   });
   harness = pipeline;
+  if (input.supervised === true) {
+    const admin = new Client(pipeline.instance.baseUrl);
+    const signedIn = await admin.post('/api/auth/sign-in/email', {
+      email: BOOTSTRAP_EMAIL,
+      password: BOOTSTRAP_PASSWORD,
+    });
+    expect(signedIn.status, JSON.stringify(signedIn.body)).toBe(200);
+    const dialled = await admin.json(`/api/projects/${pipeline.projectId}/autonomy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'queue-admission-dial' },
+      body: JSON.stringify({ autonomy: 'supervised' }),
+    });
+    expect(dialled.status, JSON.stringify(dialled.body)).toBe(200);
+  }
 
   await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
   await pipeline.waitFor('ACME-1’s first run to start', async () => runs.length === 1);
@@ -129,15 +149,9 @@ describe('a queued task is admitted when the running one stops counting (S-25.21
     await admittedAfter({
       label: 'queue-admission-approval',
       scenarios: featureScenarios,
-      // The plan names `src/totals.ts` (`PLAN.files_to_change`): a class that requires approval.
-      config: {
-        version: 1,
-        ...ONE_RUNNING,
-        policies: {
-          risk_classes: { totals: { paths: ['src/totals.ts'], require: ['plan_approval'] } },
-        },
-      },
+      config: { version: 1, ...ONE_RUNNING },
       stopsAt: 'waiting_approval',
+      supervised: true,
     });
   }, 300_000);
 });
