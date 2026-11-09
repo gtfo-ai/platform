@@ -773,6 +773,88 @@ describe('intake', () => {
   });
 
   /**
+   * S-25.21 (BACKLOG 1369): **the scheduler runs whenever a place may have freed.** One running
+   * place (`max_parallel_tasks: 1`): both tickets are matched in one publish, so ACME-2 is queued
+   * behind ACME-1 before ACME-1's first stage runs; ACME-1 then stops to wait for a person — the
+   * only event that follows — and ACME-2 starts with nothing else happening. Before S-25.21 the
+   * scheduler heard neither wait, and ACME-2 stayed `queued`.
+   */
+  const ONE_RUNNING = { maxParallelTasks: 1, maxTasksInPipeline: 5, maxParallelRuns: 4 };
+  const keyed = (harness: PipelineHarness, key: string) =>
+    harness.store.snapshot().find((stored) => stored.task.ticket.key === key);
+
+  it('starts a queued task when the active one asks a blocking question (waiting_answers)', async () => {
+    const harness = harnessWith({ settings: { wip: { ...ONE_RUNNING } } });
+    harness.script('refinement', {
+      status: 'completed',
+      terminalReason: 'success',
+      structuredOutput: {
+        ...REFINED_SPEC,
+        decision: 'ask',
+        questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
+      },
+    });
+    await harness.publish([ticketMatched(), ticketMatched('Story', 'ACME-2')]);
+    expect(keyed(harness, TICKET.key)?.task.state).toBe('waiting_answers');
+    // Queued first (it was), then started by the scheduler on the question, and asked its own.
+    expect(harness.types()).toContain('task.queued');
+    expect(keyed(harness, 'ACME-2')?.task.state).toBe('waiting_answers');
+  });
+
+  it('starts a queued task when the active one waits for an approval (waiting_approval)', async () => {
+    const harness = harnessWith({
+      settings: {
+        wip: { ...ONE_RUNNING },
+        // Supervised: probation parks the plan at a person (the plan-approval gate's own case).
+        autonomy: materialiseAutonomy({
+          level: 'supervised',
+          at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          appliedBy: null,
+        }),
+      },
+    });
+    await harness.publish([ticketMatched(), ticketMatched('Story', 'ACME-2')]);
+    expect(keyed(harness, TICKET.key)?.task.state).toBe('waiting_approval');
+    expect(harness.types()).toContain('task.queued');
+    expect(keyed(harness, 'ACME-2')?.task.state).toBe('waiting_approval');
+  });
+
+  it('starts queued tasks when a WIP limit is raised, as many as the new limit admits', async () => {
+    // `runsAgents: false`: an admitted task holds its running place, its stage job left queued.
+    const wip = { ...ONE_RUNNING };
+    const harness = harnessWith({ runsAgents: false, settings: { wip } });
+    await harness.publish([
+      ticketMatched(),
+      ticketMatched('Story', 'ACME-2'),
+      ticketMatched('Story', 'ACME-3'),
+      ticketMatched('Story', 'ACME-4'),
+    ]);
+    const states = () =>
+      ['ACME-2', 'ACME-3', 'ACME-4'].map((key) => keyed(harness, key)?.task.state);
+    expect(keyed(harness, TICKET.key)?.task.state).toBe('active');
+    expect(states()).toEqual(['queued', 'queued', 'queued']);
+
+    // A `config.changed` naming no project schedules nothing, and neither does one before a raise.
+    await harness.publish([
+      event('config.changed', { project_id: null, scope: 'org', scope_id: null, diff: [] }),
+      event('config.changed', { project_id: PROJECT, scope: 'project', scope_id: null, diff: [] }),
+    ]);
+    expect(states()).toEqual(['queued', 'queued', 'queued']);
+
+    // Raised from 1 to 3: two places open, and the two first in the queue take them.
+    wip.maxParallelTasks = 3;
+    await harness.publish([
+      event('config.changed', {
+        project_id: PROJECT,
+        scope: 'project',
+        scope_id: null,
+        diff: [{ key: 'pipeline.wip.max_parallel_tasks', from: '1', to: '3' }],
+      }),
+    ]);
+    expect(states()).toEqual(['active', 'active', 'queued']);
+  });
+
+  /**
    * WP-91 criterion 1 (backlog 227): every run row carries the snapshot and hash of the settings
    * it was planned with, and a configuration change between two runs of one task yields two
    * hashes — the change is made the moment the first run is inserted, so the second stage plans

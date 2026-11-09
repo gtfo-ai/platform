@@ -55,6 +55,7 @@ import {
   composeSecretRedactors,
   createDeadLetterCommands,
   createLiveRuns,
+  createWipRaisedRecorder,
   createWorkingCalendar,
   DEFAULT_WEBHOOK_RATE_LIMIT_POLICY,
   exactSecretRedactor,
@@ -1395,6 +1396,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         config.secretKey,
       ),
       projectSettings: createProjectSettingsPort(database.pool, loggerPort),
+      // S-25.21 (BACKLOG 1369): a raised WIP limit appends `config.changed` on the project's
+      // stream, which the scheduler hears wherever events are dispatched — `ROLE=api` appends it
+      // and a worker starts the queued task.
+      wipRaised: capabilities.api
+        ? createWipRaisedRecorder({
+            unitOfWork: eventing.unitOfWork,
+            ids: { next: () => randomUUID() as never },
+            clock: { now: () => new Date().toISOString() },
+            logger: loggerPort,
+          })
+        : null,
       historyBootstrap: bootstrapCommands,
       historyBootstrapGate: bootstrapGate,
       rediscoveryGate: capabilities.api

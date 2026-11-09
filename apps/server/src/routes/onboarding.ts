@@ -131,6 +131,7 @@ import {
   writeIntegrationHealth,
   writeProjectConfig,
 } from '../queries/onboarding-queries.js';
+import { recordProjectWipRaise, type WipRaiseNotifier } from '../wip-raise.js';
 import {
   claimIdempotentAttempt,
   configHashOf,
@@ -172,6 +173,12 @@ export interface OnboardingRoutesOptions {
    * argument; `assertHostIsDeclared` is the refusal.
    */
   readonly integrationHosts?: readonly string[];
+  /**
+   * S-25.21 (BACKLOG 1369): what the configuration write appends when it **raised** a WIP limit in
+   * force, so the scheduler starts a queued task in the place it opened. Absent or `null`: nothing
+   * is appended (a composition with no event store).
+   */
+  readonly wipRaise?: WipRaiseNotifier | null;
 }
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -830,7 +837,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Write this project’s configuration and autonomy dial (the wizard’s step 4)',
         description:
-          "The **whole** `.agentic/config.yml` document through the strict schema — an unknown key is refused, never dropped (technical/12). `autonomy_level` is materialised through the domain preset (BD-027), and a document whose `policies.autonomy` disagrees with it is refused rather than silently resolved. `base_hash` is optimistic concurrency: send the `hash` the last read gave you, or omit it to overwrite. The answer's `not_applied` names every key of the document this build parses and does not read (`template_overrides.*.enabled`, `custom_stages`, and a per-stage prompt key whose value names a file outside `.agentic/prompts/`; the prompt files themselves are read since WP-92), with the reason — the write is accepted, never silently inert. A `pipeline.wip` limit above the organisation's maximum is `409 wip_above_organisation`.",
+          "The **whole** `.agentic/config.yml` document through the strict schema — an unknown key is refused, never dropped (technical/12). `autonomy_level` is materialised through the domain preset (BD-027), and a document whose `policies.autonomy` disagrees with it is refused rather than silently resolved. `base_hash` is optimistic concurrency: send the `hash` the last read gave you, or omit it to overwrite. The answer's `not_applied` names every key of the document this build parses and does not read (`template_overrides.*.enabled`, `custom_stages`, and a per-stage prompt key whose value names a file outside `.agentic/prompts/`; the prompt files themselves are read since WP-92), with the reason — the write is accepted, never silently inert. A `pipeline.wip` limit above the organisation's maximum is `409 wip_above_organisation`. A write that **raises** a limit in force appends `config.changed` on the project's stream, so the scheduler starts a queued task in the place it opened (S-25.21).",
         tags: ['projects'],
         params: projectParamsSchema,
         body: updateProjectConfigRequestSchema,
@@ -855,6 +862,9 @@ export const registerOnboardingRoutes = async (
       }
       const level = requested ?? inDocument;
       await refuseWipAboveOrganisation(options.database, projectId, config);
+      // S-25.21: the limits admission uses before this write, so a raise is told to the scheduler.
+      const wipRaise = options.wipRaise ?? null;
+      const wipBefore = wipRaise === null ? null : await wipRaise.limitsInForce(projectId);
       // Materialised at selection time, never at read time (BD-027): the preset's own version is
       // stored beside the level so a release that changes a preset does not silently change a
       // project's effective policies.
@@ -905,6 +915,16 @@ export const registerOnboardingRoutes = async (
               }),
         },
       });
+      // S-25.21 (BACKLOG 1369): a limit in force that rose opens a place the scheduler hears of
+      // only through an event — appended after the write committed, on the project's stream.
+      if (wipRaise !== null) {
+        await recordProjectWipRaise(wipRaise, {
+          projectId,
+          before: wipBefore,
+          userId: actor.userId,
+          log: request.log,
+        });
+      }
       // WP-91: accepted, and never silently inert — every key this build parses and does not read
       // is named with the reason, as the repository read names the file's (the row's ruling).
       const { version: _version, ...values } = config;

@@ -60,6 +60,7 @@ import type {
   RemoteRunCalls,
   RemoteRuns,
   WebhookIngress,
+  WipRaisedRecorder,
 } from '@platform/application';
 import { createIntegrationEgressPolicy } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
@@ -376,6 +377,12 @@ export interface BuildAppOptions {
    */
   readonly projectSettings: ProjectSettingsPort;
   /**
+   * S-25.21 (BACKLOG 1369): appends `config.changed` for a raised WIP limit, so the scheduler
+   * starts a queued task in the place the raise opened. Absent or `null` on a composition with no
+   * event store (`app.test.ts`): the configuration writes are served and append nothing.
+   */
+  readonly wipRaised?: WipRaisedRecorder | null;
+  /**
    * The history bootstrap's start command (WP-35), or `null` for a process with no pipeline.
    *
    * Nullable like `shadow` and for the same reason; the route answers `503` by name.
@@ -656,9 +663,27 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         : { run: release.digests.platform_runtime, egress: release.digests.platform_egress };
     };
     // S-25.16: a queued task's `queue_wait` is read with the limits the scheduler is given — the
-    // same settings port's `wip`, the organisation's bound applied — never a second resolution.
-    const wipLimits = async (projectId: string) =>
-      (await options.projectSettings.forProject(projectId as Id)).wip;
+    // same settings port's `wip`, the organisation's bound applied — never a second resolution —
+    // and (S-25.21) the keys of the limits that bound lowered, from the same read.
+    const wipLimits = async (projectId: string) => {
+      const settings = await options.projectSettings.forProject(projectId as Id);
+      return {
+        limits: settings.wip,
+        bounded: (settings.wipBounded ?? []).map((bound) => bound.key),
+      };
+    };
+    // S-25.21: the two configuration writes compare the limits in force — this same settings port's
+    // `wip` — before and after, and append the event that starts the queue for a raise.
+    const wipRaise =
+      options.wipRaised === undefined || options.wipRaised === null
+        ? null
+        : {
+            limitsInForce: async (projectId: string) =>
+              (await projectExists(options.database, projectId))
+                ? (await options.projectSettings.forProject(projectId as Id)).wip
+                : null,
+            recorder: options.wipRaised,
+          };
     await registerOrgRoutes(app, {
       coreDigests: coreRunDigests,
       database: options.database,
@@ -946,6 +971,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     });
     await registerOnboardingRoutes(app, {
       database: options.database,
+      wipRaise,
       secretKey: config.secretKey,
       onboarding: options.onboarding,
       integrationSecretEnv: config.integrationSecretEnv,
@@ -1060,6 +1086,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       // TD-012 step 2, the platform's patterns — the same composition `commands.ts` gives every
       // task command, and for the same reason: an HTTP request carries no run-scoped credential.
       redactor: redactionAdapters.patternRedactor(),
+      wipRaise,
     });
     // WP-41: the organisation statistics and their CSV twin. It needs the database and nothing
     // else — every number is a projection, and the two the projector writes are read like the six

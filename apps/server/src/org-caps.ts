@@ -43,6 +43,8 @@ import {
   ProjectSettingsInvalidError,
   projectConfigWithRepository,
   type RepositoryConfigSnapshot,
+  raisedWipLimits,
+  type WipRaise,
 } from '@platform/application';
 import {
   type AutonomyLevel,
@@ -101,6 +103,32 @@ const WIP_KEYS = [
   ['pipeline.wip.max_parallel_tasks', 'maxParallelTasks'],
   ['pipeline.wip.max_tasks_in_pipeline', 'maxTasksInPipeline'],
 ] as const;
+
+/**
+ * **The other direction** (S-25.21, BACKLOG 1369): the projects whose WIP limit in force this write
+ * **raised**, with each limit before and after — the same layering and the same two documents as
+ * {@link cappedProjectsOf}, so a project is never both. A raise opens a place the scheduler hears
+ * of only through an event, so the route appends one per project listed here once the write has
+ * committed (`wip-raise.ts`). A project whose settings layer does not parse is left out: it runs on
+ * the floor whatever the organisation states (`pipeline.ts`), so no maximum raised anything for it.
+ * The residual of `before` — the replaced document's **stated** values — is the one stated above:
+ * a write that repairs an unparseable organisation document lists no raise that the floor hid.
+ */
+export const raisedWipProjectsOf = (input: {
+  readonly before: unknown;
+  readonly after: OrganisationSettings;
+  readonly projects: readonly OrgCapProject[];
+}): { readonly projectId: string; readonly raised: WipRaise[] }[] => {
+  const before = organisationOrNone(input.before);
+  return input.projects.flatMap((project) => {
+    if (project.wip === 'refused') return [];
+    const raised = raisedWipLimits(
+      resolveWipLimits(project.wip, before.pipeline?.wip).limits,
+      resolveWipLimits(project.wip, input.after.pipeline?.wip).limits,
+    );
+    return raised.length === 0 ? [] : [{ projectId: project.id, raised }];
+  });
+};
 
 /**
  * The projects whose value in force this write lowered, autonomy first and then the two WIP limits,

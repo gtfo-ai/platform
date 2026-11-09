@@ -18,11 +18,16 @@
  *
  * One statement per project read (the project's live tasks), plus the settings read, and only when
  * the page holds a queued task: never one per item. A queued task the limits would admit now answers
- * `admitted` — the scheduler runs when a task leaves the active set, and none has since.
+ * `admitted` — the scheduler has not run since a place freed (since S-25.21 it runs whenever one may
+ * have: a task leaving the active set, a WIP limit raised).
+ *
+ * **Which limit binds** (S-25.21): `organisation_bound` says the refusing limit is the
+ * organisation's maximum — `resolveWipLimits`' `bounded`, carried on the settings port's
+ * `wipBounded` — so the page does not send the reader to a project value that would change nothing.
  */
 import { priorityRankOf } from '@platform/application';
 import type { IsoDateTime, QueueWait, TaskState } from '@platform/contracts';
-import { queueWaitsOver, type WipLimits } from '@platform/domain';
+import { queueWaitsOver, type WipBound, type WipLimits } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, eq, notInArray } from 'drizzle-orm';
 
@@ -31,9 +36,16 @@ const { tasks } = dbAdapters.schema;
 
 /**
  * The limits a project is admitted against — `ProjectSettings.wip`, read through the scheduler's
- * own settings port by the composition (`app.ts`). A test hands a fixed one.
+ * own settings port by the composition (`app.ts`) — with the keys of those the organisation's
+ * maximum lowered (`ProjectSettings.wipBounded`, S-25.21). A test hands a fixed one.
  */
-export type WipLimitsReader = (projectId: string) => Promise<WipLimits>;
+export type WipLimitsReader = (projectId: string) => Promise<WipLimitsInForce>;
+
+export interface WipLimitsInForce {
+  readonly limits: WipLimits;
+  /** The limits the organisation's maximum lowered — `resolveWipLimits`' `bounded`, by key. */
+  readonly bounded: readonly WipBound['key'][];
+}
 
 /** The states no limit counts, and the only ones this read need not fetch. */
 const FINISHED_STATES: readonly TaskState[] = ['done', 'cancelled'];
@@ -60,7 +72,7 @@ export const queueWaitsFor = async (
   if (taskIds.length === 0) {
     return new Map();
   }
-  const [limits, rows] = await Promise.all([
+  const [inForce, rows] = await Promise.all([
     wipLimits(projectId),
     database
       .select({
@@ -73,7 +85,7 @@ export const queueWaitsFor = async (
       .from(tasks)
       .where(and(eq(tasks.projectId, projectId), notInArray(tasks.state, [...FINISHED_STATES]))),
   ]);
-  return queueWaitsOf(rows, taskIds, limits);
+  return queueWaitsOf(rows, taskIds, inForce.limits, inForce.bounded);
 };
 
 /**
@@ -85,6 +97,7 @@ export const queueWaitsOf = (
   live: readonly LiveTask[],
   taskIds: readonly string[],
   limits: WipLimits,
+  bounded: readonly WipBound['key'][] = [],
 ): ReadonlyMap<string, QueueWait> =>
   queueWaitsOver(
     live.map((task) => ({
@@ -97,4 +110,5 @@ export const queueWaitsOf = (
     })),
     taskIds,
     limits,
+    bounded,
   );

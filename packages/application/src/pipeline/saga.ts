@@ -2156,42 +2156,67 @@ const defaultBranchHandler = (options: PipelineSagaOptions): EventHandler => ({
 // ── The WIP scheduler ────────────────────────────────────────────────────────
 
 /**
+ * The events after which a WIP place **may** have freed (S-25.21, BACKLOG 1369) — the scheduler's
+ * subscription. A task leaving the active set (finished, cancelled, escalated, paused); an active
+ * task stopping to wait for a person (a blocking question, an approval — `waiting_answers` and
+ * `waiting_approval` hold a pipeline place but no running one); and a WIP limit raised
+ * (`config.changed`, which the configuration and organisation-policy writes append for a raise,
+ * `pipeline/wip-raised.ts`). The scheduler asks admission again on every one, so an event that
+ * freed nothing — a non-blocking question, a raise the other limit still refuses — starts nothing.
+ */
+export const SCHEDULER_EVENT_TYPES = [
+  'task.completed',
+  'task.cancelled',
+  'task.escalated',
+  'task.paused',
+  'task.question.asked',
+  'task.approval.requested',
+  'config.changed',
+] as const satisfies readonly DomainEvent['type'][];
+
+type SchedulerEvent = Extract<DomainEvent, { type: (typeof SCHEDULER_EVENT_TYPES)[number] }>;
+
+const isSchedulerEvent = (event: DomainEvent): event is SchedulerEvent =>
+  (SCHEDULER_EVENT_TYPES as readonly string[]).includes(event.type);
+
+/**
  * BD-010: "Tasks beyond limits wait in `Queued` ordered by ticket priority then age."
  *
- * A slot is freed by any event that takes a task out of the active set, so the scheduler listens
- * to all of them rather than to `task.completed` alone — a task parked in `Needs human` frees a
- * slot exactly as a finished one does.
+ * A place is freed by any event that takes a task out of a counted set, so the scheduler listens
+ * to all of them ({@link SCHEDULER_EVENT_TYPES}) rather than to `task.completed` alone — a task
+ * parked in `Needs human` frees a slot exactly as a finished one does. Since S-25.21 it starts **as
+ * many queued tasks as the limits now admit**, in queue order, asking admission again before each
+ * start in the one transaction (so each count sees the start before it): a limit raised by two
+ * opens two places, and a queued task never reads *a place is free* beside one nobody took.
  */
 const schedulerHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.scheduler',
   priority: 30,
-  eventTypes: ['task.completed', 'task.cancelled', 'task.escalated', 'task.paused'],
+  eventTypes: [...SCHEDULER_EVENT_TYPES],
   handle: async (context) => {
     const event = context.event.event;
-    if (
-      event.type !== 'task.completed' &&
-      event.type !== 'task.cancelled' &&
-      event.type !== 'task.escalated' &&
-      event.type !== 'task.paused'
-    ) {
+    if (!isSchedulerEvent(event)) {
       return;
     }
     const projectId = event.payload.project_id;
+    if (projectId === null || projectId === undefined) {
+      // An organisation-wide `config.changed` names no project; the policy write appends one per
+      // project whose limit it raised, so this one has nothing to schedule.
+      return;
+    }
     const settings = await options.settings.forProject(projectId, context.scope.tx);
-    const counts = await options.store.tasks.counts(context.scope.tx, projectId);
-    if (!evaluateTaskAdmission(counts, settings.wip).admitted) {
-      return;
-    }
     const queued = orderQueue(await options.store.tasks.queued(context.scope.tx, projectId));
-    const next = queued[0];
-    if (next === undefined) {
-      return;
+    for (const next of queued) {
+      const counts = await options.store.tasks.counts(context.scope.tx, projectId);
+      if (!evaluateTaskAdmission(counts, settings.wip).admitted) {
+        return;
+      }
+      const stored = await options.store.tasks.load(context.scope.tx, next.id);
+      if (stored === null || stored.task.state !== 'queued') {
+        continue;
+      }
+      await step(options, context, stored, { kind: 'start' });
     }
-    const stored = await options.store.tasks.load(context.scope.tx, next.id);
-    if (stored === null || stored.task.state !== 'queued') {
-      return;
-    }
-    await step(options, context, stored, { kind: 'start' });
   },
 });
 

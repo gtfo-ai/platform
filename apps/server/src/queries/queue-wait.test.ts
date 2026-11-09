@@ -35,6 +35,7 @@ describe('queueWaitsOf', () => {
       reason: 'max_tasks_in_pipeline',
       count: 5,
       limit: 5,
+      organisation_bound: false,
       position: 2,
       queued: 2,
       running: { count: 0, limit: 2 },
@@ -142,6 +143,19 @@ describe('queueWaitsOf', () => {
     expect(wait.holders.items).toHaveLength(MAX_QUEUE_WAIT_HOLDERS);
     expect(wait.holders.items.slice(0, 6).every((held) => held.state === 'needs_human')).toBe(true);
     expect(wait.holders.items[6]?.state).toBe('paused');
+  });
+
+  it('says the organisation binds only when the refusing limit is one it lowered (S-25.21)', () => {
+    const queued = task('queued');
+    const live = [task('active'), task('active'), queued];
+    const bound = (keys: Parameters<typeof queueWaitsOf>[3]) => {
+      const wait = queueWaitsOf(live, [queued.id], DEFAULT_WIP_LIMITS, keys).get(queued.id);
+      return wait?.status === 'waiting' ? wait.organisation_bound : null;
+    };
+    // The parallel limit (2) refuses: bound when it is the lowered one, not when the other is.
+    expect(bound(['pipeline.wip.max_parallel_tasks'])).toBe(true);
+    expect(bound(['pipeline.wip.max_tasks_in_pipeline'])).toBe(false);
+    expect(bound([])).toBe(false);
   });
 
   it('answers nothing for a task that is not queued at this read', () => {

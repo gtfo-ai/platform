@@ -53,7 +53,7 @@ const waitFor = (states: readonly TaskState[], limits: WipLimits, position = 1):
     })),
   ];
   const asked = live.at(-1)?.id ?? '';
-  const wait = queueWaitsOver(live, [asked], limits).get(asked);
+  const wait = queueWaitsOver(live, [asked], limits, []).get(asked);
   if (wait === undefined) {
     throw new Error('the queued task has no queue_wait');
   }

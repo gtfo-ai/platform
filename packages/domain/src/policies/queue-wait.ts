@@ -16,7 +16,15 @@ import {
   type QueueWait,
   type TaskState,
 } from '@platform/contracts';
-import { holdsPlace, orderQueue, queueAdmissionOf, type WipLimits, wipCountsOf } from './wip.js';
+import {
+  holdsPlace,
+  orderQueue,
+  type QueueWaitReason,
+  queueAdmissionOf,
+  type WipBound,
+  type WipLimits,
+  wipCountsOf,
+} from './wip.js';
 
 /** One of the project's live tasks (not `done`, not `cancelled`), as the read selects it. */
 export interface QueueLiveTask {
@@ -28,6 +36,12 @@ export interface QueueLiveTask {
   /** At the store's millisecond resolution, so ties break as the scheduler breaks them. */
   readonly createdAt: IsoDateTime;
 }
+
+/** The configuration key of each limit a queued task can wait behind — `WipBound`'s keys. */
+const WIP_KEY_OF = {
+  max_parallel_tasks: 'pipeline.wip.max_parallel_tasks',
+  max_tasks_in_pipeline: 'pipeline.wip.max_tasks_in_pipeline',
+} as const satisfies Record<QueueWaitReason, WipBound['key']>;
 
 /** Waiting-for-a-person first (what a reader can act on), then the oldest, then the id. */
 const holderOrder = (a: QueueLiveTask, b: QueueLiveTask): number => {
@@ -42,11 +56,16 @@ const holderOrder = (a: QueueLiveTask, b: QueueLiveTask): number => {
 /**
  * The `queue_wait` of every **queued** task among `taskIds`, over the project's live tasks — keyed
  * by task id; a task that is not queued is absent (its `queue_wait` is `null`).
+ *
+ * `bounded` is the keys of the limits the organisation's maximum lowered (`resolveWipLimits`'
+ * `bounded`, S-25.21): a wait on one of them answers `organisation_bound: true`, because raising the
+ * project's own value would change nothing.
  */
 export const queueWaitsOver = (
   live: readonly QueueLiveTask[],
   taskIds: readonly string[],
   limits: WipLimits,
+  bounded: readonly WipBound['key'][],
 ): ReadonlyMap<string, QueueWait> => {
   const counts = wipCountsOf(live.map((task) => task.state));
   const admission = queueAdmissionOf(counts, limits);
@@ -87,6 +106,7 @@ export const queueWaitsOver = (
             reason: admission.reason,
             count: admission.count,
             limit: admission.limit,
+            organisation_bound: bounded.includes(WIP_KEY_OF[admission.reason]),
             position: at,
             queued: queue.length,
             running,

@@ -60,7 +60,10 @@ beforeAll(async () => {
   store = pipeline.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
   // The composition's reader (`app.ts`): the scheduler's settings port, its `wip`.
   const settings = createProjectSettingsPort(pool);
-  wipLimits = async (projectId) => (await settings.forProject(projectId as Id)).wip;
+  wipLimits = async (projectId) => {
+    const read = await settings.forProject(projectId as Id);
+    return { limits: read.wip, bounded: (read.wipBounded ?? []).map((bound) => bound.key) };
+  };
 }, 120_000);
 
 afterAll(async () => {
@@ -135,6 +138,7 @@ describe('queue_wait (S-25.16)', () => {
       reason: 'max_tasks_in_pipeline',
       count: 5,
       limit: 5,
+      organisation_bound: false,
       position: 2,
       queued: 2,
       running: { count: 0, limit: 2 },
@@ -195,7 +199,7 @@ describe('queue_wait (S-25.16)', () => {
           orderQueue(await store.tasks.queued(tx, projectId)),
         ] as const,
     );
-    const scheduler = evaluateTaskAdmission(counts, await wipLimits(projectId));
+    const scheduler = evaluateTaskAdmission(counts, (await wipLimits(projectId)).limits);
     for (const id of [later, urgent]) {
       const wait = await queueWaitOf(projectId, id);
       expect(wait?.status === 'admitted', id).toBe(scheduler.admitted);
@@ -220,13 +224,34 @@ describe('queue_wait (S-25.16)', () => {
       await task(projectId, `ORG-${n}`, 'needs_human', { minute: n });
     }
     const queued = await task(projectId, 'ORG-Q', 'queued', { minute: 9 });
-    expect((await wipLimits(projectId)).maxTasksInPipeline).toBe(3);
+    expect((await wipLimits(projectId)).limits.maxTasksInPipeline).toBe(3);
     expect(await queueWaitOf(projectId, queued)).toMatchObject({
       status: 'waiting',
       reason: 'max_tasks_in_pipeline',
       count: 3,
       limit: 3,
+      // S-25.21: the organisation's 3 lowered BD-010's 5, so raising the project's changes nothing.
+      organisation_bound: true,
       holders: { total: 3, needs_human: 3 },
+    });
+  });
+
+  it('says the limit is the project’s own when the organisation’s maximum is not what binds', async () => {
+    // The organisation allows 3 in the pipeline; the project states 2 itself, below it.
+    const projectId = await project({ pipeline: { wip: { max_tasks_in_pipeline: 3 } } });
+    await pool.query(`update projects set config = $2::jsonb where id = $1`, [
+      projectId,
+      JSON.stringify({ version: 1, pipeline: { wip: { max_tasks_in_pipeline: 2 } } }),
+    ]);
+    for (let n = 0; n < 2; n += 1) {
+      await task(projectId, `OWN-${n}`, 'needs_human', { minute: n });
+    }
+    const queued = await task(projectId, 'OWN-Q', 'queued', { minute: 9 });
+    expect(await queueWaitOf(projectId, queued)).toMatchObject({
+      status: 'waiting',
+      reason: 'max_tasks_in_pipeline',
+      limit: 2,
+      organisation_bound: false,
     });
   });
 });

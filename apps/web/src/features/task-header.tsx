@@ -58,8 +58,9 @@
  * *Take it* on the page, and the menu keeps the owner items.
  *
  * **And only what the caller's role may do** (S-23.23): the read carries `can_pause`, `can_resume`,
- * `can_cancel`, `can_return`, `can_rework` and `can_decide_approval` — each the command route's own
- * permission over the caller's effective role — and a command whose flag is false is not offered
+ * `can_cancel`, `can_return`, `can_rework`, `can_decide_approval` and (S-25.21) `can_take_over` —
+ * each the command route's own permission over the caller's effective role — and a command whose
+ * flag is false is not offered
  * (no menu item, never the primary). The callout says who may decide what the caller cannot.
  */
 import type { TaskDetailResponse, TaskState } from '@platform/contracts';
@@ -208,6 +209,7 @@ export const TaskHeader = ({
   const canPause = detail.can_pause && !merged && !finished && !queued && task.state !== 'paused';
   const canResume = detail.can_resume && RESUMABLE.has(task.state);
   const canTakeOver =
+    detail.can_take_over &&
     takenOver === null &&
     !finished &&
     !merged &&

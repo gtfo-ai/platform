@@ -942,8 +942,13 @@ would have nowhere to run.
   starts then.* only when the next such change starts it, *AUT-6862 is 2nd in the queue: 1 ticket is
   ahead of it.* further back. The tasks holding the places are listed as links, those waiting for a
   person first (ten, then *and N more*). **Change the limit** opens *Settings → Rules & limits*, and is
-  shown only to whoever may change the project's settings (an administrator). Deciding a stopped task
-  moves it on; its place frees when it finishes or is cancelled.
+  shown only to whoever may change the project's settings (an administrator). When the limit in force
+  is the **organisation's** maximum, raising the project's would change nothing, so the note says
+  *Your organisation allows at most N …* instead and offers an organisation administrator **Change
+  the organisation's limit** (the organisation's *Policies*); anyone else reads that an organisation
+  administrator can raise it. Deciding a stopped task moves it on; its place frees when it finishes
+  or is cancelled. A place that frees — a task finishing, stopping for a person, being paused, or a
+  limit raised on either settings screen — starts the next queued task at once.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
   question with its answer box, each pending approval with *Approve* and *Reject…* (see *Deciding an
   approval* below), an escalation
@@ -1332,7 +1337,8 @@ laid out like a GitHub Actions job:
   one — and becomes the primary button once a run has failed. The
   **···** menu holds **Work on it yourself…** (**A person is working on it: resume / give back…** while the task is taken over), which opens the
   same take-over form and hand-back the task page has, and **Download transcript**, the run's
-  transcript as a JSONL file.
+  transcript as a JSONL file. *Re-run ▾* and *Work on it yourself…* are shown only to a reader whose
+  role may use them (a member or above); a viewer sees neither, and still the download.
 - **The left column** is the task's runs in stage order, each with its status icon, the one you
   are reading marked — click another to read it. Under it, **Details** opens the settings line
   (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the

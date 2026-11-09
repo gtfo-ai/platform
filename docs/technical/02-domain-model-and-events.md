@@ -716,7 +716,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `knowledge.proposal.created` / `.applied` / `.rejected` | Librarian / Human | proposal | Index rebuild (40), UI |
 | `knowledge.index.rebuilt` | Indexer | project, commit | — |
 | `readiness.evaluated` | Discovery (the `onboarding.discovery` recorder) / the post-merge re-check (WP-64) — one per recorded `readiness_evaluations` row, in that row's transaction, since WP-73 (PROGRESS backlog 228; `source` is `discovery`, `rediscovery` — a maintainer's re-evaluate, WP-94 — or `recheck`) | project, level, criteria (`{id, passed, evidence, not_checked?}` — `not_checked` since BD-026's 2026-10-06 amendment), source | Policy suggestions (20), UI — **neither built**, so it is declared `unconsumed` |
-| `config.changed` | Settings / repo sync | scope, diff (secrets redacted), actor | Audit (0), effective config rebuild (10) |
+| `config.changed` | Settings / repo sync — **since S-25.21 its one producer** is a raised WIP limit: `PUT /api/projects/:id/config` (scope `project`) and `PATCH /api/org` (scope `org`, one per project whose limit in force rose), on the **project** stream after the write commits (`pipeline/wip-raised.ts`); the diff names the raised `pipeline.wip.*` keys, in force before and after | project, scope, diff (secrets redacted), actor | WIP scheduler (30, S-25.21 — the place the raise opened starts a queued task); audit (0) and effective config rebuild (10) are not built |
 | `integration.action.performed` / `.failed` | adapters | integration, action, payload (redacted), result | Audit (0), health (20) |
 | `shadow.report.created` | Shadow report duty (WP-34) | task, artifact ref | Batch completion (40), UI |
 

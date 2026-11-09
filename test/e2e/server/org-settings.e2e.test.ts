@@ -283,4 +283,65 @@ describe('the organisation settings document over HTTP', () => {
     await waitForState(pipeline, 'ACME-2', 'needs_human');
     expect(await stagesRun(pipeline, second?.id as string)).not.toContain('implementation');
   }, 300_000);
+
+  /**
+   * S-25.21 (BACKLOG 1369): **a raised limit starts the queue with no further event.** ACME-1 holds
+   * the one pipeline place at *Ready for merge*; ACME-2 is queued behind it. Raising the limit —
+   * once through the organisation's maximum, once through the project's own configuration — is the
+   * only thing that happens next, and the queued task starts: the write appended `config.changed`
+   * on the project's stream and the scheduler heard it.
+   */
+  const raiseCase = async (
+    label: string,
+    lower: (pipeline: PipelineE2E, admin: Client) => Promise<Reply>,
+    raise: (pipeline: PipelineE2E, admin: Client) => Promise<Reply>,
+    scope: 'org' | 'project',
+  ) => {
+    const pipeline = await startPipeline({ scenarios: featureScenarios, label, tickets: TICKETS });
+    harness = pipeline;
+    const admin = await signIn(pipeline.instance.baseUrl, BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD);
+    const lowered = await lower(pipeline, admin);
+    expect(lowered.status, JSON.stringify(lowered.body)).toBe(200);
+    // Lowering appends nothing: it frees no place.
+    expect(await pipeline.query("select 1 from events where type = 'config.changed'")).toEqual([]);
+
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
+    await waitForState(pipeline, 'ACME-1', 'ready_for_merge');
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-2')]);
+    await waitForState(pipeline, 'ACME-2', 'queued');
+
+    const raised = await raise(pipeline, admin);
+    expect(raised.status, JSON.stringify(raised.body)).toBe(200);
+    await waitForState(pipeline, 'ACME-2', 'ready_for_merge');
+    const changed = await pipeline.query<{ stream_id: string; payload: Record<string, unknown> }>(
+      "select stream_id, payload from events where type = 'config.changed'",
+    );
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.stream_id).toBe(pipeline.projectId);
+    expect(changed[0]?.payload).toMatchObject({
+      project_id: pipeline.projectId,
+      scope,
+      diff: [{ key: 'pipeline.wip.max_tasks_in_pipeline', from: '1', to: '2' }],
+    });
+  };
+
+  it('starts a queued task when the organisation raises the maximum that held it (S-25.21)', async () => {
+    const write = (limit: number, key: string) => async (_pipeline: PipelineE2E, admin: Client) =>
+      send(
+        admin,
+        'PATCH',
+        '/api/org',
+        { pipeline: { wip: { max_tasks_in_pipeline: limit } } },
+        key,
+      );
+    await raiseCase('org-settings-wip-raise', write(1, 'lower-1'), write(2, 'raise-1'), 'org');
+  }, 300_000);
+
+  it('starts a queued task when the project raises its own limit (S-25.21)', async () => {
+    const write = (limit: number) => async (pipeline: PipelineE2E, admin: Client) =>
+      send(admin, 'PUT', `/api/projects/${pipeline.projectId}/config`, {
+        config: { version: 1, pipeline: { wip: { max_tasks_in_pipeline: limit } } },
+      });
+    await raiseCase('project-config-wip-raise', write(1), write(2), 'project');
+  }, 300_000);
 });

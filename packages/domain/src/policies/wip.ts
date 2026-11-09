@@ -149,7 +149,7 @@ export type QueueWaitReason = 'max_parallel_tasks' | 'max_tasks_in_pipeline';
  * **Why a queued task has not started** (S-25.16): the scheduler's own admission
  * ({@link evaluateTaskAdmission}) over the same counts and the same resolved limits, with the count
  * it compared. `admitted` is the honest third state — the limits have room and the scheduler has
- * not run since (it runs when a task leaves the active set) — never a guess at a wait.
+ * not run since (it runs whenever a place may have freed, S-25.21) — never a guess at a wait.
  */
 export type QueueAdmission =
   | { readonly status: 'admitted' }

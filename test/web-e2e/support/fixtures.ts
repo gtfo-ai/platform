@@ -573,6 +573,8 @@ export const taskDetail = taskDetailResponseSchema.parse({
   can_rework: true,
   can_decide_approval: true,
   can_change_limits: false,
+  can_retry_run: true,
+  can_take_over: true,
   take_writes_back: false,
   // S-26.8b: the operator is an administrator — every owner action the matrix allows.
   can_take: true,
@@ -659,6 +661,8 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   can_rework: true,
   can_decide_approval: true,
   can_change_limits: false,
+  can_retry_run: true,
+  can_take_over: true,
   take_writes_back: false,
   // S-26.8b: nobody owns it, so nothing to unassign; an administrator may take it.
   can_take: true,
@@ -717,6 +721,8 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
   can_rework: true,
   can_decide_approval: true,
   can_change_limits: false,
+  can_retry_run: true,
+  can_take_over: true,
   can_take: false,
   can_assign: false,
   can_unassign: false,

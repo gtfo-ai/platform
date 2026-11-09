@@ -769,8 +769,10 @@ describe('the list envelopes and the KB health report', () => {
       'can_pause',
       'can_raise_budget',
       'can_resume',
+      'can_retry_run',
       'can_return',
       'can_rework',
+      'can_take_over',
     ]);
   });
 
@@ -1412,6 +1414,7 @@ describe('queue_wait (S-25.16)', () => {
     reason: 'max_tasks_in_pipeline',
     count: 5,
     limit: 5,
+    organisation_bound: false,
     position: 2,
     queued: 5,
     running: { count: 0, limit: 2 },

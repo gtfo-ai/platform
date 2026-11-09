@@ -778,6 +778,7 @@ export const createProjectSettingsPort = (
       (refusal): refusal is string => refusal !== null,
     );
     const layered = projectConfigWithRepository(projectRead.values, snapshot);
+    const wip = resolveWipLimits(layered.values.pipeline?.wip, organisation.pipeline?.wip);
     const ticketLifecycle = await readTicketLifecycle(executor, projectId, logger);
     return defaultProjectSettings(projectId, {
       // WP-177 (TD-029 decision 1): the task-management binding's `lifecycle` block, read on the
@@ -791,10 +792,10 @@ export const createProjectSettingsPort = (
       // lower, BD-010's default where both are silent — never above the organisation's.
       // Under a refusal, the schema's floor (1 and 1), never BD-010's defaults: no valid document
       // could allow fewer, so a refused one admits no more than the project does (WP-106 round 1).
-      wip:
-        refusals.length > 0
-          ? REFUSED_CONFIGURATION_WIP_LIMITS
-          : resolveWipLimits(layered.values.pipeline?.wip, organisation.pipeline?.wip).limits,
+      wip: refusals.length > 0 ? REFUSED_CONFIGURATION_WIP_LIMITS : wip.limits,
+      // S-25.21: which of them the organisation's maximum lowered, so the queued task's callout
+      // names the limit that binds. None under a refusal: the floor is no organisation's value.
+      wipBounded: refusals.length > 0 ? [] : wip.bounded,
       ...(organisationCommands === undefined ? {} : { organisationCommands }),
       ...(layered.repositoryCommands === undefined
         ? {}

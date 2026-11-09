@@ -375,6 +375,8 @@ const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({
   can_rework: false,
   can_decide_approval: false,
   can_change_limits: false,
+  can_retry_run: false,
+  can_take_over: false,
   can_take: false,
   can_assign: false,
   can_unassign: false,
@@ -661,6 +663,8 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_rework: false,
       can_decide_approval: false,
       can_change_limits: false,
+      can_retry_run: false,
+      can_take_over: false,
     },
     member: {
       can_raise_budget: false,
@@ -672,6 +676,8 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_rework: false,
       can_decide_approval: false,
       can_change_limits: false,
+      can_retry_run: true,
+      can_take_over: true,
     },
     maintainer: {
       can_raise_budget: true,
@@ -683,6 +689,8 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_rework: true,
       can_decide_approval: true,
       can_change_limits: false,
+      can_retry_run: true,
+      can_take_over: true,
     },
     admin: {
       can_raise_budget: true,
@@ -694,6 +702,8 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_rework: true,
       can_decide_approval: true,
       can_change_limits: true,
+      can_retry_run: true,
+      can_take_over: true,
     },
   };
 
@@ -736,6 +746,9 @@ describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
       can_decide_approval: 'task.approve_plan',
       // S-25.16: the configuration write's own gate (`PUT /api/projects/:id/config`).
       can_change_limits: 'project.settings.write',
+      // S-25.21: the retry and take-over routes' own gates.
+      can_retry_run: 'run.retry',
+      can_take_over: 'task.take_over',
     });
   });
 });

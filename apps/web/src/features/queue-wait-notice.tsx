@@ -5,6 +5,12 @@
  * and *Change the limit* — the project's *Rules & limits* settings — only for a reader who may
  * change it (`can_change_limits`, the configuration write's own permission).
  *
+ * **Unless the organisation's maximum is what binds** (S-25.21, BACKLOG 1371: `organisation_bound`):
+ * the project's value would then change nothing, so the callout says *Your organisation allows at
+ * most N …* and, instead of the project link, sends an organisation administrator (the session's
+ * role; `org.settings.write` is the organisation's admin) to the organisation's *Policies*, and tells
+ * anyone else who can raise it.
+ *
  * Neutral information (`tone="info"`), never *Needs you*: nothing on this task is the reader's to
  * do. What frees it is on the tasks it lists, and their own pages ask for it. Every link is a
  * secondary one; the page's amber primary is never here.
@@ -12,10 +18,11 @@
 import type { QueueWait } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
+import { useSession } from '../app/queries.js';
 import { Flash } from '../ui/flash.js';
 import { TASK_STATE_LABEL } from '../ui/humanize.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { queueSentence } from './queue-words.js';
+import { organisationLimitSentence, queueSentence } from './queue-words.js';
 
 export const QueueWaitNotice = ({
   wait,
@@ -35,6 +42,8 @@ export const QueueWaitNotice = ({
 }): ReactElement => {
   const holders = wait.status === 'waiting' ? wait.holders : null;
   const more = holders === null ? 0 : holders.total - holders.items.length;
+  const organisation = organisationLimitSentence(wait);
+  const orgAdmin = useSession().data?.user.role === 'admin';
   return (
     <section aria-label="What happens next" data-testid="queue-wait-notice">
       <Flash tone="info">
@@ -65,7 +74,27 @@ export const QueueWaitNotice = ({
               </ul>
             </div>
           )}
-          {!canChangeLimits || projectKey === null || wait.status === 'admitted' ? null : (
+          {organisation === null ? null : (
+            <p className="text-sm" data-queue-organisation-limit="">
+              {`${organisation} `}
+              {orgAdmin ? (
+                <Link
+                  to="/settings/$section"
+                  params={{ section: 'policies' }}
+                  className="text-link underline"
+                  data-queue-change-org-limit=""
+                >
+                  Change the organisation’s limit
+                </Link>
+              ) : (
+                'An organisation administrator can raise it.'
+              )}
+            </p>
+          )}
+          {!canChangeLimits ||
+          projectKey === null ||
+          wait.status === 'admitted' ||
+          organisation !== null ? null : (
             <p className="text-sm">
               <Link
                 to="/projects/$key/settings/$section"

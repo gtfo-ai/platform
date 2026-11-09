@@ -103,6 +103,7 @@ const AUTIX: Extract<QueueWait, { status: 'waiting' }> = {
   reason: 'max_tasks_in_pipeline',
   count: 5,
   limit: 5,
+  organisation_bound: false,
   position: 2,
   queued: 5,
   running: { count: 0, limit: 2 },
@@ -126,6 +127,8 @@ const detail = (
   can_rework: true,
   can_decide_approval: true,
   can_change_limits: true,
+  can_retry_run: true,
+  can_take_over: true,
   take_writes_back: false,
   can_take: true,
   can_assign: true,
@@ -156,11 +159,13 @@ const detail = (
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const start = (task: TaskDetailResponse) => {
+const start = (task: TaskDetailResponse, role: SessionResponse['user']['role'] = 'admin') => {
   const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://localhost').pathname;
-    if (url.includes('/api/auth/get-session')) return json(session);
+    if (url.includes('/api/auth/get-session')) {
+      return json({ ...session, user: { ...session.user, role } });
+    }
     if (path === `/api/tasks/${TASK}`) return json(task);
     if (path === '/api/projects') return json({ items: [PROJECT_ROW] });
     if (path === '/api/org/inbox')
@@ -227,6 +232,67 @@ describe('a queued task’s page (S-25.16)', () => {
     expect(within(await notice()).queryByRole('link', { name: 'Change the limit' })).toBeNull();
   });
 
+  /**
+   * S-25.21 (BACKLOG 1371): when the organisation's maximum is what binds, the project's value would
+   * change nothing — so the callout says whose limit it is, links an organisation administrator to
+   * the organisation's Policies, tells anyone else who can raise it, and offers the project link to
+   * nobody.
+   */
+  describe('when the organisation’s maximum binds', () => {
+    const BOUND: QueueWait = { ...AUTIX, organisation_bound: true };
+
+    it('says so, and links an organisation administrator to its Policies', async () => {
+      start(detail(BOUND), 'admin');
+      const box = await notice();
+      expect(box.querySelector('[data-queue-organisation-limit]')?.textContent).toBe(
+        'Your organisation allows at most 5 tasks in a project’s pipeline, so this project’s own ' +
+          'limit cannot go higher. Change the organisation’s limit',
+      );
+      const link = within(box).getByRole('link', { name: 'Change the organisation’s limit' });
+      expect(link.getAttribute('href')).toBe('/settings/policies');
+      // Never the project page, which would change nothing — even for a reader who may write it.
+      expect(within(box).queryByRole('link', { name: 'Change the limit' })).toBeNull();
+    });
+
+    it('tells a reader who is not an administrator who can raise it, with no link', async () => {
+      start(detail(BOUND), 'member');
+      const box = await notice();
+      expect(box.querySelector('[data-queue-organisation-limit]')?.textContent).toBe(
+        'Your organisation allows at most 5 tasks in a project’s pipeline, so this project’s own ' +
+          'limit cannot go higher. An organisation administrator can raise it.',
+      );
+      expect(
+        within(box).queryByRole('link', { name: 'Change the organisation’s limit' }),
+      ).toBeNull();
+      expect(within(box).queryByRole('link', { name: 'Change the limit' })).toBeNull();
+    });
+
+    it('names the parallel limit in its own words', async () => {
+      start(
+        detail({
+          ...AUTIX,
+          reason: 'max_parallel_tasks',
+          count: 1,
+          limit: 1,
+          organisation_bound: true,
+          running: { count: 1, limit: 1 },
+          pipeline: { count: 1, limit: 5 },
+          holders: { total: 1, needs_human: 0, items: holders(1, 'active') },
+        }),
+      );
+      expect(
+        (await notice()).querySelector('[data-queue-organisation-limit]')?.textContent,
+      ).toMatch(/^Your organisation allows at most 1 parallel task per project, /);
+    });
+
+    it('says nothing of the organisation when the project’s own limit binds', async () => {
+      start(detail(AUTIX), 'admin');
+      const box = await notice();
+      expect(box.querySelector('[data-queue-organisation-limit]')).toBeNull();
+      expect(within(box).getByRole('link', { name: 'Change the limit' })).toBeTruthy();
+    });
+  });
+
   it('says the holders wait for a person, and asks nothing, of a reader who may not cancel', async () => {
     start(detail(AUTIX, { can_cancel: false }));
     const sentence = (await notice()).querySelector('[data-queue-sentence]')?.textContent ?? '';
@@ -254,6 +320,7 @@ describe('a queued task’s page (S-25.16)', () => {
       reason: 'max_parallel_tasks',
       count: 2,
       limit: 2,
+      organisation_bound: false,
       position: 1,
       queued: 1,
       running: { count: 2, limit: 2 },

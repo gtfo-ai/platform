@@ -160,3 +160,20 @@ export const queueSentence = (wait: QueueWait, ticketKey: string, mayDecide: boo
         : `${ticketKey} is next in the queue and starts once the project is back under its limits.`;
   return `${queueNote(wait, mayDecide) ?? ''} ${place}`;
 };
+
+/**
+ * **Which limit binds** (S-25.21, BACKLOG 1371): when the refusing limit is the organisation's
+ * maximum (`organisation_bound`: `resolveWipLimits` lowered what the project asked for), raising the
+ * project's own value changes nothing, so the page says whose limit it is. `null` for any other
+ * wait, and for `admitted`.
+ */
+export const organisationLimitSentence = (wait: QueueWait): string | null => {
+  if (wait.status !== 'waiting' || !wait.organisation_bound) {
+    return null;
+  }
+  const allowed =
+    wait.reason === 'max_parallel_tasks'
+      ? `${wait.limit} parallel ${wait.limit === 1 ? 'task' : 'tasks'} per project`
+      : `${tasks(wait.limit)} in a project’s pipeline`;
+  return `Your organisation allows at most ${allowed}, so this project’s own limit cannot go higher.`;
+};

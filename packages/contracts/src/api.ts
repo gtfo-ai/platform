@@ -1798,10 +1798,13 @@ export const MAX_QUEUE_WAIT_HOLDERS = 10;
  * task states at this read and the limits the scheduler is given (`ProjectSettings.wip`, the
  * organisation's bound applied). `null` unless the task is `queued`.
  *
- * - `admitted`: the limits have room now. The scheduler starts the head of the queue when a task
- *   leaves the active set, and none has since — the honest third state, never a guessed wait.
+ * - `admitted`: the limits have room now and the scheduler has not run since — the honest third
+ *   state, never a guessed wait. Since S-25.21 it runs whenever a place may have freed (a task
+ *   leaving the active set, a WIP limit raised), so this is read only in the moment before it does,
+ *   or after a change it does not hear (BACKLOG 1378).
  * - `waiting`: `reason` is the limit that refused (`max_parallel_tasks` is checked first, as the
- *   scheduler checks it), `count` the places it counted against `limit`, and `holders` the tasks
+ *   scheduler checks it), `count` the places it counted against `limit`, `organisation_bound`
+ *   whether that limit is the organisation's maximum (S-25.21), and `holders` the tasks
  *   holding the places (below) — at most {@link MAX_QUEUE_WAIT_HOLDERS}, the ones waiting for a person
  *   first, then the oldest; `total` counts them all and `needs_human` those waiting for a person
  *   (`needs_human`), so a reader can say *5 of them wait for you* past the cut.
@@ -1833,6 +1836,13 @@ export const queueWaitSchema = z.discriminatedUnion('status', [
     reason: z.enum(['max_parallel_tasks', 'max_tasks_in_pipeline']),
     count: z.int().nonnegative(),
     limit: z.int().positive(),
+    /**
+     * Whether `limit` is the **organisation's** maximum, which lowered what the project (or BD-010's
+     * default) asked for (`resolveWipLimits`' `bounded`, S-25.21): raising the project's own value
+     * then changes nothing, so the page says *Your organisation allows at most N* and sends an
+     * administrator to the organisation's Policies. Required, as the read always knows.
+     */
+    organisation_bound: z.boolean(),
     position: z.int().positive(),
     queued: z.int().positive(),
     running: queueWaitLimitSchema,
@@ -2126,6 +2136,17 @@ export const taskCallerFactsShape = {
    * queued task's callout offers *Change the limit* only then. Required, as every caller fact is.
    */
   can_change_limits: z.boolean(),
+  /**
+   * `run.retry` (S-25.21, BACKLOG 1393): the run page offers *Re-run ▾* and the *Ended* panel's
+   * *Re-run as configured* only then. Role only, like every fact here: whether *this* run has
+   * ended is the page's question, answered from the run record.
+   */
+  can_retry_run: z.boolean(),
+  /**
+   * `task.take_over` (S-25.21, BACKLOG 1393): the run page's `···` *Work on it yourself…* and the
+   * *Ended* panel's twin are offered only then.
+   */
+  can_take_over: z.boolean(),
 } as const;
 
 /**

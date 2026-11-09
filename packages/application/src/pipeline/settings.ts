@@ -28,6 +28,7 @@ import type {
   EffectiveConfig,
   EpicSplitSettings,
   IterationLimits,
+  WipBound,
   WipLimits,
 } from '@platform/domain';
 import {
@@ -66,6 +67,14 @@ export interface ProjectSettings {
   /** Templates by id: the shipped three, plus anything `.agentic/pipeline.yml` defines. */
   readonly templates: Readonly<Record<string, PipelineTemplate>>;
   readonly wip: WipLimits;
+  /**
+   * The project limits in {@link ProjectSettings.wip} that the organisation's maximum lowered —
+   * `resolveWipLimits`' `bounded` (S-25.21). Absent means none: a harness, or a refused
+   * configuration's floor, which no organisation value set. Read by the queued task's callout,
+   * which says *Your organisation allows at most N* rather than offering a project value that
+   * would change nothing; admission reads {@link ProjectSettings.wip} alone.
+   */
+  readonly wipBounded?: readonly WipBound[];
   /** product/09: "a total cap (default $50, per template)" at task scope. */
   readonly taskBudgetUsd: number;
   /** Where a task's workspace lives; WP-14's `WorkspaceProvider` supplies the real one. */

@@ -76,9 +76,10 @@ import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { organisationSettingsForRequest } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
-import { cappedProjectsOf, type OrgCapProject } from '../org-caps.js';
+import { cappedProjectsOf, type OrgCapProject, raisedWipProjectsOf } from '../org-caps.js';
 import type { WriteBudgetResult } from '../queries/cost-queries.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
+import { recordWipRaise, type WipRaiseNotifier } from '../wip-raise.js';
 import {
   claimIdempotentAttempt,
   type IdempotencyRecords,
@@ -202,6 +203,12 @@ export interface SettingsRoutesOptions {
    * same one `apps/server/src/commands.ts` gives every task command.
    */
   readonly redactor: SecretRedactor;
+  /**
+   * S-25.21 (BACKLOG 1369): what `PATCH /api/org` appends for each project whose WIP limit in force
+   * it **raised**, so the scheduler starts a queued task in the place it opened. Absent or `null`:
+   * nothing is appended (a composition with no event store).
+   */
+  readonly wipRaise?: WipRaiseNotifier | null;
 }
 
 /** How many audit rows a settings screen asks for at once. A page, not an export. */
@@ -620,7 +627,7 @@ export const registerSettingsRoutes = async (
       schema: {
         summary: 'Replace or remove sections of the organisation settings document',
         description:
-          'Each top-level section present **replaces** the stored one; `null` removes it; an absent section is kept. The merged document is validated by the same strict schema every reader parses with, so a value a reader would refuse is refused here. `notifications.organisation_default` must name a communication account (`409 organisation_default_not_communication`) that is not retired (`409 integration_retired`, WP-114): with two or more accounts that each name a channel, that one speaks for the organisation (Q103 (c)). A lowered maximum applies **at the next read** — the next run, the next settings read, the next admission — and never moves a task’s frozen dial or a project’s stored choice; `capped_projects` names every project whose autonomy level or WIP limit in force this write lowered, before and after, computed in the write’s own transaction (empty when nothing fell, `null` on a replay). Admin only; audited; `Idempotency-Key` optional and honoured.',
+          'Each top-level section present **replaces** the stored one; `null` removes it; an absent section is kept. The merged document is validated by the same strict schema every reader parses with, so a value a reader would refuse is refused here. `notifications.organisation_default` must name a communication account (`409 organisation_default_not_communication`) that is not retired (`409 integration_retired`, WP-114): with two or more accounts that each name a channel, that one speaks for the organisation (Q103 (c)). A lowered maximum applies **at the next read** — the next run, the next settings read, the next admission — and never moves a task’s frozen dial or a project’s stored choice; `capped_projects` names every project whose autonomy level or WIP limit in force this write lowered, before and after, computed in the write’s own transaction (empty when nothing fell, `null` on a replay). A limit in force that **rose** appends `config.changed` on each such project’s stream, so the scheduler starts a queued task in the place it opened (S-25.21). Admin only; audited; `Idempotency-Key` optional and honoured.',
         tags: ['org'],
         body: patchOrgSettingsRequestSchema,
         response: {
@@ -664,13 +671,27 @@ export const registerSettingsRoutes = async (
           // Platform values only (ids, keys, levels, counts) — nothing to redact.
           capped_projects: result.capped.map((entry) => ({ ...entry })),
         }),
-        perform: async () => {
+        perform: async (userId) => {
           let changed: readonly OrganisationSettingsSection[] = [];
           const written = await options.queries.replaceOrganisationSettings((stored) => {
             const merged = mergeOrganisationSettings(stored, patch);
             changed = merged.changed;
             return merged.next;
           });
+          // S-25.21 (BACKLOG 1369): committed now — every project whose limit in force rose gets
+          // the event that starts its queue, computed from the rows the write's transaction read.
+          const wipRaise = options.wipRaise ?? null;
+          if (wipRaise !== null) {
+            for (const { projectId, raised } of raisedWipProjectsOf(written)) {
+              await recordWipRaise(wipRaise, {
+                projectId,
+                scope: 'org',
+                raised,
+                userId,
+                log: request.log,
+              });
+            }
+          }
           return {
             before: written.before,
             after: written.after,

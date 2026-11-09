@@ -205,6 +205,8 @@ export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/transitions.js';
 export * from './pipeline/unfinished-work.js';
 export * from './pipeline/verdicts.js';
+// S-25.21: a raised WIP limit appends `config.changed`, which the scheduler hears.
+export * from './pipeline/wip-raised.js';
 export * from './pipeline/workpad.js';
 // Ports
 export * from './ports/broadcast.js';

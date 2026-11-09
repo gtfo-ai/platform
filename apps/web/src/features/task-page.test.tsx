@@ -128,6 +128,8 @@ const detail = (over: Partial<TaskDetailResponse> = {}, task: Partial<TaskRecord
     can_rework: true,
     can_decide_approval: true,
     can_change_limits: false,
+    can_retry_run: true,
+    can_take_over: true,
     can_take: false,
     can_assign: false,
     can_unassign: false,
@@ -1511,12 +1513,20 @@ describe('only what the caller may do', () => {
     can_rework: false,
     can_decide_approval: false,
     can_change_limits: false,
+    can_retry_run: true,
+    can_take_over: true,
     can_take: false,
     can_assign: false,
     can_unassign: false,
     take_writes_back: false,
   } as const;
-  const VIEWER = { ...MEMBER, can_pause: false, can_resume: false } as const;
+  const VIEWER = {
+    ...MEMBER,
+    can_pause: false,
+    can_resume: false,
+    can_retry_run: false,
+    can_take_over: false,
+  } as const;
 
   const menuOf = async (task: TaskDetailResponse): Promise<string[]> => {
     const user = userEvent.setup();
@@ -1530,6 +1540,7 @@ describe('only what the caller may do', () => {
   it('offers a member no cancel, return or rework in the menu', async () => {
     const items = await menuOf(detail(MEMBER));
     expect(items).toContain('Pause…');
+    expect(items).toContain('Work on it yourself…');
     expect(items).toContain('Retry stage…');
     for (const absent of ['Cancel task…', 'Return to stage…', 'Rework…']) {
       expect(items).not.toContain(absent);
@@ -1539,6 +1550,8 @@ describe('only what the caller may do', () => {
   it('offers a viewer no pause, and no Resume as the page’s primary action', async () => {
     const running = await menuOf(detail(VIEWER));
     expect(running).not.toContain('Pause…');
+    // S-25.21 (BACKLOG 1393): nor the take-over, which `task.take_over` refuses a viewer.
+    expect(running).not.toContain('Work on it yourself…');
     cleanup();
     start(detail(VIEWER, { state: 'paused', paused_reason: 'manual' }));
     await screen.findByText('Checks');

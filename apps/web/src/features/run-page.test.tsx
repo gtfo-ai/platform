@@ -152,6 +152,8 @@ const detail = (over: Partial<TaskDetailResponse> = {}): TaskDetailResponse => (
   can_rework: true,
   can_decide_approval: true,
   can_change_limits: false,
+  can_retry_run: true,
+  can_take_over: true,
   can_take: false,
   can_assign: false,
   can_unassign: false,
@@ -389,6 +391,37 @@ describe('the run page’s header', () => {
     const finished = detail();
     open(LIVE, { ...finished, task: { ...finished.task, state: 'done' } });
     await user.click(await screen.findByRole('button', { name: 'Run actions' }));
+    const menu = within(await screen.findByRole('menu'));
+    expect(menu.getByRole('menuitem', { name: 'Download transcript' })).toBeTruthy();
+    expect(menu.queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();
+  });
+});
+
+/**
+ * S-25.21 (BACKLOG 1393): the header's *Re-run ▾* and the `···` menu's *Work on it yourself…* are
+ * drawn only for a reader whose role the routes admit — the task read's `can_retry_run`
+ * (`run.retry`) and `can_take_over` (`task.take_over`). Both cases wait for the task read (the back
+ * link carries its ticket key), so the viewer's absence is not the page before the read answered.
+ */
+describe('only what the reader’s role may do', () => {
+  const ENDED = RUNS[1] as RunRecord;
+
+  it('offers a member Re-run and Work on it yourself…', async () => {
+    const user = userEvent.setup();
+    open(ENDED, detail({ can_retry_run: true, can_take_over: true }), []);
+    await screen.findByRole('link', { name: /ACME-12/ });
+    expect(await screen.findByRole('button', { name: 'Re-run' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Run actions' }));
+    const menu = within(await screen.findByRole('menu'));
+    expect(menu.getByRole('menuitem', { name: 'Work on it yourself…' })).toBeTruthy();
+  });
+
+  it('offers a viewer neither, and still the transcript download', async () => {
+    const user = userEvent.setup();
+    open(ENDED, detail({ can_retry_run: false, can_take_over: false }), []);
+    await screen.findByRole('link', { name: /ACME-12/ });
+    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Run actions' }));
     const menu = within(await screen.findByRole('menu'));
     expect(menu.getByRole('menuitem', { name: 'Download transcript' })).toBeTruthy();
     expect(menu.queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();

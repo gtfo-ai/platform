@@ -1062,6 +1062,7 @@ describe('the Queued column says what holds it (S-25.16)', () => {
     reason: 'max_tasks_in_pipeline',
     count: 5,
     limit: 5,
+    organisation_bound: false,
     position,
     queued: 2,
     running: { count: 0, limit: 2 },

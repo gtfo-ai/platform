@@ -314,12 +314,14 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'knowledge.proposal.applied': 'unconsumed', // Since WP-18b; see above — `mr.merged` triggers the index.
   'knowledge.proposal.rejected': 'unconsumed', // Since WP-18b.
   'knowledge.index.rebuilt': 'unconsumed', // `—` in technical/02: unconsumed by design, not by omission.
-  // Both named WP-21 as their owner until WP-73, and WP-21 was DONE without consuming either:
-  // readiness is re-read from `readiness_evaluations`, and the effective configuration is read at
-  // each stage rather than rebuilt on an event. Policy suggestions and the audit projection have
-  // no work package (backlog 1).
+  // Named WP-21 as its owner until WP-73, and WP-21 was DONE without consuming it: readiness is
+  // re-read from `readiness_evaluations`. Policy suggestions have no work package (backlog 1).
   'readiness.evaluated': 'unconsumed',
-  'config.changed': 'unconsumed',
+  // Handled since S-25.21 (BACKLOG 1369) by the saga's `pipeline.scheduler`: the configuration and
+  // organisation-policy writes append it for a raised WIP limit (`pipeline/wip-raised.ts`), so a
+  // queued task starts in the place the raise opened. The effective configuration is still read at
+  // each stage rather than rebuilt on it; the audit projection has no work package.
+  'config.changed': 'handled',
   // technical/03 attributes an audit and a health projection to "WP-19", and WP-19's plan row does
   // not carry them: it is the cost ledger, the rollups, the budgets, the price job, the estimates
   // and the backfill. They have no work package, which is why no number is named here.
@@ -423,7 +425,6 @@ export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${s
     'knowledge.proposal.rejected': null,
     'knowledge.index.rebuilt': null,
     'readiness.evaluated': null,
-    'config.changed': null,
     'integration.action.performed': null,
     'integration.action.failed': null,
     'task.mr.measured': null,

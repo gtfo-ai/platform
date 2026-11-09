@@ -155,6 +155,8 @@ const detail = (
   can_decide_approval: true,
   can_take: false,
   can_change_limits: false,
+  can_retry_run: true,
+  can_take_over: true,
   can_assign: false,
   can_unassign: false,
   take_writes_back: false,
@@ -471,12 +473,26 @@ describe('the next step, only for a reader who may take it', () => {
     expect(await screen.findByRole('dialog', { name: 'Work on this task yourself' })).toBeTruthy();
   });
 
-  it('offers neither to a reader whose role may not, and still opens the task', async () => {
-    open(runOf('stalled'), detail({ can_pause: false }));
+  it('offers neither to a viewer, whose role may not, and still opens the task', async () => {
+    // S-25.21: the read's own facts for the two commands, with `can_pause` left true so the panel
+    // is shown not to read it any more.
+    open(runOf('stalled'), detail({ can_retry_run: false, can_take_over: false }));
     const region = await settledPanel();
     expect(within(region).queryByRole('button', { name: 'Re-run as configured' })).toBeNull();
     expect(within(region).queryByRole('button', { name: 'Work on it yourself…' })).toBeNull();
     expect(within(region).getByRole('link', { name: 'Open the task' })).toBeTruthy();
+  });
+
+  it('reads each command’s own fact: a re-run without the take-over, and the take-over alone', async () => {
+    open(runOf('stalled'), detail({ can_retry_run: true, can_take_over: false }));
+    let region = await settledPanel();
+    expect(within(region).getByRole('button', { name: 'Re-run as configured' })).toBeTruthy();
+    expect(within(region).queryByRole('button', { name: 'Work on it yourself…' })).toBeNull();
+    cleanup();
+    open(runOf('stalled'), detail({ can_retry_run: false, can_take_over: true }));
+    region = await settledPanel();
+    expect(within(region).queryByRole('button', { name: 'Re-run as configured' })).toBeNull();
+    expect(within(region).getByRole('button', { name: 'Work on it yourself…' })).toBeTruthy();
   });
 
   it('offers no Work on it yourself while a person already is, nor on a finished task', async () => {
@@ -494,12 +510,14 @@ describe('the next step, only for a reader who may take it', () => {
   });
 
   /**
-   * The panel's gate is the task read's `can_pause` — the read has no fact for `run.retry` or
-   * `task.take_over` — which is honest only while the three need the same role.
+   * The run page's `···` *resume / give back…* (a task a person holds) rides on `can_take_over`,
+   * because the read carries no fact for `task.hand_back` — honest only while the two need the same
+   * role (S-25.21).
    */
-  it('gates on a fact whose role is the same as the two commands’', () => {
-    expect(PERMISSION_REQUIREMENTS['run.retry']).toBe(PERMISSION_REQUIREMENTS['task.pause']);
-    expect(PERMISSION_REQUIREMENTS['task.take_over']).toBe(PERMISSION_REQUIREMENTS['task.pause']);
+  it('gates the give-back on a fact whose role is the hand-back’s', () => {
+    expect(PERMISSION_REQUIREMENTS['task.hand_back']).toBe(
+      PERMISSION_REQUIREMENTS['task.take_over'],
+    );
   });
 });
 

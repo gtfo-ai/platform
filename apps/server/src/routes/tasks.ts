@@ -128,6 +128,10 @@ export const TASK_CALLER_FACT_ACTIONS = {
   can_decide_approval: 'task.approve_plan',
   // S-25.16: *Change the limit* — the gate of `PUT /api/projects/:id/config`, which writes them.
   can_change_limits: 'project.settings.write',
+  // S-25.21: the run page's *Re-run ▾* (`POST /api/runs/:id/retry`) and *Work on it yourself…*
+  // (`POST /api/tasks/:id/take-over`), each the route's own gate in `commands.ts`.
+  can_retry_run: 'run.retry',
+  can_take_over: 'task.take_over',
 } as const satisfies Record<TaskCallerFactKey, PermissionAction>;
 
 /**

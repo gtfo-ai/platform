@@ -100,7 +100,7 @@ import { reviewVerb } from './approval-text.js';
 import { FeedbackForm } from './feedback.js';
 import { PromptsWithheldExplanation } from './prompts-withheld.js';
 import { RunCommandLog } from './run-command-log.js';
-import { endedPanelReason, mayRerunAndWork, RunEndedPanel } from './run-ended.js';
+import { endedPanelReason, RunEndedPanel, runCallerMay } from './run-ended.js';
 import { isFailedRun, isLiveRun, jobLabel, jobsInStageOrder, RUN_STATUS_ICON } from './run-jobs.js';
 import { isStoppedRun, RunNotStartedPanel } from './run-not-started.js';
 import {
@@ -709,8 +709,15 @@ export const RunDetailScreen = ({
       ? 0
       : detail.questions.filter((question) => question.status === 'open').length +
         detail.approvals.filter((approval) => approval.status === 'pending').length;
+  // S-25.21 (BACKLOG 1393): what the reader's role may do — the task read's `can_retry_run` and
+  // `can_take_over`, each the command route's own permission. A control they may not use is not
+  // drawn; the route refuses everyone else regardless. The `···` item's other reading, *resume /
+  // give back…*, is `task.hand_back`, which the read has no fact for: it rides on `can_take_over`
+  // because both need the same role (`run-ended.test.tsx` holds the two requirements equal).
+  const may = runCallerMay(detail);
   const takeOverOffered =
     detail !== undefined &&
+    may.takeOver &&
     (detail.taken_over !== null ||
       (detail.task.state !== 'done' && detail.task.state !== 'cancelled'));
 
@@ -746,8 +753,9 @@ export const RunDetailScreen = ({
           Cancel run
         </Button>
       ) : null}
-      {/* Not while the run is live: the server refuses `run.retry` until it has ended (S-23.23). */}
-      {live ? null : (
+      {/* Not while the run is live: the server refuses `run.retry` until it has ended (S-23.23);
+          and not for a reader whose role `run.retry` refuses (S-25.21). */}
+      {live || !may.rerun ? null : (
         <ActionMenu
           trigger={
             <Button tone={isFailedRun(record.status) ? 'primary' : 'default'}>
@@ -907,7 +915,7 @@ export const RunDetailScreen = ({
               reason={endedReason}
               detail={detail}
               blocks={snapshot.blocks}
-              mayAct={mayRerunAndWork(detail)}
+              may={may}
               takeOverOffered={takeOverOffered && detail?.taken_over === null}
               rerunPending={commands.retry.isPending}
               openTask={(children, className) => (

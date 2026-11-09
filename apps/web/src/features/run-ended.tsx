@@ -17,7 +17,7 @@
  *    person, paused, ended — or nothing yet, said as such, with the stage named when the task has
  *    moved on from this run's. *Re-run* is not offered while that newer run is live.
  * 3. **The next step** — *Re-run as configured*, *Work on it yourself…* and *Open the task*, each
- *    only for a reader who may ({@link mayRerunAndWork}); *See the run’s settings* for a refused
+ *    only for a reader who may ({@link runCallerMay}); *See the run’s settings* for a refused
  *    tool; and *Jump to the last lines*, which opens the transcript at its end.
  *
  * **Not shown** for a live run, a success, a run with no recorded reason, a run whose workspace never
@@ -69,14 +69,17 @@ export const endedPanelReason = (
 };
 
 /**
- * Whether the reader may *Re-run* and *Work on it yourself…*: `run.retry` and `task.take_over` both
- * need `member`, which is what the task read's role-only `can_pause` (`task.pause`) answers — the
- * read has no fact of its own for either, and `run-ended.test.tsx` holds the three requirements
- * equal in `@platform/domain`'s table, so a change to one fails there rather than here. `false`
- * until the task read answers.
+ * What the reader may do from a run that ended (S-25.21, BACKLOG 1393): *Re-run* is `run.retry`
+ * (`can_retry_run`) and *Work on it yourself…* is `task.take_over` (`can_take_over`) — each the task
+ * read's fact for the command route's own permission, never a proxy for it. Both `false` until the
+ * task read answers.
  */
-export const mayRerunAndWork = (detail: Pick<TaskDetailResponse, 'can_pause'> | undefined) =>
-  detail?.can_pause === true;
+export const runCallerMay = (
+  detail: Pick<TaskDetailResponse, 'can_retry_run' | 'can_take_over'> | undefined,
+): { readonly rerun: boolean; readonly takeOver: boolean } => ({
+  rerun: detail?.can_retry_run === true,
+  takeOver: detail?.can_take_over === true,
+});
 
 const flatten = (blocks: readonly TranscriptBlock[], into: TranscriptBlock[] = []) => {
   for (const block of blocks) {
@@ -277,7 +280,7 @@ export const RunEndedPanel = ({
   reason,
   detail,
   blocks,
-  mayAct,
+  may,
   takeOverOffered,
   rerunPending,
   openTask,
@@ -290,8 +293,8 @@ export const RunEndedPanel = ({
   readonly reason: RunTerminalReason;
   readonly detail: TaskDetailResponse | undefined;
   readonly blocks: readonly TranscriptBlock[];
-  /** {@link mayRerunAndWork} over the task read. */
-  readonly mayAct: boolean;
+  /** {@link runCallerMay} over the task read. */
+  readonly may: { readonly rerun: boolean; readonly takeOver: boolean };
   /** The task is not finished and nobody is working on it already. */
   readonly takeOverOffered: boolean;
   readonly rerunPending: boolean;
@@ -308,10 +311,10 @@ export const RunEndedPanel = ({
   // A newer run of the stage that is still live is the re-run already: offering another would
   // start a second beside it.
   const rerun =
-    mayAct &&
+    may.rerun &&
     record.stage !== null &&
     !(followUp?.kind === 'ran_again' && isLiveRun(followUp.run.status));
-  const work = mayAct && takeOverOffered;
+  const work = may.takeOver && takeOverOffered;
   return (
     <section
       aria-label="Why this run ended"
