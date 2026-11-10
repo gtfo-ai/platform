@@ -59,6 +59,7 @@ export const ROLE_PROMPT_DIGESTS = {
     '7': 'ff00c9782153b35580d87557383c826d7a680a5a5c00fdfbedca442c9c571b72',
     '8': 'fbded4316218ae25a07626762f2d1e16a9f7eb23a928a5c6c6999c5b0890a891',
     '9': '737f1d97aeb55525a18ffbfec35189ea05e65286f9abebdfd8cbfd6586ed5fa4',
+    '10': '8739c600606c52607d9b1b9f1fee0d1707179b377a2159a9dd9850306c7153e0',
   },
   reviewer: {
     '4': 'dfeab32f0cc79abc01ee1a3e255a2c31f9c29bbb22777cd56e9a67703d8aebcd',

@@ -189,17 +189,9 @@ export const reviewConversationHandler = (options: PipelineSagaOptions): EventHa
           duties.push({ ...base, duty: 'review_threads_resolve', artifact_id: ref.id });
         }
       } else if (ref.artifact_type === 'ImplementationNotes') {
-        const notes = await artifactOf(
-          options,
-          context,
-          stored.task.id,
-          ref.id,
-          'ImplementationNotes',
-        );
-        const parsed = implementationNotesDataSchema.safeParse(notes?.data);
-        if (parsed.success && (parsed.data.thread_replies ?? []).length > 0) {
-          duties.push({ ...base, duty: 'conversation_replies', artifact_id: ref.id });
-        }
+        // S-28.3 review: every set of notes, replies or none — a run that answers nothing still
+        // tells each person's open thread it is still open (M28 ruling R3).
+        duties.push({ ...base, duty: 'conversation_replies', artifact_id: ref.id });
       }
     }
     if (duties.length === 0) {
@@ -544,10 +536,8 @@ export const runConversationReplies = async (
   }
   const { stored, artifact, runId } = subject;
   const parsed = implementationNotesDataSchema.safeParse(artifact.data);
+  // S-28.3 review: an empty list falls through — the run's silence is said on each open thread.
   const replies = parsed.success ? (parsed.data.thread_replies ?? []) : [];
-  if (replies.length === 0) {
-    return;
-  }
   const integrations = await integrationsForProject(
     options.integrations,
     stored.task.projectId,
@@ -559,6 +549,20 @@ export const runConversationReplies = async (
   const discussions =
     integrations.git === null ? [] : await reads.discussions(stored.mr, readContext);
   const self = integrations.git === null ? null : await reads.self(readContext);
+  /**
+   * S-28.3 review: the head the run left, read **live** — `tasks.mr_ref.head_sha` is written only
+   * on a provider signal, which this duty races, so it is usually the commit from before the fix.
+   * The run pushed when the live head differs from the head recorded on the task; when it does
+   * not, a `fixed`/`documented` reply says *not pushed yet* and resolves nothing. Residual: a push
+   * signal recorded before this duty reads the task makes the two equal, and a pushed fix then
+   * reads as not pushed — the safe direction (a reply, no resolve).
+   */
+  const needsHead = replies.some((entry) => entry.kind === 'fixed' || entry.kind === 'documented');
+  const liveHead =
+    integrations.git === null || !needsHead
+      ? null
+      : ((await reads.mergeRequest(stored.mr, readContext))?.head_sha ?? null);
+  const pushed = liveHead !== null && liveHead !== (stored.mr.head_sha ?? null);
   const known = new Set(discussions.map((discussion) => discussion.id));
   const needsComments = replies.some((reply) => !known.has(reply.thread_id));
   const page = needsComments
@@ -603,8 +607,9 @@ export const runConversationReplies = async (
         kind: entry.kind,
         reply: entry.reply,
         person: entry.person ?? null,
-        // M28 ruling R3: name the commit — the merge request's head the platform last recorded.
-        addressedIn: stored.mr.head_sha ?? null,
+        // M28 ruling R3: name the commit — the live head the run left (S-28.3 review).
+        addressedIn: liveHead,
+        pushed,
       });
     if (known.has(entry.thread_id)) {
       const discussion = discussions.find((candidate) => candidate.id === entry.thread_id);
@@ -628,10 +633,23 @@ export const runConversationReplies = async (
         discussion.resolvable &&
         !discussion.resolved &&
         settledByRun(discussion.id) &&
+        pushed &&
         !personWroteAfter(discussion, subject.runCreatedAt) &&
         !resolving.has(discussion.id)
       ) {
         resolving.add(discussion.id);
+        // Re-read the one discussion right before resolving: a person's note written since the
+        // first read blocks the resolve (S-28.3 review).
+        const fresh = (await reads.discussions(stored.mr, readContext)).find(
+          (candidate) => candidate.id === discussion.id,
+        );
+        if (
+          fresh === undefined ||
+          fresh.resolved ||
+          personWroteAfter(fresh, subject.runCreatedAt)
+        ) {
+          continue;
+        }
         const resolvedNow = await resolvePersonThread(integrations, {
           stored,
           discussionId: discussion.id,
@@ -693,6 +711,18 @@ export const runConversationReplies = async (
   );
 };
 
+/**
+ * The position of the newest *still open* note any run of this task posted in the discussion, or
+ * -1 — so the note is said once per thread until a person writes again (S-28.3 review), never once
+ * per run.
+ */
+const saidStillOpenSince = (discussion: Discussion, taskId: Id): number =>
+  discussion.notes.findLastIndex(
+    (note) =>
+      note.body.trimStart().startsWith(`<!-- agentic:reply:${taskId}.`) &&
+      note.body.includes(`.open-${discussion.id} -->`),
+  );
+
 /** The position of the newest person's note in a discussion, or -1 when it holds none. */
 const lastPersonNoteIndex = (discussion: Discussion): number =>
   discussion.notes.findLastIndex((note) => !note.system && !isPlatformMergeRequestNote(note.body));
@@ -724,6 +754,12 @@ const isPersonThread = (discussion: Discussion): boolean => {
  * `would_have`. A provider that cannot resolve a discussion, or refuses this one, is logged and
  * skipped: the reply is posted and the thread stays open, which is where a person finds it.
  * Answers whether the thread was resolved on the provider (never in shadow mode).
+ *
+ * The caller resolves only when the live head moved past the head recorded on the task (the run
+ * pushed) and re-reads the discussion right before this call, so a person's note written while the
+ * run went blocks it. **Residual, stated:** a note a person writes between that re-read and this
+ * call is under a resolved thread; GitLab keeps it visible, and the window does not read a resolved
+ * thread, so it reaches the next run only through the conversation block.
  */
 const resolvePersonThread = async (
   integrations: Awaited<ReturnType<typeof integrationsForProject>>,
@@ -797,6 +833,7 @@ const sayStillOpen = async (
       discussion.resolved ||
       input.answeredThreads.has(discussion.id) ||
       last < 0 ||
+      saidStillOpenSince(discussion, stored.task.id) > last ||
       !CONVERSATION_HANDLED_ID.test(discussion.id) ||
       ledger.some(
         (row) =>

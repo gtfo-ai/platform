@@ -285,6 +285,12 @@ export const renderConversationReply = (input: {
    * hexadecimal commit id is dropped, never printed.
    */
   readonly addressedIn?: string | null;
+  /**
+   * Whether the run's commits reached the merge request (S-28.3 review). `false` turns a `fixed` or
+   * `documented` reply's heading into *Not pushed yet — still open* and drops the commit line;
+   * absent reads as pushed.
+   */
+  readonly pushed?: boolean;
 }): string => {
   const heading =
     input.kind === 'needs_person'
@@ -292,11 +298,18 @@ export const renderConversationReply = (input: {
         ? '**A person must act on this.** The agent has not done it and cannot: it needs somebody with access the agent does not have.'
         : `**${collapseLines(input.person.trim())} must act on this.** The agent has not done it and cannot.`
       : REPLY_HEADING[input.kind];
+  const claimsDone = input.kind === 'fixed' || input.kind === 'documented';
+  if (claimsDone && input.pushed === false) {
+    return [
+      input.marker,
+      '**Not pushed yet — still open.** The agent says it changed this, but no new commit has reached the merge request.',
+      '',
+      input.reply,
+    ].join('\n');
+  }
   const sha = input.addressedIn ?? null;
   const addressed =
-    (input.kind === 'fixed' || input.kind === 'documented') &&
-    sha !== null &&
-    /^[0-9a-f]{7,64}$/i.test(sha)
+    claimsDone && sha !== null && /^[0-9a-f]{7,64}$/i.test(sha)
       ? ['', `Addressed in \`${sha.slice(0, 8).toLowerCase()}\`.`]
       : [];
   return [input.marker, heading, '', input.reply, ...addressed].join('\n');

@@ -1474,7 +1474,7 @@ describe('the review conversation through the pipeline (WP-179)', () => {
         ),
       );
 
-  it('posts the review’s findings and summary after code_review, and asks for replies only when the Developer wrote some', async () => {
+  it('posts the review’s findings and summary after code_review, and owes the replies duty after every Developer run', async () => {
     const finding = {
       id: 'f1',
       severity: 'major',
@@ -1489,7 +1489,11 @@ describe('the review conversation through the pipeline (WP-179)', () => {
     });
     const { harness } = waiting;
 
-    expect(dutiesOf(harness).map((data) => data.duty)).toEqual(['review_findings_post']);
+    // S-28.3 review: every Developer run's notes owe `conversation_replies`, replies or none.
+    expect(dutiesOf(harness).map((data) => data.duty)).toEqual([
+      'conversation_replies',
+      'review_findings_post',
+    ]);
     // One finding thread and one summary note, both through the executor — and, since WP-184,
     // replayed once by the other performer: the outbound duty and the `business_review` job's
     // pre-plan step name the same keys, so the second turn makes no call.
@@ -1513,6 +1517,7 @@ describe('the review conversation through the pipeline (WP-179)', () => {
     await fire(harness, noteArrived(harness, 'One more change'));
 
     expect(dutiesOf(harness).map((data) => data.duty)).toEqual([
+      'conversation_replies',
       'review_findings_post',
       'conversation_replies',
       'review_findings_post',
