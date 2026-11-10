@@ -377,7 +377,7 @@ export const runReviewFindingsPost = async (
     }
   }
   // S-28.13 (M28 ruling R3b (1)): a general note, never a thread — a summary blocks no merge.
-  await writes.note(
+  const summaryNote = await writes.note(
     {
       ref: stored.mr,
       markdown: renderReviewSummary({
@@ -391,6 +391,18 @@ export const runReviewFindingsPost = async (
     },
     context,
   );
+  // TD-029 Amendment D.1: a provider that lists the note as resolvable (GitLab's documentation
+  // shows both values, research/15 G2) gets it resolved at once, keyed beside the post.
+  if (summaryNote?.resolvable === true && !summaryNote.resolved) {
+    await writes.resolve(
+      {
+        ref: stored.mr,
+        discussionId: summaryNote.id,
+        idempotencyKey: `${reviewFindingSummaryIdempotencyKeyFor(stored.task.id, runId)}:resolve`,
+      },
+      context,
+    );
+  }
   logger.info(
     {
       task_id: stored.task.id,
@@ -400,9 +412,14 @@ export const runReviewFindingsPost = async (
     },
     'review findings posted on the merge request',
   );
-  if (verdict.verdict === 'approve') {
+  const latest = await options.unitOfWork.transaction(async (scope) =>
+    options.store.artifacts.latest(scope.tx, stored.task.id, 'ReviewVerdict'),
+  );
+  if (verdict.verdict === 'approve' && latest?.id === artifact.id) {
     // M28 ruling R3b (2): an approving review leaves none of the platform's own threads open —
-    // this run's findings included, which nobody will answer now the task has moved on.
+    // this run's findings included, which nobody will answer now the task has moved on. Only
+    // while it is still the task's latest verdict: a retried post after a later review that asked
+    // for changes must not close that review's threads under "the reviewer approved" (#155).
     // The threads it named as fixed are `review_threads_resolve`'s, which runs beside this duty.
     await closeOwnThreads(options, integrations, {
       stored,
@@ -1020,9 +1037,10 @@ const personWroteIn = (discussion: Discussion, self: ExternalIdentity): boolean 
  * (`ready-merge-check.ts`) and the recovery pass that reaches tasks already waiting: the note is
  * keyed and marked by the discussion (`review_left_open:<task>:<discussion>`, found again by its
  * marker before a retry posts), and the resolve is keyed by the discussion too
- * (`review_thread_close:<task>:<discussion>`). The resolve's key is also what keeps a person's
- * **reopen** standing: a thread the platform already closed replays its recorded answer and is not
- * resolved a second time. Shadow mode records `would_have` and changes nothing. A provider that
+ * (`review_thread_close:<task>:<discussion>`), and each resolve writes a `resolved` row to the
+ * handled ledger. That row is what keeps a person's **reopen** standing (TD-029 Amendment D.3): a
+ * thread the platform already resolved that is open again is never resolved a second time — it is
+ * counted as `reopened`, and the Ready check arms the human-return window, which returns the task. Shadow mode records `would_have` and changes nothing. A provider that
  * cannot resolve a discussion is logged and skipped. Answers how many threads it resolved.
  */
 export const closeOwnThreads = async (
@@ -1033,10 +1051,17 @@ export const closeOwnThreads = async (
     readonly logger: Logger;
     /** Threads another duty resolves (the approving verdict's `resolved_threads`); left alone. */
     readonly leave?: ReadonlySet<string>;
+    /**
+     * Threads the Reviewer confirmed fixed (an approving verdict's `resolved_threads`), resolved
+     * here **without** the *Left as is* note — the Ready check's, in case `review_threads_resolve`
+     * was lost (review of #155).
+     */
+    readonly confirmed?: ReadonlySet<string>;
   },
-): Promise<number> => {
+): Promise<ClosedOwnThreads> => {
+  const none: ClosedOwnThreads = { resolved: 0, reopened: 0 };
   if (integrations.git === null) {
-    return 0;
+    return none;
   }
   const { stored, logger } = input;
   const readContext = { projectId: stored.task.projectId, taskId: stored.task.id };
@@ -1055,7 +1080,7 @@ export const closeOwnThreads = async (
   });
   if (!open) {
     // Nothing of this task's is open: no identity read, no write.
-    return 0;
+    return none;
   }
   const self = await reads.self(readContext);
   if (self === null) {
@@ -1063,9 +1088,9 @@ export const closeOwnThreads = async (
       { task_id: stored.task.id },
       'the git binding did not say who it is, so the platform cannot tell its own threads; none is closed',
     );
-    return 0;
+    return none;
   }
-  const candidates = discussions.filter(
+  const own = discussions.filter(
     (discussion) =>
       discussion.resolvable &&
       !discussion.resolved &&
@@ -1073,10 +1098,31 @@ export const closeOwnThreads = async (
       ownReviewThreadKind(discussion, stored.task.id, self) !== null &&
       !personWroteIn(discussion, self),
   );
-  if (candidates.length === 0) {
-    return 0;
+  if (own.length === 0) {
+    return none;
   }
-  const settled = await settledThreadIds(options, stored.task.id);
+  // TD-029 Amendment D.3: a thread the platform already resolved that is open again was reopened
+  // by a person — a return signal for the window, never resolved a second time (and so no replayed
+  // write every time the Ready check runs over it).
+  const ledger = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.conversationHandled(scope.tx, stored.task.id),
+  );
+  const resolvedBefore = new Set(
+    ledger
+      .filter((row) => row.kind === 'resolved' && row.source === 'mr_thread')
+      .map((row) => row.threadId),
+  );
+  const candidates = own.filter((discussion) => !resolvedBefore.has(discussion.id));
+  const reopened = own.length - candidates.length;
+  if (candidates.length === 0) {
+    return { resolved: 0, reopened };
+  }
+  const settled = new Set([
+    ...(await settledThreadIds(options, stored.task.id)),
+    ...(input.confirmed ?? []),
+  ]);
+  const handledAt = new Date(options.clock?.now() ?? Date.now()).toISOString();
+  const rows: ConversationHandledInput[] = [];
   let resolved = 0;
   for (const discussion of candidates) {
     if (!CONVERSATION_HANDLED_ID.test(discussion.id)) {
@@ -1108,6 +1154,13 @@ export const closeOwnThreads = async (
         writeContext,
       );
       resolved += 1;
+      // The ledger's `resolved` row is what tells a later reopen from a thread never closed.
+      const row = handledRow(stored, '', handledAt, {
+        source: 'mr_thread',
+        threadId: discussion.id,
+        lastNoteId: discussion.notes.at(-1)?.id ?? null,
+      });
+      if (row !== null) rows.push({ ...row, kind: 'resolved' });
     } catch (error) {
       if (
         error instanceof IntegrationUnsupportedError ||
@@ -1123,12 +1176,19 @@ export const closeOwnThreads = async (
       throw error;
     }
   }
+  await recordHandled(options, rows);
   logger.info(
-    { task_id: stored.task.id, candidates: candidates.length, resolved },
+    { task_id: stored.task.id, candidates: candidates.length, resolved, reopened },
     'the platform closed its own review threads after the approval',
   );
-  return resolved;
+  return { resolved, reopened };
 };
+
+/** What {@link closeOwnThreads} did: threads it resolved, and own threads a person reopened. */
+export interface ClosedOwnThreads {
+  readonly resolved: number;
+  readonly reopened: number;
+}
 
 /** Every thread id the Developer answered `fixed` or `documented`, across every run's notes. */
 const settledThreadIds = async (

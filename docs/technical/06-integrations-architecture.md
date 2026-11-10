@@ -215,9 +215,19 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > approving review — and again the `ready_merge_check` duty at Ready, and the recovery pass for tasks
 > already waiting — resolves every unresolved resolvable thread whose first note opens with this
 > task's `review-finding` or `review-summary` marker by the binding's own account **and in which no
-> person wrote** (a finding the Developer did not answer `fixed`/`documented` first gets one keyed,
-> marked *Left as is* note). The same duty records `merge_blocker` in `task_merge_checks` and the task
-> page says it (`provider_sync`'s `merge_request_blocked`).
+> person wrote** (a finding the Developer did not answer `fixed`/`documented` — and not confirmed in
+> the approving verdict's `resolved_threads` — first gets one keyed, marked *Left as is* note), and
+> records a `resolved` row in the handled ledger. A summary a provider lists as resolvable is resolved
+> at once (TD-029 Amendment D.1). A platform thread with a `resolved` row that is open again was
+> reopened by a person (Amendment D.3): it is never resolved again, the Ready check arms the
+> human-return window, and `humanReturnDecision` returns on it (rule 7a). The same duty records
+> `merge_blocker` in `task_merge_checks` and the task page says it (`provider_sync`'s
+> `merge_request_blocked`), but only for a check read since the current entry into Ready.
+> **Deviations from Amendment D, stated:** the duty is `ready_merge_check` (it also reads the
+> mergeability), not `platform_threads_resolve`; and a thread counts as the platform's only when its
+> first note carries **this task's** review marker by the binding's account and every note is the
+> binding's own **and** marked — the narrowing direction, so a note somebody else wrote with a marker
+> keeps the thread open.
 
 > **WP-187 amendment (backlog 549, M11): every note is mention-neutral.** A finding, a review summary,
 > a reply and a `needs_person` name are model text shaped by untrusted input (BD-022), and GitLab

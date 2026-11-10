@@ -48,6 +48,9 @@
  *     stage, `approved`/`done` at Ready and `done` at QA ({@link isForwardMove}) — no word written no later than the instant the window first saw that
  *     move (`forwardSeenAt`) returns the task. A note written after it still does. (Until M28 the
  *     opposite held: return won over pass.)
+ *  7a. **A reopened platform thread returns** (TD-029 Amendment D.3, S-28.13): an unresolved
+ *     platform thread the platform resolved since the horizon (a `resolved` ledger row) — the
+ *     reopen is a person's act even with no note; never while the status has moved forward.
  *  8. Any form returns → `return`. Otherwise, at `qa`, a status that is mapped, readable, not the
  *     `qa` status and not a return status → `pass` — **and only when the ticket has been seen
  *     leaving the `qa` status**: a recorded change out of it (`leftQa`, WP-178 criterion (14)), or
@@ -110,6 +113,11 @@ export interface HandledThread {
   readonly lastNoteId: string | null;
   /** When the platform handled it (ISO 8601). */
   readonly handledAt: string;
+  /**
+   * What the platform did (`task_conversation_handled.kind`): `resolved` is what makes a platform
+   * thread that is unresolved again a **reopen** (TD-029 Amendment D.3). Absent reads as answered.
+   */
+  readonly kind?: 'answered' | 'resolved' | 'seen';
 }
 
 /** The binding's slots, with `pick_up_from` — the binding's `pickup_status` — beside them. */
@@ -172,6 +180,11 @@ export type HumanReturnDecision<TWord extends HumanWord = HumanWord> =
       readonly status: string | null;
       /** Always empty: a return quotes every word in its feedback, and the horizon moves on. */
       readonly seen: readonly TWord[];
+      /**
+       * The first note of each platform thread a person **reopened** (TD-029 Amendment D.3, S-28.13)
+       * — present only when one did, so the feedback can name the thread nobody wrote in.
+       */
+      readonly reopened?: readonly TWord[];
     }
   | { readonly kind: 'pass'; readonly status: string; readonly seen: readonly TWord[] }
   | { readonly kind: 'none'; readonly seen: readonly TWord[] };
@@ -329,6 +342,51 @@ const returningWords = <TWord extends HumanWord>(
   );
 };
 
+/**
+ * **A reopened platform thread is a return signal** (TD-029 Amendment D.3, M28 ruling R3b, S-28.13):
+ * an unresolved resolvable thread whose first note is the platform's and which the platform itself
+ * resolved — a `resolved` ledger row written **after the horizon** — was reopened by a person, an
+ * act even with no new note. Answers each such thread's first word. The horizon bound keeps one
+ * reopen from returning the task twice: after the return a new implementation run moves it. While
+ * the ticket has moved **forward** nothing counts — a reopen carries no instant to compare with the
+ * move, and forward wins (rule 7). A thread a person's word already returns is not counted twice.
+ */
+const reopenedPlatformThreads = <TWord extends HumanWord>(
+  input: HumanReturnInput<TWord>,
+  returning: readonly TWord[],
+): readonly TWord[] => {
+  if (isForwardMove(input)) return [];
+  const returningThreads = new Set(returning.map((word) => word.threadId));
+  const resolved = new Set(
+    input.handled
+      .filter(
+        (row) =>
+          row.kind === 'resolved' &&
+          row.source === 'mr_thread' &&
+          isNewerThan(row.handledAt, input.horizon),
+      )
+      .map((row) => row.threadId),
+  );
+  const out: TWord[] = [];
+  const firsts = new Map<string, TWord>();
+  for (const word of input.words) {
+    if (word.form === 'ticket_comment' || typeof word.threadId !== 'string') continue;
+    if (!firsts.has(word.threadId)) firsts.set(word.threadId, word);
+  }
+  for (const [threadId, first] of firsts) {
+    if (
+      resolved.has(threadId) &&
+      first.resolvable === true &&
+      first.system !== true &&
+      isPlatformWord(first) &&
+      !returningThreads.has(threadId)
+    ) {
+      out.push(first);
+    }
+  }
+  return out;
+};
+
 const isPass = (input: HumanReturnInput<HumanWord>, returnsByStatus: boolean): boolean => {
   const qa = input.slots.lifecycle.qa;
   if (
@@ -378,8 +436,9 @@ export const humanReturnDecision = <TWord extends HumanWord>(
     (word) => !handled.has(word),
   );
   const words = returningWords(candidates, input);
+  const reopened = reopenedPlatformThreads(input, words);
   const counts: Record<HumanWordForm, number> = { mr_diff: 0, mr_note: 0, ticket_comment: 0 };
-  for (const word of words) {
+  for (const word of [...words, ...reopened]) {
     counts[word.form] += 1;
   }
   const returnsByStatus = returnsByStatusOf(input);
@@ -394,6 +453,7 @@ export const humanReturnDecision = <TWord extends HumanWord>(
       counts,
       status: returnsByStatus ? input.status : null,
       seen: [],
+      ...(reopened.length === 0 ? {} : { reopened }),
     };
   }
   // Every candidate is a word that did not return the task: seen, not a change request — except an

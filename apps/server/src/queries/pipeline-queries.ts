@@ -142,6 +142,7 @@ import {
   desc,
   eq,
   gt,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -2535,17 +2536,40 @@ export const providerSyncFor = async (
  * `task_merge_checks` row when its last check read "the provider will not merge it now", served as
  * the `merge_request_blocked` subject — `target` `mergeable`, `observed` the provider's own word,
  * `reason_code` the port's reason and `unresolved_threads` the count. Read only at Ready (the
- * caller's), so a row from an earlier Ready entry never speaks for a task that moved on. Every
- * value is held by the table's checks; a row that does not parse is refused by name.
+ * caller's), and only when the check was read **after the current entry into Ready** (the open
+ * `ready_for_merge` stage row's `entered_at`): a row from an earlier entry never speaks for this
+ * one between the re-entry and its first check (review of #155). Every value is held by the
+ * table's checks; a row that does not parse is refused by name.
  */
 const mergeBlockedFor = async (
   database: Database,
   taskId: string,
 ): Promise<readonly ProviderSync[]> => {
+  const [entry] = await database
+    .select({ enteredAt: taskStages.enteredAt })
+    .from(taskStages)
+    .where(
+      and(
+        eq(taskStages.taskId, taskId),
+        eq(taskStages.stage, 'ready_for_merge'),
+        isNull(taskStages.exitedAt),
+      ),
+    )
+    .orderBy(desc(taskStages.enteredAt))
+    .limit(1);
+  if (entry === undefined) {
+    return [];
+  }
   const rows = await database
     .select()
     .from(taskMergeChecks)
-    .where(and(eq(taskMergeChecks.taskId, taskId), eq(taskMergeChecks.mergeable, false)));
+    .where(
+      and(
+        eq(taskMergeChecks.taskId, taskId),
+        eq(taskMergeChecks.mergeable, false),
+        gte(taskMergeChecks.checkedAt, entry.enteredAt),
+      ),
+    );
   return rows.map((row) => {
     const parsed = providerSyncSchema.safeParse({
       subject: 'merge_request_blocked',

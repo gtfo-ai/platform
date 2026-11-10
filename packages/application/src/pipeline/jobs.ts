@@ -1975,6 +1975,8 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
         threadId: row.threadId,
         lastNoteId: row.lastNoteId,
         handledAt: row.handledAt,
+        // TD-029 Amendment D.3 (S-28.13): a platform thread resolved and open again is a reopen.
+        kind: row.kind,
       })),
       forwardSeenAt,
       leftQa: leftQaOf(read.statusChanges, slots.lifecycle.qa),
@@ -2206,6 +2208,7 @@ const returnForHumanWords = async (
     words,
     horizon: read.horizon,
     redactor,
+    reopened: decision.reopened ?? [],
   });
   if (feedback.redactions > 0) {
     logger.info(

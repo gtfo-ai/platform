@@ -9,7 +9,10 @@
  * does both, at Ready:
  *
  *  1. when the task's latest `ReviewVerdict` approves, it closes the platform's own review threads
- *     in which no person has written (`closeOwnThreads`, `review-conversation.ts`);
+ *     in which no person has written (`closeOwnThreads`, `review-conversation.ts`) — those the
+ *     verdict's `resolved_threads` confirmed fixed without the *Left as is* note — and, when one
+ *     the platform had resolved is open again (a person's reopen, TD-029 Amendment D.3), arms the
+ *     human-return window, which returns the task;
  *  2. it reads the merge request and records whether the provider would merge it **now**
  *     (`MergeRequest.merge_blocker`) in `task_merge_checks` (migration 0118), with the count of
  *     unresolved threads when that is the reason. The task read serves a "not now" as the
@@ -36,9 +39,10 @@
 import type { Id } from '@platform/contracts';
 import { reviewVerdictDataSchema } from '@platform/contracts';
 import { READY_FOR_MERGE_STAGE } from '@platform/domain';
+import type { Jobs } from '../ports/jobs.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
-import type { PipelineOutboundData } from './jobs.js';
+import { enqueueReviewCommentWindow, type PipelineOutboundData } from './jobs.js';
 import { closeOwnThreads, type ReviewConversationOptions } from './review-conversation.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ReadyMergeCheck, StoredTask } from './store.js';
@@ -56,7 +60,7 @@ export type ReadyMergeCheckOutcome =
  * `pipeline.outbound` duty **ready_merge_check** — see the module docblock.
  */
 export const runReadyMergeCheck = async (
-  options: ReviewConversationOptions,
+  options: ReviewConversationOptions & { readonly jobs: Jobs },
   data: Pick<PipelineOutboundData, 'task_id'>,
 ): Promise<ReadyMergeCheckOutcome> => {
   const logger: Logger = options.logger ?? silentLogger;
@@ -97,7 +101,24 @@ export const runReadyMergeCheck = async (
   if (approved.success && approved.data.verdict === 'approve') {
     // M28 ruling R3b (2), again at Ready: idempotent, so a thread closed after the approving
     // review is not touched twice, and a task that waited from before this shipped is cleaned up.
-    await closeOwnThreads(options, integrations, { stored: atReady, logger });
+    // The threads the Reviewer confirmed fixed are resolved without the *Left as is* note, in case
+    // `review_threads_resolve` was lost (review of #155).
+    const closed = await closeOwnThreads(options, integrations, {
+      stored: atReady,
+      logger,
+      confirmed: new Set(approved.data.resolved_threads ?? []),
+    });
+    if (closed.reopened > 0) {
+      // TD-029 Amendment D.3: a person reopened one of the platform's threads — a return signal
+      // with no note, so no comment arms the window; this check does.
+      await enqueueReviewCommentWindow(options.jobs, {
+        taskId: stored.task.id,
+        projectId: stored.task.projectId,
+        iid: atReady.mr.iid,
+        windowMs: 0,
+        now: new Date(options.clock?.now() ?? Date.now()),
+      });
+    }
   }
   const context = { projectId: stored.task.projectId, taskId: stored.task.id };
   const reads = gitReads(integrations);

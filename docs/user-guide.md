@@ -1351,9 +1351,11 @@ The review is held **on the merge request**, where you read it:
 - **The platform cleans up after itself.** When the Reviewer approves, the platform resolves every
   one of its own review threads in which no person has written — including the small findings of the
   approving review itself, which nobody would otherwise answer. A finding the Developer did not fix
-  first gets one closing note: *"Left as is. … To have it changed, reopen this thread and write what
-  you want here"* — and a note in an open thread does send a task waiting at Ready back to the agent.
-  A thread in which you wrote anything is yours, and the platform never closes it. Tasks that were
+  first gets one closing note: *"Left as is — the reviewer approved the change with this open. Reopen
+  this thread to have it changed."* Reopening it is enough: while the task waits at Ready, a thread of
+  the platform's that you reopen sends the task back to the agent, with or without a note (the
+  platform notices within ten minutes). A thread in which you wrote anything is yours, and the
+  platform never closes it. Tasks that were
   already waiting at Ready when this arrived are cleaned up once, the same way.
 
 Every agent stage also reads the merge request's notes and the ticket's comments, as data it is told

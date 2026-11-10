@@ -29,6 +29,7 @@ import type {
   TicketComment,
   TicketRefInput,
 } from '../ports/integrations/task-management.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import {
@@ -37,6 +38,7 @@ import {
   createVirtualTimer,
 } from '../testing/memory-integrations.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
+import { recordingJobs } from '../testing/pipeline-harness.js';
 import {
   OUTBOUND_DUTY_LEASE_WAIT_MS,
   TASK_DUTY_LEASE_WAIT_MS,
@@ -487,6 +489,7 @@ const world = async (
     }
   });
   const auditLog = createMemoryAuditLog();
+  const windowJobs = recordingJobs();
   const logger: Logger = {
     debug: (fields, message) => recorded.logs.push({ level: 'debug', message, fields }),
     info: (fields, message) => recorded.logs.push({ level: 'info', message, fields }),
@@ -567,7 +570,11 @@ const world = async (
     resolve: () =>
       runReviewThreadsResolve(conversationOptions, data('review_threads_resolve', VERDICT_ID)),
     /** S-28.13: the `ready_merge_check` duty, as the outbound queue's dispatch hands it the task. */
-    readyCheck: () => runReadyMergeCheck(conversationOptions, { task_id: TASK }),
+    readyCheck: () =>
+      runReadyMergeCheck({ ...conversationOptions, jobs: windowJobs }, { task_id: TASK }),
+    /** S-28.13: the human-return windows the Ready check armed (a reopened platform thread). */
+    windowsArmed: () =>
+      windowJobs.history.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce).length,
     /** S-28.13: what the last merge check recorded. */
     mergeCheck: () =>
       memory.transaction(async (scope) => store.tasks.readyMergeCheckOf(scope.tx, TASK)),
@@ -1504,8 +1511,8 @@ describe('(S-28.13) the platform closes its own threads after an approval (M28 r
       entry.markdown.startsWith(reviewLeftOpenNoteMarker(TASK, 'nit-not-changed')),
     );
     expect(closing).toHaveLength(1);
-    expect(closing[0]?.markdown).toContain('Left as is.');
-    expect(closing[0]?.markdown).toContain('reopen this thread and write what you want here');
+    expect(closing[0]?.markdown).toContain('**Left as is** — the reviewer approved the change');
+    expect(closing[0]?.markdown).toContain('Reopen this thread to have it changed.');
     expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['nit-not-changed']);
     // The approving review's own summary is a note; of the platform's threads only the one a
     // person wrote in is still open.
@@ -1541,6 +1548,54 @@ describe('(S-28.13) the platform closes its own threads after an approval (M28 r
         entry.markdown.startsWith(reviewLeftOpenNoteMarker(TASK, 'nit-not-changed')),
       ),
     ).toHaveLength(1);
+  });
+
+  /** Review of #155 (1): a retried post of an approval a later review superseded closes nothing. */
+  it('closes nothing when the approving verdict is no longer the task’s latest', async () => {
+    const w = await world({
+      discussions: ownThreads(),
+      artifacts: [
+        developerNotes(),
+        approving(),
+        {
+          id: '00000000-0000-4000-8000-0000000017b5' as Id,
+          type: 'ReviewVerdict',
+          run: '00000000-0000-4000-8000-0000000017b3' as Id,
+          data: verdict({ findings: [] }),
+        },
+      ],
+    });
+    await w.findings();
+    expect(w.recorded.resolved).toEqual([]);
+    expect(w.recorded.replied).toEqual([]);
+  });
+
+  /** Review of #155 (4): a person's note anywhere in the thread makes it theirs. */
+  it('never resolves a thread with a person’s note in the middle, nor another task’s thread', async () => {
+    const w = await world({
+      discussions: [
+        {
+          id: 'person-in-the-middle',
+          resolvable: true,
+          resolved: false,
+          notes: [
+            note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'm1')}\n**nit · style**`),
+            note(PERSON, 'Actually, please do change it.'),
+            note(BOT, `${conversationReplyNoteMarker(TASK, DEV_RUN, 0)}\n**Not changed.**`),
+          ],
+        },
+        {
+          id: 'other-task',
+          resolvable: true,
+          resolved: false,
+          notes: [note(BOT, `${reviewFindingMarkerFor(OTHER_TASK, 'old-run', 'o1')}\n**nit**`)],
+        },
+      ],
+      artifacts: [approving()],
+    });
+    await w.findings();
+    expect(w.recorded.resolved).toEqual([]);
+    expect(w.recorded.replied).toEqual([]);
   });
 
   it('closes nothing after a review that asked for changes', async () => {
@@ -1618,6 +1673,56 @@ describe('(S-28.13) Ready tells the truth about the provider (M28 ruling R3b (3)
     });
     expect(await deciding.readyCheck()).toBe('unknown');
     expect((await deciding.mergeCheck())?.mergeable).toBeNull();
+  });
+
+  /** Review of #155 (2): a thread the Reviewer confirmed fixed gets no *Left as is*. */
+  it('resolves a thread the approving verdict confirmed fixed without the closing note', async () => {
+    const w = await world({
+      atReady: true,
+      discussions: [
+        {
+          id: 'confirmed-fixed',
+          resolvable: true,
+          resolved: false,
+          notes: [note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'c1')}\n**major**`)],
+        },
+      ],
+      artifacts: [
+        reviewArtifact({ verdict: 'approve', findings: [], resolved_threads: ['confirmed-fixed'] }),
+      ],
+    });
+    await w.readyCheck();
+    expect(w.recorded.resolved).toEqual(['confirmed-fixed']);
+    expect(w.recorded.replied).toEqual([]);
+  });
+
+  /**
+   * Review of #155 (4) and TD-029 Amendment D.3: run twice over a thread a person reopened, the
+   * check resolves nothing again (no replayed write either) and arms the window, which returns.
+   */
+  it('leaves a reopened thread open on the second check, writes nothing, and arms the window', async () => {
+    const w = await world({
+      atReady: true,
+      discussions: [
+        {
+          id: 'nit-open',
+          resolvable: true,
+          resolved: false,
+          notes: [note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'n1')}\n**nit**`)],
+        },
+      ],
+      artifacts: [reviewArtifact({ verdict: 'approve', findings: [] })],
+    });
+    await w.readyCheck();
+    expect(w.recorded.resolved).toEqual(['nit-open']);
+    expect(w.windowsArmed()).toBe(0);
+    const writesBefore = w.auditLog.entriesFor('resolve_discussion').length;
+    const nit = w.discussions.find((discussion) => discussion.id === 'nit-open');
+    if (nit !== undefined) nit.resolved = false;
+    await w.readyCheck();
+    expect(w.recorded.resolved).toEqual(['nit-open']);
+    expect(w.auditLog.entriesFor('resolve_discussion')).toHaveLength(writesBefore);
+    expect(w.windowsArmed()).toBe(1);
   });
 
   it('checks nothing for a task that is not at Ready', async () => {

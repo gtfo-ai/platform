@@ -190,6 +190,30 @@ describe('the words the human-return window reads', () => {
   });
 });
 
+describe('the reason a reopened platform thread carries (TD-029 Amendment D.3, S-28.13)', () => {
+  it('names the reopened thread and what it asks for, though nobody wrote in it', () => {
+    const [first] = mergeRequestWords([
+      thread([
+        note('<!-- agentic:review-finding:t.r.n1 -->\n**nit** Rename the helper.', {
+          path: 'src/a.ts',
+          line: 3,
+        }),
+      ]),
+    ]);
+    const { reason } = humanReturnFeedback({
+      stage: 'ready_for_merge',
+      forms: ['mr_diff'],
+      status: null,
+      words: first === undefined ? [] : [first],
+      horizon: null,
+      redactor: none,
+      reopened: first === undefined ? [] : [first],
+    });
+    expect(reason).toContain('[reopened] src/a.ts:3 A person reopened this thread');
+    expect(reason).toContain('Rename the helper.');
+  });
+});
+
 describe('the reason a human return carries (WP-178)', () => {
   it('opens with the stage and the forms, and gives each person’s word one tagged line', () => {
     const { reason, redactions } = humanReturnFeedback({

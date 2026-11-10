@@ -266,6 +266,8 @@ export const humanReturnFeedback = (input: {
   readonly words: readonly WindowWord[];
   readonly horizon: string | null;
   readonly redactor: SecretRedactor;
+  /** TD-029 Amendment D.3 (S-28.13): the first note of each platform thread a person reopened. */
+  readonly reopened?: readonly WindowWord[];
 }): HumanReturnFeedback => {
   let redactions = 0;
   const clean = (text: string): string => {
@@ -283,6 +285,15 @@ export const humanReturnFeedback = (input: {
         (words.length === 0
           ? ' Nobody wrote why: read the merge request’s and the ticket’s conversation with get_conversation to find what to fix, and ask a question if you find nothing to fix.'
           : ' Read the words below, and the whole conversation with get_conversation.'),
+    );
+  }
+  for (const word of input.reopened ?? []) {
+    const where =
+      typeof word.path === 'string'
+        ? ` ${clean(word.path)}${typeof word.line === 'number' ? `:${String(word.line)}` : ''}`
+        : '';
+    lines.push(
+      `[reopened]${where} A person reopened this thread of the platform's after it was closed, without a note: change what it asks for — ${clean(word.text)}`,
     );
   }
   for (const word of words) {

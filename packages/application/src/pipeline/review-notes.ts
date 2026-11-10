@@ -159,16 +159,15 @@ export const reviewThreadCloseIdempotencyKeyFor = (taskId: Id, discussionId: str
   `review_thread_close:${taskId}:${discussionId}`;
 
 /**
- * The closing note itself (M28 ruling R3b (2)). Platform text, and it promises only what the code
- * keeps: a person's note in an **unresolved** thread returns a task waiting at Ready (M28 ruling
- * R1), so the sentence asks for both — reopen it *and* say so — never for a reopen alone, which no
- * signal reaches the platform for.
+ * The closing note itself — TD-029 Amendment D.2's words (M28 ruling R3b (2)). Platform text, and
+ * it promises what the code keeps: a reopened platform thread is a return signal (Amendment D.3,
+ * `humanReturnDecision`'s rule 7a), which the window reads at Ready — armed by the Ready check when
+ * it finds one of the platform's threads open again.
  */
 export const renderLeftOpenNote = (marker: string): string =>
   [
     marker,
-    '**Left as is.** The reviewer approved this change with this point open, so the platform closes the thread.',
-    'To have it changed, reopen this thread and write what you want here: a note in an open thread sends a task waiting to be merged back to the agent.',
+    '**Left as is** — the reviewer approved the change with this open. Reopen this thread to have it changed.',
   ].join('\n');
 
 /** The platform's whole note on a person's thread the run left unanswered (R3). Platform text. */
