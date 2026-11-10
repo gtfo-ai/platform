@@ -289,7 +289,7 @@ const world = async (
       taskManagement:
         options.lifecycleSlots === undefined
           ? null
-          : {
+          : ({
               port: {
                 capabilities: () => ({}),
                 transition: async (_ref: unknown, status: string) => {
@@ -303,7 +303,7 @@ const world = async (
                 type: 'task_management',
               },
               redactor: exactSecretRedactor([]),
-            },
+            } as never),
       communication: null,
     }),
   } as unknown as Parameters<typeof runMergeRequestReady>[0];

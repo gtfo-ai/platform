@@ -2383,7 +2383,7 @@ export const findTaskDetail = async (
     // S-27.2: the manual jobs the latest CI pass left unstarted.
     ci_manual_not_run: ciManualNotRunOf(stageRows),
     // S-28.10: what is out of sync with the provider, if anything — nothing for a finished task.
-    provider_sync: await providerSyncFor(database, taskId, task.state),
+    provider_sync: [...(await providerSyncFor(database, taskId, task.state))],
     queue_wait: queueWaits.get(task.id) ?? null,
     manual_pause: manualPause,
     // S-25.11: the returns and the stop, off the same rows.

@@ -7,7 +7,9 @@
 -- lifecycle duty only logged a warning.
 --
 -- **`integration_actions.error_code` / `error_message`.** A failed row keeps what failed: the
--- `IntegrationError` code (or the error's class name — platform vocabulary, never provider text)
+-- `IntegrationError` code (or the error's class name — platform vocabulary, never provider text;
+-- held to `^[A-Za-z0-9_.-]{1,64}$` by the executor, not by a check here: a constraint on this
+-- existing, partitioned table would have to be added `not valid`, which a partitioned table refuses)
 -- and the message the executor already redacted and bounded (TD-012). `null` on every other row,
 -- and on every row written before this file.
 --
@@ -28,10 +30,6 @@
 alter table integration_actions
   add column error_code text,
   add column error_message text;
-
-alter table integration_actions
-  add constraint integration_actions_error_code_shape
-  check (error_code is null or error_code ~ '^[A-Za-z0-9_.-]{1,64}$');
 
 create table task_provider_sync (
   task_id uuid not null references tasks (id) on delete cascade,
