@@ -180,6 +180,8 @@ const world = async (
     readonly anchoredThenUnparsable?: boolean;
     /** The first reply call posts, then throws — GitLab's fallback, POST and then a failed read. */
     readonly failAfterFirstReply?: boolean;
+    /** When the artifacts' runs were created. @default NOW */
+    readonly runCreatedAt?: IsoDateTime;
     readonly discussions?: readonly Discussion[];
     readonly comments?: readonly TicketComment[];
     readonly artifacts?: readonly { id: Id; type: string; run: Id; data: unknown }[];
@@ -390,6 +392,39 @@ const world = async (
         producedByRunId: artifact.run,
         createdAt: NOW,
         redactionCount: 0,
+      });
+    }
+    // The runs that produced them, created at NOW: the handled ledger covers a thread only up to
+    // the newest note written no later than the run was created (review of #139).
+    for (const runId of new Set((options.artifacts ?? []).map((artifact) => artifact.run))) {
+      await store.runs.insert(scope.tx, {
+        id: runId,
+        taskId: TASK,
+        projectId: PROJECT,
+        stage: null,
+        role: 'developer',
+        mode: 'normal',
+        attempt: 1,
+        model: 'claude-opus-5',
+        effort: 'high',
+        promptVersion: 'test@1',
+        systemPrompt: null,
+        userPrompt: null,
+        redactionCount: 0,
+        contextPack: null,
+        settings: null,
+        reserveUsd: null,
+        promptsWithheld: null,
+        providerMode: 'api',
+        status: 'completed',
+        terminalReason: null,
+        sessionId: null,
+        numTurns: 0,
+        usage: null,
+        cost: null,
+        wallMs: 0,
+        createdAt: options.runCreatedAt ?? NOW,
+        startedAt: options.runCreatedAt ?? NOW,
       });
     }
   });
@@ -760,12 +795,59 @@ describe('(3) the replies', () => {
       w.discussions.find((discussion) => discussion.id === 'person-diff')?.notes[0]?.id,
     );
     expect(person?.runId).toBe(DEV_RUN);
-    // The finding thread holds only the platform's own note: no person's note to name.
-    expect(first.find((row) => row.threadId === 'finding-thread')?.lastNoteId).toBeNull();
+    // The finding thread's newest note written before the run is the platform's finding itself.
+    expect(first.find((row) => row.threadId === 'finding-thread')?.lastNoteId).toBe(
+      w.discussions.find((discussion) => discussion.id === 'finding-thread')?.notes[0]?.id,
+    );
     expect(first.find((row) => row.threadId === '10042')?.lastNoteId).toBe('10042');
 
     await w.replies();
     expect(await ledgerOf(w)).toEqual(first);
+  });
+
+  /**
+   * Review of #139: a person who adds "also X" to a thread while the run goes is **not** covered
+   * by the run's answer — the row stops at the newest note written no later than the run was
+   * created, so the window returns the task on the later note. Canary: with the row's last note
+   * read at duty time (the newest note), the decision is `none` and the request is lost.
+   */
+  it('covers only the notes written before the run, so a later person note still returns the task', async () => {
+    const later: Discussion = {
+      ...personsThread(),
+      notes: [
+        note(PERSON, 'Use cents here, not floats.', 'src/totals.ts'),
+        { ...note(PERSON, 'Also round the VAT line.'), created_at: '2026-06-01T09:30:00.000Z' },
+      ],
+    };
+    const w = await world({
+      discussions: [later],
+      artifacts: [
+        notesArtifact([{ thread_id: 'person-diff', kind: 'not_changed', reply: 'Kept.' }]),
+      ],
+    });
+    await w.replies();
+    const ledger = await ledgerOf(w);
+    expect(ledger.map((row) => [row.threadId, row.lastNoteId])).toEqual([
+      ['person-diff', later.notes[0]?.id],
+    ]);
+    const decision = humanReturnDecision({
+      stage: 'ready_for_merge',
+      slots: { lifecycle: {}, pickUpFrom: null },
+      status: null,
+      words: mergeRequestWords(w.discussions),
+      horizon: null,
+      handled: ledger.map((row) => ({
+        source: row.source,
+        threadId: row.threadId,
+        lastNoteId: row.lastNoteId,
+        handledAt: row.handledAt,
+      })),
+      forwardSeenAt: null,
+      leftQa: null,
+      entryStatus: null,
+      seenAtQa: false,
+    });
+    expect(decision).toMatchObject({ kind: 'return', counts: { mr_diff: 1 } });
   });
 
   it('none of its replies is a person’s word to the human-return window (decision 6)', async () => {

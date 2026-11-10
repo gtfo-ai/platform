@@ -21,6 +21,8 @@
  *  - `pipeline.template_overrides.<t>.enabled` — no specified meaning at all (refuse a ticket of
  *    that template? fall back to another?), which is Q99's question too.
  *  - `pipeline.custom_stages` — declined for 0.1 (M5: Q56 has no loop counter for a custom stage).
+ *  - `human_returns.acknowledgements` — read from WP-178 until S-28.2, when M28 ruling R1 removed
+ *    the acknowledgement rule; accepted and ignored.
  *
  * `stages.<s>.prompt` / `prompt_append` **are** read since WP-92 (`project-prompts.ts`) and left
  * this table; what is still reported of them is a **value** naming a file outside
@@ -45,6 +47,9 @@ export const SETTINGS_UNREAD_KEYS: Readonly<Record<string, string>> = {
   'pipeline.template_overrides.*.stages.*.enabled': STAGE_ENABLED_REASON,
   'pipeline.custom_stages':
     'custom stages are not read on this build (a custom stage has no loop counter, Q56)',
+  // S-28.2 (M28 ruling R1): the acknowledgement rule is gone, so its added words have no reader.
+  'human_returns.acknowledgements':
+    'accepted and ignored: since M28 a ticket comment or a merge-request note that cannot be resolved never returns a task, so there is no acknowledgement vocabulary to add words to; a person sends a task back with an open review thread, a return status or the task page’s button',
 };
 
 type Json = Record<string, unknown>;

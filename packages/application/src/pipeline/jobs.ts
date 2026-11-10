@@ -1721,7 +1721,8 @@ const distinctPipelines = (
  *    resolved or handled thread, a word older than the horizon or than a forward status move, the
  *    platform's own note — M28 ruling R1); every person's word among them that the ledger has not
  *    handled yet is recorded there as **seen, not a change request** (R2), which the task page
- *    shows with the button that sends the task back;
+ *    shows with the button that sends the task back — and the same *seen* rows are written on a
+ *    **pass** too, so the words a person wrote beside moving the ticket on are recorded as well;
  *  - a person wrote inside the last window → open another window instead of deciding now;
  *  - **return** → one `interpret` with `mr.review.comment` (every form, decision 7) carrying the
  *    redacted feedback, `task.human_return` naming the forms, and the ticket claim marked stale —
@@ -1883,7 +1884,7 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
     const status = ticket?.status ?? null;
     const entryStatus = observed?.entryStatus ?? null;
     // M28 ruling R1: forward wins over return. The first firing that sees the move records when.
-    const forwardSeenAt = isForwardMove({ slots, status, entryStatus })
+    const forwardSeenAt = isForwardMove({ stage, slots, status, entryStatus })
       ? await observeForward(options, read)
       : null;
     const decision = humanReturnDecision({

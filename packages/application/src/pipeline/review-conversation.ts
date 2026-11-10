@@ -227,6 +227,13 @@ interface DutySubject {
   readonly artifact: StoredArtifact;
   /** The run that produced the artifact — the `<run>` of every marker and key (decision 10). */
   readonly runId: string;
+  /**
+   * When that run was created — the instant its plan had just read the conversation — or `null`
+   * when the run row is not there. The handled ledger records an item as handled only up to the
+   * newest note written no later than this (review of #139): a note a person adds while the run
+   * goes, or before the duty fires, is new business, never covered by this run's answer.
+   */
+  readonly runCreatedAt: string | null;
 }
 
 /**
@@ -248,9 +255,14 @@ const subjectOf = async (
     const stored = await options.store.tasks.load(scope.tx, taskId);
     const artifacts =
       stored === null ? [] : await options.store.artifacts.listFor(scope.tx, taskId);
-    return { stored, artifact: artifacts.find((artifact) => artifact.id === artifactId) ?? null };
+    const artifact = artifacts.find((candidate) => candidate.id === artifactId) ?? null;
+    const run =
+      artifact?.producedByRunId == null
+        ? null
+        : await options.store.runs.load(scope.tx, artifact.producedByRunId as Id);
+    return { stored, artifact, runCreatedAt: run?.createdAt ?? null };
   });
-  const { stored, artifact } = read;
+  const { stored, artifact, runCreatedAt } = read;
   if (stored === null || stored.mr === null || artifact === null) {
     logger.debug(
       { task_id: taskId, duty: data.duty },
@@ -262,6 +274,7 @@ const subjectOf = async (
     stored: stored as DutySubject['stored'],
     artifact,
     runId: artifact.producedByRunId ?? artifact.id,
+    runCreatedAt,
   };
 };
 
@@ -570,7 +583,7 @@ export const runConversationReplies = async (
       const handled = handledRow(stored, runId, handledAt, {
         source: discussion?.resolvable === true ? 'mr_thread' : 'mr_note',
         threadId: entry.thread_id,
-        lastNoteId: lastPersonNoteId(discussion),
+        lastNoteId: handledUpTo(discussion, subject.runCreatedAt),
       });
       const marker = conversationReplyNoteMarker(stored.task.id, runId, index);
       if (replyIsOnTheMergeRequest(discussions, marker, self)) {
@@ -690,7 +703,7 @@ export const runReviewThreadsResolve = async (
     const handled = handledRow(subject.stored, subject.runId, handledAt, {
       source: 'mr_thread',
       threadId: discussion.id,
-      lastNoteId: discussion.notes.at(-1)?.id ?? null,
+      lastNoteId: handledUpTo(discussion, subject.runCreatedAt),
     });
     if (handled !== null) resolvedRows.push({ ...handled, kind: 'resolved' });
     resolved += 1;
@@ -705,13 +718,31 @@ export const runReviewThreadsResolve = async (
 // ── The handled ledger (M28 ruling R2) ──────────────────────────────────────
 
 /**
- * The newest note a **person** wrote in a discussion — what the platform's answer handled, so a
- * person's later note in the same thread is new business. `null` when the discussion is unknown or
- * holds no person's note (the ledger then falls back to the row's instant).
+ * The newest note of a discussion written **no later than the run was created** — what this run's
+ * answer can have handled (review of #139). A note a person added while the run went, or before the
+ * duty fired, is after it, so it stays new business: the window returns the task on it and the next
+ * prompt does not mark it answered. A note whose instant cannot be read is never covered. `null`
+ * when the discussion is unknown, the run's instant is not known, or no note qualifies — and then
+ * no row is written ({@link handledRow}), because a row naming no note would fall back to its own
+ * instant and cover exactly the notes this bound exists to leave open.
  */
-const lastPersonNoteId = (discussion: Discussion | undefined): string | null =>
-  discussion?.notes.filter((note) => !note.system && !isPlatformMergeRequestNote(note.body)).at(-1)
-    ?.id ?? null;
+const handledUpTo = (discussion: Discussion | undefined, before: string | null): string | null => {
+  if (discussion === undefined || before === null) {
+    return null;
+  }
+  const bound = Date.parse(before);
+  if (Number.isNaN(bound)) {
+    return null;
+  }
+  return (
+    discussion.notes
+      .filter((note) => {
+        const at = Date.parse(note.created_at);
+        return !note.system && !Number.isNaN(at) && at <= bound;
+      })
+      .at(-1)?.id ?? null
+  );
+};
 
 /**
  * One ledger row for an item the platform answered — or `null` when the task is in **shadow** mode
@@ -730,6 +761,7 @@ const handledRow = (
 ): ConversationHandledInput | null => {
   if (
     stored.task.mode !== 'normal' ||
+    (item.source !== 'ticket_comment' && item.lastNoteId === null) ||
     !CONVERSATION_HANDLED_ID.test(item.threadId) ||
     (item.lastNoteId !== null && !CONVERSATION_HANDLED_ID.test(item.lastNoteId))
   ) {

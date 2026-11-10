@@ -44,8 +44,8 @@
  *     status, compared by {@link lifecycleStatusKey} — **and differs from the status the ticket had
  *     at the human stage's entry** (`entryStatus`, TD-029 decision 7's WP-178 review amendment (a)).
  *  7. **Forward wins over return** (M28 ruling R1): when the ticket's status moved **forward** since
- *     the stage was entered — it differs from the entry status and is not a return status
- *     ({@link isForwardMove}) — no word written no later than the instant the window first saw that
+ *     the stage was entered — it differs from the entry status and is a lifecycle slot ahead of the
+ *     stage, `approved`/`done` at Ready and `done` at QA ({@link isForwardMove}) — no word written no later than the instant the window first saw that
  *     move (`forwardSeenAt`) returns the task. A note written after it still does. (Until M28 the
  *     opposite held: return won over pass.)
  *  8. Any form returns → `return`. Otherwise, at `qa`, a status that is mapped, readable, not the
@@ -275,11 +275,30 @@ const returnStatusKeys = (slots: HumanReturnSlots): ReadonlySet<string> =>
   );
 
 /**
+ * The lifecycle slots that are **ahead** of a human stage (review of #139, the coordinator's ruling
+ * on "forward"): at `ready_for_merge` the `approved` and `done` slots, at `qa` the `done` slot. The
+ * slots the platform writes itself on the way in — `in_review`, `approved` before `qa`, and `qa`
+ * at `qa` — are never ahead, so the platform's own status write landing late is never read as a
+ * person's forward move.
+ */
+const forwardSlotKeys = (stage: Slug, slots: HumanReturnSlots): ReadonlySet<string> =>
+  new Set(
+    (stage === QA_STAGE_ID
+      ? [slots.lifecycle.done]
+      : [slots.lifecycle.approved, slots.lifecycle.done]
+    )
+      .filter((name): name is string => typeof name === 'string')
+      .map(lifecycleStatusKey),
+  );
+
+/**
  * Rule 7: the ticket's status moved **forward** since the human stage began — readable, different
- * from the entry status, and not a return status (the `approved` or `done` slot, or any status the
- * lifecycle does not map as a return). An unknown entry moves nothing.
+ * from the entry status, and one of the lifecycle's slots ahead of the current stage
+ * ({@link forwardSlotKeys}). An **unmapped** status (*Reopened*) is not forward: an open review
+ * thread beside it still returns the task. An unknown entry moves nothing.
  */
 export const isForwardMove = (input: {
+  readonly stage: Slug;
   readonly slots: HumanReturnSlots;
   readonly status: string | null;
   readonly entryStatus: string | null;
@@ -287,7 +306,7 @@ export const isForwardMove = (input: {
   input.status !== null &&
   input.entryStatus !== null &&
   lifecycleStatusKey(input.status) !== lifecycleStatusKey(input.entryStatus) &&
-  !returnStatusKeys(input.slots).has(lifecycleStatusKey(input.status));
+  forwardSlotKeys(input.stage, input.slots).has(lifecycleStatusKey(input.status));
 
 /**
  * The words that return the task (rules 4, 5 and 7, over the candidates of rules 2 and 3): in an
