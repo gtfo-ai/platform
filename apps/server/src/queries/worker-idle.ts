@@ -122,19 +122,25 @@ export const createWorkerIdleReader =
         count: number;
         takes: number;
       }>(sql`
-        select w.id as worker_id, p.id as project_id, p.key as project_key, t.state::text as state,
+        with served as (
+          -- The projects each machine serves: the eligible_projects predicates, per project, once.
+          select w.id as worker_id, p.id as project_id, p.key as project_key
+            from workers w
+            join projects p on ${SCOPE_TAKES}
+            left join project_execution_settings s on s.project_id = p.id
+           where w.id = any(${ids}::uuid[])
+             and coalesce(s.mode, ${DEFAULT_EXECUTION_MODE}) <> 'server_only'
+             and ${MAY_RUN_IN}
+             and not ${CREDENTIAL_REFUSED}
+        )
+        select sv.worker_id, sv.project_id, sv.project_key, t.state::text as state,
                count(*)::int as count,
                count(*) filter (where ${POLICY_TAKES_TASK})::int as takes
-          from workers w
-          join projects p on ${SCOPE_TAKES}
-          left join project_execution_settings s on s.project_id = p.id
-          join tasks t on t.project_id = p.id
-         where w.id = any(${ids}::uuid[])
-           and t.state not in ('done', 'cancelled')
-           and coalesce(s.mode, ${DEFAULT_EXECUTION_MODE}) <> 'server_only'
-           and ${MAY_RUN_IN}
-           and not ${CREDENTIAL_REFUSED}
-         group by w.id, p.id, p.key, t.state`),
+          from served sv
+          join workers w on w.id = sv.worker_id
+          join tasks t on t.project_id = sv.project_id
+         where t.state not in ('done', 'cancelled')
+         group by sv.worker_id, sv.project_id, sv.project_key, t.state`),
     ]);
     const offersOf = new Map(offers.rows.map((row) => [row.worker_id, row]));
     const limits = new Map<string, Promise<WipLimitsInForce>>();

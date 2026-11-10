@@ -206,9 +206,8 @@ const toWireWorkerRow = (
 
 /**
  * **One worker's `idle_reason`** (S-28.6) — the Workers screen's own answer for the machine a
- * worker credential names, for `GET offers?fields=idle_reason`: its row read as the list reads it
- * (its user's workers, the core's digests), its blockers decided by the same function, then the
- * reader. `null` for a worker the list does not name or a revoked one.
+ * worker credential names, for `GET offers?fields=idle_reason`: its one row read as the list
+ * reads it (the core's digests), its blockers decided by the same function, then the reader. `null` for a worker the list does not name or a revoked one.
  */
 export const idleReasonOfWorker = async (
   store: WorkerStore,
@@ -217,11 +216,7 @@ export const idleReasonOfWorker = async (
   coreDigests: RunImageDigests | null,
   now: Date,
 ): Promise<WorkerIdleReason | null> => {
-  const subject = await store.findCredentialSubject(workerId);
-  if (subject === null) return null;
-  const row = (await store.listWorkers(subject.userId, coreDigests)).find(
-    (listed) => listed.id === workerId,
-  );
+  const [row] = await store.listWorkers(null, coreDigests, workerId);
   if (row === undefined || row.revokedAt !== null || row.state === 'revoked') return null;
   const answer = await idle(
     [

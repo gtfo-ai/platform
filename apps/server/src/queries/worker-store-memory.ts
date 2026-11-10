@@ -485,9 +485,10 @@ export const createMemoryWorkerStore = (
       return { status: 'decided', decidedAt: input.now, performed: true };
     },
 
-    async listWorkers(userId, coreDigests = null) {
+    async listWorkers(userId, coreDigests = null, workerId) {
       return [...workers.values()]
         .filter((worker) => userId === null || worker.userId === userId)
+        .filter((worker) => workerId === undefined || worker.id === workerId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .map((worker) => ({
           ...listRowOf(worker),

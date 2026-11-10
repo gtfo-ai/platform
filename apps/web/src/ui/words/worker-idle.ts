@@ -26,7 +26,11 @@ export type IdleNext =
   /** What this machine takes — its claim policy (the reader's own machine only). */
   | { readonly kind: 'policy'; readonly label: string }
   /** The per-person limit (the Workers screen's *Your limit*). */
-  | { readonly kind: 'limit'; readonly label: string };
+  | { readonly kind: 'limit'; readonly label: string }
+  /** The Agents screen, where the runs it holds are. */
+  | { readonly kind: 'agents'; readonly label: string }
+  /** The projects' boards, where what is queued shows. */
+  | { readonly kind: 'projects'; readonly label: string };
 
 export interface IdleWords {
   readonly text: string;
@@ -44,7 +48,7 @@ export const workerIdleWords = (reason: WorkerIdleReason, reader: IdleReader): I
           reason.concurrency === 1
             ? 'Its one place is busy: it takes the next run when this one ends.'
             : `All ${reason.concurrency} of its places are busy: it takes the next run when one of them ends.`,
-        next: null,
+        next: { kind: 'agents', label: 'See what it runs' },
       };
     case 'owner_limit': {
       const who = reader.self ? 'You own' : `${reader.ownerName} owns`;
@@ -85,7 +89,7 @@ export const workerIdleWords = (reason: WorkerIdleReason, reader: IdleReader): I
     case 'nothing_queued':
       return {
         text: 'Nothing is queued or waiting for this machine in the projects it serves.',
-        next: null,
+        next: { kind: 'projects', label: 'Open the boards' },
       };
   }
 };

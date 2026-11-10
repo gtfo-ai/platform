@@ -1190,9 +1190,11 @@ export const startRemoteWorker = async (
       if (answer.policy_skipped_offers !== undefined) {
         policySkippedOffers = answer.policy_skipped_offers;
       }
-      // S-28.6: absent is a core before the field — unknown, so nothing is said.
-      idleReason = answer.idle_reason ?? null;
-      return workerLocalOffersSchema.parse(redactKeysAndValues(pageRedactor(), answer));
+      const read = workerLocalOffersSchema.parse(redactKeysAndValues(pageRedactor(), answer));
+      // S-28.6: kept as the page is given it — through the redactor — and absent is a core before
+      // the field: unknown, so nothing is said.
+      idleReason = read.idle_reason ?? null;
+      return read;
     } catch (error) {
       throw asLocalError(error, 'list the offers');
     }

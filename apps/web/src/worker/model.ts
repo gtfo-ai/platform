@@ -617,9 +617,16 @@ export const idleWordsOf = (state: WorkerLocalState): IdleWords | null => {
 export const coreIdleUrl = (coreUrl: string | null, next: IdleWords['next']): string | null => {
   if (next === null || next.kind === 'policy') return null;
   const base = (coreUrl ?? '').replace(/\/+$/, '');
-  return next.kind === 'board'
-    ? `${base}/projects/${encodeURIComponent(next.projectKey)}`
-    : `${base}/workers`;
+  switch (next.kind) {
+    case 'board':
+      return `${base}/projects/${encodeURIComponent(next.projectKey)}`;
+    case 'agents':
+      return `${base}/agents`;
+    case 'projects':
+      return `${base}/projects`;
+    case 'limit':
+      return `${base}/workers`;
+  }
 };
 
 /** The core's page for a run — steer and take-over live there (amendment §4). */

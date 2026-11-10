@@ -308,6 +308,8 @@ export interface WorkerStore {
   listWorkers(
     userId: string | null,
     coreDigests?: RunImageDigests | null,
+    /** S-28.6: only this worker's row — the idle read of one machine's `GET offers`. */
+    workerId?: string,
   ): Promise<WorkerListRow[]>;
   /**
    * {@link listWorkers}' rows — **not revoked** — with whether each worker's user may run in
@@ -919,7 +921,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
     });
   },
 
-  async listWorkers(userId, coreDigests = null) {
+  async listWorkers(userId, coreDigests = null, workerId) {
     const counted = coreDigests ?? null;
     const { rows } = await database.execute<WorkerRowSql & ClaimFactsSql>(sql`
       select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}, ${CLAIM_FACTS_OF_WORKER},
@@ -927,6 +929,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
         from workers w join users u on u.id = w.user_id
         ${counted === null ? sql`` : policySkippedJoins(counted)}
        where ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
+         and ${workerId === undefined ? sql`true` : sql`w.id = ${workerId}`}
        order by w.created_at desc, w.id desc`);
     const listed = rows.map((row) => ({ ...toWorkerListRow(row), claimFacts: toClaimFacts(row) }));
     if (listed.length === 0) return listed;

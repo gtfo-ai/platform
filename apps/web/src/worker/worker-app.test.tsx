@@ -1108,7 +1108,11 @@ describe('why nothing (more) runs here — the core’s one sentence (S-28.6)', 
     RegExp,
     { readonly link?: string; readonly button?: string },
   ][] = [
-    [{ kind: 'slots_busy', running: 2, concurrency: 2 }, /^All 2 of its places are busy/, {}],
+    [
+      { kind: 'slots_busy', running: 2, concurrency: 2 },
+      /^All 2 of its places are busy/,
+      { link: 'https://core.example.test/agents' },
+    ],
     [
       {
         kind: 'project_limit',
@@ -1131,7 +1135,7 @@ describe('why nothing (more) runs here — the core’s one sentence (S-28.6)', 
     [
       { kind: 'nothing_queued' },
       /^Nothing is queued or waiting for this machine in the projects it serves\.$/,
-      {},
+      { link: 'https://core.example.test/projects' },
     ],
   ];
 

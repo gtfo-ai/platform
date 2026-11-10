@@ -408,6 +408,16 @@ export const WorkerIdleLine = ({
             {next.label}
           </Link>
         </>
+      ) : next.kind === 'agents' || next.kind === 'projects' ? (
+        <>
+          {' '}
+          <Link
+            to={next.kind === 'agents' ? '/agents' : '/projects'}
+            className="text-link underline"
+          >
+            {next.label}
+          </Link>
+        </>
       ) : (
         <span>{` ${next.label} below.`}</span>
       )}
