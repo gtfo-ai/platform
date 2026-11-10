@@ -298,7 +298,12 @@ export interface GitLabClient {
    * The page shows no response example, so the created note's `id` is read when it is there and
    * `null` is answered otherwise; the caller finds the note by re-reading the discussions.
    */
-  createMergeRequestNote(project: string, iid: number, body: string): Promise<number | null>;
+  createMergeRequestNote(
+    project: string,
+    iid: number,
+    body: string,
+    action?: 'reply_to_discussion' | 'create_merge_request_note',
+  ): Promise<number | null>;
   /** § "Resolve a merge request thread". */
   resolveDiscussion(
     project: string,
@@ -712,12 +717,12 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
       return { noteId: created.success ? created.data.id : null };
     },
 
-    createMergeRequestNote: async (project, iid, body) => {
+    createMergeRequestNote: async (project, iid, body, action = 'reply_to_discussion') => {
       const response = await http.request({
         method: 'POST',
         path: `${mrPath(project, iid)}/notes`,
         json: { body },
-        action: 'reply_to_discussion',
+        action,
       });
       const created = z.object({ id: z.int() }).safeParse(response?.body);
       return created.success ? created.data.id : null;

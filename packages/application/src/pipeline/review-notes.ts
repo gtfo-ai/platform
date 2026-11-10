@@ -137,6 +137,40 @@ export const conversationOpenIdempotencyKeyFor = (
   discussionId: string,
 ): string => `conversation_open:${taskId}:${runId}:${discussionId}`;
 
+/** The prefix every review summary **of this task** opens with, whichever run posted it (S-28.13). */
+export const reviewFindingSummaryMarkerPrefixFor = (taskId: Id): string =>
+  `<!-- agentic:review-summary:${taskId}.`;
+
+/**
+ * The marker of the platform's closing note on one of its own finding threads that was left as
+ * it is when the Reviewer approved (S-28.13, M28 ruling R3b (2)) — keyed by the discussion, never
+ * by a run, so every performer of the close (the approving review's post, the Ready check, the
+ * recovery pass) finds the same note and posts it once. A reply marker, so the handled ledger and
+ * the window read it as the platform's answer. The id must be ledger-shaped; the caller skips any
+ * other.
+ */
+export const reviewLeftOpenNoteMarker = (taskId: Id, discussionId: string): string =>
+  `<!-- agentic:reply:${taskId}.left-${discussionId} -->`;
+
+/** {@link reviewLeftOpenNoteMarker}'s idempotency key, and the resolve's after it. */
+export const reviewLeftOpenIdempotencyKeyFor = (taskId: Id, discussionId: string): string =>
+  `review_left_open:${taskId}:${discussionId}`;
+export const reviewThreadCloseIdempotencyKeyFor = (taskId: Id, discussionId: string): string =>
+  `review_thread_close:${taskId}:${discussionId}`;
+
+/**
+ * The closing note itself (M28 ruling R3b (2)). Platform text, and it promises only what the code
+ * keeps: a person's note in an **unresolved** thread returns a task waiting at Ready (M28 ruling
+ * R1), so the sentence asks for both — reopen it *and* say so — never for a reopen alone, which no
+ * signal reaches the platform for.
+ */
+export const renderLeftOpenNote = (marker: string): string =>
+  [
+    marker,
+    '**Left as is.** The reviewer approved this change with this point open, so the platform closes the thread.',
+    'To have it changed, reopen this thread and write what you want here: a note in an open thread sends a task waiting to be merged back to the agent.',
+  ].join('\n');
+
 /** The platform's whole note on a person's thread the run left unanswered (R3). Platform text. */
 export const renderNotAddressedReply = (marker: string): string =>
   [marker, '**Not addressed in this run — still open.**'].join('\n');

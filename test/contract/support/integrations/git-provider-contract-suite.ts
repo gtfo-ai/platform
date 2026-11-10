@@ -203,6 +203,12 @@ export interface GitProviderContractContext {
     readonly resolvable: GeneralNoteFixture;
   };
   /**
+   * S-28.13 (M28 ruling R3b (1)): a merge request the suite posts one **general note** on — the
+   * platform's review summary's shape, which must never be a resolvable thread. Its own iid, so a
+   * replay harness serves the note's POST and the re-read without colliding with another case.
+   */
+  readonly mergeRequestNote: { readonly iid: number };
+  /**
    * WP-138: the developer's `open_mr` adopts an existing open merge request only when it is the
    * platform's own. `openBranch` has exactly one open merge request (`openIid`), opened by the
    * binding's own account; `emptyBranch` has none. `pipelineIid` is the merge request a new
@@ -1052,6 +1058,22 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         expect(summary.notes[0]?.path ?? null).toBeNull();
         expect(summary.notes[0]?.line ?? null).toBeNull();
         expect(summary.notes[0]?.body).toContain('A neutral summary');
+      });
+
+      /**
+       * S-28.13 (M28 ruling R3b (1)): a general note is not a thread — it cannot be resolved, so it
+       * never blocks a merge — and its body opens exactly as sent, marker first. The summary that
+       * blocked AUT-6655's merge was a resolvable thread; a provider that answered one here fails.
+       */
+      it('posts a general note that cannot be resolved, the body opening as sent (S-28.13)', async () => {
+        const body =
+          '<!-- agentic:review-summary:00000000-0000-4000-8000-0000000000d1.r1 -->\nThe reviewer approved this change.';
+        const note = await port.createMergeRequestNote(mrRef(context.mergeRequestNote.iid), body);
+        expect(note.resolvable).toBe(false);
+        expect(note.resolved).toBe(false);
+        expect(note.notes).toHaveLength(1);
+        expect(note.notes[0]?.body.startsWith(body)).toBe(true);
+        expect(note.notes[0]?.path ?? null).toBeNull();
       });
 
       /** Half an anchor is one no provider can place: refuse it rather than post it unanchored. */

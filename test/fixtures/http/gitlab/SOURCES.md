@@ -461,7 +461,10 @@ Retrieved **2026-10-08**, without a GitLab credential; nothing was recorded agai
   `provider.test.ts` with scripted `400`/`404`/`500` answers, not by this corpus.
 - `https://docs.gitlab.com/api/notes/` § "Create new merge request note" — the fallback's endpoint:
   `body` required, no response example. The adapter reads the created note's `id` when it is there
-  and otherwise finds the note by its body; no fixture records this endpoint.
+  and otherwise finds the note by its body. **Since S-28.13** (re-read 2026-11-10) the platform's
+  review summary is posted there (`createMergeRequestNote`, M28 ruling R3b (1)), and merge request
+  36 records the `201` — the note shape of "Retrieve a merge request note", `resolvable: false` —
+  and the discussions re-read that lists it as an individual note (`documented-adapted`).
 - `https://docs.gitlab.com/api/rest/troubleshooting/` — the `404` of the thread read for an unknown
   discussion id, which the reply now makes after a refused post.
 

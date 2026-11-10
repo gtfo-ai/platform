@@ -199,6 +199,9 @@ export const gitlabReplayContext = (
         body: 'Could the summary name the migration?',
       },
     },
+    // S-28.13: `general-notes.json` records the 201 of a general note on merge request 36 and the
+    // discussions re-read that lists it, `individual_note: true` and `resolvable: false`.
+    mergeRequestNote: { iid: 36 },
     commits: {
       since: '2000-01-01T00:00:00.000Z',
       emptySince: '2026-09-20T00:00:00.000Z',

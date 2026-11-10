@@ -343,8 +343,19 @@ export const pausedBudgetFiguresSchema = z.strictObject({
 
 export type PausedBudgetFigures = z.infer<typeof pausedBudgetFiguresSchema>;
 
-/** What can be out of sync with the platform's intent (S-28.10, TD-029's amendment C). */
-export const providerSyncSubjectSchema = z.enum(['ticket_status', 'merge_request_draft']);
+/**
+ * What can be out of sync with the platform's intent (S-28.10, TD-029's amendment C) — and, since
+ * S-28.13 (M28 ruling R3b (3)), `merge_request_blocked`: the task is at Ready and the provider says
+ * it will not merge the merge request yet. That subject is served from `task_merge_checks`
+ * (migration 0118): `target` is `mergeable`, `observed` the provider's own word, `reason_code` the
+ * port's reason (`unresolved_threads`, `conflict`, `pipeline`, `approvals`, `draft`, `rebase`,
+ * `other`) and `unresolved_threads` the count when threads are the reason.
+ */
+export const providerSyncSubjectSchema = z.enum([
+  'ticket_status',
+  'merge_request_draft',
+  'merge_request_blocked',
+]);
 export type ProviderSyncSubject = z.infer<typeof providerSyncSubjectSchema>;
 
 /**
@@ -369,6 +380,8 @@ export const providerSyncSchema = z.strictObject({
     .nullable(),
   failed_at: isoDateTimeSchema,
   attempts: z.int().positive(),
+  /** `merge_request_blocked` only (S-28.13): the unresolved threads, when they are the reason. */
+  unresolved_threads: z.int().nonnegative().nullish(),
 });
 export type ProviderSync = z.infer<typeof providerSyncSchema>;
 

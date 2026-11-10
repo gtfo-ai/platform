@@ -84,6 +84,7 @@ import type {
 } from '@platform/domain';
 import type { PromptsWithheld } from '../config/repository-config.js';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
+import type { MergeBlockerReason } from '../ports/integrations/git-provider.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { CiPendingRead } from './ci-pending-read.js';
 import type { RunSettingsSnapshot } from './settings-snapshot.js';
@@ -1355,6 +1356,32 @@ export interface TaskRepository {
   /** Clears `subject`: a later move or read-back succeeded. Answers whether a row was cleared. */
   clearProviderSync(tx: Transaction, taskId: Id, subject: ProviderSyncSubject): Promise<boolean>;
   /**
+   * The tasks at `ready_for_merge` whose merge check is due (S-28.13, migration 0118,
+   * `pipeline/ready-merge-check.ts`): mode `normal`, a merge request recorded, and **no** check row
+   * — a task waiting since before the check existed — or a row whose `mergeable` is not `true` and
+   * whose claim is older than `staleBefore`. The most recently touched first, then id, at most
+   * `limit`.
+   */
+  readyMergeCheckDue(
+    tx: Transaction,
+    query: { readonly staleBefore: IsoDateTime; readonly limit: number },
+  ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
+  /**
+   * Claims a due check for the recovery pass: inserts the row with `claimed_at = at`, or moves the
+   * claim of a row that is still due (not `true`, claimed before `staleBefore`). Answers whether
+   * this call claimed it, so two passes enqueue one check.
+   */
+  claimReadyMergeCheck(
+    tx: Transaction,
+    taskId: Id,
+    at: IsoDateTime,
+    staleBefore: IsoDateTime,
+  ): Promise<boolean>;
+  /** Records (upserts) what the provider answered; a new row's claim is its `checkedAt`. */
+  recordReadyMergeCheck(tx: Transaction, taskId: Id, check: ReadyMergeCheck): Promise<void>;
+  /** The task's last merge check, or `null` when none was read (no row, or claimed only). */
+  readyMergeCheckOf(tx: Transaction, taskId: Id): Promise<ReadyMergeCheck | null>;
+  /**
    * When `stage`'s attempt `attempt` was entered (`task_stages.entered_at`, the database's clock)
    * and whether it is still open — `null` when the attempt has no row (WP-136).
    *
@@ -1732,6 +1759,19 @@ export interface AttachedReturnFeedback {
 export interface ReturnCause {
   readonly type: ArtifactType;
   readonly version: number;
+}
+
+/**
+ * What the `ready_merge_check` duty read of a merge request's mergeability (S-28.13, migration
+ * 0118): `mergeable` `true` (the provider would merge it now), `false` (it would not — `reason`),
+ * or `null` (the provider has not decided, or the merge request could not be read).
+ */
+export interface ReadyMergeCheck {
+  readonly checkedAt: IsoDateTime;
+  readonly mergeable: boolean | null;
+  readonly reason: MergeBlockerReason | null;
+  readonly providerStatus: string | null;
+  readonly unresolvedThreads: number | null;
 }
 
 export interface StoredArtifact {

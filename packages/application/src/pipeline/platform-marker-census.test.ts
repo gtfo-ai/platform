@@ -48,8 +48,10 @@ import {
   renderConversationReply,
   renderFinding,
   renderFindingWith,
+  renderLeftOpenNote,
   renderReviewSummary,
   reviewFindingMarkerFor,
+  reviewLeftOpenNoteMarker,
 } from './review-notes.js';
 import { renderSummary } from './review-only.js';
 import { renderSupersededComment } from './superseded-mr.js';
@@ -126,6 +128,11 @@ const MR_NOTES: readonly { readonly name: string; readonly file: string; readonl
         posted: 1,
         summary: 'One problem.',
       }),
+    },
+    {
+      name: 'left-as-is closing note (S-28.13)',
+      file: 'review-conversation.ts',
+      body: renderLeftOpenNote(reviewLeftOpenNoteMarker(TASK, 'd-17')),
     },
     ...KINDS.map((kind, index) => ({
       name: `merge-request reply (${kind})`,
@@ -344,7 +351,7 @@ describe('half 2 — every caller that posts a merge-request note is in the tabl
         ({ file, text }) =>
           file !== 'pipeline/integrations.ts' &&
           text.includes('reviewWrites') &&
-          /\.(?:thread|reply)\(\s*\{/.test(text),
+          /\.(?:thread|reply|note)\(\s*\{/.test(text),
       )
       .map(({ file }) => file.replace(/^pipeline\//, ''))
       .sort();
@@ -368,7 +375,8 @@ describe('half 3 — every body-carrying provider call is a guarded helper', () 
   const integrations = readFileSync(join(RING, 'pipeline/integrations.ts'), 'utf8');
 
   it('makes every such call from integrations.ts and nowhere else', () => {
-    const CALL = /port\.(?:createDiscussion|replyToDiscussion|addComment|upsertWorkpad)\(/;
+    const CALL =
+      /port\.(?:createDiscussion|createMergeRequestNote|replyToDiscussion|addComment|upsertWorkpad)\(/;
     const elsewhere = sources()
       .filter(({ file, text }) => file !== 'pipeline/integrations.ts' && CALL.test(text))
       .map(({ file }) => file);
@@ -379,10 +387,11 @@ describe('half 3 — every body-carrying provider call is a guarded helper', () 
     // Each call, with the helper body above it back to the previous helper's start.
     const helpers = integrations.split(/\n {2}[a-zA-Z]+: async \(/);
     const mr = helpers.filter((helper) =>
-      /port\.(?:createDiscussion|replyToDiscussion)\(/.test(helper),
+      /port\.(?:createDiscussion|createMergeRequestNote|replyToDiscussion)\(/.test(helper),
     );
     const ticket = helpers.filter((helper) => /port\.(?:addComment|upsertWorkpad)\(/.test(helper));
-    expect(mr.length).toBe(2);
+    // `thread`, `note` (S-28.13) and `reply`.
+    expect(mr.length).toBe(3);
     for (const helper of mr) {
       expect(helper).toContain("assertOpensWithMarker('merge_request'");
     }

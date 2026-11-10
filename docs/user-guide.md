@@ -1289,6 +1289,14 @@ request is still a draft on GitLab — it cannot be merged yet"* with a link to 
 task is escalated once the retries are spent. A finished task shows none of this. A
 binding may also map the optional **Ready for merge** slot: the ticket is moved there only once the
 merge request has read back as no longer a draft, so the tracker never says *ready* about a draft.
+
+At **Ready for merge** the platform also asks GitLab whether it would merge the merge request **now**.
+When it would not, the page says so with the reason in plain words, what to do and a link to the
+merge request: *"GitLab will not merge this yet: 2 threads are unresolved. Resolve them on the merge
+request — or write in one to send the task back to the agent with that change."* Other reasons — a
+conflict, a pipeline that has not passed, missing approvals, a draft, a branch that must be rebased —
+each get their own sentence. The box clears itself once GitLab says the merge request can be merged:
+the platform checks again when a thread is resolved, and every ten minutes while the task waits.
 ### QA, and sending a task back from QA or Ready
 
 When the project maps a *QA* status, a task created afterwards gets a human **QA** stage after the
@@ -1333,12 +1341,20 @@ The review is held **on the merge request**, where you read it:
 - **The Reviewer's findings.** Every code review of a task that has a merge request posts each finding
   as its own thread, anchored to the file and line where the diff allows it (otherwise as a note that
   names the location), and then **one summary note** stating the verdict — posted even when there
-  are no findings.
+  are no findings. The summary is an ordinary comment, not a thread, so it never holds up a merge
+  that requires every thread to be resolved.
 - **The Developer's replies.** The fix run that follows replies on each thread it addressed, and
   answers a ticket comment on the ticket. Where a note asks for something only a person can do, the
   reply names who must act and says it is not done.
 - **Resolution.** The Reviewer resolves a thread only after a re-review confirms the fix, and only
   **its own** finding threads: never a person's thread, and never another task's.
+- **The platform cleans up after itself.** When the Reviewer approves, the platform resolves every
+  one of its own review threads in which no person has written — including the small findings of the
+  approving review itself, which nobody would otherwise answer. A finding the Developer did not fix
+  first gets one closing note: *"Left as is. … To have it changed, reopen this thread and write what
+  you want here"* — and a note in an open thread does send a task waiting at Ready back to the agent.
+  A thread in which you wrote anything is yours, and the platform never closes it. Tasks that were
+  already waiting at Ready when this arrived are cleaned up once, the same way.
 
 Every agent stage also reads the merge request's notes and the ticket's comments, as data it is told
 not to obey. A shadow task posts none of this: each write is recorded as what it would have done.

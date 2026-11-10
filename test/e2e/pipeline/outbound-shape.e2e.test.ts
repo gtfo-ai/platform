@@ -191,7 +191,8 @@ describe('when the same wake-up is delivered twice', () => {
     // workpad's replay says nothing about whether the summary's second performer has run yet.
     await pipeline.waitFor('the code review summary was audited as a replay', async () =>
       (await pipeline.auditRows()).some(
-        (row) => row.status === 'replayed' && row.action === 'create_discussion',
+        // S-28.13: the summary is a general note, audited as `create_merge_request_note`.
+        (row) => row.status === 'replayed' && row.action === 'create_merge_request_note',
       ),
     );
 
@@ -209,7 +210,7 @@ describe('when the same wake-up is delivered twice', () => {
           .filter((row) => row.status === 'replayed' && row.action !== 'upsert_workpad')
           .map((row) => row.action),
       ),
-    ]).toEqual(['create_discussion']);
+    ]).toEqual(['create_merge_request_note']);
     // `attempts: 0` is the audit log's own statement that nothing was sent — a performed call
     // records at least 1, which the row above it in this file asserts.
     expect(replayed[0]?.attempts).toBe(0);

@@ -156,6 +156,7 @@ import { normaliseGitLabDelivery } from './inbound.js';
 import {
   isDraftTitle,
   mapMergeability,
+  mapMergeBlocker,
   mapMergeRequestState,
   mapPipelineStatus,
   toIsoDateTime,
@@ -545,6 +546,7 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       detailedMergeStatus: source.detailed_merge_status,
       hasConflicts: source.has_conflicts,
     });
+    const blocker = mapMergeBlocker(source.detailed_merge_status);
     const headSha = source.sha ?? source.diff_refs?.head_sha ?? null;
     if (headSha === null) {
       throw new IntegrationError(
@@ -578,6 +580,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       head_sha: headSha,
       mergeable: mergeability.mergeable,
       has_conflicts: mergeability.hasConflicts,
+      // S-28.13 (M28 ruling R3b (3)): why GitLab would not merge it now, when it says so.
+      ...(blocker === null ? {} : { merge_blocker: blocker }),
       diff_stats: null,
       coverage_pct: source.head_pipeline?.coverage ?? null,
       labels: source.labels ?? [],
@@ -1343,6 +1347,42 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       return toDiscussion(
         await client.createDiscussion(project, mrRef.iid, gitlabNoteBody(note.markdown), position),
       );
+    },
+
+    /**
+     * S-28.13 (M28 ruling R3b (1)) — § "Create new merge request note": a general note, which
+     * GitLab lists as a discussion of its own (`individual_note: true`) and which blocks no merge.
+     * The documented response is the created *note*, so its discussion is found by re-reading the
+     * list — by the created id, or by the newest discussion whose first note is exactly this body —
+     * and a failure of that read after the POST is never retried (`afterPost`, WP-189).
+     */
+    createMergeRequestNote: async (mrRef, markdown) => {
+      const project = projectOf(mrRef, 'create_merge_request_note');
+      const body = gitlabNoteBody(markdown);
+      const createdId = await client.createMergeRequestNote(
+        project,
+        mrRef.iid,
+        body,
+        'create_merge_request_note',
+      );
+      const { discussions } = await afterPost(createdId, `${project}!${mrRef.iid}`, () =>
+        client.listDiscussions(project, mrRef.iid),
+      );
+      const created =
+        createdId === null
+          ? discussions.findLast((discussion) => discussion.notes?.[0]?.body === body)
+          : discussions.find((discussion) =>
+              (discussion.notes ?? []).some((note) => note.id === createdId),
+            );
+      if (created === undefined) {
+        throw new IntegrationError(
+          'invalid_response',
+          GITLAB_PROVIDER_ID,
+          `the note posted on ${project}!${mrRef.iid} is not among its discussions`,
+          { action: 'create_merge_request_note' },
+        );
+      }
+      return toDiscussion(created);
     },
 
     /**

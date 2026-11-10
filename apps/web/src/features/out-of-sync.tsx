@@ -8,7 +8,10 @@
  *   Jira offers no such move from there (it offers: Released).* with the tracker's reason, **Retry**
  *   (the same lifecycle move, again) and **Open in Jira**;
  * - *The merge request is still a draft on GitLab* after the platform marked it ready, with the
- *   merge request's link — what the Ready callout's *ready to merge* must not hide.
+ *   merge request's link — what the Ready callout's *ready to merge* must not hide;
+ * - *GitLab will not merge this yet: 2 threads are unresolved* (S-28.13, M28 ruling R3b (3)) — the
+ *   task is at Ready and the provider says it cannot be merged as it stands, with what to do and
+ *   the merge request's link. It clears itself once a later check reads it mergeable.
  *
  * Information with an action, never *Needs you* on its own: the stage runs regardless (TD-029
  * decision 4). Every provider value — the statuses, the reason — is untrusted text (BD-022).
@@ -19,6 +22,7 @@ import type { useTaskCommands } from '../app/queries.js';
 import { Flash } from '../ui/flash.js';
 import { Button, ErrorNotice } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { mergeBlockedNext, mergeBlockedWhy } from '../ui/words/merge-blockers.js';
 import { trackerName } from '../ui/words/trackers.js';
 import { providerName } from './gate-wait.js';
 
@@ -75,6 +79,22 @@ export const mergeRequestStillDraftSentence = (provider: string | null | undefin
 export const readyStillDraftSentence = (provider: string | null | undefined): string =>
   `The merge request is still a draft on ${providerName(provider)} — it cannot be merged yet. The platform marked it ready and it read back as a draft; it tries again, and if it is still a draft when those tries are spent the task comes to you. Mark it ready there and the task is ready to merge.`;
 
+/**
+ * The plain sentence for a merge request the provider will not merge yet (S-28.13): what (it will
+ * not merge it), why (the reason, in words), and what to do next.
+ */
+export const mergeRequestBlockedSentence = (
+  row: Pick<ProviderSync, 'reason_code' | 'observed' | 'unresolved_threads'>,
+  provider: string | null | undefined,
+): string =>
+  `${capitalised(providerName(provider))} will not merge this yet: ${mergeBlockedWhy(
+    row.reason_code,
+    row.observed,
+    row.unresolved_threads ?? null,
+  )}. ${mergeBlockedNext(row.reason_code)}`;
+
+const capitalised = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
 export const OutOfSyncNotice = ({
   detail,
   commands,
@@ -82,9 +102,14 @@ export const OutOfSyncNotice = ({
   readonly detail: TaskDetailResponse;
   readonly commands: Pick<ReturnType<typeof useTaskCommands>, 'retryTicketSync'>;
 }): ReactElement | null => {
-  // At Ready the callout itself says the merge request's draft state (`./task-callout.tsx`).
-  const rows = (detail.provider_sync ?? []).filter(
-    (row) => !(row.subject === 'merge_request_draft' && detail.task.state === 'ready_for_merge'),
+  // At Ready the callout itself says the merge request's draft state (`./task-callout.tsx`), and
+  // a "will not merge: it is a draft" beside it would say the same thing twice (S-28.13).
+  const all = detail.provider_sync ?? [];
+  const stillDraft = all.some((row) => row.subject === 'merge_request_draft');
+  const rows = all.filter(
+    (row) =>
+      !(row.subject === 'merge_request_draft' && detail.task.state === 'ready_for_merge') &&
+      !(row.subject === 'merge_request_blocked' && row.reason_code === 'draft' && stillDraft),
   );
   if (rows.length === 0) {
     return null;
@@ -129,6 +154,26 @@ export const OutOfSyncNotice = ({
                   error={commands.retryTicketSync.error}
                 />
               ) : null}
+            </div>
+          </Flash>
+        ) : row.subject === 'merge_request_blocked' ? (
+          <Flash
+            key={row.subject}
+            tone="warning"
+            title={`${capitalised(providerName(task.mr_ref?.provider))} will not merge this yet`}
+          >
+            <div className="flex flex-col gap-2 pt-1">
+              <p data-out-of-sync="merge_request_blocked">
+                {mergeRequestBlockedSentence(row, task.mr_ref?.provider)}
+              </p>
+              {task.mr_ref === null || task.mr_ref === undefined ? null : (
+                <div>
+                  <ExternalLink
+                    url={task.mr_ref.url}
+                    label={`Open the merge request on ${providerName(task.mr_ref.provider)}`}
+                  />
+                </div>
+              )}
             </div>
           </Flash>
         ) : (

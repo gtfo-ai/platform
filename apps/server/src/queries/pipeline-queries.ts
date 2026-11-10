@@ -179,6 +179,7 @@ const {
   runCommands,
   runModelUsage,
   runs,
+  taskMergeChecks,
   taskProviderSync,
   taskStages,
   tasks,
@@ -2502,7 +2503,7 @@ export const providerSyncFor = async (
     .from(taskProviderSync)
     .where(eq(taskProviderSync.taskId, taskId))
     .orderBy(asc(taskProviderSync.failedAt), asc(taskProviderSync.subject));
-  return rows
+  const synced = rows
     .filter((row) => !(merged && row.subject === 'merge_request_draft'))
     .map((row) => {
       const parsed = providerSyncSchema.safeParse({
@@ -2524,6 +2525,48 @@ export const providerSyncFor = async (
       }
       return parsed.data;
     });
+  return state === 'ready_for_merge'
+    ? [...synced, ...(await mergeBlockedFor(database, taskId))]
+    : synced;
+};
+
+/**
+ * **"Ready to merge" tells the truth about the provider** (S-28.13, M28 ruling R3b (3)): the task's
+ * `task_merge_checks` row when its last check read "the provider will not merge it now", served as
+ * the `merge_request_blocked` subject — `target` `mergeable`, `observed` the provider's own word,
+ * `reason_code` the port's reason and `unresolved_threads` the count. Read only at Ready (the
+ * caller's), so a row from an earlier Ready entry never speaks for a task that moved on. Every
+ * value is held by the table's checks; a row that does not parse is refused by name.
+ */
+const mergeBlockedFor = async (
+  database: Database,
+  taskId: string,
+): Promise<readonly ProviderSync[]> => {
+  const rows = await database
+    .select()
+    .from(taskMergeChecks)
+    .where(and(eq(taskMergeChecks.taskId, taskId), eq(taskMergeChecks.mergeable, false)));
+  return rows.map((row) => {
+    const parsed = providerSyncSchema.safeParse({
+      subject: 'merge_request_blocked',
+      slot: null,
+      target: 'mergeable',
+      observed: row.providerStatus,
+      available: null,
+      reason: row.providerStatus ?? row.reason ?? 'not mergeable',
+      reason_code: row.reason,
+      failed_at: (row.checkedAt ?? row.claimedAt).toISOString(),
+      attempts: 1,
+      unresolved_threads: row.unresolvedThreads,
+    });
+    if (!parsed.success) {
+      throw new UnprojectableRowError(
+        `task_merge_checks (${taskId})`,
+        'it does not parse as the published out-of-sync shape',
+      );
+    }
+    return parsed.data;
+  });
 };
 
 /**

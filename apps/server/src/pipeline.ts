@@ -1849,6 +1849,11 @@ export const composePipeline = async (
        * a ticket a person finished before it stops its task; `recovery/ticket-status-sweep.ts`.
        */
       ticketStatusSweep: { tasks: store.tasks },
+      /**
+       * S-28.13 (M28 ruling R3b): a task at Ready with no merge check — every task already waiting
+       * when it shipped — is checked once, and a blocked one again; `recovery/ready-merge-check.ts`.
+       */
+      readyMergeChecks: { tasks: store.tasks },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,

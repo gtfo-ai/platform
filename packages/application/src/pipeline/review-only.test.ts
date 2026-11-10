@@ -119,6 +119,8 @@ interface Posted {
   readonly path: string | null;
   readonly line: number | null;
   readonly markdown: string;
+  /** S-28.13: posted as a general note (`createMergeRequestNote`), not as a thread. */
+  readonly note?: boolean;
 }
 
 const reviewHarness = (
@@ -183,6 +185,16 @@ const reviewHarness = (
         return {
           id: `disc-${posted.length}`,
           resolvable: true,
+          resolved: false,
+          notes: [],
+        } as Discussion;
+      },
+      // S-28.13: the neutral summary is a general note, which no project's merge rule waits on.
+      createMergeRequestNote: async (_ref, markdown) => {
+        posted.push({ path: null, line: null, markdown, note: true });
+        return {
+          id: `disc-${posted.length}`,
+          resolvable: false,
           resolved: false,
           notes: [],
         } as Discussion;
@@ -640,10 +652,12 @@ describe('the findings and the neutral summary', () => {
     expect(posted[0]?.markdown).toContain('The footer still sums the visible rows.');
     expect(posted[0]?.markdown).toContain('blocker · correctness');
     expect(posted[0]?.markdown).toContain(marker);
-    // The summary is the merge-request-level thread: no path, no line.
+    // The summary is a general note on the merge request (S-28.13): no path, no line, no thread.
     const summary = posted.at(-1);
     expect(summary?.path).toBeNull();
     expect(summary?.line).toBeNull();
+    expect(summary?.note).toBe(true);
+    expect(posted.slice(0, -1).every((entry) => entry.note !== true)).toBe(true);
     expect(summary?.markdown).toContain(REVIEW_SUMMARY_PREAMBLE);
     expect(summary?.markdown).toContain('One real problem and one nit.');
   });
@@ -826,7 +840,10 @@ describe('the findings and the neutral summary', () => {
     await harness.publish([mrEvent('mr.opened')]);
     expect(reviewTask(harness)?.task.mode).toBe('normal');
     const rows = harness.audit.entriesFor('create_discussion');
-    expect(rows.map((row) => row.status)).toEqual(['ok', 'ok']);
+    expect(rows.map((row) => row.status)).toEqual(['ok']);
+    // S-28.13: the summary is a general note, audited under its own action.
+    const notes = harness.audit.entriesFor('create_merge_request_note');
+    expect(notes.map((row) => row.status)).toEqual(['ok']);
     expect(posted).toHaveLength(2);
   });
 

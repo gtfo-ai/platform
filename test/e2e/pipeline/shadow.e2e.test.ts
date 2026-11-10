@@ -456,6 +456,8 @@ const MUTATING = new Set([
   'upsert_workpad',
   'transition',
   'create_discussion',
+  // S-28.13: the review summary's general note.
+  'create_merge_request_note',
   'open_merge_request',
   'set_reviewers',
   'update_merge_request',

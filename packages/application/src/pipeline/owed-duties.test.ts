@@ -217,6 +217,24 @@ const gitDouble = (order: string[]) => {
       order.push(`thread:${id}`);
       return structuredClone(discussions.at(-1) as Discussion);
     },
+    // S-28.13: the review summary is a general note — counted with the threads as `created`.
+    createMergeRequestNote: async (_ref, markdown) => {
+      if (state.failPosts) {
+        throw new IntegrationError('forbidden', 'fake-git', 'the account may not comment', {
+          action: 'create_merge_request_note',
+        });
+      }
+      counts.created += 1;
+      const id = `thread-${String(discussions.length + 1)}`;
+      discussions.push({
+        id,
+        resolvable: false,
+        resolved: false,
+        notes: [note(markdown, null, null)],
+      });
+      order.push(`note:${id}`);
+      return structuredClone(discussions.at(-1) as Discussion);
+    },
     replyToDiscussion: async (_ref, discussionId, markdown) => {
       const target = discussions.find((discussion) => discussion.id === discussionId);
       if (target === undefined) {
@@ -434,7 +452,11 @@ describe('a returned stage is planned after the conversation it owes is posted (
     );
     expect(findingThreads.map((thread) => thread.notes.length)).toEqual([2, 2]);
     // The outbound turns replayed the keys the stage job recorded: no write was made twice.
-    const created = w.harness.audit.entriesFor('create_discussion');
+    // S-28.13: two finding threads and two summary notes.
+    const created = [
+      ...w.harness.audit.entriesFor('create_discussion'),
+      ...w.harness.audit.entriesFor('create_merge_request_note'),
+    ];
     expect(created.filter((entry) => entry.status === 'ok')).toHaveLength(4);
     expect(created.filter((entry) => entry.status === 'replayed').length).toBeGreaterThan(0);
   });

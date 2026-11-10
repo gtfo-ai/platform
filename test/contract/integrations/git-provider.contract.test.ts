@@ -363,6 +363,7 @@ runGitProviderContract({
         platformNoteId: platformThread.notes[0]?.id ?? '',
       },
       generalNotes: { unresolvable: unresolvableGeneralNote, resolvable: resolvableGeneralNote },
+      mergeRequestNote: { iid: existing.ref.iid },
       commits: {
         since: '2000-01-01T00:00:00.000Z',
         emptySince: '2026-09-20T00:00:00.000Z',

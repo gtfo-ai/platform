@@ -96,6 +96,7 @@ import type {
   ExecutionRoutingRepository,
   PipelineStore,
   QuestionRepository,
+  ReadyMergeCheck,
   RemoteListing,
   RunCommandInstruction,
   RunCommandRefusal,
@@ -479,6 +480,8 @@ export const createMemoryPipelineStore = (
   const ticketStatusSweeps = new Map<Id, string>();
   /** S-28.5 review: the status each task's last reverse-sync stop acted on. */
   const ticketStatusStops = new Map<Id, string>();
+  /** S-28.13 (migration 0118): each task's merge check — its claim and what was read. */
+  const mergeChecks = new Map<Id, { claimedAt: string; check: ReadyMergeCheck | null }>();
   const backfillOf = (taskId: Id): OwnerBackfillState =>
     ownerBackfills.get(taskId) ?? NO_OWNER_BACKFILL;
   const backfillClaimable = (
@@ -1461,6 +1464,53 @@ export const createMemoryPipelineStore = (
     },
     clearProviderSync: async (_tx, taskId, subject) =>
       providerSyncRows.delete(`${taskId}#${subject}`),
+    // S-28.13: the SQL's predicate, claim and upsert over `task_merge_checks`.
+    readyMergeCheckDue: async (_tx, query) => {
+      const stale = Date.parse(query.staleBefore);
+      const due = (taskId: Id): boolean => {
+        const row = mergeChecks.get(taskId);
+        return (
+          row === undefined || (row.check?.mergeable !== true && Date.parse(row.claimedAt) < stale)
+        );
+      };
+      return [...tasks.values()]
+        .filter(
+          (stored) =>
+            stored.task.state === 'ready_for_merge' &&
+            stored.task.mode === 'normal' &&
+            stored.mr !== null &&
+            due(stored.task.id),
+        )
+        .sort(
+          (a, b) => b.createdAt.localeCompare(a.createdAt) || a.task.id.localeCompare(b.task.id),
+        )
+        .slice(0, query.limit)
+        .map((stored) => ({ taskId: stored.task.id, projectId: stored.task.projectId }));
+    },
+    claimReadyMergeCheck: async (_tx, taskId, at, staleBefore) => {
+      if (!tasks.has(taskId)) return false;
+      const row = mergeChecks.get(taskId);
+      if (row === undefined) {
+        mergeChecks.set(taskId, { claimedAt: at, check: null });
+        return true;
+      }
+      if (row.check?.mergeable === true || Date.parse(row.claimedAt) >= Date.parse(staleBefore)) {
+        return false;
+      }
+      mergeChecks.set(taskId, { ...row, claimedAt: at });
+      return true;
+    },
+    recordReadyMergeCheck: async (_tx, taskId, check) => {
+      const row = mergeChecks.get(taskId);
+      mergeChecks.set(taskId, {
+        claimedAt: row?.claimedAt ?? check.checkedAt,
+        check: { ...check },
+      });
+    },
+    readyMergeCheckOf: async (_tx, taskId) => {
+      const check = mergeChecks.get(taskId)?.check ?? null;
+      return check === null ? null : { ...check };
+    },
     // S-28.1: the SQL's join through `runs.task_stage_id`, here the run's own stage and attempt.
     stageAttemptRuns: async (_tx, taskId, stage, attempt) =>
       [...runs.values()].filter(

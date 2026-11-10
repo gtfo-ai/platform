@@ -7,6 +7,8 @@
  */
 import {
   IntegrationError,
+  MERGE_BLOCKER_STATUS,
+  type MergeBlockerReason,
   type MergeRequestState,
   type PipelineStatusValue,
 } from '@platform/application';
@@ -93,6 +95,46 @@ export const mapMergeability = (input: {
   // Every other detailed status is a *blocking reason* (approvals, CI, draft), which says nothing
   // about whether the branches merge. Unknown is `null`, never `false`.
   return { mergeable: null, hasConflicts: null };
+};
+
+/**
+ * Why GitLab will not merge a merge request now — `detailed_merge_status` in the port's words
+ * (S-28.13, M28 ruling R3b (3)). The values are the documented list
+ * (<https://docs.gitlab.com/api/merge_requests/#merge-status>, read 2026-11-10).
+ *
+ * `null` for `mergeable` and for an instance that publishes no `detailed_merge_status` (older than
+ * 15.6): nothing GitLab said blocks it. `checking` for the states GitLab has not decided yet. A
+ * value this table does not know is `other`, carrying GitLab's word when it is a plain word and
+ * `unknown` otherwise — never free text.
+ */
+export const mapMergeBlocker = (
+  detailed: string | null | undefined,
+): { readonly reason: MergeBlockerReason; readonly provider_status: string } | null => {
+  if (detailed === null || detailed === undefined || detailed === 'mergeable') {
+    return null;
+  }
+  const reason = MERGE_BLOCKER_REASONS[detailed] ?? 'other';
+  return {
+    reason,
+    provider_status: MERGE_BLOCKER_STATUS.test(detailed) ? detailed : 'unknown',
+  };
+};
+
+const MERGE_BLOCKER_REASONS: Readonly<Record<string, MergeBlockerReason>> = {
+  checking: 'checking',
+  unchecked: 'checking',
+  preparing: 'checking',
+  approvals_syncing: 'checking',
+  discussions_not_resolved: 'unresolved_threads',
+  conflict: 'conflict',
+  ci_must_pass: 'pipeline',
+  ci_still_running: 'pipeline',
+  status_checks_must_pass: 'pipeline',
+  security_policy_pipeline_check: 'pipeline',
+  not_approved: 'approvals',
+  requested_changes: 'approvals',
+  draft_status: 'draft',
+  need_rebase: 'rebase',
 };
 
 /**

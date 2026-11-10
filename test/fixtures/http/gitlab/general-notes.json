@@ -191,6 +191,80 @@
         "kind": "documented",
         "note": "WP-173: since the reply endpoint's 404 is answered rather than thrown, the adapter reads the thread to tell \"no such thread\" from \"an individual note it would not take\"; this is that read for the unknown thread discussions.json's POST already answers 404 for, with the status table's 404 and the same message."
       }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests/36/notes",
+      "status": 201,
+      "body": {
+        "id": 3601,
+        "type": null,
+        "body": "<!-- agentic:review-summary:00000000-0000-4000-8000-0000000000d1.r1 -->\nThe reviewer approved this change.",
+        "attachment": null,
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "created_at": "2026-11-10T09:00:00.000Z",
+        "updated_at": "2026-11-10T09:00:00.000Z",
+        "system": false,
+        "noteable_id": 155016036,
+        "noteable_type": "MergeRequest",
+        "project_id": 15513260,
+        "noteable_iid": 36,
+        "resolvable": false
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/notes/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "S-28.13 (M28 ruling R3b (1)): \"Create new merge request note\" answers 201 Created with the created note. The page shows no response example for this endpoint, so the note is the note shape of \"Retrieve a merge request note\" on the same page (a merge-request comment, resolvable: false). Adapted: merge request 36 of this corpus, the platform's bot account as author, an invented review-summary body, fake ids and instants."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/36/discussions?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": "c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c601",
+          "individual_note": true,
+          "notes": [
+            {
+              "id": 3601,
+              "type": null,
+              "body": "<!-- agentic:review-summary:00000000-0000-4000-8000-0000000000d1.r1 -->\nThe reviewer approved this change.",
+              "attachment": null,
+              "author": {
+                "id": 4242,
+                "username": "agentic-bot",
+                "name": "Agentic Bot",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/agentic-bot",
+                "avatar_url": null
+              },
+              "created_at": "2026-11-10T09:00:00.000Z",
+              "updated_at": "2026-11-10T09:00:00.000Z",
+              "system": false,
+              "noteable_id": 155016036,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 36,
+              "resolvable": false
+            }
+          ]
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "S-28.13: the discussions re-read after the general note — the individual-note entry of \"List all merge request discussion items\" (id, individual_note: true, one note), holding the note the POST above created. Adapted: merge request 36, the one note, fake ids. That a general note is listed this way is the page's own example; its resolvable: false is the notes page's value for a merge-request comment."
+      }
     }
   ]
 }

@@ -858,6 +858,23 @@ export const taskProviderSync = pgTable(
 );
 
 /**
+ * S-28.13's merge check (migration 0118, `pipeline/ready-merge-check.ts`): whether the provider
+ * would merge a task's merge request now, recorded at `ready_for_merge` and re-read by the recovery
+ * pass while it is not `true`. The migration's header carries the reasoning.
+ */
+export const taskMergeChecks = pgTable('task_merge_checks', {
+  taskId: uuid('task_id')
+    .primaryKey()
+    .references(() => tasks.id, { onDelete: 'cascade' }),
+  claimedAt: timestamp('claimed_at', { withTimezone: true }).notNull(),
+  checkedAt: timestamp('checked_at', { withTimezone: true }),
+  mergeable: boolean('mergeable'),
+  reason: text('reason'),
+  providerStatus: text('provider_status'),
+  unresolvedThreads: integer('unresolved_threads'),
+});
+
+/**
  * The ask-the-task thread (WP-31, migration 0024).
  *
  * `citations` is the model's own list after the application dropped the entries that name another

@@ -540,6 +540,77 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await due('2000-01-01T00:00:00.000Z' as IsoDateTime)).toEqual([]);
       });
 
+      /**
+       * S-28.13 (M28 ruling R3b (3)): a task at Ready with no merge check is due once; a check
+       * that read "not mergeable" is due again after its claim goes stale; a mergeable one never.
+       */
+      it('finds the tasks at Ready whose merge check is due, claims each once, and records the read (S-28.13)', async () => {
+        const mr = (iid: number) => ({
+          provider: 'fake-git',
+          project_path: 'acme/api',
+          iid,
+          url: `https://git.example.test/acme/api/-/merge_requests/${iid}`,
+          branch: `agentic/acme-${iid}`,
+          head_sha: 'b'.repeat(40),
+        });
+        const ready = async (stored: StoredTask) => {
+          await store.tasks.insert(tx, stored);
+          const loaded = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+          await store.tasks.save(tx, {
+            ...loaded,
+            task: {
+              ...loaded.task,
+              state: 'ready_for_merge',
+              currentStage: 'ready_for_merge' as Slug,
+            },
+          });
+        };
+        const waiting = task({ mr: mr(31) }, 'ACME-MERGE-1');
+        const clean = task({ mr: mr(32) }, 'ACME-MERGE-2');
+        const queued = task({ mr: mr(33) }, 'ACME-MERGE-3');
+        await ready(waiting);
+        await ready(clean);
+        await store.tasks.insert(tx, queued);
+        const mine = new Set([waiting, clean, queued].map((s) => s.task.id));
+        const at = '2026-06-02T09:00:00.000Z' as IsoDateTime;
+        const due = async (staleBefore: IsoDateTime) =>
+          (await store.tasks.readyMergeCheckDue(tx, { staleBefore, limit: 10_000 }))
+            .map((row) => row.taskId)
+            .filter((id) => mine.has(id))
+            .sort();
+        expect(await due(at)).toEqual([waiting, clean].map((s) => s.task.id).sort());
+        expect(await store.tasks.readyMergeCheckOf(tx, waiting.task.id)).toBeNull();
+        // Claimed once: the second claim within the window loses.
+        expect(await store.tasks.claimReadyMergeCheck(tx, waiting.task.id, at, at)).toBe(true);
+        expect(await store.tasks.claimReadyMergeCheck(tx, waiting.task.id, at, at)).toBe(false);
+        expect(await store.tasks.readyMergeCheckOf(tx, waiting.task.id)).toBeNull();
+        const blocked = {
+          checkedAt: at,
+          mergeable: false,
+          reason: 'unresolved_threads' as const,
+          providerStatus: 'discussions_not_resolved',
+          unresolvedThreads: 2,
+        };
+        await store.tasks.recordReadyMergeCheck(tx, waiting.task.id, blocked);
+        await store.tasks.recordReadyMergeCheck(tx, clean.task.id, {
+          checkedAt: at,
+          mergeable: true,
+          reason: null,
+          providerStatus: null,
+          unresolvedThreads: null,
+        });
+        expect(await store.tasks.readyMergeCheckOf(tx, waiting.task.id)).toEqual(blocked);
+        // Neither is due inside the window; the blocked one is due again after it, the clean never.
+        expect(await due(at)).toEqual([]);
+        const later = '2026-06-02T09:10:00.000Z' as IsoDateTime;
+        expect(await due(later)).toEqual([waiting.task.id]);
+        expect(await store.tasks.claimReadyMergeCheck(tx, clean.task.id, later, later)).toBe(false);
+        expect(await store.tasks.claimReadyMergeCheck(tx, waiting.task.id, later, later)).toBe(
+          true,
+        );
+        expect(await due(later)).toEqual([]);
+      });
+
       it('records the status a reverse-sync stop acted on, and replaces it (S-28.5 review)', async () => {
         const stored = task({}, 'ACME-STOP-1');
         await store.tasks.insert(tx, stored);

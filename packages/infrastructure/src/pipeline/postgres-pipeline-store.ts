@@ -29,6 +29,7 @@ import type {
   Logger,
   PipelineStore,
   QuestionRepository,
+  ReadyMergeCheck,
   RunRepository,
   StoredApproval,
   StoredArtifact,
@@ -1636,6 +1637,79 @@ export const createPostgresPipelineStore = (
         [taskId, subject],
       );
       return (result.rowCount ?? 0) > 0;
+    },
+
+    // S-28.13 (migration 0118): the merge check at Ready — due, claim, record, read.
+    readyMergeCheckDue: async (tx, query) => {
+      const { rows } = await sqlOf(tx).query<{ id: string; project_id: string }>(
+        `select t.id, t.project_id from tasks t
+           left join task_merge_checks c on c.task_id = t.id
+          where t.state = 'ready_for_merge'
+            and t.mode = 'normal'
+            and t.mr_ref is not null
+            and (c.task_id is null
+                 or (c.mergeable is distinct from true and c.claimed_at < $1))
+          order by t.updated_at desc, t.id
+          limit $2`,
+        [query.staleBefore, query.limit],
+      );
+      return rows.map((row) => ({ taskId: row.id as Id, projectId: row.project_id as Id }));
+    },
+
+    claimReadyMergeCheck: async (tx, taskId, at, staleBefore) => {
+      const { rows } = await sqlOf(tx).query(
+        `insert into task_merge_checks (task_id, claimed_at) values ($1, $2)
+           on conflict (task_id) do update set claimed_at = excluded.claimed_at
+             where task_merge_checks.mergeable is distinct from true
+               and task_merge_checks.claimed_at < $3
+           returning task_id`,
+        [taskId, at, staleBefore],
+      );
+      return rows.length > 0;
+    },
+
+    recordReadyMergeCheck: async (tx, taskId, check) => {
+      await sqlOf(tx).query(
+        `insert into task_merge_checks
+           (task_id, claimed_at, checked_at, mergeable, reason, provider_status, unresolved_threads)
+         values ($1, $2, $2, $3, $4, $5, $6)
+         on conflict (task_id) do update
+            set checked_at = excluded.checked_at, mergeable = excluded.mergeable,
+                reason = excluded.reason, provider_status = excluded.provider_status,
+                unresolved_threads = excluded.unresolved_threads`,
+        [
+          taskId,
+          check.checkedAt,
+          check.mergeable,
+          check.reason,
+          check.providerStatus,
+          check.unresolvedThreads,
+        ],
+      );
+    },
+
+    readyMergeCheckOf: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{
+        checked_at: string;
+        mergeable: boolean | null;
+        reason: string | null;
+        provider_status: string | null;
+        unresolved_threads: number | null;
+      }>(
+        `select to_char(checked_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as checked_at,
+                mergeable, reason, provider_status, unresolved_threads
+           from task_merge_checks where task_id = $1 and checked_at is not null`,
+        [taskId],
+      );
+      const row = rows[0];
+      if (row === undefined) return null;
+      return {
+        checkedAt: row.checked_at as IsoDateTime,
+        mergeable: row.mergeable,
+        reason: (row.reason ?? null) as ReadyMergeCheck['reason'],
+        providerStatus: row.provider_status,
+        unresolvedThreads: row.unresolved_threads,
+      };
     },
 
     stageAttemptRuns: async (tx, taskId, stage, attempt) => {

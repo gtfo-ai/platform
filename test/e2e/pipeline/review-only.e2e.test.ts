@@ -137,7 +137,10 @@ const humanMergeRequest = async (pipeline: PipelineE2E, labels: readonly string[
  * implies.
  */
 const auditedThreads = async (pipeline: PipelineE2E) =>
-  (await pipeline.auditRows()).filter((row) => row.action === 'create_discussion');
+  (await pipeline.auditRows()).filter(
+    // S-28.13: the summary is a general note (`create_merge_request_note`), never a thread.
+    (row) => row.action === 'create_discussion' || row.action === 'create_merge_request_note',
+  );
 
 /**
  * The threads this mode posted, and the wait that has to precede reading them.
@@ -252,6 +255,9 @@ describe('review-only mode, from a signed merge-request delivery', () => {
     const anchored = ours.filter((discussion) => discussion.notes[0]?.path !== null);
     expect(anchored).toHaveLength(1);
     expect(anchored[0]?.notes[0]).toMatchObject({ path: 'src/totals.ts', line: 3 });
+    // S-28.13 (M28 ruling R3b (1)): the summary blocks no merge — it is not a resolvable thread.
+    const general = ours.filter((discussion) => discussion.notes[0]?.path === null);
+    expect(general.map((discussion) => discussion.resolvable)).toEqual([false]);
 
     const bodies = ours
       .flatMap((discussion) => discussion.notes.map((note) => note.body))
@@ -369,6 +375,8 @@ describe('review-only mode, from a signed merge-request delivery', () => {
       async () => (await auditedThreads(pipeline)).length >= 2,
     );
     for (const discussion of await threads.mine()) {
+      // S-28.13: the summary is a general note, which cannot be resolved and blocks nothing.
+      if (!discussion.resolvable) continue;
       await pipeline.git.resolveDiscussion(threads.ref, discussion.id);
     }
     await pipeline.deliverGit(

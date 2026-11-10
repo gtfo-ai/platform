@@ -96,6 +96,11 @@ const refreshHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (stored === null || stored.task.state !== 'ready_for_merge') {
       return;
     }
+    // S-28.13 (M28 ruling R3b (3)): a resolution may be what makes a blocked merge request
+    // mergeable, so a task whose last merge check read "not now" is checked again.
+    const blocked =
+      (await options.store.tasks.readyMergeCheckOf(context.scope.tx, stored.task.id))?.mergeable ===
+      false;
     const data: PipelineOutboundData = {
       duty: 'review_threads_refresh',
       project_id: stored.task.projectId,
@@ -105,6 +110,14 @@ const refreshHandler = (options: PipelineSagaOptions): EventHandler => ({
     };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);
+      if (blocked) {
+        await enqueueOutbound(options.jobs, {
+          duty: 'ready_merge_check',
+          project_id: stored.task.projectId,
+          task_id: stored.task.id,
+          cause_event_id: event.id,
+        });
+      }
     });
   },
 });

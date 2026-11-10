@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isDraftTitle,
   mapMergeability,
+  mapMergeBlocker,
   mapMergeRequestState,
   mapPipelineStatus,
   pipelineStatusOrNull,
@@ -310,5 +311,42 @@ describe('mapMergeRequestState', () => {
 
   it('refuses an unknown state', () => {
     expect(() => mapMergeRequestState('quantum')).toThrow(IntegrationError);
+  });
+});
+
+/**
+ * S-28.13 (M28 ruling R3b (3)): why GitLab will not merge now, in the port's words. AUT-6655's
+ * `discussions_not_resolved` must read as unresolved threads, and nothing GitLab says may reach the
+ * port as free text.
+ */
+describe('mapMergeBlocker', () => {
+  it.each([
+    ['discussions_not_resolved', 'unresolved_threads'],
+    ['conflict', 'conflict'],
+    ['ci_must_pass', 'pipeline'],
+    ['ci_still_running', 'pipeline'],
+    ['not_approved', 'approvals'],
+    ['requested_changes', 'approvals'],
+    ['draft_status', 'draft'],
+    ['need_rebase', 'rebase'],
+    ['checking', 'checking'],
+    ['unchecked', 'checking'],
+    ['preparing', 'checking'],
+    ['jira_association_missing', 'other'],
+  ] as const)('%s → %s, carrying GitLab’s word', (detailed, reason) => {
+    expect(mapMergeBlocker(detailed)).toEqual({ reason, provider_status: detailed });
+  });
+
+  it('answers nothing for mergeable and for an instance that publishes no detailed status', () => {
+    expect(mapMergeBlocker('mergeable')).toBeNull();
+    expect(mapMergeBlocker(null)).toBeNull();
+    expect(mapMergeBlocker(undefined)).toBeNull();
+  });
+
+  it('never carries a value that is not a plain word', () => {
+    expect(mapMergeBlocker('Blocked <script>')).toEqual({
+      reason: 'other',
+      provider_status: 'unknown',
+    });
   });
 });

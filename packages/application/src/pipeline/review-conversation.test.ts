@@ -19,7 +19,11 @@ import { createIntegrationActionExecutor } from '../integrations/action-executor
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { IntegrationError, IntegrationUnsupportedError } from '../ports/integrations/common.js';
-import type { Discussion, GitProviderPort } from '../ports/integrations/git-provider.js';
+import type {
+  Discussion,
+  GitProviderPort,
+  MergeBlocker,
+} from '../ports/integrations/git-provider.js';
 import type {
   TaskManagementPort,
   TicketComment,
@@ -42,6 +46,7 @@ import {
 import { staticPipelineIntegrations } from './integrations.js';
 import type { PipelineOutboundData } from './jobs.js';
 import { performOwedDuties, underReviewConversationLease } from './owed-duties.js';
+import { runReadyMergeCheck } from './ready-merge-check.js';
 import {
   type ReviewConversationOptions,
   runConversationReplies,
@@ -53,6 +58,7 @@ import {
   conversationReplyNoteMarker,
   reviewFindingMarkerFor,
   reviewFindingSummaryMarkerFor,
+  reviewLeftOpenNoteMarker,
 } from './review-notes.js';
 import { mergeRequestWords, ticketCommentWords } from './review-threads.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -150,7 +156,13 @@ const notes = (threadReplies: readonly Record<string, unknown>[]) => ({
 });
 
 interface Recorded {
-  readonly created: { path: string | null; line: number | null; markdown: string }[];
+  /** Every thread and (S-28.13, `note: true`) every general note, in the order posted. */
+  readonly created: {
+    path: string | null;
+    line: number | null;
+    markdown: string;
+    note?: boolean;
+  }[];
   readonly replied: { discussionId: string; markdown: string }[];
   readonly resolved: string[];
   readonly commented: { body: string; markerId: string | null }[];
@@ -198,6 +210,10 @@ const world = async (
     readonly slowWrites?: boolean;
     /** The duty lease's seams (WP-184); the lease is armed unless a case disarms it. */
     readonly dutyLease?: PipelineSagaOptions['dutyLease'];
+    /** S-28.13: the task waits at `ready_for_merge` rather than at Implementation. */
+    readonly atReady?: boolean;
+    /** S-28.13: why the provider would not merge the merge request now (absent: nothing). */
+    readonly mergeBlocker?: MergeBlocker | null;
   } = {},
 ) => {
   const discussions: (Discussion & { individual?: boolean })[] = (options.discussions ?? []).map(
@@ -233,6 +249,7 @@ const world = async (
       head_sha: options.liveHead ?? LIVE_HEAD,
       mergeable: true,
       has_conflicts: false,
+      ...(options.mergeBlocker == null ? {} : { merge_blocker: options.mergeBlocker }),
       labels: [],
       reviewers: [],
       web_url: MR_URL,
@@ -272,6 +289,20 @@ const world = async (
           action: 'create_discussion',
         });
       }
+      return structuredClone(created);
+    },
+    // S-28.13: a general note — its own discussion, never resolvable (GitLab's individual note).
+    createMergeRequestNote: async (_ref: unknown, markdown: string) => {
+      recorded.created.push({ path: null, line: null, markdown, note: true });
+      discussionCounter += 1;
+      const created = {
+        id: `general-${String(discussionCounter)}`,
+        resolvable: false,
+        resolved: false,
+        individual: true,
+        notes: [note(BOT, markdown)],
+      };
+      discussions.push(created);
       return structuredClone(created);
     },
     replyToDiscussion: async (_ref: unknown, discussionId: string, markdown: string) => {
@@ -362,8 +393,8 @@ const world = async (
         ticket: TICKET,
         template: 'feature',
         mode: options.mode ?? 'normal',
-        state: 'active',
-        currentStage: 'implementation',
+        state: options.atReady === true ? 'ready_for_merge' : 'active',
+        currentStage: options.atReady === true ? 'ready_for_merge' : 'implementation',
         stageAttempts: { implementation: 2, code_review: 1 },
         iterationCounters: {},
         limits: {
@@ -535,6 +566,11 @@ const world = async (
       runConversationReplies(conversationOptions, data('conversation_replies', NOTES_ID)),
     resolve: () =>
       runReviewThreadsResolve(conversationOptions, data('review_threads_resolve', VERDICT_ID)),
+    /** S-28.13: the `ready_merge_check` duty, as the outbound queue's dispatch hands it the task. */
+    readyCheck: () => runReadyMergeCheck(conversationOptions, { task_id: TASK }),
+    /** S-28.13: what the last merge check recorded. */
+    mergeCheck: () =>
+      memory.transaction(async (scope) => store.tasks.readyMergeCheckOf(scope.tx, TASK)),
     discussions,
     comments,
     recorded,
@@ -592,8 +628,28 @@ describe('(1) the findings, one thread each, and one summary', () => {
       'ok',
       'ok',
       'ok',
-      'ok',
     ]);
+    // S-28.13 (M28 ruling R3b (1)): the summary is a general note, never a resolvable thread.
+    expect(summary?.note).toBe(true);
+    expect(w.auditLog.entriesFor('create_merge_request_note').map((entry) => entry.status)).toEqual(
+      ['ok'],
+    );
+  });
+
+  /**
+   * S-28.13 (M28 ruling R3b (1)): AUT-6655's three summaries were three unresolved threads, and
+   * GitLab refused the merge. Canary: posting the summary through `reviewWrites.thread` again
+   * leaves a resolvable, unresolved discussion here.
+   */
+  it('leaves no unresolved thread behind for the summary (S-28.13)', async () => {
+    const w = await world({ artifacts: [reviewArtifact()] });
+    await w.findings();
+
+    const summaries = w.discussions.filter((discussion) =>
+      discussion.notes[0]?.body.startsWith('<!-- agentic:review-summary:'),
+    );
+    expect(summaries).toHaveLength(1);
+    expect(summaries.map((discussion) => discussion.resolvable)).toEqual([false]);
   });
 
   /**
@@ -612,12 +668,13 @@ describe('(1) the findings, one thread each, and one summary', () => {
       'ok',
       'ok',
       'ok',
-      'ok',
-      'replayed',
       'replayed',
       'replayed',
       'replayed',
     ]);
+    expect(w.auditLog.entriesFor('create_merge_request_note').map((entry) => entry.status)).toEqual(
+      ['ok', 'replayed'],
+    );
   });
 
   it('gives two findings that share an id two threads, the second under its index', async () => {
@@ -667,7 +724,6 @@ describe('(2) a refused anchor', () => {
     // The refused call is on the record, and the re-post under the same key succeeded.
     expect(w.auditLog.entriesFor('create_discussion').map((entry) => entry.status)).toEqual([
       'failed',
-      'ok',
       'ok',
       'ok',
       'ok',
@@ -1360,5 +1416,202 @@ describe('(R3) resolving a person’s thread after the Developer’s reply', () 
     expect(silent[0]?.markdown.startsWith('<!-- agentic:reply:')).toBe(true);
     expect(w.recorded.resolved).toEqual(['p-fixed']);
     expect(w.discussions.find((discussion) => discussion.id === 'p-silent')?.resolved).toBe(false);
+  });
+});
+
+// ── (S-28.13) the platform closes its own threads, and Ready reads the provider ─────────────
+
+describe('(S-28.13) the platform closes its own threads after an approval (M28 ruling R3b)', () => {
+  /** AUT-6655's five, plus the two the platform must leave alone. */
+  const ownThreads = (): Discussion[] => [
+    // An old review summary, posted as a thread before S-28.13.
+    {
+      id: 'old-summary',
+      resolvable: true,
+      resolved: false,
+      notes: [note(BOT, `${reviewFindingSummaryMarkerFor(TASK, 'old-run')}\nThe reviewer asked.`)],
+    },
+    // A nit the Developer answered *Not changed*.
+    {
+      id: 'nit-not-changed',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'n1')}\n**nit · style**`),
+        note(BOT, `${conversationReplyNoteMarker(TASK, DEV_RUN, 0)}\n**Not changed.**`),
+      ],
+    },
+    // A finding the Developer fixed, which the re-review did not name.
+    {
+      id: 'finding-fixed',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'f9')}\n**major · correctness**`),
+        note(BOT, `${conversationReplyNoteMarker(TASK, DEV_RUN, 1)}\n**Fixed.**`),
+      ],
+    },
+    // The platform's finding in which a person wrote: the person's conversation now.
+    {
+      id: 'finding-person',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'f8')}\n**minor · naming**`),
+        note(PERSON, 'I disagree — keep the old name.'),
+      ],
+    },
+    // A person typed this task's marker: not the platform's, by author.
+    {
+      id: 'spoofed',
+      resolvable: true,
+      resolved: false,
+      notes: [note(PERSON, `${reviewFindingMarkerFor(TASK, 'old-run', 'x')}\nmine`)],
+    },
+  ];
+  const developerNotes = () =>
+    notesArtifact([
+      { thread_id: 'nit-not-changed', kind: 'not_changed', reply: 'Kept: it matches the module.' },
+      { thread_id: 'finding-fixed', kind: 'fixed', reply: 'Summed every row.' },
+    ]);
+  const approving = () => reviewArtifact({ verdict: 'approve', findings: [] });
+
+  it('resolves its own threads nobody wrote in, notes the one left as is, and never a person’s', async () => {
+    const w = await world({
+      discussions: ownThreads(),
+      artifacts: [developerNotes(), approving()],
+    });
+    await w.findings();
+
+    expect([...w.recorded.resolved].sort()).toEqual(
+      ['finding-fixed', 'nit-not-changed', 'old-summary'].sort(),
+    );
+    const byId = (id: string) => w.discussions.find((discussion) => discussion.id === id);
+    expect(byId('finding-person')?.resolved).toBe(false);
+    expect(byId('spoofed')?.resolved).toBe(false);
+    // The nit left as is gets one closing note first; the fixed one and the summary get none.
+    const closing = w.recorded.replied.filter((entry) =>
+      entry.markdown.startsWith(reviewLeftOpenNoteMarker(TASK, 'nit-not-changed')),
+    );
+    expect(closing).toHaveLength(1);
+    expect(closing[0]?.markdown).toContain('Left as is.');
+    expect(closing[0]?.markdown).toContain('reopen this thread and write what you want here');
+    expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['nit-not-changed']);
+    // The approving review's own summary is a note, and nothing of it is left open.
+    expect(
+      w.discussions.filter(
+        (discussion) =>
+          discussion.resolvable &&
+          !discussion.resolved &&
+          discussion.notes[0]?.author.external_id === BOT.external_id,
+      ),
+    ).toEqual([]);
+  });
+
+  /** A replay posts no second note and resolves nothing again — and a person's reopen stands. */
+  it('is idempotent across replays, and leaves a thread a person reopened open', async () => {
+    const w = await world({
+      discussions: ownThreads(),
+      artifacts: [developerNotes(), approving()],
+    });
+    await w.findings();
+    const resolvedOnce = w.recorded.resolved.length;
+    // A person reopens the nit without writing.
+    const nit = w.discussions.find((discussion) => discussion.id === 'nit-not-changed');
+    if (nit !== undefined) nit.resolved = false;
+    await w.findings();
+
+    expect(w.recorded.resolved).toHaveLength(resolvedOnce);
+    expect(nit?.resolved).toBe(false);
+    expect(
+      w.recorded.replied.filter((entry) =>
+        entry.markdown.startsWith(reviewLeftOpenNoteMarker(TASK, 'nit-not-changed')),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('closes nothing after a review that asked for changes', async () => {
+    const w = await world({
+      discussions: ownThreads(),
+      artifacts: [developerNotes(), reviewArtifact({ findings: [] })],
+    });
+    await w.findings();
+    expect(w.recorded.resolved).toEqual([]);
+    expect(w.recorded.replied).toEqual([]);
+  });
+
+  it('records would_have in shadow mode and changes nothing', async () => {
+    const w = await world({
+      mode: 'shadow',
+      discussions: ownThreads(),
+      artifacts: [developerNotes(), approving()],
+    });
+    await w.findings();
+    expect(w.recorded.resolved).toEqual([]);
+    expect(w.recorded.replied).toEqual([]);
+    const statuses = w.auditLog.entriesFor('resolve_discussion').map((entry) => entry.status);
+    expect(statuses.length).toBeGreaterThan(0);
+    expect(statuses.every((status) => status === 'would_have')).toBe(true);
+  });
+});
+
+describe('(S-28.13) Ready tells the truth about the provider (M28 ruling R3b (3))', () => {
+  /**
+   * A task already waiting at Ready when this shipped — AUT-6655: the check closes the platform's
+   * own threads and records what the provider says, with the unresolved threads that remain.
+   */
+  it('closes the platform’s own threads at Ready, then records the block with the threads left', async () => {
+    const person: Discussion = {
+      id: 'person-open',
+      resolvable: true,
+      resolved: false,
+      notes: [note(PERSON, 'Please rename this.')],
+    };
+    const w = await world({
+      atReady: true,
+      mergeBlocker: { reason: 'unresolved_threads', provider_status: 'discussions_not_resolved' },
+      discussions: [
+        {
+          id: 'old-summary',
+          resolvable: true,
+          resolved: false,
+          notes: [note(BOT, `${reviewFindingSummaryMarkerFor(TASK, 'old-run')}\nApproved.`)],
+        },
+        person,
+      ],
+      artifacts: [reviewArtifact({ verdict: 'approve', findings: [] })],
+    });
+    expect(await w.readyCheck()).toBe('blocked');
+    expect(w.recorded.resolved).toEqual(['old-summary']);
+    expect(await w.mergeCheck()).toMatchObject({
+      mergeable: false,
+      reason: 'unresolved_threads',
+      providerStatus: 'discussions_not_resolved',
+      unresolvedThreads: 1,
+    });
+  });
+
+  it('records a mergeable merge request as mergeable, and says nothing while the provider decides', async () => {
+    const clean = await world({
+      atReady: true,
+      artifacts: [reviewArtifact({ verdict: 'approve' })],
+    });
+    expect(await clean.readyCheck()).toBe('mergeable');
+    expect((await clean.mergeCheck())?.mergeable).toBe(true);
+
+    const deciding = await world({
+      atReady: true,
+      mergeBlocker: { reason: 'checking', provider_status: 'checking' },
+    });
+    expect(await deciding.readyCheck()).toBe('unknown');
+    expect((await deciding.mergeCheck())?.mergeable).toBeNull();
+  });
+
+  it('checks nothing for a task that is not at Ready', async () => {
+    const w = await world({
+      mergeBlocker: { reason: 'pipeline', provider_status: 'ci_must_pass' },
+    });
+    expect(await w.readyCheck()).toBe('not_at_ready');
+    expect(await w.mergeCheck()).toBeNull();
   });
 });

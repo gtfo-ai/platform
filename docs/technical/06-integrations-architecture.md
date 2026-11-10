@@ -147,7 +147,7 @@ cloneUrl(project, credential) ; mintCredential(project, scope: read|push:agentic
 openMergeRequest({branch, target, title, description, draft, labels, reviewers}) -> MrRef
 commitFiles({project, branch, start_branch, message, author, actions[]}) -> {sha, branch, url}   # WP-18b: one commit of whole files (the knowledge apply); GitLab refuses it WHOLE and names no file (any 4xx → invalid_request), so the apply splits a refused batch into one commit per page, once (WP-156, backlog 420; technical/07)
 updateMergeRequest(mr, {description?, draft?, labels?, reviewers?, title?})
-getMergeRequest(mr) -> {state, draft, headSha, mergeable, diffStats, coverage?}
+getMergeRequest(mr) -> {state, draft, headSha, mergeable, mergeBlocker?, diffStats, coverage?}   # S-28.13: mergeBlocker = why the provider would not merge it now ({reason: checking|unresolved_threads|conflict|pipeline|approvals|draft|rebase|other, provider_status}); GitLab maps `detailed_merge_status`
 closeMergeRequest(mr) -> MergeRequest                 # WP-59: idempotent (closed stays closed), `conflict` for a merged MR; a rework's superseded MR (Q92)
 findOpenMergeRequest(project, sourceBranch) -> MergeRequest | null   # WP-138: the open MR of one branch — `open_mr` adopts it after a `conflict` only when it is the binding's own and targets the default branch
 authenticatedUser() -> ExternalIdentity               # WP-138: the account the binding's credential acts as (GitLab `GET /user`)
@@ -159,7 +159,8 @@ createMergeRequestPipeline(mr) -> {id, headSha, status, url?}   # WP-138: a muta
 repositorySettings(project) -> {defaultBranch | null, ciConfig: repository{path} | external{location} | unknown{reason}}   # WP-139: GitLab `GET /projects/:id` — `default_branch` (the wizard's prefill and, since WP-142, the settings page's mismatch notice — its **only** readers; every pipeline reader takes the stored branch) and `ci_config_path` (empty → `.gitlab-ci.yml`; `…@project` or a URL → external, counted as CI present; absent key → unknown). The CI gate and `mr_ready` look for that path on the default branch (by presence only, through the mirror) instead of a fixed `.gitlab-ci.yml`; since WP-143 the CI gate's tamper check also protects that path, and the readiness CI-rules notice and R13 read its bytes through the mirror (`RepositoryFileRequest.ciConfigPath`, the one provider-named path whose content is read)
 getMergeRequestDiffStats(mr) -> {filesChanged, insertions, deletions} | null   # WP-59: GitLab answers from GraphQL `diffStatsSummary`; null = not computed
 listDiscussions(mr) ; replyToDiscussion(mr, discussionId, markdown) ; resolveDiscussion(mr, discussionId)
-createDiscussion(mr, {path?, line?, markdown})         # review findings; both absent = a thread on the MR (WP-24's neutral summary)
+createDiscussion(mr, {path?, line?, markdown})         # review findings; both absent = a thread on the MR
+createMergeRequestNote(mr, markdown) -> Discussion     # S-28.13: a general note, never resolvable — the review summaries (the pipeline's and review-only's), which must never block a merge (GitLab `POST …/merge_requests/:iid/notes`, then the discussions re-read)
 getMergeRequestDiff(mr, {limit}) -> [{oldPath, newPath, diff?, newFile, renamedFile, deletedFile, omitted}]  # review-only mode (WP-24)
 getPipelineStatus(headSha) -> {status, url, jobs[{name, status, stage, allowFailure, logRef}], jobsTruncated?}   # jobs include GitLab's trigger jobs (bridges, read from their own list); jobsTruncated: either list was cut (GitLab's max_pages), and the CI gate never passes on it (BACKLOG 1490). S-27.2 (TD-036 decision 1): `manual` = a person must start it; allowFailure false = counts toward the pipeline (a blocking manual job); stage = the provider's, or null when it has none (GitLab's jobs API `stage`); a pipeline `manual` = held at a blocking manual job
 getJobLog(jobId, {tailBytes}) -> string
@@ -206,12 +207,24 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > silence a person. A reply is found again by its marker across every discussion, never by the
 > discussion `replyToDiscussion` returned, whose id may differ (the port's docblock).
 
+> **S-28.13 amendment (M28 ruling R3b): the platform's own threads never hold up a merge.** The port
+> gains `createMergeRequestNote` and `MergeRequest.merge_blocker`. AUT-6655 waited at Ready while
+> GitLab answered `discussions_not_resolved` for five threads, all the platform's: three review
+> summaries posted as threads and two nits nobody answered once the Reviewer approved. Since S-28.13
+> a review summary is a general note (`reviewWrites.note`, idempotency key and marker unchanged); an
+> approving review — and again the `ready_merge_check` duty at Ready, and the recovery pass for tasks
+> already waiting — resolves every unresolved resolvable thread whose first note opens with this
+> task's `review-finding` or `review-summary` marker by the binding's own account **and in which no
+> person wrote** (a finding the Developer did not answer `fixed`/`documented` first gets one keyed,
+> marked *Left as is* note). The same duty records `merge_blocker` in `task_merge_checks` and the task
+> page says it (`provider_sync`'s `merge_request_blocked`).
+
 > **WP-187 amendment (backlog 549, M11): every note is mention-neutral.** A finding, a review summary,
 > a reply and a `needs_person` name are model text shaped by untrusted input (BD-022), and GitLab
 > notifies whoever a note names with `@name`, `@group` or `@all`. The neutralisation is the
 > **adapter's**, because mention syntax is the provider's (BD-017), as Slack's `escapeSlackText` is the
 > Slack adapter's; the pipeline's renderers (`review-notes.ts`) stay provider-neutral and unchanged.
-> Every body the GitLab adapter posts through `createDiscussion` and `replyToDiscussion` (its
+> Every body the GitLab adapter posts through `createDiscussion`, `createMergeRequestNote` (S-28.13) and `replyToDiscussion` (its
 > general-note fallback included) passes through `gitlabNoteBody`
 > (`packages/integrations/src/providers/gitlab/mentions.ts`): outside a code span or a fenced block a
 > mention is written as inline code, `<code>@&#8203;name</code>`, and code spans and fences are left

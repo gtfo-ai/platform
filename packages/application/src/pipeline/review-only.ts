@@ -964,11 +964,11 @@ export const runReviewOnlyPost = async (
   }
   const posted = threads.size;
 
-  await writes.thread(
+  // S-28.13 (M28 ruling R3b (1)): a general note, never a thread — product/18's *"a neutral summary
+  // that never blocks merge"* is now true of a project that requires resolved threads too.
+  await writes.note(
     {
       ref,
-      path: null,
-      line: null,
       markdown: renderSummary({
         taskId: stored.task.id,
         summary: verdict.summary ?? '',

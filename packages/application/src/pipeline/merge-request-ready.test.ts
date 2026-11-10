@@ -28,6 +28,7 @@ import {
   createVirtualTimer,
 } from '../testing/memory-integrations.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
+import { recordingJobs } from '../testing/pipeline-harness.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import type { PipelineOutboundData } from './jobs.js';
 import {
@@ -243,10 +244,12 @@ const world = async (
   } as unknown as GitProviderPort;
   const auditLog = createMemoryAuditLog();
   const transitions: string[] = [];
+  const jobs = recordingJobs();
   const options_ = {
     clock: { now: () => '2026-06-01T09:00:00.000Z' },
     unitOfWork: memory,
     store,
+    jobs,
     settings: staticProjectSettings((projectId) =>
       defaultProjectSettings(projectId, {
         ...(options.lifecycleSlots === undefined
@@ -328,6 +331,11 @@ const world = async (
   return {
     run: () => runMergeRequestPipeline(options_, data('mr_pipeline')),
     ready: (cause?: string) => runMergeRequestReady(options_, data('mr_ready', cause)),
+    /** S-28.13: the merge checks `mr_ready` enqueued once the merge request read non-draft. */
+    mergeChecks: () =>
+      jobs.history
+        .map((request) => request.data as unknown as PipelineOutboundData)
+        .filter((entry) => entry.duty === 'ready_merge_check'),
     draft: (cause?: string) => runMergeRequestDraft(options_, data('mr_draft', cause)),
     updates,
     pipelines,
@@ -735,6 +743,20 @@ describe('mr_ready reads the merge request back (S-28.10)', () => {
     ]);
     // The ticket is not told "ready" about a draft.
     expect(transitions).toEqual([]);
+  });
+
+  /**
+   * S-28.13 (M28 ruling R3b (3)): once the merge request reads non-draft, the merge check follows —
+   * never before, so the platform's own draft is never reported as what blocks the merge.
+   */
+  it('enqueues the merge check once the merge request reads non-draft, and not while it is a draft', async () => {
+    const marked = await world({ state: 'ready_for_merge' });
+    expect(await marked.ready()).toBe('marked_ready');
+    expect(marked.mergeChecks().map((entry) => entry.task_id)).toEqual([TASK]);
+
+    const stuck = await world({ state: 'ready_for_merge', ignoresDraftWrite: true });
+    await expect(stuck.ready()).rejects.toBeInstanceOf(MergeRequestStillDraftError);
+    expect(stuck.mergeChecks()).toEqual([]);
   });
 
   it('marks ready, clears an earlier out-of-sync row, and only then moves the ticket to ready_for_merge', async () => {

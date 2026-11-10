@@ -416,6 +416,11 @@ const gitlabScript = (): Script => ({
     },
   },
   [`PUT /projects/${P}/merge_requests/7/discussions/${DISCUSSION}`]: { body: gitlabDiscussion() },
+  // S-28.13: a general note — the created note's id is the listed discussion's note (900).
+  [`POST /projects/${P}/merge_requests/7/notes`]: {
+    status: 201,
+    body: { id: 900, body: `summary ${GITLAB_TOKEN}`, author: gitlabUser(4244), created_at: NOW },
+  },
   [`GET /projects/${P}/pipelines`]: { body: [{ id: 900, sha: SHA, status: 'success' }] },
   [`GET /projects/${P}/pipelines/900`]: {
     body: {
@@ -578,6 +583,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   reply_to_discussion: 'replyToDiscussion',
   resolve_discussion: 'resolveDiscussion',
   create_discussion: 'createDiscussion',
+  create_merge_request_note: 'createMergeRequestNote',
   get_pipeline_status: 'getPipelineStatus',
   get_job_log: 'getJobLog',
   play_job: 'playJob',
@@ -705,6 +711,10 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       line: 12,
       markdown: `found ${GITLAB_TOKEN}`,
     });
+    emitted.create_merge_request_note = await port.createMergeRequestNote(
+      ref,
+      `summary ${GITLAB_TOKEN}`,
+    );
     emitted.get_merge_request_diff = await port.getMergeRequestDiff(ref, { limit: 10 });
     emitted.get_pipeline_status = await port.getPipelineStatus(PROJECT, SHA);
     emitted.get_job_log = await port.getJobLog(PROJECT, '9002');

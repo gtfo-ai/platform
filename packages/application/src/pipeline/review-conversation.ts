@@ -108,12 +108,17 @@ import {
   findingKeysOf,
   renderConversationReply,
   renderFindingWith,
+  renderLeftOpenNote,
   renderNotAddressedReply,
   renderReviewSummary,
   reviewFindingIdempotencyKeyFor,
   reviewFindingMarkerFor,
   reviewFindingMarkerPrefixFor,
   reviewFindingSummaryIdempotencyKeyFor,
+  reviewFindingSummaryMarkerPrefixFor,
+  reviewLeftOpenIdempotencyKeyFor,
+  reviewLeftOpenNoteMarker,
+  reviewThreadCloseIdempotencyKeyFor,
 } from './review-notes.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -371,11 +376,10 @@ export const runReviewFindingsPost = async (
       threads.add(thread.id);
     }
   }
-  await writes.thread(
+  // S-28.13 (M28 ruling R3b (1)): a general note, never a thread — a summary blocks no merge.
+  await writes.note(
     {
       ref: stored.mr,
-      path: null,
-      line: null,
       markdown: renderReviewSummary({
         taskId: stored.task.id,
         runId,
@@ -396,6 +400,16 @@ export const runReviewFindingsPost = async (
     },
     'review findings posted on the merge request',
   );
+  if (verdict.verdict === 'approve') {
+    // M28 ruling R3b (2): an approving review leaves none of the platform's own threads open —
+    // this run's findings included, which nobody will answer now the task has moved on.
+    // The threads it named as fixed are `review_threads_resolve`'s, which runs beside this duty.
+    await closeOwnThreads(options, integrations, {
+      stored,
+      logger,
+      leave: new Set(verdict.resolved_threads ?? []),
+    });
+  }
 };
 
 /**
@@ -951,6 +965,188 @@ export const runReviewThreadsResolve = async (
     { task_id: stored.task.id, named: named.length, resolved, recorded },
     'review threads resolved after the re-review',
   );
+};
+
+// ── The platform closes its own threads after an approval (S-28.13) ─────────
+
+/**
+ * Whether a discussion is one of this task's own review threads — its **first** note opens with
+ * this task's `review-finding` or `review-summary` marker and was written by the binding's account
+ * (the ownership test `review_threads_resolve` uses) — and which kind.
+ */
+const ownReviewThreadKind = (
+  discussion: Discussion,
+  taskId: Id,
+  self: ExternalIdentity,
+): 'finding' | 'summary' | null => {
+  const first = discussion.notes[0];
+  if (first === undefined || first.system || !authoredBy(first.author, self)) {
+    return null;
+  }
+  const body = first.body.trimStart();
+  if (!isPlatformMergeRequestNote(body)) return null;
+  if (body.startsWith(reviewFindingMarkerPrefixFor(taskId))) return 'finding';
+  if (body.startsWith(reviewFindingSummaryMarkerPrefixFor(taskId))) return 'summary';
+  return null;
+};
+
+/**
+ * Whether a person wrote anything in the discussion: a note that is not a provider system note and
+ * is not the platform's own (a platform marker **and** the binding's account — a note somebody
+ * else wrote that quotes a marker is still theirs).
+ */
+const personWroteIn = (discussion: Discussion, self: ExternalIdentity): boolean =>
+  discussion.notes.some(
+    (note) =>
+      !note.system && !(authoredBy(note.author, self) && isPlatformMergeRequestNote(note.body)),
+  );
+
+/**
+ * **The platform resolves its own threads after an approval** (S-28.13, M28 ruling R3b (2)).
+ *
+ * AUT-6655 waited at Ready with five unresolved threads, all the platform's: three review
+ * summaries, a nit the Developer answered *Not changed* and a nit from the approving review nobody
+ * answered — and GitLab refused the merge (`discussions_not_resolved`). So, once the Reviewer has
+ * approved, every unresolved resolvable thread on the merge request that is this task's own review
+ * thread ({@link ownReviewThreadKind}) **and in which no person has written** is resolved. A finding
+ * thread the Developer did not answer `fixed`/`documented` first gets one closing note
+ * ({@link renderLeftOpenNote}) saying it was left as it is and how to have it changed.
+ *
+ * A thread in which a person wrote anything is never resolved here: it is that person's
+ * conversation, and R3's own rules apply to it. With no binding identity answered nothing is
+ * resolved (ownership cannot be shown).
+ *
+ * **Idempotent across every performer** — the approving review's post, the Ready check
+ * (`ready-merge-check.ts`) and the recovery pass that reaches tasks already waiting: the note is
+ * keyed and marked by the discussion (`review_left_open:<task>:<discussion>`, found again by its
+ * marker before a retry posts), and the resolve is keyed by the discussion too
+ * (`review_thread_close:<task>:<discussion>`). The resolve's key is also what keeps a person's
+ * **reopen** standing: a thread the platform already closed replays its recorded answer and is not
+ * resolved a second time. Shadow mode records `would_have` and changes nothing. A provider that
+ * cannot resolve a discussion is logged and skipped. Answers how many threads it resolved.
+ */
+export const closeOwnThreads = async (
+  options: ReviewConversationOptions,
+  integrations: Awaited<ReturnType<typeof integrationsForProject>>,
+  input: {
+    readonly stored: DutySubject['stored'];
+    readonly logger: Logger;
+    /** Threads another duty resolves (the approving verdict's `resolved_threads`); left alone. */
+    readonly leave?: ReadonlySet<string>;
+  },
+): Promise<number> => {
+  if (integrations.git === null) {
+    return 0;
+  }
+  const { stored, logger } = input;
+  const readContext = { projectId: stored.task.projectId, taskId: stored.task.id };
+  const writeContext = { ...readContext, mode: stored.task.mode };
+  const reads = gitReads(integrations);
+  const discussions = await reads.discussions(stored.mr, readContext);
+  const findingPrefix = reviewFindingMarkerPrefixFor(stored.task.id);
+  const summaryPrefix = reviewFindingSummaryMarkerPrefixFor(stored.task.id);
+  const open = discussions.some((discussion) => {
+    const body = discussion.notes[0]?.body.trimStart() ?? '';
+    return (
+      discussion.resolvable &&
+      !discussion.resolved &&
+      (body.startsWith(findingPrefix) || body.startsWith(summaryPrefix))
+    );
+  });
+  if (!open) {
+    // Nothing of this task's is open: no identity read, no write.
+    return 0;
+  }
+  const self = await reads.self(readContext);
+  if (self === null) {
+    logger.info(
+      { task_id: stored.task.id },
+      'the git binding did not say who it is, so the platform cannot tell its own threads; none is closed',
+    );
+    return 0;
+  }
+  const candidates = discussions.filter(
+    (discussion) =>
+      discussion.resolvable &&
+      !discussion.resolved &&
+      !(input.leave?.has(discussion.id) ?? false) &&
+      ownReviewThreadKind(discussion, stored.task.id, self) !== null &&
+      !personWroteIn(discussion, self),
+  );
+  if (candidates.length === 0) {
+    return 0;
+  }
+  const settled = await settledThreadIds(options, stored.task.id);
+  let resolved = 0;
+  for (const discussion of candidates) {
+    if (!CONVERSATION_HANDLED_ID.test(discussion.id)) {
+      // Its marker and keys would not be an identity; left for a person.
+      continue;
+    }
+    const kind = ownReviewThreadKind(discussion, stored.task.id, self);
+    if (kind === 'finding' && !settled.has(discussion.id)) {
+      const marker = reviewLeftOpenNoteMarker(stored.task.id, discussion.id);
+      if (!replyIsOnTheMergeRequest(discussions, marker, self)) {
+        await reviewWrites(integrations).reply(
+          {
+            ref: stored.mr,
+            discussionId: discussion.id,
+            markdown: renderLeftOpenNote(marker),
+            idempotencyKey: reviewLeftOpenIdempotencyKeyFor(stored.task.id, discussion.id),
+          },
+          writeContext,
+        );
+      }
+    }
+    try {
+      await reviewWrites(integrations).resolve(
+        {
+          ref: stored.mr,
+          discussionId: discussion.id,
+          idempotencyKey: reviewThreadCloseIdempotencyKeyFor(stored.task.id, discussion.id),
+        },
+        writeContext,
+      );
+      resolved += 1;
+    } catch (error) {
+      if (
+        error instanceof IntegrationUnsupportedError ||
+        (error instanceof IntegrationError &&
+          (error.code === 'unsupported_capability' || error.code === 'invalid_request'))
+      ) {
+        logger.info(
+          { task_id: stored.task.id, reason: error.name },
+          'the provider did not resolve one of the platform’s own review threads; it stays open',
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+  logger.info(
+    { task_id: stored.task.id, candidates: candidates.length, resolved },
+    'the platform closed its own review threads after the approval',
+  );
+  return resolved;
+};
+
+/** Every thread id the Developer answered `fixed` or `documented`, across every run's notes. */
+const settledThreadIds = async (
+  options: ReviewConversationOptions,
+  taskId: Id,
+): Promise<ReadonlySet<string>> => {
+  const artifacts = await options.unitOfWork.transaction(async (scope) =>
+    options.store.artifacts.listFor(scope.tx, taskId),
+  );
+  const settled = new Set<string>();
+  for (const artifact of artifacts) {
+    if (artifact.type !== 'ImplementationNotes') continue;
+    const parsed = implementationNotesDataSchema.safeParse(artifact.data);
+    for (const entry of parsed.success ? (parsed.data.thread_replies ?? []) : []) {
+      if (entry.kind === 'fixed' || entry.kind === 'documented') settled.add(entry.thread_id);
+    }
+  }
+  return settled;
 };
 
 // ── The handled ledger (M28 ruling R2) ──────────────────────────────────────

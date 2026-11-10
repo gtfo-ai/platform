@@ -78,6 +78,7 @@ import { underReviewConversationLease } from './owed-duties.js';
 import { runOwnerSync } from './owner-sync.js';
 import { runTicketOwnerAssign } from './owner-write-back.js';
 import { runReadyHeadCheck } from './ready-head.js';
+import { runReadyMergeCheck } from './ready-merge-check.js';
 import { runResolveOnMerge } from './resolve-on-merge.js';
 import {
   runConversationReplies,
@@ -362,6 +363,13 @@ const dispatchOutbound =
         await underReviewConversationLease(options, data, () =>
           runReviewThreadsResolve(options, data),
         );
+        return;
+      // S-28.13 (M28 ruling R3b): at Ready, the platform's own threads closed and the provider's
+      // mergeability recorded — under the same lease, because it resolves review threads too.
+      case 'ready_merge_check':
+        await underReviewConversationLease(options, data, async () => {
+          await runReadyMergeCheck(options, data);
+        });
         return;
       default:
         logger.warn(

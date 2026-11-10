@@ -40,6 +40,34 @@ import {
 export const mergeRequestStateSchema = z.enum(['opened', 'merged', 'closed', 'locked']);
 
 /**
+ * Why the provider will not merge a merge request **right now** (S-28.13, M28 ruling R3b (3)) —
+ * the port's words for the provider's own answer, so the pipeline never reads a GitLab value.
+ *
+ * `checking` is "the provider has not decided yet" (GitLab's `checking`/`unchecked`/`preparing`):
+ * ask again, never "blocked". `other` is a reason the port has no word for; `provider_status` then
+ * carries the provider's own word, which the task page names through a words map.
+ */
+export const mergeBlockerReasonSchema = z.enum([
+  'checking',
+  'unresolved_threads',
+  'conflict',
+  'pipeline',
+  'approvals',
+  'draft',
+  'rebase',
+  'other',
+]);
+
+/** The provider's word: lower-case letters, digits and `_`, so it is never free text. */
+export const MERGE_BLOCKER_STATUS = /^[a-z0-9_]{1,64}$/;
+
+export const mergeBlockerSchema = z.strictObject({
+  reason: mergeBlockerReasonSchema,
+  /** The provider's own status word (GitLab's `detailed_merge_status`). */
+  provider_status: z.string().regex(MERGE_BLOCKER_STATUS),
+});
+
+/**
  * A merge request as the pipeline sees it.
  *
  * `mergeable` and `has_conflicts` are separate on purpose: a provider that has not finished its
@@ -74,6 +102,13 @@ export const mergeRequestSchema = z.strictObject({
   base_sha: shaSchema.nullish(),
   mergeable: z.boolean().nullish(),
   has_conflicts: z.boolean().nullish(),
+  /**
+   * Whether the provider would merge it **now**, beyond the branches merging cleanly (S-28.13):
+   * absent or `null` when nothing blocks it (or the provider does not say), else the reason —
+   * unresolved threads, a pipeline that has not passed, missing approvals. `mergeable` stays the
+   * conflict question the rebase gate asks; this is the question a person pressing *Merge* asks.
+   */
+  merge_blocker: mergeBlockerSchema.nullish(),
   diff_stats: diffStatsSchema.nullish(),
   coverage_pct: coveragePctSchema.nullish(),
   labels: z.array(nonEmptyStringSchema),
@@ -436,6 +471,8 @@ export const mergeRequestUpdateSchema = z.strictObject({
 });
 
 export type MergeRequestState = z.infer<typeof mergeRequestStateSchema>;
+export type MergeBlocker = z.infer<typeof mergeBlockerSchema>;
+export type MergeBlockerReason = z.infer<typeof mergeBlockerReasonSchema>;
 export type MergeRequest = z.infer<typeof mergeRequestSchema>;
 export type MergeRequestRefInput = z.infer<typeof mergeRequestRefSchema>;
 export type Discussion = z.infer<typeof discussionSchema>;
@@ -966,6 +1003,24 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
       readonly line?: number | null;
       readonly markdown: string;
     },
+  ) => Promise<Discussion>;
+  /**
+   * A **general note** on the merge request — a comment that is not a thread and cannot be
+   * resolved, so it never blocks a merge (S-28.13, M28 ruling R3b (1)). The platform's review
+   * summary is one: posted as a resolvable thread it sat unresolved on AUT-6655's merge request and
+   * GitLab refused the merge (`discussions_not_resolved`) while the platform said *ready to merge*.
+   *
+   * Answers the note's discussion as `listDiscussions` lists it (GitLab lists a general note as a
+   * discussion of its own, `individual_note: true`), with `resolvable: false`. The body is the
+   * caller's `markdown`, changed only where the provider's mention syntax is neutralised, so a body
+   * that opens with a platform marker still opens with it.
+   *
+   * **It is a mutation**, through `IntegrationActionExecutor`; not idempotent by itself (a POST,
+   * then a read), so the caller keys it.
+   */
+  readonly createMergeRequestNote: (
+    ref: MergeRequestRefInput,
+    markdown: string,
   ) => Promise<Discussion>;
 
   /**

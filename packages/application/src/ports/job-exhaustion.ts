@@ -45,8 +45,8 @@
  *    effect, or what is lost is a notification (rule 20). The workpad, the status and
  *    `notify.digest` are the ruling's examples.
  *
- * `pipeline.outbound` carries forty-one duties of all three shapes since S-28.5's `ticket_status_recheck`
- * (forty at S-26.3's `ticket_owner_assign`; this sentence said thirty-two through three additions, thirty-seven past two more, and
+ * `pipeline.outbound` carries forty-two duties of all three shapes since S-28.13's `ready_merge_check`
+ * (forty-one at S-28.5's `ticket_status_recheck`, forty at S-26.3's `ticket_owner_assign`; this sentence said thirty-two through three additions, thirty-seven past two more, and
  * thirty-nine at S-26.1's `owner_sync`), so it is the one queue whose
  * shape is **`per_duty`**: {@link OUTBOUND_DUTY_EXHAUSTION} declares each, and it is typed as a
  * record over the duty union, so a duty added to `OutboundJobData` without a row fails the build.
@@ -389,6 +389,10 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   review_threads_resolve: {
     shape: 'notification_shaped',
     why: 'resolves the Reviewer’s own finding threads a re-review confirmed fixed: nothing waits on it, and a thread left open is one a person resolves by hand; since WP-184 it runs under the task’s duty lease and, finding the lease held past a 2 s wait, throws into its retry rather than holding the one outbound worker, and the retry replays what the holder recorded',
+  },
+  ready_merge_check: {
+    shape: 'notification_shaped',
+    why: 'closes the platform’s own review threads after an approval and records whether the provider would merge the merge request now (S-28.13); a lost check leaves the threads and the task page as they were until the recovery pass, which checks a task at Ready with no record once and a blocked one again ten minutes after its claim',
   },
   approval_refused: {
     shape: 'notification_shaped',

@@ -32,6 +32,7 @@
  * | an offer written before WP-278 (S-22.19) | **887** | a worker reads its null `workers_from` as *never* and it has no `expires_at`: on a core with no server runner it waits for ever | **here** — `run_offer_reroute`, in `./offer-timeout.ts`: routed from the project's effective setting, once, bounded by the columns it writes |
  * | an agent run's offer nobody claimed (WP-278) | — | the task's stage entry, held by an open offer for ever (a `workers_only` project with no worker, a `server_only` one with no runner) | **here** — `run_offer_timeout`, in `./offer-timeout.ts`: past its `expires_at` the offer is withdrawn, its run cancelled and the task escalated with *no claimant took this run* (an ask is refused), never re-offered |
  * | a live task created before S-26.1 whose ticket never changed (BACKLOG 1510) | — | its tracker assignee, never read: the held-ticket callout cannot say who holds the ticket | **here** — `owner_backfill`, in `./owner-backfill.ts`: the `owner_sync` duty per claimed attempt (`tasks.owner_backfill_attempts`, at most three, 15 min then 2 h apart), settled by a definitive read or the third failure, at most twenty a pass |
+ * | a task waiting at Ready from before S-28.13, or one whose provider said "not mergeable now" (M28 ruling R3b) | — | the platform's own review threads stay open and the page says *ready to merge* while the provider refuses the merge | **here** — `ready_merge_check`, in `./ready-merge-check.ts`: the duty per claimed task, once with no record and again ten minutes after a claim that did not read "mergeable", at most twenty a pass |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
  * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
@@ -187,6 +188,11 @@ import {
   type OwnerBackfillRecoverySite,
   recoverOwnerBackfill,
 } from './owner-backfill.js';
+import {
+  READY_MERGE_CHECK_SITE,
+  type ReadyMergeCheckRecoverySite,
+  recoverReadyMergeChecks,
+} from './ready-merge-check.js';
 import {
   enqueueRunCredentialRevocation,
   type RunCredentialRecoverySite,
@@ -494,6 +500,12 @@ export interface StrandedRecoveryOptions {
   readonly ownerBackfill?: OwnerBackfillRecoverySite;
   /** S-28.5 (M28 ruling 5): the one-off ticket-status sweep (`./ticket-status-sweep.ts`). */
   readonly ticketStatusSweep?: TicketStatusSweepRecoverySite;
+  /**
+   * S-28.13 (M28 ruling R3b): the merge check at Ready (`./ready-merge-check.ts`) — a task waiting
+   * with no record once, a blocked one again after its claim goes stale. **Absent is "a task that
+   * waited from before S-28.13 keeps the platform's own threads open"**.
+   */
+  readonly readyMergeChecks?: ReadyMergeCheckRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -1152,6 +1164,25 @@ export const runStrandedRecovery = async (
       site: TICKET_STATUS_SWEEP_SITE,
       found: swept.found,
       reEnqueued: swept.enqueued,
+      ended: 0,
+    });
+  }
+
+  if (options.readyMergeChecks !== undefined) {
+    // A re-enqueue per claimed task; the duty records, so the pass has no ending of its own.
+    const checked = await recoverReadyMergeChecks(
+      {
+        unitOfWork: options.unitOfWork,
+        jobs: options.jobs,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      options.readyMergeChecks,
+      { now, limit },
+    );
+    sites.push({
+      site: READY_MERGE_CHECK_SITE,
+      found: checked.found,
+      reEnqueued: checked.enqueued,
       ended: 0,
     });
   }

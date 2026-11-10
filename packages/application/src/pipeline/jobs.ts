@@ -369,7 +369,13 @@ export interface PipelineOutboundData {
      * status signal (or once, from the sweep) and stop the task when a person finished or took the
      * ticket (`ticket-status-recheck.ts`).
      */
-    | 'ticket_status_recheck';
+    | 'ticket_status_recheck'
+    /**
+     * S-28.13 (M28 ruling R3b (2)–(3)): at `ready_for_merge`, close the platform's own review
+     * threads when the Reviewer approved, then read whether the provider would merge the merge
+     * request now and record it for the task page (`ready-merge-check.ts`).
+     */
+    | 'ready_merge_check';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;

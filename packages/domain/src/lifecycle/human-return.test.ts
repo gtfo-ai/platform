@@ -481,6 +481,42 @@ describe('humanReturnDecision (WP-174 criterion 6, M28 R1)', () => {
   });
 });
 
+/**
+ * S-28.13 (M28 ruling R3b (2)): the platform closes its own finding thread after an approval with
+ * *"To have it changed, reopen this thread and write what you want here"*. The promise holds only
+ * if a person's note in that reopened thread — every other note the platform's — returns the task
+ * at Ready, and a reopen with no note (which reaches the platform as no word at all) does not.
+ */
+describe('a reopened platform thread with a person’s note (S-28.13)', () => {
+  const finding =
+    '<!-- agentic:review-finding:00000000-0000-4000-8000-0000000017a2.r1.n1 -->\n**nit · style**';
+  const closing =
+    '<!-- agentic:reply:00000000-0000-4000-8000-0000000017a2.left-d1 -->\n**Left as is.**';
+  const platform = (text: string, noteId: string): HumanWord => ({
+    ...thread('mr_diff', text, AFTER, { threadId: 'd1', noteId }),
+  });
+
+  it('returns the task at Ready on the person’s note, beside the platform’s own notes', () => {
+    const decision = humanReturnDecision(
+      input({
+        words: [
+          platform(finding, 'n1'),
+          platform(closing, 'n2'),
+          thread('mr_diff', 'Please change it after all.', LATER, { threadId: 'd1', noteId: 'n3' }),
+        ],
+      }),
+    );
+    expect(decision.kind).toBe('return');
+  });
+
+  it('returns nothing on the platform’s notes alone — a reopen with no note is no word', () => {
+    const decision = humanReturnDecision(
+      input({ words: [platform(finding, 'n1'), platform(closing, 'n2')] }),
+    );
+    expect(decision).toEqual({ kind: 'none', seen: [] });
+  });
+});
+
 describe('isPlatformWord — by marker, never by author (TD-029 decision 6)', () => {
   it('reads a merge-request marker only when the note opens with it', () => {
     expect(isPlatformWord(word('mr_note', '  <!-- agentic:reply:t.r.1 --> done'))).toBe(true);

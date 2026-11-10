@@ -8,6 +8,7 @@ import { cleanup, render } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  mergeRequestBlockedSentence,
   mergeRequestStillDraftSentence,
   OutOfSyncNotice,
   ticketOutOfSyncSentence,
@@ -108,6 +109,79 @@ describe('out of sync (S-28.10)', () => {
       view.container.querySelector('[data-out-of-sync="merge_request_draft"]')?.textContent,
     ).toBe(mergeRequestStillDraftSentence('gitlab'));
     expect(mergeRequestStillDraftSentence('gitlab')).toContain('still a draft on GitLab');
+  });
+
+  /**
+   * S-28.13 (M28 ruling R3b (3)): AUT-6655 waited at Ready while GitLab refused the merge
+   * (`discussions_not_resolved`), and the page said nothing. Canary: the branch removed from the
+   * notice draws the draft box's sentence instead, which this asserts against.
+   */
+  const BLOCKED: ProviderSync = {
+    subject: 'merge_request_blocked',
+    slot: null,
+    target: 'mergeable',
+    observed: 'discussions_not_resolved',
+    available: null,
+    reason: 'discussions_not_resolved',
+    reason_code: 'unresolved_threads',
+    failed_at: '2026-11-10T09:00:00.000Z',
+    attempts: 1,
+    unresolved_threads: 2,
+  };
+
+  it('says GitLab will not merge it yet, why in plain words, what to do, and links the merge request (S-28.13)', () => {
+    const view = render(
+      <OutOfSyncNotice detail={detailWith([BLOCKED])} commands={commandsWith()} />,
+    );
+    const sentence = view.container.querySelector(
+      '[data-out-of-sync="merge_request_blocked"]',
+    )?.textContent;
+    expect(sentence).toBe(
+      'GitLab will not merge this yet: 2 threads are unresolved. Resolve them on the merge request — or write in one to send the task back to the agent with that change.',
+    );
+    expect(view.getByText('GitLab will not merge this yet')).toBeTruthy();
+    expect(view.getByText('Open the merge request on GitLab')).toBeTruthy();
+    // No raw enum on screen.
+    expect(view.container.textContent).not.toContain('discussions_not_resolved');
+    expect(view.container.textContent).not.toContain('unresolved_threads');
+  });
+
+  it('gives every other reason its own sentence, and an unknown provider word plain words (S-28.13)', () => {
+    expect(mergeRequestBlockedSentence({ ...BLOCKED, unresolved_threads: 1 }, 'gitlab')).toContain(
+      '1 thread is unresolved.',
+    );
+    expect(
+      mergeRequestBlockedSentence(
+        { reason_code: 'pipeline', observed: 'ci_must_pass', unresolved_threads: null },
+        'gitlab',
+      ),
+    ).toBe(
+      'GitLab will not merge this yet: its pipeline has not passed yet. Open the merge request to see the pipeline; the platform checks again once it passes.',
+    );
+    expect(
+      mergeRequestBlockedSentence(
+        { reason_code: 'conflict', observed: 'conflict', unresolved_threads: null },
+        'gitlab',
+      ),
+    ).toContain('its branch conflicts with the target branch.');
+    expect(
+      mergeRequestBlockedSentence(
+        { reason_code: 'approvals', observed: 'not_approved', unresolved_threads: null },
+        'gitlab',
+      ),
+    ).toContain('it still needs approval from a reviewer.');
+    expect(
+      mergeRequestBlockedSentence(
+        { reason_code: 'other', observed: 'title_regex', unresolved_threads: null },
+        'gitlab',
+      ),
+    ).toContain('its title does not match the project’s rule for titles.');
+    const unknown = mergeRequestBlockedSentence(
+      { reason_code: 'other', observed: 'brand_new_rule', unresolved_threads: null },
+      'gitlab',
+    );
+    expect(unknown).toContain('“brand new rule”');
+    expect(unknown).not.toContain('brand_new_rule');
   });
 
   it('draws nothing when nothing is out of sync', () => {

@@ -409,7 +409,7 @@ export const runMergeRequestReady = async (
   }
   const slotKey = `ticket_lifecycle:${taskId}:ready_for_merge:${String(data.cause_event_id)}`;
   if (!live.draft) {
-    await inSync(options, stored, slotKey);
+    await inSync(options, stored, slotKey, data.cause_event_id);
     return 'unchanged';
   }
   const ready = await codeMergeRequestWrites(integrations).markReady(
@@ -433,7 +433,7 @@ export const runMergeRequestReady = async (
     await recordMergeRequestStillDraft(options, { taskId, reason });
     throw new MergeRequestStillDraftError(taskId, mr.iid);
   }
-  await inSync(options, stored, slotKey);
+  await inSync(options, stored, slotKey, data.cause_event_id);
   return 'marked_ready';
 };
 
@@ -451,10 +451,25 @@ export class MergeRequestStillDraftError extends Error {
  * The merge request read back **non-draft**: it is in sync, and only now may the ticket say *ready
  * for merge* — the optional `ready_for_merge` lifecycle slot (S-28.10, TD-029's amendment C (4)), so
  * a tracker never says ready about a draft. An unmapped slot moves nothing.
+ *
+ * Then the **merge check** (S-28.13, M28 ruling R3b (2)–(3)): the platform closes its own review
+ * threads and asks whether the provider would merge it now (`ready-merge-check.ts`). Enqueued here,
+ * after the draft is off, so the check never reads the platform's own draft as the blocker.
  */
-const inSync = async (options: DutyOptions, stored: StoredTask, slotKey: string): Promise<void> => {
+const inSync = async (
+  options: DutyOptions,
+  stored: StoredTask,
+  slotKey: string,
+  causeEventId: string,
+): Promise<void> => {
   await clearOutOfSync(options, stored.task.id, 'merge_request_draft');
   await moveTicketToSlot(options, stored, 'ready_for_merge', slotKey);
+  await enqueueOutbound(options.jobs, {
+    duty: 'ready_merge_check',
+    project_id: stored.task.projectId,
+    task_id: stored.task.id,
+    cause_event_id: causeEventId,
+  });
 };
 
 export type MergeRequestDraftOutcome =

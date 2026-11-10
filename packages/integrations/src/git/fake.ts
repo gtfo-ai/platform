@@ -289,6 +289,13 @@
  *     are `<pipeline>-<n>`, not digits, so the `ci_play_manual` duty — which keys a play by digits
  *     only — refuses every one of its jobs: the duty is driven by stubs with numeric ids
  *     (`ci-play.test.ts`), and this fake's play only by the shared contract suite.
+ * 38. **Kinder — nothing blocks a merge unless the test says so** (S-28.13). GitLab's
+ *     `detailed_merge_status` folds unresolved threads, the pipeline, approvals and the draft flag
+ *     into one answer, which the adapter maps onto `merge_blocker`; this fake never derives it from
+ *     its own threads, pipelines or draft flag — an unresolved thread here blocks nothing until
+ *     `setMergeability({ mergeBlocker })` seeds a blocker, and resolving it clears nothing until a
+ *     second seed does. `createMergeRequestNote` is a general note as GitLab lists one: its own
+ *     discussion, `resolvable: false`, the body exactly as sent.
  */
 import {
   type BranchPushProtection,
@@ -308,6 +315,7 @@ import {
   IntegrationError,
   type IntegrationRef,
   IntegrationUnsupportedError,
+  type MergeBlocker,
   type MergedMergeRequest,
   type MergeRequest,
   type MergeRequestDraft,
@@ -478,6 +486,8 @@ interface StoredMergeRequest {
   head_sha: string;
   mergeable: boolean | null;
   has_conflicts: boolean | null;
+  /** Divergence 38 (S-28.13): what `setMergeability` seeded; absent is "nothing blocks it". */
+  merge_blocker?: MergeBlocker | null;
   diff_stats: DiffStats | null;
   coverage_pct: number | null;
   labels: string[];
@@ -666,6 +676,8 @@ export interface FakeGitProvider extends GitProviderPort {
     readonly iid: number;
     readonly mergeable: boolean | null;
     readonly hasConflicts: boolean | null;
+    /** Divergence 38 (S-28.13): why the provider would not merge it now; absent leaves it. */
+    readonly mergeBlocker?: MergeBlocker | null;
   }): MergeRequest;
   /**
    * Sets what `getMergeRequestDiff` answers for a merge request — divergence 10 made reachable.
@@ -1053,6 +1065,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       base_sha: mr.base_sha,
       mergeable: mr.mergeable,
       has_conflicts: mr.has_conflicts,
+      ...(mr.merge_blocker == null ? {} : { merge_blocker: { ...mr.merge_blocker } }),
       diff_stats: mr.diff_stats,
       coverage_pct: mr.coverage_pct,
       labels: [...mr.labels],
@@ -1827,6 +1840,22 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return toDiscussion(discussion);
     },
 
+    // S-28.13 (M28 ruling R3b (1)): a general note — its own discussion, never resolvable.
+    createMergeRequestNote: async (mrRef, markdown) => {
+      core.enter('create_merge_request_note');
+      const mr = requireMr('create_merge_request_note', mrRef);
+      return toDiscussion(
+        storeGeneralNote({
+          project: mr.project,
+          iid: mr.iid,
+          author: identityOf('agentic-bot'),
+          body: markdown,
+          resolvable: false,
+          createdAt: core.clock.now(),
+        }),
+      );
+    },
+
     getMergeRequestDiff: async (mrRef, options) => {
       core.enter('get_merge_request_diff');
       const mr = requireMr('get_merge_request_diff', mrRef);
@@ -2149,6 +2178,9 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       }
       mr.mergeable = input.mergeable;
       mr.has_conflicts = input.hasConflicts;
+      if (input.mergeBlocker !== undefined) {
+        mr.merge_blocker = input.mergeBlocker === null ? null : { ...input.mergeBlocker };
+      }
       return toMergeRequest(mr);
     },
 

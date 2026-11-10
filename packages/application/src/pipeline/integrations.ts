@@ -2282,6 +2282,40 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
   },
 
   /**
+   * One **general note** on the merge request (S-28.13, M28 ruling R3b (1)) — a comment that is not
+   * a thread and cannot be resolved, so it never blocks the merge. The review summaries (the
+   * pipeline's and review-only's) are posted this way. A mutation with the caller's idempotency key,
+   * the body redacted with the git binding's redactor and refused unless it opens with a marker.
+   */
+  note: async (
+    input: {
+      readonly ref: MergeRequestRefInput;
+      readonly markdown: string;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<Discussion | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    const markdown = git.redactor.redactText(input.markdown).value;
+    assertOpensWithMarker('merge_request', markdown, 'create_merge_request_note');
+    return mutate(
+      integrations,
+      git.ref,
+      'create_merge_request_note',
+      // The merge request, never the body (`create_discussion`'s rule).
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () => git.port.createMergeRequestNote(addressed(git, input.ref), markdown),
+      () => null as unknown as Discussion,
+      (result) => (result === null ? null : { discussion_id: result.id }),
+      replayable<Discussion>(input.idempotencyKey),
+    );
+  },
+
+  /**
    * One reply in an existing discussion (WP-179, TD-029 decision 10) — the Developer's answer to a
    * finding or to a person's note, posted by the platform.
    *

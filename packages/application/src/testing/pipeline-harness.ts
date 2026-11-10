@@ -1141,6 +1141,11 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
             readonly markdown: string;
           },
         ) => harnessDiscussion(note.markdown, note.path ?? null, note.line ?? null),
+        // S-28.13: the review summary is a general note — not resolvable, and not stored either.
+        createMergeRequestNote: async (_ref: unknown, markdown: string) => ({
+          ...harnessDiscussion(markdown, null, null),
+          resolvable: false,
+        }),
         replyToDiscussion: async (_ref: unknown, discussionId: string, markdown: string) => ({
           ...harnessDiscussion(markdown, null, null),
           id: discussionId,
