@@ -141,6 +141,10 @@ const EXPECTED_TABLES = [
   // WP-40 (migration 0033): the epic split's queue, one row per proposed child ticket. `approvals`
   // cannot express it — a breakdown is N independent decisions and an approval is one (Q85).
   'ticket_breakdown_items',
+  // S-28.5, migration 0116: the one-off ticket-status sweep's record, and the status a reverse-sync
+  // stop acted on (M28 rulings 4–5).
+  'ticket_status_stops',
+  'ticket_status_sweeps',
   'user_identities',
   'users',
   'verifications',
@@ -338,6 +342,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // WP-40 (migration 0033): the epic-split queue. `read_write` because a row is written once by
       // the stage's handler, moved once by a human's decision and stamped once by the duty.
       row('ticket_breakdown_items', 'read_write', null),
+      // S-28.5 (migration 0116): a sweep record inserted once, a stop's status upserted; both removed
+      // with their task.
+      row('ticket_status_stops', 'read_write', null),
+      row('ticket_status_sweeps', 'read_write', null),
       row('users', 'read_write', null),
       row('verifications', 'read_write', null),
       // WP-280 (migration 0096): a code is polled, decided and consumed in place; a worker is
