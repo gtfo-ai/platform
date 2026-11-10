@@ -167,6 +167,8 @@ export const platformWrittenStatuses = (
         return entered(['merged_gate']);
       case 'returned':
         return entered(['qa', 'ready_for_merge']);
+      default:
+        return false;
     }
   };
   return policy.platformWriters.filter(reached).map((writer) => writer.status);
