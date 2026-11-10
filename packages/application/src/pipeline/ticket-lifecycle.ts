@@ -360,9 +360,34 @@ const moveTicket = async (
     });
     return;
   }
-  // A move that went through: whatever was out of sync for the ticket's status no longer is.
-  await clearOutOfSync(options, taskId, 'ticket_status', logger);
+  // A move that went through clears the record when it is the move that failed, or a move to a
+  // later moment of the lifecycle — never an earlier one (a late or replayed duty of a moment the
+  // ticket already passed must not hide that a later moment was refused).
+  const recorded = await options.unitOfWork.transaction(async (scope) =>
+    (await options.store.tasks.providerSync(scope.tx, taskId)).find(
+      (row) => row.subject === 'ticket_status',
+    ),
+  );
+  if (
+    recorded !== undefined &&
+    (recorded.target === status || slotRank(move.slot) > slotRank(recorded.slot ?? undefined))
+  ) {
+    await clearOutOfSync(options, taskId, 'ticket_status', logger);
+  }
 };
+
+/** The order a ticket passes the lifecycle's moments; an unknown slot ranks lowest. */
+const SLOT_ORDER: readonly string[] = [
+  'pick_up_from',
+  'in_progress',
+  'in_review',
+  'approved',
+  'qa',
+  'ready_for_merge',
+  'done',
+];
+const slotRank = (slot: string | undefined): number =>
+  slot === undefined ? -1 : SLOT_ORDER.indexOf(slot);
 
 /**
  * **A move to one named lifecycle slot**, for a caller that is not a stage moment (S-28.10): the
