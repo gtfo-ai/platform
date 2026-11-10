@@ -45,9 +45,11 @@ import {
   compilePipeline,
   type HumanReturnDecision,
   type HumanReturnStage,
+  handledSourceOf,
   hasIdenticalFailureStreak,
   humanReturnDecision,
   interpret,
+  isForwardMove,
   isRunnableTaskState,
   personsWordsSince,
   QA_STAGE_ID,
@@ -115,7 +117,14 @@ import {
 import type { PipelineSagaOptions } from './saga.js';
 import { enqueueStage, STAGE_WAIT_FOR_PREVIOUS_RUN_MS } from './stage-enqueue.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
-import type { StoredTask, TicketStatusChange } from './store.js';
+import {
+  CONVERSATION_HANDLED_ID,
+  type ConversationHandledInput,
+  type ConversationHandledRow,
+  MAX_CONVERSATION_HANDLED_AUTHOR_CHARS,
+  type StoredTask,
+  type TicketStatusChange,
+} from './store.js';
 import { confirmExcusedPaths, unconfirmedTamperReturn } from './tamper-confirmation.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 import { ensureTicketClaim } from './ticket-claim.js';
@@ -1708,8 +1717,11 @@ const distinctPipelines = (
  * gates ran is decided by the entry's firing rather than waiting for the next signal; WP-178 had the
  * four alone. Four endings, and the first two are the reason this is not a coalesced job:
  *
- *  - nothing returns and nothing passes → nothing (an acknowledgement, a resolved thread, a word
- *    older than the horizon, the platform's own note);
+ *  - nothing returns and nothing passes → nothing moves (a ticket comment, a general note, a
+ *    resolved or handled thread, a word older than the horizon or than a forward status move, the
+ *    platform's own note — M28 ruling R1); every person's word among them that the ledger has not
+ *    handled yet is recorded there as **seen, not a change request** (R2), which the task page
+ *    shows with the button that sends the task back;
  *  - a person wrote inside the last window → open another window instead of deciding now;
  *  - **return** → one `interpret` with `mr.review.comment` (every form, decision 7) carrying the
  *    redacted feedback, `task.human_return` naming the forms, and the ticket claim marked stale —
@@ -1762,6 +1774,8 @@ interface WindowRead {
   readonly statusChanges: readonly TicketStatusChange[];
   /** The same changes oldest first, bounded from the entry's side — what the entry is read from. */
   readonly earliestChanges: readonly TicketStatusChange[];
+  /** The task's handled ledger (M28 ruling R2, migration 0111). */
+  readonly handled: readonly ConversationHandledRow[];
 }
 
 const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowData> => {
@@ -1795,6 +1809,7 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
           limit: MAX_WINDOW_STATUS_CHANGES,
           order: 'oldest_first',
         }),
+        handled: await options.store.tasks.conversationHandled(scope.tx, stored.task.id),
       };
     });
     if (read === null || read.stored.mr === null) {
@@ -1865,19 +1880,32 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
     }
 
     const slots = { lifecycle: lifecycle?.slots ?? {}, pickUpFrom: lifecycle?.pickUpFrom ?? null };
+    const status = ticket?.status ?? null;
+    const entryStatus = observed?.entryStatus ?? null;
+    // M28 ruling R1: forward wins over return. The first firing that sees the move records when.
+    const forwardSeenAt = isForwardMove({ slots, status, entryStatus })
+      ? await observeForward(options, read)
+      : null;
     const decision = humanReturnDecision({
       stage,
       slots,
-      status: ticket?.status ?? null,
+      status,
       words,
       horizon,
-      // Criterion (11): the words a project added through the settings write (technical/12). The
-      // repository file's value never reaches `config` — it is graded not applied.
-      extraAcks: settings.config.human_returns?.acknowledgements ?? [],
+      handled: read.handled.map((row) => ({
+        source: row.source,
+        threadId: row.threadId,
+        lastNoteId: row.lastNoteId,
+        handledAt: row.handledAt,
+      })),
+      forwardSeenAt,
       leftQa: leftQaOf(read.statusChanges, slots.lifecycle.qa),
-      entryStatus: observed?.entryStatus ?? null,
+      entryStatus,
       seenAtQa: observed?.seenAtQa ?? false,
     });
+    if (decision.seen.length > 0) {
+      await recordSeenWords(options, read, integrations, decision.seen);
+    }
     if (decision.kind === 'none') {
       logger.debug(
         { task_id: stored.task.id, stage },
@@ -1942,6 +1970,93 @@ const observeEntryStatus = async (
         read.stage === 'qa' &&
         (atQa(status) || read.statusChanges.some((change) => atQa(change.from) || atQa(change.to))),
     }),
+  );
+};
+
+/**
+ * **Forward wins over return** (M28 ruling R1, migration 0111): the instant this human-stage entry
+ * first saw the ticket's current forward move — written by the first firing that sees it, never
+ * moved. `null` only when the stage row is gone, which the decision reads as *this firing*.
+ */
+const observeForward = async (
+  options: PipelineJobOptions,
+  read: WindowRead,
+): Promise<string | null> => {
+  const stageId = read.stage === 'qa' ? QA_STAGE_ID : READY_FOR_MERGE_STAGE;
+  return options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.observeTicketForward(scope.tx, {
+      taskId: read.stored.task.id,
+      stage: stageId,
+      attempt: read.stored.task.stageAttempts[stageId] ?? 0,
+      at: options.clock.now(),
+    }),
+  );
+};
+
+/**
+ * **Seen, not a change request** (M28 rulings R1 and R2): every person's word this firing read that
+ * did not return the task goes into the handled ledger as `seen`, one row per thread or comment at
+ * its newest note — so the task page says *commented — not treated as a change request* with the
+ * author and the time, and the next firing does not read the same words again. The author is
+ * provider text: redacted with the bindings' redactors and cut at
+ * {@link MAX_CONVERSATION_HANDLED_AUTHOR_CHARS}; an id outside the ledger's shape is skipped rather
+ * than cut, because a cut id is another item's id. Idempotent (`on conflict do nothing`), so a
+ * repeated firing adds nothing.
+ */
+const recordSeenWords = async (
+  options: PipelineJobOptions,
+  read: WindowRead,
+  integrations: PipelineIntegrations,
+  seen: readonly WindowWord[],
+): Promise<void> => {
+  const redactor = composeSecretRedactors(
+    ...[integrations.git?.redactor, integrations.taskManagement?.redactor].filter(
+      (redactor): redactor is SecretRedactor => redactor !== undefined,
+    ),
+  );
+  const newest = new Map<string, WindowWord>();
+  for (const word of seen) {
+    if (typeof word.threadId !== 'string') continue;
+    // Words arrive in the provider's order within a thread, so the last one is the newest.
+    newest.set(`${handledSourceOf(word)}\u0000${word.threadId}`, word);
+  }
+  const handledAt = options.clock.now();
+  const rows: ConversationHandledInput[] = [];
+  for (const word of newest.values()) {
+    const threadId = word.threadId as string;
+    const noteId = word.noteId ?? null;
+    if (
+      !CONVERSATION_HANDLED_ID.test(threadId) ||
+      (noteId !== null && !CONVERSATION_HANDLED_ID.test(noteId))
+    ) {
+      continue;
+    }
+    const author =
+      word.author === undefined || word.author === null
+        ? null
+        : redactor.redactText(word.author).value.slice(0, MAX_CONVERSATION_HANDLED_AUTHOR_CHARS);
+    const at = Date.parse(word.at);
+    rows.push({
+      taskId: read.stored.task.id,
+      source: handledSourceOf(word),
+      threadId,
+      lastNoteId: noteId,
+      runId: null,
+      kind: 'seen',
+      author: author === '' ? null : author,
+      writtenAt: Number.isNaN(at) ? null : new Date(at).toISOString(),
+      handledAt,
+    });
+  }
+  if (rows.length === 0) {
+    return;
+  }
+  const added = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.recordConversationHandled(scope.tx, rows),
+  );
+  (options.logger ?? silentLogger).info(
+    { task_id: read.stored.task.id, seen: rows.length, added },
+    'review window: a person’s word that is not a change request was recorded as seen',
   );
 };
 

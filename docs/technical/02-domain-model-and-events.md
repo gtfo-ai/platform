@@ -191,7 +191,25 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > rules:
 > - whose note it is: decision 6;
 > - the horizon (the start of the latest implementation run): decision 7;
-> - the acknowledgement rule: decision 8.
+> - the acknowledgement rule: decision 8 — **replaced by M28 ruling R1 (S-28.2)**, below.
+>
+> *Amended at S-28.2 (M28 rulings R1 and R2, migration 0111):* **a return needs an explicit signal,
+> language-independent.** At `qa` and `ready_for_merge` only a person's note in an **unresolved,
+> resolvable** merge-request discussion, or the status form, returns the task (`humanReturnDecision`,
+> `packages/domain/src/lifecycle/human-return.ts`); a ticket comment or a merge-request note that
+> cannot be resolved never does, and the acknowledgement word list is deleted (`human_returns.
+> acknowledgements` still parses and is read by nothing). **Forward wins over return:** when the
+> ticket's status moved forward since the stage was entered (it differs from the entry status and is
+> not a return status), no word written no later than the instant the window first saw that move
+> (`task_stages.ticket_forward_seen_at`, written once by `observeTicketForward`) returns the task.
+> Every person's word a firing read that did not return the task, and is not handled yet, is written
+> to the **handled ledger** `task_conversation_handled` as `seen` — one row per thread or comment at
+> its newest note — which the task read publishes as `conversation_seen` (the task page's
+> *"commented — not treated as a change request"*). The `conversation_replies` duty writes `answered`
+> rows and `review_threads_resolve` `resolved` rows (not in shadow mode). The decision ignores a
+> handled thread unless a person wrote a newer note in it, and the conversation block marks a handled
+> note `answered="true"` and a resolved thread `resolved="true"` (platform text on the marker).
+> Resolving a person's thread after a `fixed`/`documented` reply (R3) is S-28.3.
 >
 > Every form is passed to the interpreter as `mr.review.comment`, because per-task template snapshots
 > already carry that edge (TD-003). The forms themselves are recorded in `task.human_return`. A return

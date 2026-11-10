@@ -1456,7 +1456,14 @@ export const composePipeline = async (
          * planned run, outside the executor's transactions, redacted with each binding's redactor and
          * bounded. A failed read is logged and the run proceeds without the blocks.
          */
-        readConversation: createConversationReader({ integrations }),
+        readConversation: createConversationReader({
+          integrations,
+          // M28 ruling R2: the handled ledger marks what the platform already answered or resolved.
+          handled: (taskId) =>
+            options.eventing.unitOfWork.transaction(async (scope) =>
+              store.tasks.conversationHandled(scope.tx, taskId),
+            ),
+        }),
         /**
          * The data-block nonce (BD-022). `randomUUID` is a CSPRNG — 122 bits — rendered as the 32
          * hex characters `NONCE_PATTERN` requires; the delimiter contract rests on a document's

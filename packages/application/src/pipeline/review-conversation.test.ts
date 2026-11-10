@@ -615,6 +615,12 @@ describe('(2) a refused anchor', () => {
 
 // ── (3) and (8) the replies ─────────────────────────────────────────────────
 
+/** The task's handled ledger (M28 ruling R2), as the duties left it. */
+const ledgerOf = async (w: Awaited<ReturnType<typeof world>>) =>
+  w.taskOptions.unitOfWork.transaction(async (scope) =>
+    w.taskOptions.store.tasks.conversationHandled(scope.tx, TASK),
+  );
+
 const personsThread = (): Discussion => ({
   id: 'person-diff',
   resolvable: true,
@@ -735,6 +741,33 @@ describe('(3) the replies', () => {
     expect(w.recorded.commented).toHaveLength(1);
   });
 
+  /**
+   * M28 ruling R2: every item the Developer answered is in the handled ledger, at the person's last
+   * note, so the human-return window ignores it until a newer note; a replay adds nothing. Canary:
+   * without `recordHandled` in `runConversationReplies` the ledger is empty.
+   */
+  it('records each answered item in the handled ledger once, and a replay adds nothing (M28 R2)', async () => {
+    const w = await replied();
+    const first = await ledgerOf(w);
+    expect(first.map((row) => [row.source, row.threadId, row.kind]).sort()).toEqual([
+      ['mr_note', 'person-general', 'answered'],
+      ['mr_thread', 'finding-thread', 'answered'],
+      ['mr_thread', 'person-diff', 'answered'],
+      ['ticket_comment', '10042', 'answered'],
+    ]);
+    const person = first.find((row) => row.threadId === 'person-diff');
+    expect(person?.lastNoteId).toBe(
+      w.discussions.find((discussion) => discussion.id === 'person-diff')?.notes[0]?.id,
+    );
+    expect(person?.runId).toBe(DEV_RUN);
+    // The finding thread holds only the platform's own note: no person's note to name.
+    expect(first.find((row) => row.threadId === 'finding-thread')?.lastNoteId).toBeNull();
+    expect(first.find((row) => row.threadId === '10042')?.lastNoteId).toBe('10042');
+
+    await w.replies();
+    expect(await ledgerOf(w)).toEqual(first);
+  });
+
   it('none of its replies is a person’s word to the human-return window (decision 6)', async () => {
     const w = await replied();
     const words = [...mergeRequestWords(w.discussions), ...ticketCommentWords(w.comments)];
@@ -746,12 +779,13 @@ describe('(3) the replies', () => {
       status: null,
       words: platform,
       horizon: null,
-      extraAcks: [],
+      handled: [],
+      forwardSeenAt: null,
       leftQa: null,
       entryStatus: null,
       seenAtQa: false,
     });
-    expect(decision.kind).toBe('none');
+    expect(decision).toEqual({ kind: 'none', seen: [] });
   });
 });
 
@@ -845,6 +879,14 @@ describe('(4) resolving after a re-review', () => {
     expect(w.discussions.find((discussion) => discussion.id === 'person-diff')?.resolved).toBe(
       false,
     );
+    // M28 ruling R2: the resolved thread is in the handled ledger, the person's is not; a replay
+    // resolves nothing twice and records nothing twice.
+    const ledger = await ledgerOf(w);
+    expect(ledger.map((row) => [row.source, row.threadId, row.kind])).toEqual([
+      ['mr_thread', 'finding-thread', 'resolved'],
+    ]);
+    await w.resolve();
+    expect(await ledgerOf(w)).toEqual(ledger);
     expect(
       w.recorded.logs.filter((entry) => entry.message.includes('is not its own finding thread')),
     ).toHaveLength(1);
@@ -912,6 +954,8 @@ describe('(5) a shadow task', () => {
     expect(w.auditLog.entriesFor('reply_to_discussion')).toHaveLength(1);
     expect(w.auditLog.entriesFor('add_comment')).toHaveLength(1);
     expect(w.auditLog.entriesFor('resolve_discussion')).toHaveLength(1);
+    // M28 ruling R2: nothing was answered on the provider, so nothing is handled.
+    expect(await ledgerOf(w)).toEqual([]);
   });
 });
 

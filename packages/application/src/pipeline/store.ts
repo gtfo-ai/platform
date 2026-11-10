@@ -68,6 +68,7 @@ import type {
 import type {
   Approval,
   AssigneeClass,
+  ConversationHandledSource,
   ExecutionSettings,
   IterationLimits,
   OfferRouting,
@@ -1417,7 +1418,73 @@ export interface TaskRepository {
       readonly seenAtQa: boolean;
     },
   ): Promise<HumanStageStatus | null>;
+  /**
+   * The instant the human-return window first saw the ticket's current **forward** move during one
+   * entry into a human stage — `task_stages.ticket_forward_seen_at` on the `(task, stage, attempt)`
+   * row (migration 0111, M28 ruling R1: forward wins over return) — written only while the column
+   * is null, and answered after the write. `null` when the row does not exist. One statement, so
+   * two firings cannot both write it.
+   */
+  observeTicketForward(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      /** ISO 8601, the platform's clock. */
+      readonly at: string;
+    },
+  ): Promise<string | null>;
+  /**
+   * Records conversation items the platform handled — `task_conversation_handled` (migration 0111,
+   * M28 ruling R2): a thread it answered or resolved, a ticket comment it replied to, and a word the
+   * human-return window read and did not treat as a change request. **Idempotent**: a row equal to
+   * one already recorded on `(task, source, thread, kind, last note)` is not written again, so a
+   * replayed job or a repeated firing adds nothing. Answers how many rows were new.
+   */
+  recordConversationHandled(
+    tx: Transaction,
+    rows: readonly ConversationHandledInput[],
+  ): Promise<number>;
+  /**
+   * The task's handled ledger, newest first, at most {@link MAX_CONVERSATION_HANDLED_ROWS} rows.
+   */
+  conversationHandled(tx: Transaction, taskId: Id): Promise<readonly ConversationHandledRow[]>;
 }
+
+/** The most ledger rows {@link TaskRepository.conversationHandled} reads for one task. */
+export const MAX_CONVERSATION_HANDLED_ROWS = 500;
+
+/** The longest provider id the ledger stores; a longer one, or one outside the shape, is skipped. */
+export const MAX_CONVERSATION_HANDLED_ID_CHARS = 255;
+
+/** The shape a ledger id must have — `task_conversation_handled`'s own check. */
+export const CONVERSATION_HANDLED_ID = /^[A-Za-z0-9:._/-]{1,255}$/;
+
+/** The longest display name a *seen* row keeps. */
+export const MAX_CONVERSATION_HANDLED_AUTHOR_CHARS = 256;
+
+/** Why a ledger row exists (M28 ruling R2). */
+export type ConversationHandledKind = 'seen' | 'answered' | 'resolved';
+
+/** One row to record. Every string but `kind` and `source` is provider data, bounded by the writer. */
+export interface ConversationHandledInput {
+  readonly taskId: Id;
+  readonly source: ConversationHandledSource;
+  readonly threadId: string;
+  readonly lastNoteId: string | null;
+  readonly runId: Id | null;
+  readonly kind: ConversationHandledKind;
+  /** A *seen* word's author, as the provider displays them — redacted and bounded; else `null`. */
+  readonly author: string | null;
+  /** When the handled word was written (ISO 8601), when the writer knows it; else `null`. */
+  readonly writtenAt: string | null;
+  /** ISO 8601. */
+  readonly handledAt: string;
+}
+
+/** One ledger row, as read. */
+export type ConversationHandledRow = ConversationHandledInput;
 
 /** What {@link TaskRepository.observeHumanStageStatus} answers: the row's record after the write. */
 export interface HumanStageStatus {

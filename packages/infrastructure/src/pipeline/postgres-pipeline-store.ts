@@ -25,6 +25,7 @@ import type {
   ArtifactRepository,
   BreakdownRepository,
   BugTraceRepository,
+  ConversationHandledRow,
   Logger,
   PipelineStore,
   QuestionRepository,
@@ -42,6 +43,7 @@ import {
   ciPendingReadSchema,
   DefaultBranchChangedError,
   LeaseLostError,
+  MAX_CONVERSATION_HANDLED_ROWS,
   PAUSE_ENDING_EVENTS,
   priorityRankOf,
   silentLogger,
@@ -1699,6 +1701,74 @@ export const createPostgresPipelineStore = (
       return row === undefined || row.entry_ticket_status === null
         ? null
         : { entryStatus: row.entry_ticket_status, seenAtQa: row.ticket_seen_at_qa };
+    },
+    observeTicketForward: async (tx, entry) => {
+      // M28 ruling R1, migration 0111: the first sighting of a forward move, written once.
+      const { rows } = await sqlOf(tx).query<{ ticket_forward_seen_at: Date | string | null }>(
+        `update task_stages
+            set ticket_forward_seen_at = coalesce(ticket_forward_seen_at, $4::timestamptz)
+          where task_id = $1 and stage = $2 and attempt = $3
+          returning ticket_forward_seen_at`,
+        [entry.taskId, entry.stage, entry.attempt, entry.at],
+      );
+      const value = rows[0]?.ticket_forward_seen_at ?? null;
+      return value === null ? null : new Date(value).toISOString();
+    },
+    recordConversationHandled: async (tx, rows) => {
+      // M28 ruling R2, migration 0111: `on conflict do nothing` over the unique key, so a replay
+      // or a second firing adds nothing.
+      let added = 0;
+      for (const row of rows) {
+        const result = await sqlOf(tx).query(
+          `insert into task_conversation_handled
+             (id, task_id, source, thread_id, last_note_id, run_id, kind, author, written_at, handled_at)
+           values (uuidv7(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
+           on conflict (task_id, source, thread_id, kind, last_note_id) do nothing`,
+          [
+            row.taskId,
+            row.source,
+            row.threadId,
+            row.lastNoteId,
+            row.runId,
+            row.kind,
+            row.author,
+            row.writtenAt,
+            row.handledAt,
+          ],
+        );
+        added += result.rowCount ?? 0;
+      }
+      return added;
+    },
+    conversationHandled: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{
+        source: ConversationHandledRow['source'];
+        thread_id: string;
+        last_note_id: string | null;
+        run_id: string | null;
+        kind: ConversationHandledRow['kind'];
+        author: string | null;
+        written_at: Date | string | null;
+        handled_at: Date | string;
+      }>(
+        `select source, thread_id, last_note_id, run_id, kind, author, written_at, handled_at
+           from task_conversation_handled
+          where task_id = $1
+          order by handled_at desc, id desc
+          limit $2`,
+        [taskId, MAX_CONVERSATION_HANDLED_ROWS],
+      );
+      return rows.map((row) => ({
+        taskId,
+        source: row.source,
+        threadId: row.thread_id,
+        lastNoteId: row.last_note_id,
+        runId: row.run_id as Id | null,
+        kind: row.kind,
+        author: row.author,
+        writtenAt: row.written_at === null ? null : new Date(row.written_at).toISOString(),
+        handledAt: new Date(row.handled_at).toISOString(),
+      }));
     },
     ticketStatusChangesSinceEntry: async (tx, query) => {
       // WP-178 criterion (14). The entry is the task's newest `task.stage.entered` naming the stage

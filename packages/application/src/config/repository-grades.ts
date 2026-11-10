@@ -31,8 +31,8 @@
  *    agent work, sets a spending cap or publishes a per-person read — all `project.settings.write`
  *    decisions), `project.default_branch` (the branch configuration is trusted from is
  *    `projects.default_branch`, never a key in a file on it — BD-025 §1), and `human_returns`
- *    (WP-170: a word the file adds to the acknowledgement vocabulary stops a person's comment
- *    returning a task — TD-029 decision 8, technical/12).
+ *    (WP-170; since M28 ruling R1 no reader at all — a comment never returns a task, so the
+ *    acknowledgement vocabulary it added to is gone).
  *  - **operational** — the project's own, applied as written, because none of them widens what an
  *    agent may *do*: the stage `model`, `effort`, `max_turns` and `budget_usd` (every run is still
  *    admitted against the task cap — `taskBudgetExhausted`, which a stage budget above it parks
@@ -119,7 +119,7 @@ const NOT_APPLIED_REASONS: Readonly<Record<string, string>> = {
     'per-template stage and plan-approval overrides can take a check away; they are a settings decision',
   'pipeline.custom_stages': 'custom stages are not read on this build',
   human_returns:
-    'a word added to the acknowledgement vocabulary makes a person’s comment made of it stop returning a task, which loosens what the agent is held to (TD-029 decision 8); set it on the project settings page',
+    'it is no longer read: since M28 a ticket comment or a merge-request note that cannot be resolved never returns a task, so there is no acknowledgement vocabulary to add words to; a person sends a task back with an open review thread, a return status or the task page’s button',
 };
 
 /** Why `policies.autonomy` in a repository file is not applied. */

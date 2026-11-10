@@ -80,8 +80,10 @@ describe('Drizzle schema', () => {
     // WP-282, TD-031 §§9–10), plus `identity_link_codes` and `identity_link_matches` — a person's
     // self-service account link code, hashed, and what a comment carrying it proved, which no table
     // held because a link was only ever an admin's statement (migration 0105, S-26.6, TD-031's
-    // 2026-11-06 amendment item 9).
-    expect(tables.length).toBe(83);
+    // 2026-11-06 amendment item 9), plus `task_conversation_handled` — the handled ledger of what the
+    // platform answered, resolved or read as not a change request (migration 0111, S-28.2, M28
+    // ruling R2).
+    expect(tables.length).toBe(84);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

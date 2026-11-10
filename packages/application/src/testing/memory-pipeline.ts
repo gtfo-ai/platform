@@ -111,8 +111,12 @@ import type {
   TaskRepository,
 } from '../pipeline/store.js';
 import {
+  CONVERSATION_HANDLED_ID,
+  type ConversationHandledRow,
   DefaultBranchChangedError,
   LeaseLostError,
+  MAX_CONVERSATION_HANDLED_AUTHOR_CHARS,
+  MAX_CONVERSATION_HANDLED_ROWS,
   PAUSE_ENDING_EVENTS,
   STOPPING_RUN_COMMAND_KINDS,
   TAKE_OVER_BOUNDARY_EVENTS,
@@ -155,6 +159,8 @@ interface StageRow {
   entryTicketStatus?: string | null;
   /** Whether the window saw the ticket at the `qa` slot during this entry (migration 0089). */
   ticketSeenAtQa?: boolean;
+  /** When the window first saw a forward move during this entry (migration 0111, M28 R1). */
+  ticketForwardSeenAt?: string | null;
   signature: string | null;
   /** `task_stages.lost_runs` and `usage_limited_runs` (migration 0100, WP-285/WP-286). */
   lostRuns?: number;
@@ -435,6 +441,8 @@ export const createMemoryPipelineStore = (
   const superseded = new Map<string, MemorySupersededRow>();
   const supersededKey = (taskId: Id, iid: number): string => `${taskId}#${iid}`;
   const stages: StageRow[] = [];
+  /** `task_conversation_handled` (migration 0111, M28 ruling R2), in insertion order. */
+  const conversationHandled: ConversationHandledRow[] = [];
   const artifacts: StoredArtifact[] = [];
   const runs = new Map<Id, StoredRun>();
   /** `runs.ask_id` (migration 0082, WP-149): the ask a run answered, for the ask's bound. */
@@ -1495,6 +1503,57 @@ export const createMemoryPipelineStore = (
       row.ticketSeenAtQa = (row.ticketSeenAtQa ?? false) || entry.seenAtQa;
       return { entryStatus: row.entryTicketStatus, seenAtQa: row.ticketSeenAtQa };
     },
+    observeTicketForward: async (_tx, entry) => {
+      // The SQL statement's `coalesce`, over the attempt's row (migration 0111).
+      const row = [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === entry.taskId &&
+            candidate.stage === entry.stage &&
+            candidate.attempt === entry.attempt,
+        );
+      if (row === undefined) {
+        return null;
+      }
+      row.ticketForwardSeenAt = row.ticketForwardSeenAt ?? entry.at;
+      return row.ticketForwardSeenAt;
+    },
+    recordConversationHandled: async (_tx, rows) => {
+      // The SQL's check and its `on conflict do nothing` over the unique key (migration 0111).
+      let added = 0;
+      for (const row of rows) {
+        if (
+          !CONVERSATION_HANDLED_ID.test(row.threadId) ||
+          (row.lastNoteId !== null && !CONVERSATION_HANDLED_ID.test(row.lastNoteId)) ||
+          (row.author !== null && row.author.length > MAX_CONVERSATION_HANDLED_AUTHOR_CHARS)
+        ) {
+          throw new Error('task_conversation_handled: a value outside the table’s checks');
+        }
+        if (!tasks.has(row.taskId)) {
+          throw new Error('task_conversation_handled: no such task');
+        }
+        const exists = conversationHandled.some(
+          (stored) =>
+            stored.taskId === row.taskId &&
+            stored.source === row.source &&
+            stored.threadId === row.threadId &&
+            stored.kind === row.kind &&
+            stored.lastNoteId === row.lastNoteId,
+        );
+        if (!exists) {
+          conversationHandled.push({ ...row });
+          added += 1;
+        }
+      }
+      return added;
+    },
+    conversationHandled: async (_tx, taskId) =>
+      conversationHandled
+        .filter((row) => row.taskId === taskId)
+        .reverse()
+        .slice(0, MAX_CONVERSATION_HANDLED_ROWS)
+        .map((row) => ({ ...row })),
     ticketStatusChangesSinceEntry: async (_tx, query) => {
       // The SQL store's predicate over the committed log (divergence 12).
       const task = tasks.get(query.taskId);

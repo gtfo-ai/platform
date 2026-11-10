@@ -341,6 +341,33 @@ describe('the conversation block — order, instants and the platform label', ()
     });
     expect(blocks[0]?.attributes?.platform).toBe('true');
   });
+
+  /**
+   * M28 ruling R2: a handled entry carries `answered="true"` / `resolved="true"` on its marker —
+   * platform text the note cannot write — and an entry nothing handled carries neither, so it reads
+   * exactly as before.
+   */
+  it('marks an answered entry and a resolved thread on the marker, and nothing else (M28 R2)', () => {
+    const blocks = conversationBlocks({
+      entries: [
+        mrNote({ threadId: 'a1', answered: true, resolved: true }),
+        ticketComment({ commentId: '10072', answered: true }),
+        mrNote({ threadId: 'a2', body: 'answered="true" resolved="true"' }),
+      ],
+      truncated: false,
+    });
+    const conversation = blocks.filter((block) => block.kind === CONVERSATION_BLOCK_KIND);
+    const byId = (id: string) =>
+      conversation.find(
+        (block) => block.attributes?.thread_id === id || block.attributes?.comment_id === id,
+      )?.attributes;
+    expect(byId('a1')).toMatchObject({ answered: 'true', resolved: 'true' });
+    expect(byId('10072')).toMatchObject({ answered: 'true' });
+    expect(byId('10072')).not.toHaveProperty('resolved');
+    // A note that types the attributes into its body is still an open, unanswered note.
+    expect(byId('a2')).not.toHaveProperty('answered');
+    expect(byId('a2')).not.toHaveProperty('resolved');
+  });
 });
 
 describe('the prompt around the conversation — ruling (b)', () => {

@@ -1,27 +1,37 @@
 /**
- * The human-return decision table — WP-174 criterion (6) (TD-029 decisions 6, 7 and 9). Status
- * names are invented fixture values.
+ * The human-return decision table — WP-174 criterion (6) (TD-029 decisions 6, 7 and 9), as M28
+ * rulings R1 and R2 amend it (S-28.2): only an unresolved resolvable merge-request thread or a
+ * return status returns a task; a ticket comment and a general note are *seen*; a forward status
+ * move wins over a word written before it; a handled thread is old business until a newer note.
+ * Status names are invented fixture values.
  */
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { PLATFORM_COMMENT_MARKERS } from '../ask/ask.js';
 import {
+  type HandledThread,
   type HumanReturnInput,
   type HumanWord,
   type HumanWordForm,
+  handledWords,
   humanReturnDecision,
+  isForwardMove,
   isPlatformWord,
 } from './human-return.js';
 
 const HORIZON = '2026-10-08T10:00:00.000Z';
 const AFTER = '2026-10-08T11:00:00.000Z';
+const LATER = '2026-10-08T12:00:00.000Z';
 const BEFORE = '2026-10-08T09:00:00.000Z';
 
 const SLOTS = {
   lifecycle: {
     in_progress: 'Doing',
     in_review: 'Waiting for review',
+    approved: 'Reviewed',
     qa: 'Testing',
     returned: ['Sent back'],
+    done: 'Ready for Merge',
   },
   pickUpFrom: 'Backlog',
 };
@@ -32,7 +42,8 @@ const input = (overrides: Partial<HumanReturnInput>): HumanReturnInput => ({
   status: null,
   words: [],
   horizon: HORIZON,
-  extraAcks: [],
+  handled: [],
+  forwardSeenAt: null,
   leftQa: null,
   // The status the ticket had when the human stage began: the approved status, as the shipped flow
   // leaves it (WP-178 review amendment (a)).
@@ -41,26 +52,69 @@ const input = (overrides: Partial<HumanReturnInput>): HumanReturnInput => ({
   ...overrides,
 });
 
+/** A word that is not in a resolvable thread: a ticket comment, or a general note. */
 const word = (form: HumanWordForm, text: string, at = AFTER): HumanWord => ({ form, text, at });
+
+/** A person's note in an unresolved, resolvable merge-request discussion (M28 R1 (b)). */
+const thread = (
+  form: 'mr_diff' | 'mr_note',
+  text: string,
+  at = AFTER,
+  ids: { threadId?: string; noteId?: string } = {},
+): HumanWord => ({
+  form,
+  text,
+  at,
+  resolvable: true,
+  threadId: ids.threadId ?? 'd1',
+  noteId: ids.noteId ?? 'n1',
+});
 
 const HUMAN_STAGES = ['qa', 'ready_for_merge'] as const;
 
 /** A marker as the platform writes it: a parameterised one with an id, `agentic:linter` alone. */
 const written = (marker: string): string => (marker.endsWith(':') ? `${marker}t1` : marker);
-const WORD_FORMS: readonly HumanWordForm[] = ['mr_diff', 'mr_note', 'ticket_comment'];
 
-describe('humanReturnDecision (WP-174 criterion 6)', () => {
+describe('humanReturnDecision (WP-174 criterion 6, M28 R1)', () => {
   describe.each(HUMAN_STAGES)('at %s', (stage) => {
-    it.each(WORD_FORMS)('returns on a person’s %s newer than the horizon', (form) => {
-      expect(humanReturnDecision(input({ stage, words: [word(form, 'Please rename X')] }))).toEqual(
-        {
+    it.each(['mr_diff', 'mr_note'] as const)(
+      'returns on a person’s note in an unresolved resolvable %s thread',
+      (form) => {
+        expect(
+          humanReturnDecision(input({ stage, words: [thread(form, 'Please rename X')] })),
+        ).toEqual({
           kind: 'return',
           from: stage,
           forms: [form],
           counts: { mr_diff: 0, mr_note: 0, ticket_comment: 0, [form]: 1 },
           status: null,
-        },
-      );
+          seen: [],
+        });
+      },
+    );
+
+    /**
+     * AUT-6655: a long Czech *QA: OK* at Ready returned the task twice. A ticket comment alone is
+     * never a change request now — whatever it says, in any language — and it is recorded as seen.
+     */
+    it.each([
+      'QA – MR !2768: OK. Otestováno na stagingu, vše funguje podle zadání, můžete mergovat.',
+      'Please rename X before merging',
+      'thanks!',
+    ])('a ticket comment alone does not return the task, and is seen: %s', (text) => {
+      const comment = word('ticket_comment', text);
+      expect(humanReturnDecision(input({ stage, words: [comment] }))).toEqual({
+        kind: 'none',
+        seen: [comment],
+      });
+    });
+
+    it('a general note that cannot be resolved does not return the task, and is seen', () => {
+      const note = word('mr_note', 'Please rename X');
+      expect(humanReturnDecision(input({ stage, words: [note] }))).toEqual({
+        kind: 'none',
+        seen: [note],
+      });
     });
 
     it.each([['Sent back'], ['doing'], ['BACKLOG']])(
@@ -72,6 +126,7 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
           forms: ['status'],
           counts: { mr_diff: 0, mr_note: 0, ticket_comment: 0 },
           status,
+          seen: [],
         });
       },
     );
@@ -84,8 +139,8 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
             status: 'Sent back',
             words: [
               word('ticket_comment', 'still broken'),
-              word('mr_diff', 'rename this'),
-              word('mr_diff', 'and this'),
+              thread('mr_diff', 'rename this'),
+              thread('mr_diff', 'and this', AFTER, { noteId: 'n2' }),
               word('mr_note', 'thanks!'),
             ],
           }),
@@ -93,22 +148,11 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
       ).toEqual({
         kind: 'return',
         from: stage,
-        forms: ['status', 'mr_diff', 'ticket_comment'],
-        counts: { mr_diff: 2, mr_note: 0, ticket_comment: 1 },
+        forms: ['status', 'mr_diff'],
+        counts: { mr_diff: 2, mr_note: 0, ticket_comment: 0 },
         status: 'Sent back',
+        seen: [],
       });
-    });
-
-    it('gives none for acknowledgements alone', () => {
-      expect(
-        humanReturnDecision(
-          input({
-            stage,
-            status: stage === 'qa' ? 'Testing' : null,
-            words: [word('mr_note', 'LGTM 👍'), word('ticket_comment', 'thanks!')],
-          }),
-        ),
-      ).toEqual({ kind: 'none' });
     });
 
     it('gives none for a platform-marked word, a system note and a word older than the horizon', () => {
@@ -118,25 +162,176 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
             stage,
             status: stage === 'qa' ? 'Testing' : null,
             words: [
-              word('mr_note', '<!-- agentic:reply:t1.r1.0 -->\nFixed in the last commit.'),
-              word('mr_diff', '<!-- agentic:review-finding:t1.r1.f1 -->\nRename this.'),
+              thread('mr_note', '<!-- agentic:reply:t1.r1.0 -->\nFixed in the last commit.'),
+              thread('mr_diff', '<!-- agentic:review-finding:t1.r1.f1 -->\nRename this.'),
               word('ticket_comment', 'agentic:claim-refused:t1\nClaim refused.'),
               { ...word('ticket_comment', 'Our workpad'), markerId: 'agentic:task:t1' },
-              { ...word('mr_note', 'changed the description'), system: true },
-              word('mr_note', 'Please rename X', BEFORE),
+              { ...thread('mr_note', 'changed the description'), system: true },
+              thread('mr_note', 'Please rename X', BEFORE),
             ],
           }),
         ),
-      ).toEqual({ kind: 'none' });
+      ).toEqual({ kind: 'none', seen: [] });
     });
 
-    it('reads an acknowledgement in the project’s own language only when it is configured', () => {
-      const words = [word('ticket_comment', 'Díky!')];
-      expect(humanReturnDecision(input({ stage, words, status: 'Testing' })).kind).toBe('return');
+    /** Amendment (c), Q119: an `@agentic ask` ticket comment is answered by ask-the-task. */
+    it('(c) gives no return for an @agentic ask ticket comment, and does not record it as seen', () => {
       expect(
-        humanReturnDecision(input({ stage, words, status: 'Testing', extraAcks: ['díky'] })),
-      ).toEqual({ kind: 'none' });
+        humanReturnDecision(
+          input({ stage, words: [word('ticket_comment', '@agentic ask why a column?')] }),
+        ),
+      ).toEqual({ kind: 'none', seen: [] });
     });
+  });
+
+  describe('forward wins over return (M28 R1)', () => {
+    it.each(HUMAN_STAGES)(
+      'at %s, a forward move and a thread note written before it: nothing returns',
+      (stage) => {
+        const note = thread('mr_diff', 'one more thing');
+        const decision = humanReturnDecision(
+          input({
+            stage,
+            status: 'Ready for Merge',
+            entryStatus: stage === 'qa' ? 'Testing' : 'Reviewed',
+            forwardSeenAt: LATER,
+            words: [note, word('ticket_comment', 'QA OK')],
+          }),
+        );
+        expect(decision.kind).not.toBe('return');
+        expect(decision.seen).toHaveLength(2);
+      },
+    );
+
+    it('a forward move first seen in this firing (no recorded instant) blocks every word read', () => {
+      expect(
+        humanReturnDecision(
+          input({
+            status: 'Ready for Merge',
+            forwardSeenAt: null,
+            words: [thread('mr_diff', 'one more thing', LATER)],
+          }),
+        ).kind,
+      ).toBe('none');
+    });
+
+    it('a thread note written after the forward move was first seen still returns', () => {
+      expect(
+        humanReturnDecision(
+          input({
+            status: 'Ready for Merge',
+            forwardSeenAt: AFTER,
+            words: [thread('mr_diff', 'found a bug', LATER)],
+          }),
+        ),
+      ).toMatchObject({ kind: 'return', forms: ['mr_diff'] });
+    });
+
+    it('at qa a forward move with a thread note passes rather than returns', () => {
+      expect(
+        humanReturnDecision(
+          input({
+            stage: 'qa',
+            status: 'Ready for Merge',
+            entryStatus: 'Testing',
+            forwardSeenAt: LATER,
+            words: [thread('mr_diff', 'nit')],
+          }),
+        ),
+      ).toMatchObject({ kind: 'pass', status: 'Ready for Merge' });
+    });
+
+    it('isForwardMove: a change to a status that is not a return status, never the entry itself', () => {
+      const of = (status: string | null, entryStatus: string | null) =>
+        isForwardMove({ slots: SLOTS, status, entryStatus });
+      expect(of('Ready for Merge', 'Reviewed')).toBe(true);
+      expect(of('Somewhere unmapped', 'Reviewed')).toBe(true);
+      expect(of('reviewed', 'Reviewed')).toBe(false);
+      expect(of('Sent back', 'Reviewed')).toBe(false);
+      expect(of('Doing', 'Reviewed')).toBe(false);
+      expect(of(null, 'Reviewed')).toBe(false);
+      expect(of('Ready for Merge', null)).toBe(false);
+    });
+  });
+
+  describe('the handled ledger (M28 R2)', () => {
+    const handled = (overrides: Partial<HandledThread> = {}): HandledThread => ({
+      source: 'mr_thread',
+      threadId: 'd1',
+      lastNoteId: 'n1',
+      handledAt: AFTER,
+      ...overrides,
+    });
+
+    it('a handled thread does not return the task, and is not seen again', () => {
+      expect(
+        humanReturnDecision(
+          input({ words: [thread('mr_diff', 'rename X')], handled: [handled()] }),
+        ),
+      ).toEqual({ kind: 'none', seen: [] });
+    });
+
+    it('a handled thread with a newer person note returns the task', () => {
+      const newer = thread('mr_diff', 'still wrong', LATER, { noteId: 'n2' });
+      expect(
+        humanReturnDecision(
+          input({ words: [thread('mr_diff', 'rename X'), newer], handled: [handled()] }),
+        ),
+      ).toMatchObject({ kind: 'return', counts: { mr_diff: 1 } });
+    });
+
+    it('a row that names no note the window read covers the words written no later than it', () => {
+      const words = [
+        thread('mr_diff', 'rename X', AFTER, { noteId: 'gone' }),
+        thread('mr_diff', 'still wrong', LATER, { noteId: 'n9' }),
+      ];
+      const covered = handledWords(words, [handled({ lastNoteId: null })]);
+      expect([...covered]).toEqual([words[0]]);
+    });
+
+    it('a row of another source or thread handles nothing', () => {
+      const words = [thread('mr_diff', 'rename X')];
+      expect(handledWords(words, [handled({ source: 'mr_note' })]).size).toBe(0);
+      expect(handledWords(words, [handled({ threadId: 'd2' })]).size).toBe(0);
+    });
+
+    it('a seen ticket comment is not seen twice', () => {
+      const comment = {
+        ...word('ticket_comment', 'QA OK'),
+        threadId: 'c1',
+        noteId: 'c1',
+      };
+      const once = humanReturnDecision(input({ words: [comment] }));
+      expect(once.seen).toEqual([comment]);
+      expect(
+        humanReturnDecision(
+          input({
+            words: [comment],
+            handled: [handled({ source: 'ticket_comment', threadId: 'c1', lastNoteId: 'c1' })],
+          }),
+        ).seen,
+      ).toEqual([]);
+    });
+  });
+
+  /** Property: whatever ticket comments and general notes say, alone they never return a task. */
+  it('never returns on ticket comments and non-resolvable notes alone (property)', () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            form: fc.constantFrom<HumanWordForm>('ticket_comment', 'mr_note', 'mr_diff'),
+            text: fc.string(),
+          }),
+          { maxLength: 8 },
+        ),
+        fc.constantFrom(...HUMAN_STAGES),
+        (drawn, stage) => {
+          const words = drawn.map((entry) => word(entry.form, entry.text));
+          expect(humanReturnDecision(input({ stage, words })).kind).not.toBe('return');
+        },
+      ),
+    );
   });
 
   it('passes only at qa: the ticket left the qa status for a status that is not a return status', () => {
@@ -144,88 +339,37 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
     expect(humanReturnDecision(input({ stage: 'qa', status: 'Finished', ...left }))).toEqual({
       kind: 'pass',
       status: 'Finished',
+      seen: [],
     });
     expect(
       humanReturnDecision(input({ stage: 'ready_for_merge', status: 'Finished', ...left })),
-    ).toEqual({
-      kind: 'none',
-    });
+    ).toEqual({ kind: 'none', seen: [] });
     // Still in the qa status, or unreadable: no pass.
-    expect(humanReturnDecision(input({ stage: 'qa', status: 'testing', ...left }))).toEqual({
-      kind: 'none',
-    });
-    expect(humanReturnDecision(input({ stage: 'qa', status: null, ...left }))).toEqual({
-      kind: 'none',
-    });
-    // An acknowledgement beside the pass does not stop it; a request does, and wins.
+    expect(humanReturnDecision(input({ stage: 'qa', status: 'testing', ...left })).kind).toBe(
+      'none',
+    );
+    expect(humanReturnDecision(input({ stage: 'qa', status: null, ...left })).kind).toBe('none');
+    // A ticket comment beside the pass does not stop it, and is seen.
+    const comment = word('ticket_comment', 'one more thing');
     expect(
-      humanReturnDecision(
-        input({ stage: 'qa', status: 'Finished', words: [word('mr_note', 'thanks!')], ...left }),
-      ),
-    ).toEqual({ kind: 'pass', status: 'Finished' });
-    expect(
-      humanReturnDecision(
-        input({
-          stage: 'qa',
-          status: 'Finished',
-          words: [word('mr_note', 'one more thing')],
-          ...left,
-        }),
-      ).kind,
-    ).toBe('return');
+      humanReturnDecision(input({ stage: 'qa', status: 'Finished', words: [comment], ...left })),
+    ).toEqual({ kind: 'pass', status: 'Finished', seen: [comment] });
   });
 
   /**
-   * WP-178 criterion (14): a pass is the ticket **leaving** `qa` (TD-029 decision 9). A task that
-   * entered `qa` with its ticket still at the `approved` status — the `qa` write refused — must not
-   * pass on the first firing of the window; only a recorded move out of the `qa` status does.
+   * WP-178 criterion (14): a pass is the ticket **leaving** `qa` (TD-029 decision 9).
    */
   it('(14) never passes before the ticket was seen leaving the qa status', () => {
-    // The ticket still sits at its approved status; nobody moved it out of qa.
-    expect(humanReturnDecision(input({ stage: 'qa', status: 'Reviewed', leftQa: null }))).toEqual({
-      kind: 'none',
-    });
-    // A move out of qa to a return status is a return, never a pass.
+    expect(humanReturnDecision(input({ stage: 'qa', status: 'Reviewed', leftQa: null })).kind).toBe(
+      'none',
+    );
     expect(
-      humanReturnDecision(input({ stage: 'qa', status: 'Finished', leftQa: 'Sent back' })),
-    ).toEqual({ kind: 'none' });
-    // Then the recorded move from the qa slot to a status that moves on: a pass.
+      humanReturnDecision(input({ stage: 'qa', status: 'Finished', leftQa: 'Sent back' })).kind,
+    ).toBe('none');
     expect(
-      humanReturnDecision(input({ stage: 'qa', status: 'Finished', leftQa: 'Finished' })),
-    ).toEqual({ kind: 'pass', status: 'Finished' });
+      humanReturnDecision(input({ stage: 'qa', status: 'Finished', leftQa: 'Finished' })).kind,
+    ).toBe('pass');
   });
-
-  /**
-   * WP-178 review, TD-029 decision 7's amendment (a): the status form is a **change**. With partial
-   * mapping the ticket reaches the human stage still at a status the form counts — `in_progress`, or
-   * the pick-up status when nothing else is mapped — and an acknowledgement must then return nothing.
-   */
-  it.each([
-    [
-      'only in_progress mapped, the ticket left at it',
-      { in_progress: 'Doing' },
-      'Backlog',
-      'Doing',
-    ],
-    ['an empty block, the ticket left at the pick-up status', {}, 'Backlog', 'Backlog'],
-  ] as const)(
-    '(a) gives none for %s with only an acknowledgement, at both stages',
-    (_name, lifecycle, pickUpFrom, status) => {
-      for (const stage of HUMAN_STAGES) {
-        expect(
-          humanReturnDecision(
-            input({
-              stage,
-              slots: { lifecycle, pickUpFrom },
-              status,
-              entryStatus: status,
-              words: [word('mr_note', 'LGTM')],
-            }),
-          ),
-        ).toEqual({ kind: 'none' });
-      }
-    },
-  );
 
   it('(a) returns on a real move into a return status, and on nothing while the entry is unknown', () => {
     const partial = {
@@ -238,32 +382,24 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
           input({ stage, slots: partial, status: 'Sent back', entryStatus: 'Doing' }),
         ),
       ).toMatchObject({ kind: 'return', forms: ['status'], status: 'Sent back' });
-      // Back at the entry status (TD-029 decision 7's amendment (a); which status is the entry is
-      // the window's, amendment (e)): no change, no return.
       expect(
-        humanReturnDecision(
-          input({ stage, slots: partial, status: 'doing', entryStatus: 'Doing' }),
-        ),
-      ).toEqual({ kind: 'none' });
+        humanReturnDecision(input({ stage, slots: partial, status: 'doing', entryStatus: 'Doing' }))
+          .kind,
+      ).toBe('none');
       expect(
         humanReturnDecision(
           input({ stage, slots: partial, status: 'Sent back', entryStatus: null }),
-        ),
-      ).toEqual({ kind: 'none' });
+        ).kind,
+      ).toBe('none');
     }
   });
 
-  /**
-   * Amendment (b): the pass reads the same record. A binding that only polls records no `from`, so
-   * `leftQa` is null; the ticket's entry status at the `qa` slot — or a sighting of it since — and a
-   * current status that is neither `qa` nor a return status is a pass.
-   */
   it('(b) passes a poll-only-shaped input: no recorded from, entry at qa, now moved on', () => {
     expect(
       humanReturnDecision(
         input({ stage: 'qa', status: 'Finished', leftQa: null, entryStatus: 'Testing' }),
-      ),
-    ).toEqual({ kind: 'pass', status: 'Finished' });
+      ).kind,
+    ).toBe('pass');
     expect(
       humanReturnDecision(
         input({
@@ -273,41 +409,11 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
           entryStatus: 'Reviewed',
           seenAtQa: true,
         }),
-      ),
-    ).toEqual({ kind: 'pass', status: 'Finished' });
-    // Never at qa: no pass, whatever the current status.
-    expect(humanReturnDecision(input({ stage: 'qa', status: 'Finished', leftQa: null }))).toEqual({
-      kind: 'none',
-    });
-    // Moved from qa to a return status that equals nothing new is no pass either.
-    expect(
-      humanReturnDecision(
-        input({
-          stage: 'qa',
-          slots: { ...SLOTS, lifecycle: { ...SLOTS.lifecycle, in_progress: 'Doing' } },
-          status: 'Doing',
-          entryStatus: 'Doing',
-          seenAtQa: true,
-        }),
-      ),
-    ).toEqual({ kind: 'none' });
-  });
-
-  /** Amendment (c), Q119: an `@agentic ask` ticket comment is answered by ask-the-task. */
-  it('(c) gives none for an @agentic ask ticket comment, at both stages', () => {
-    for (const stage of HUMAN_STAGES) {
-      expect(
-        humanReturnDecision(
-          input({
-            stage,
-            words: [
-              word('ticket_comment', '@agentic ask why did you sum the visible rows?'),
-              word('ticket_comment', '  @agentic why a column?'),
-            ],
-          }),
-        ),
-      ).toEqual({ kind: 'none' });
-    }
+      ).kind,
+    ).toBe('pass');
+    expect(humanReturnDecision(input({ stage: 'qa', status: 'Finished', leftQa: null })).kind).toBe(
+      'none',
+    );
   });
 
   it('never passes when no qa slot is mapped', () => {
@@ -319,8 +425,8 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
           status: 'Finished',
           leftQa: 'Finished',
         }),
-      ),
-    ).toEqual({ kind: 'none' });
+      ).kind,
+    ).toBe('none');
   });
 
   it.each(['implementation', 'code_review', 'business_review', 'rebase_gate', 'merged_gate'])(
@@ -328,19 +434,19 @@ describe('humanReturnDecision (WP-174 criterion 6)', () => {
     (stage) => {
       expect(
         humanReturnDecision(
-          input({ stage, status: 'Sent back', words: [word('mr_note', 'Please rename X')] }),
+          input({ stage, status: 'Sent back', words: [thread('mr_note', 'Please rename X')] }),
         ),
-      ).toEqual({ kind: 'none' });
+      ).toEqual({ kind: 'none', seen: [] });
     },
   );
 
   it('counts every word when there is no horizon yet, and one whose timestamp cannot be read', () => {
     expect(
-      humanReturnDecision(input({ horizon: null, words: [word('mr_note', 'fix', BEFORE)] })).kind,
+      humanReturnDecision(input({ horizon: null, words: [thread('mr_note', 'fix', BEFORE)] })).kind,
     ).toBe('return');
-    expect(humanReturnDecision(input({ words: [word('mr_note', 'fix', 'yesterday')] })).kind).toBe(
-      'return',
-    );
+    expect(
+      humanReturnDecision(input({ words: [thread('mr_note', 'fix', 'yesterday')] })).kind,
+    ).toBe('return');
   });
 });
 
@@ -365,7 +471,8 @@ describe('isPlatformWord — by marker, never by author (TD-029 decision 6)', ()
 
   /**
    * WP-178 criterion (15): TD-029 decision 6 says the body **opens with** a marker. A person who
-   * quotes a whole platform comment while asking for a change is a person, and returns the task.
+   * quotes a whole platform comment while asking for a change is a person — whose ticket comment,
+   * since M28 ruling R1, is recorded as seen rather than returning the task.
    */
   it.each(PLATFORM_COMMENT_MARKERS)(
     '(15) reads a ticket marker %s only at the start, so a quoting person still returns the task',
@@ -377,16 +484,16 @@ describe('isPlatformWord — by marker, never by author (TD-029 decision 6)', ()
       );
       for (const stage of HUMAN_STAGES) {
         expect(
-          humanReturnDecision(input({ stage, words: [word('ticket_comment', quoting)] })).kind,
-        ).toBe('return');
+          humanReturnDecision(input({ stage, words: [word('ticket_comment', quoting)] })).seen,
+        ).toHaveLength(1);
         expect(
           humanReturnDecision(
             input({
               stage,
               words: [word('ticket_comment', `${written(marker)}\nplease rename X`)],
             }),
-          ).kind,
-        ).toBe('none');
+          ).seen,
+        ).toHaveLength(0);
       }
     },
   );
@@ -419,7 +526,7 @@ describe('isPlatformWord — by marker, never by author (TD-029 decision 6)', ()
       const person: HumanWord = { form: 'ticket_comment', text, at: AFTER, markerId: null };
       expect(isPlatformWord(person)).toBe(false);
       for (const stage of HUMAN_STAGES) {
-        expect(humanReturnDecision(input({ stage, words: [person] })).kind).toBe('return');
+        expect(humanReturnDecision(input({ stage, words: [person] })).seen).toEqual([person]);
       }
     }
     // The delimited spellings are still the platform's.
@@ -448,8 +555,8 @@ describe('isPlatformWord — by marker, never by author (TD-029 decision 6)', ()
       };
       expect(isPlatformWord(quoting)).toBe(false);
       for (const stage of HUMAN_STAGES) {
-        expect(humanReturnDecision(input({ stage, words: [bare] })).kind).toBe('none');
-        expect(humanReturnDecision(input({ stage, words: [quoting] })).kind).toBe('return');
+        expect(humanReturnDecision(input({ stage, words: [bare] })).seen).toEqual([]);
+        expect(humanReturnDecision(input({ stage, words: [quoting] })).seen).toEqual([quoting]);
       }
     },
   );

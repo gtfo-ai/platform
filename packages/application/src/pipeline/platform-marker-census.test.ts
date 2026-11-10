@@ -253,30 +253,37 @@ const TICKET_COMMENTS: readonly {
 ];
 
 /** WP-178's decision over one word, at both human stages, with every slot unmapped. */
+/** The decision's kind, and how many words it recorded as seen (M28 R1/R2): a platform word is neither. */
 const decides = (word: HumanWord) =>
-  (['qa', 'ready_for_merge'] as const).map(
-    (stage) =>
-      humanReturnDecision({
-        stage,
-        slots: { lifecycle: {}, pickUpFrom: null },
-        status: null,
-        words: [word],
-        horizon: null,
-        extraAcks: [],
-        leftQa: null,
-        entryStatus: null,
-        seenAtQa: false,
-      }).kind,
-  );
+  (['qa', 'ready_for_merge'] as const).map((stage) => {
+    const decision = humanReturnDecision({
+      stage,
+      slots: { lifecycle: {}, pickUpFrom: null },
+      status: null,
+      words: [word],
+      horizon: null,
+      handled: [],
+      forwardSeenAt: null,
+      leftQa: null,
+      entryStatus: null,
+      seenAtQa: false,
+    });
+    return decision.seen.length === 0 ? decision.kind : 'seen';
+  });
 
 describe('half 1 — every renderer opens with its marker, and returns nothing', () => {
   it.each(MR_NOTES)('$name', ({ body }) => {
     expect(isPlatformMergeRequestNote(body)).toBe(true);
     for (const form of ['mr_diff', 'mr_note'] as const) {
-      expect(decides({ form, text: body, at: '2026-06-01T09:00:00.000Z', system: false })).toEqual([
-        'none',
-        'none',
-      ]);
+      expect(
+        decides({
+          form,
+          text: body,
+          at: '2026-06-01T09:00:00.000Z',
+          system: false,
+          resolvable: true,
+        }),
+      ).toEqual(['none', 'none']);
     }
   });
 

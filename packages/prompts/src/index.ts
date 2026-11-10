@@ -95,14 +95,16 @@ export const ROLE_PROMPT_VERSIONS = {
   // one entry per request (a mixed note: `fixed`, `documented`, `needs_person` naming who must act,
   // never claimed done); a status-only return reads the conversation and asks when it finds nothing.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
-  developer: '8',
+  // S-28.2 (M28 ruling R2): `answered="true"` / `resolved="true"` on a block is not open business.
+  developer: '9',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.
   // WP-176 (backlog 537): the conversation is data; on a re-review `resolved_threads` lists only
   // its own finding threads whose fix it verified, never a person's thread.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
-  reviewer: '6',
+  // S-28.2 (M28 ruling R2): `answered="true"` / `resolved="true"` on a block is not open business.
+  reviewer: '7',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
   acceptance_tester: '3',

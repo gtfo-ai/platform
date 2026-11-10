@@ -34,6 +34,7 @@ import { useTopics } from '../realtime/provider.js';
 import { Flash } from '../ui/flash.js';
 import { ErrorNotice, Loading } from '../ui/kit.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
+import { ConversationSeenNotice } from './conversation-seen.js';
 import { taskPagePrimary } from './page-primary.js';
 import { HandBackForm, TakenOverDetails, TakeOverAnswer } from './take-over.js';
 import { TaskActivity } from './task-activity.js';
@@ -196,6 +197,19 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
         onOpen={setDialog}
         merged={merged}
         breakdownWaiting={breakdownWaiting}
+      />
+
+      {/* S-28.2 (M28 ruling R1): a person's word at QA or Ready that did not send the task back. */}
+      <ConversationSeenNotice
+        seen={detail.data.conversation_seen ?? []}
+        ticketUrl={task.ticket.url}
+        mergeRequestUrl={task.mr_ref?.url ?? null}
+        maySendBack={detail.data.can_return && !merged && form.options.includes('implementation')}
+        nowMs={nowMs}
+        onSendBack={() => {
+          form.setStage('implementation');
+          setDialog('return');
+        }}
       />
 
       {takenOver !== null ? (

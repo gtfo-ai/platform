@@ -1110,14 +1110,13 @@ export const MAX_ACKNOWLEDGEMENT_WORDS = 50;
 export const MAX_ACKNOWLEDGEMENT_WORD_CHARS = 40;
 
 /**
- * `human_returns` — how a person's word at a human stage is read (BD-031, TD-029 decision 8).
+ * `human_returns` — how a person's word at a human stage was read (BD-031, TD-029 decision 8).
  *
- * `acknowledgements` **adds** words in the project's own language to the shipped acknowledgement
- * vocabulary; it can never remove a shipped word. A comment made only of acknowledgement words
- * does not return a task, so an added word **loosens** what the agent is held to — which is why
- * the repository file's value is graded *not applied* (`repository-grades.ts`) and only the
- * settings layer (`project.settings.write`) may set it. Its reader is the human-return window
- * (WP-178).
+ * **Accepted and no longer read since M28 ruling R1** (S-28.2): a ticket comment or a merge-request
+ * note that cannot be resolved never returns a task now, whatever language it is in, so there is
+ * no acknowledgement vocabulary left to add words to. The key stays in the schema so a project that
+ * set it keeps a valid configuration (the boundary is strict, and refusing it would refuse the
+ * whole file); its value changes nothing.
  */
 export const humanReturnsConfigSchema = z.strictObject({
   acknowledgements: z

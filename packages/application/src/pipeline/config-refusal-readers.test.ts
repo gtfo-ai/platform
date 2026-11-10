@@ -151,7 +151,7 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
   'packages/application/src/pipeline/jobs.ts': {
     count: 1,
     reason:
-      'the human-return window (WP-178) reads `ticketLifecycle` — the binding’s, which no configuration document carries — and `human_returns.acknowledgements`, whose default is no added word: acting on the defaults reads fewer words as thanks, so it returns the task where the project’s words would not, which is the failure direction TD-029 decision 8 chose',
+      'the human-return window (WP-178) reads only `ticketLifecycle` — the binding’s, which no configuration document carries; since M28 ruling R1 no `human_returns` key is read (a comment never returns a task)',
   },
   'packages/application/src/pipeline/workpad.ts': {
     count: 2,

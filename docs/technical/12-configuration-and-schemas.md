@@ -266,7 +266,10 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 > characters). It **adds** words in a project's own language to the shipped acknowledgement vocabulary
 > (TD-029 decision 8). It is graded **not applied** when it comes from the repository file, because a
 > word added there makes a person's comment stop returning a task, which loosens what the agent is held
-> to. Only the settings layer (`project.settings.write`) may set it.
+> to. Only the settings layer (`project.settings.write`) may set it. **Since S-28.2 (M28 ruling R1) it
+> is read by nothing**: a ticket comment or a non-resolvable merge-request note never returns a task,
+> so there is no vocabulary left to add to. The key still parses, so a configuration that set it stays
+> valid.
 >
 > **Artifact fields** (`schemas/artifacts/`, regenerated from `packages/contracts`):
 > - `ImplementationNotes.thread_replies[]`: `{thread_id, kind: fixed|documented|needs_person|not_changed, reply, person?}`;
@@ -305,7 +308,7 @@ read; `settingsNotApplied`, `packages/application/src/config/settings-grades.ts`
   project's `.agentic/pipeline.yml` is not read either (next section).
 - **`stages.<id>.prompt`** and **`stages.<id>.prompt_append`** **are read since WP-92** (next paragraph); what
   is still reported is a value naming a file outside `.agentic/prompts/`.
-- **`human_returns.acknowledgements`** is **read since WP-178**, by the human-return window (`jobs.ts`), from the
+- **`human_returns.acknowledgements`** was **read from WP-178 until S-28.2** (M28 ruling R1 removed the acknowledgement rule; it parses and is read by nothing again), by the human-return window (`jobs.ts`), from the
   settings layer only (the repository file's value is *not applied*, per the grading table below). From WP-170
   until WP-178 it parsed and had no reader, and — the one exception to the sentence above in that window — the
   settings write did not report it, because `SETTINGS_UNREAD_KEYS` was not widened; a word stored then is applied

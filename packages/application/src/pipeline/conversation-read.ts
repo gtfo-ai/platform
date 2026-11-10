@@ -58,6 +58,7 @@ import {
   type PipelineIntegrationsPort,
   ticketReads,
 } from './integrations.js';
+import type { ConversationHandledRow } from './store.js';
 
 /** The newest entries a conversation keeps (TD-029 decision 11, WP-180 ruling (a)). */
 export const CONVERSATION_MAX_ENTRIES = 40;
@@ -88,7 +89,39 @@ export interface ConversationSources {
     readonly redactor: SecretRedactor;
   } | null;
   readonly comments: { readonly page: CommentPage; readonly redactor: SecretRedactor } | null;
+  /**
+   * The task's handled ledger (M28 ruling R2) — what marks an entry `answered` or `resolved`.
+   * Absent or empty marks nothing but the provider's own `resolved`.
+   */
+  readonly handled?: readonly ConversationHandledRow[];
 }
+
+/** The ledger rows that say the platform answered or resolved an item; *seen* is not an answer. */
+const answeringRows = (
+  handled: readonly ConversationHandledRow[],
+  sources: readonly ConversationHandledRow['source'][],
+  threadId: string,
+): readonly ConversationHandledRow[] =>
+  handled.filter(
+    (row) => row.kind !== 'seen' && sources.includes(row.source) && row.threadId === threadId,
+  );
+
+/**
+ * Whether a note at `index` of its thread's notes is covered by an answering row: at or before the
+ * note the row names, or — when the row names none the reader can find — written no later than the
+ * row. The same rule as the human-return decision's `handledWords`.
+ */
+const covered = (
+  rows: readonly ConversationHandledRow[],
+  notes: readonly { readonly id: string; readonly created_at: string }[],
+  index: number,
+): boolean =>
+  rows.some((row) => {
+    const upTo = row.lastNoteId === null ? -1 : notes.findIndex((n) => n.id === row.lastNoteId);
+    if (upTo >= 0) return index <= upTo;
+    const written = Date.parse(notes[index]?.created_at ?? '');
+    return !Number.isNaN(written) && written <= Date.parse(row.handledAt);
+  });
 
 const redactWith =
   (redactor: SecretRedactor) =>
@@ -97,13 +130,18 @@ const redactWith =
 
 const mergeRequestEntries = (
   discussions: NonNullable<ConversationSources['discussions']>,
+  handled: readonly ConversationHandledRow[],
 ): PromptConversationEntry[] => {
   const redact = redactWith(discussions.redactor);
-  return discussions.items.flatMap((discussion) =>
-    discussion.notes
-      .filter((note) => !note.system)
-      .map((note): PromptConversationEntry => {
+  return discussions.items.flatMap((discussion) => {
+    const rows = answeringRows(handled, ['mr_thread', 'mr_note'], discussion.id);
+    const resolved = discussion.resolved || rows.some((row) => row.kind === 'resolved');
+    return discussion.notes
+      .map((note, index) => ({ note, index }))
+      .filter(({ note }) => !note.system)
+      .map(({ note, index }): PromptConversationEntry => {
         const path = note.path ?? null;
+        const answered = covered(rows, discussion.notes, index);
         return {
           source: 'mr',
           threadId: redact(discussion.id),
@@ -119,17 +157,25 @@ const mergeRequestEntries = (
           path: path === null ? null : redact(path),
           line: path === null ? null : (note.line ?? null),
           body: redact(note.body),
+          // M28 ruling R2: platform booleans, present only when true.
+          ...(answered ? { answered: true } : {}),
+          ...(resolved ? { resolved: true } : {}),
         };
-      }),
-  );
+      });
+  });
 };
 
 const ticketEntries = (
   comments: NonNullable<ConversationSources['comments']>,
+  handled: readonly ConversationHandledRow[],
 ): PromptConversationEntry[] => {
   const redact = redactWith(comments.redactor);
   return comments.page.comments.map(
     (comment): PromptConversationEntry => ({
+      // M28 ruling R2: the platform replied to this comment (Jira has no resolve).
+      ...(answeringRows(handled, ['ticket_comment'], comment.id).length > 0
+        ? { answered: true }
+        : {}),
       source: 'ticket',
       commentId: redact(comment.id),
       authorHandle: redact(comment.author.external_id),
@@ -205,8 +251,10 @@ export const conversationFrom = (sources: ConversationSources): PromptConversati
     return null;
   }
   const all = [
-    ...(sources.discussions === null ? [] : mergeRequestEntries(sources.discussions)),
-    ...(sources.comments === null ? [] : ticketEntries(sources.comments)),
+    ...(sources.discussions === null
+      ? []
+      : mergeRequestEntries(sources.discussions, sources.handled ?? [])),
+    ...(sources.comments === null ? [] : ticketEntries(sources.comments, sources.handled ?? [])),
   ];
   // Newest first, stable: two notes of one instant keep the order the providers answered.
   const newestFirst = all
@@ -241,6 +289,11 @@ export const conversationFrom = (sources: ConversationSources): PromptConversati
 
 export interface ConversationReaderOptions {
   readonly integrations: PipelineIntegrationsPort;
+  /**
+   * The task's handled ledger (M28 ruling R2), read in a transaction of the caller's own — so a
+   * block can say `answered="true"` / `resolved="true"`. Absent, nothing is marked.
+   */
+  readonly handled?: (taskId: Id) => Promise<readonly ConversationHandledRow[]>;
 }
 
 /**
@@ -279,9 +332,11 @@ export const createConversationReader =
               context,
             ),
           );
+    const handled = options.handled === undefined ? [] : await options.handled(subject.taskId);
     return conversationFrom({
       discussions,
       comments: binding === null || page === null ? null : { page, redactor: binding.redactor },
+      handled,
     });
   };
 
@@ -309,5 +364,8 @@ export const conversationToolAnswer = (conversation: PromptConversation | null) 
           path: entry.path,
           line: entry.line,
           body: entry.body,
+          // M28 ruling R2: present only when true, as on the block's marker.
+          ...(entry.answered === true ? { answered: true } : {}),
+          ...(entry.resolved === true ? { resolved: true } : {}),
         })),
       };

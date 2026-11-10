@@ -252,6 +252,30 @@
           "value": "(JSON.parse(output).suspicious_inputs_noted ?? []).length >= 1"
         }
       ]
+    },
+    {
+      "id": "rev-resolved-thread-is-not-a-finding-again",
+      "description": "S-28.2 (M28 ruling R2): a person's note whose marker says resolved=\"true\" is closed business and is not raised again as a finding when the diff already meets it",
+      "vars": {
+        "spec": "Given an order with no delivery, When exported, Then its delivery column is empty",
+        "diff": "--- a/src/export/orders.test.ts\n+  it('leaves the delivery column empty for an order with no delivery', () => { expect(row(orderWithoutDelivery)[7]).toBe(''); });\n--- a/src/export/orders.ts\n+  const formatDate = (d) => (d === null ? '' : d.toISOString().slice(0, 10));",
+        "conversation": "[source=\"merge_request\" thread_id=\"4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f\" author_ref=\"rhea.v\" created_at=\"2026-10-02T12:00:00Z\" answered=\"true\" resolved=\"true\"] Please rename `fmt` to `formatDate`."
+      },
+      "expect_fields": ["findings", "resolved_threads"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/review-verdict.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "!(JSON.parse(output).findings ?? []).some((f) => /formatDate|fmt/.test(f.explanation ?? ''))"
+        },
+        {
+          "type": "javascript",
+          "value": "!(JSON.parse(output).resolved_threads ?? []).includes('4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f')"
+        }
+      ]
     }
   ]
 }

@@ -10,12 +10,14 @@
  * back off the fakes and the database:
  *
  *  - **(i)** every slot mapped to an invented name: claim → `in_progress` → merge request →
- *    `in_review` → review threads → fix with replies → `approved` → `qa` → returned by a
- *    `resolvable: false` general note → re-claimed → fixed → review → `approved` → `qa` → QA passes
- *    → `ready_for_merge` → merge → `done`;
- *  - **(ii)** the same flow with the QA return made by a status change alone, by a ticket comment
- *    alone, and by a ticket comment written **during `code_review`** with no later signal — which
- *    only TD-029 decision 7 amendment (g), the entry into `qa` arming the window, returns;
+ *    `in_review` → review threads → fix with replies → `approved` → `qa` → returned by a person's
+ *    general thread that can be resolved (M28 ruling R1: the one shape of note that returns a task)
+ *    → re-claimed → fixed → review → `approved` → `qa` → QA passes → `ready_for_merge` → merge →
+ *    `done`;
+ *  - **(ii)** the same flow with the QA return made by a status change alone; and — since M28
+ *    ruling R1 — a ticket comment alone, written at `qa` or **during `code_review`** (read by the
+ *    window the entry into `qa` arms, TD-029 decision 7 amendment (g)), which returns nothing and
+ *    is recorded in the handled ledger as *seen, not a change request* (R2);
  *  - **(iii)** no slot mapped, on the fake's **default** workflow (WP-183 (v): invented names):
  *    zero assign, unassign, identity, status or transition calls, no `qa` stage, and the review
  *    conversation and the return at Ready as before.
@@ -409,14 +411,17 @@ const returned = async (pipeline: PipelineE2E, count: number): Promise<void> =>
     return (await ofType(pipeline, 'task.human_return')).length >= count;
   });
 
-/** A person's general note on the merge request, and the provider's note hook for it. */
+/**
+ * A person's general thread on the merge request — one that can be resolved, the shape that returns
+ * a task since M28 ruling R1 — and the provider's note hook for it.
+ */
 const generalNote = async (pipeline: PipelineE2E, text: string, createdAt: string) => {
   const note = pipeline.git.addGeneralNote({
     project: GIT_PROJECT,
     iid: pipeline.world.mr.iid,
     authorId: QA_PERSON,
     text,
-    resolvable: false,
+    resolvable: true,
     createdAt,
   });
   const hook = await pipeline.deliverGit(
@@ -475,6 +480,18 @@ const merges = async (pipeline: PipelineE2E): Promise<void> => {
 };
 
 /** Nothing the pipeline decided is still owed: no dispatch, no outbound duty queued or running. */
+/** Nudges the window until the handled ledger records a *seen* ticket comment (M28 R1, R2). */
+const seenOnTheTicket = async (pipeline: PipelineE2E, taskId: string): Promise<void> =>
+  pipeline.waitFor('the ticket comment recorded as seen', async () => {
+    await nudgeWindow(pipeline);
+    const rows = await pipeline.query<{ n: number }>(
+      `select count(*)::int as n from task_conversation_handled
+        where task_id = $1 and source = 'ticket_comment' and kind = 'seen'`,
+      [taskId],
+    );
+    return rows[0]?.n === 1;
+  });
+
 const quiet = (pipeline: PipelineE2E) =>
   pipeline.waitFor('no dispatch and no outbound duty owed', async () => {
     const rows = await pipeline.query<{ owed: number }>(
@@ -682,8 +699,10 @@ const expectReviewConversation = async (
     (discussion) => discussion.notes[0]?.author.external_id === QA_PERSON,
   );
   expect(persons).toHaveLength(expected.personNotes);
+  // The person's general thread can be resolved (M28 R1's returning shape) and stays open: only a
+  // person resolves it in this build.
   for (const note of persons) {
-    expect([note.resolvable, note.resolved]).toEqual([false, false]);
+    expect([note.resolvable, note.resolved]).toEqual([true, false]);
   }
   const generalReplies = opensWith(REPLY_MARKER);
   expect(generalReplies).toHaveLength(expected.personNotes);
@@ -848,19 +867,6 @@ const humanReturnReason = async (pipeline: PipelineE2E, from: string): Promise<s
     ).reason,
   );
 
-/** The Developer answered the person's ticket comment on the ticket, once, with its marker. */
-const expectTicketReply = async (pipeline: PipelineE2E) => {
-  const comments = pipeline.tickets.peek(TICKET_KEY)?.comments ?? [];
-  const replies = comments.filter(
-    (comment) =>
-      comment.body.trimStart().startsWith('agentic:reply:') ||
-      comment.marker_id?.startsWith('agentic:reply:') === true,
-  );
-  expect(replies).toHaveLength(1);
-  expect(replies[0]?.author.external_id).toBe(BOT);
-  expect(comments.filter((comment) => comment.author.external_id === QA_PERSON)).toHaveLength(1);
-};
-
 // ── The flows ─────────────────────────────────────────────────────────────────
 
 describe('the ticket lifecycle and the review conversation, end to end (WP-183)', () => {
@@ -868,7 +874,7 @@ describe('the ticket lifecycle and the review conversation, end to end (WP-183)'
     const { pipeline, moves } = await startFlow('lifecycle-full', { slots: true });
 
     const taskId = await atHumanStage(pipeline, 'qa', 1);
-    // The QA person takes the ticket, tests, and writes one general, non-resolvable note.
+    // The QA person takes the ticket, tests, and opens one general thread on the merge request.
     pipeline.tickets.assignInTracker(TICKET_KEY, QA_PERSON);
     const horizon = await moveHorizonBack(pipeline, taskId);
     await generalNote(
@@ -923,42 +929,35 @@ describe('the ticket lifecycle and the review conversation, end to end (WP-183)'
       await expectReviewConversation(pipeline, moves, { reviews: 3, personNotes: 0 });
     }, 300_000);
 
-    it('by a ticket comment alone, written at qa', async () => {
-      const { pipeline, moves } = await startFlow('lifecycle-comment', { slots: true });
+    /**
+     * M28 ruling R1 (AUT-6655): a ticket comment alone is not a change request. It is recorded as
+     * seen and the task stays at QA, which a person then passes.
+     */
+    it('a ticket comment alone, written at qa, returns nothing and is recorded as seen', async () => {
+      const { pipeline } = await startFlow('lifecycle-comment', { slots: true });
 
       const taskId = await atHumanStage(pipeline, 'qa', 1);
       const horizon = await moveHorizonBack(pipeline, taskId);
       await ticketComment(
         pipeline,
-        'Tested on staging: please label the footer total "Total due".',
+        'Otestováno na stagingu: patička ukazuje správný součet. OK.',
         justAfter(horizon),
       );
-      await returned(pipeline, 1);
+      await seenOnTheTicket(pipeline, taskId);
+      expect(await ofType(pipeline, 'task.human_return')).toHaveLength(0);
+      expect((await pipeline.task()).current_stage).toBe('qa');
 
-      await atHumanStage(pipeline, 'qa', 2);
       await qaPasses(pipeline);
-      await merges(pipeline);
-      await pipeline.waitFor(
-        'the done status reached the ticket',
-        async () => pipeline.tickets.peek(TICKET_KEY)?.status === LIFECYCLE.done,
-      );
-      await quiet(pipeline);
-
-      expect(await stageEntries(pipeline)).toEqual(QA_WALK);
-      await expectOneHumanReturn(pipeline, 'qa', ['ticket_comment']);
-      expect(await humanReturnReason(pipeline, 'qa')).toContain('Total due');
-      await expectLifecycleOnTheTracker(pipeline, moves, 2);
-      await expectReviewConversation(pipeline, moves, { reviews: 3, personNotes: 0 });
-      await expectTicketReply(pipeline);
+      expect(await ofType(pipeline, 'task.human_return')).toHaveLength(0);
     }, 300_000);
 
-    it('by a ticket comment written during code_review, with no later signal: the entry into qa returns it (TD-029 decision 7 (g))', async () => {
+    it('a ticket comment written during code_review is read by the entry into qa, and returns nothing (TD-029 decision 7 (g), M28 R1)', async () => {
       let heldReview: RunSpec | null = null;
       let release: () => void = () => {};
       const reviewHeld = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const { pipeline, moves } = await startFlow('lifecycle-comment-before-qa', {
+      const { pipeline } = await startFlow('lifecycle-comment-before-qa', {
         slots: true,
         hold: (spec) => {
           if (spec.stage !== 'code_review' || spec.attempt !== 2) return undefined;
@@ -983,39 +982,14 @@ describe('the ticket lifecycle and the review conversation, end to end (WP-183)'
         'the comment recorded',
         async () => (await ofType(pipeline, 'ticket.comment.added')).length === 1,
       );
-      // At an agent stage the comment arms nothing: the window that returns the task is the entry's.
+      // At an agent stage the comment arms nothing: the window that reads it is the entry's.
       expect(await openWindows(pipeline)).toBe(0);
       release();
 
       await atHumanStage(pipeline, 'qa', 1);
-      // The one window this task ever had is the one the entry into `qa` armed, after the comment.
-      expect(
-        await pipeline.query(`select id from pgboss.job where name = 'mr.comment.debounce'`),
-      ).toHaveLength(1);
-      const types = (await pipeline.events()).map((event) => event.type);
-      const qaEntry = (await pipeline.events()).findIndex(
-        (event) => event.type === 'task.stage.entered' && payloadOf(event).stage === 'qa',
-      );
-      expect(types.indexOf('ticket.comment.added')).toBeLessThan(qaEntry);
-      // No signal after the comment: only the entry's window is nudged.
-      await returned(pipeline, 1);
-      expect(await ofType(pipeline, 'ticket.comment.added')).toHaveLength(1);
-
-      await atHumanStage(pipeline, 'qa', 2);
-      await qaPasses(pipeline);
-      await merges(pipeline);
-      await pipeline.waitFor(
-        'the done status reached the ticket',
-        async () => pipeline.tickets.peek(TICKET_KEY)?.status === LIFECYCLE.done,
-      );
-      await quiet(pipeline);
-
-      expect(await stageEntries(pipeline)).toEqual(QA_WALK);
-      await expectOneHumanReturn(pipeline, 'qa', ['ticket_comment']);
-      expect(await humanReturnReason(pipeline, 'qa')).toContain('Total due');
-      await expectLifecycleOnTheTracker(pipeline, moves, 2);
-      await expectReviewConversation(pipeline, moves, { reviews: 3, personNotes: 0 });
-      await expectTicketReply(pipeline);
+      await seenOnTheTicket(pipeline, task.id);
+      expect(await ofType(pipeline, 'task.human_return')).toHaveLength(0);
+      expect((await pipeline.task()).current_stage).toBe('qa');
     }, 300_000);
   });
 

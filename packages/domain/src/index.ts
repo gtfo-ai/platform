@@ -54,7 +54,6 @@ export * from './knowledge/term-statistics.js';
 export * from './knowledge/tokens.js';
 // The ticket lifecycle: the acknowledgement rule, the slot rules, the moments and the human return
 // (BD-031, TD-029, WP-174)
-export * from './lifecycle/acknowledgement.js';
 export * from './lifecycle/claim.js';
 export * from './lifecycle/human-return.js';
 export * from './lifecycle/moments.js';

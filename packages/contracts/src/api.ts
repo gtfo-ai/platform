@@ -1113,6 +1113,27 @@ export const taskManualPauseSchema = z.strictObject({
 });
 export type TaskManualPause = z.infer<typeof taskManualPauseSchema>;
 
+/** The most *seen* words the task read serves (S-28.2). */
+export const MAX_TASK_CONVERSATION_SEEN = 10;
+
+/**
+ * A person's word at a human stage that the platform read and **did not treat as a change request**
+ * (S-28.2, M28 ruling R1): a ticket comment, a general merge-request note that cannot be resolved,
+ * or a thread note a forward status move outranked — one row of the handled ledger
+ * (`task_conversation_handled`, kind `seen`). The task page says *"Petr commented on the ticket at
+ * 10:43 — not treated as a change request"* with *Open* and *Send back to Implementation…*.
+ * `author` is the provider's display name, redacted and bounded at the write — untrusted text
+ * (BD-022), `null` when the provider gave none. `written_at` is when the provider says it was
+ * written, `null` when that could not be read; `seen_at` is when the platform read it.
+ */
+export const taskConversationSeenSchema = z.strictObject({
+  source: z.enum(['mr_thread', 'mr_note', 'ticket_comment']),
+  author: z.string().max(256).nullable(),
+  written_at: isoDateTimeSchema.nullable(),
+  seen_at: isoDateTimeSchema,
+});
+export type TaskConversationSeen = z.infer<typeof taskConversationSeenSchema>;
+
 /**
  * `GET /api/projects/:id/rediscovery` — whether a maintainer may run discovery again, and what it
  * may cost (WP-94, PROGRESS backlog 230, Q107 (a)).
@@ -2268,6 +2289,14 @@ export const taskDetailResponseSchema = z.strictObject({
    * Optional on the wire as `queue_wait` is; `GET /api/tasks/:id` always sends it.
    */
   manual_pause: taskManualPauseSchema.nullable().optional(),
+  /**
+   * The people's words at the current human stage the platform did **not** treat as a change
+   * request (S-28.2, M28 ruling R1): {@link taskConversationSeenSchema}, newest first, at most
+   * {@link MAX_TASK_CONVERSATION_SEEN}, recorded since the task's latest entry into that stage; `[]`
+   * at every other stage. Optional on the wire as `manual_pause` is; `GET /api/tasks/:id` always
+   * sends it.
+   */
+  conversation_seen: z.array(taskConversationSeenSchema).max(MAX_TASK_CONVERSATION_SEEN).optional(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
