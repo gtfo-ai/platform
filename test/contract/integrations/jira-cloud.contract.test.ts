@@ -608,10 +608,9 @@ describe('jira-cloud — reaching the provider', () => {
       });
       const matches = await polling.port.matchTickets(
         plan?.rule as NonNullable<typeof plan>['rule'],
-        { since: '2026-09-02T11:50:00.000Z' },
       );
       expect(polling.replay.requests[0]?.query.jql).toBe(
-        'labels = "agentic" AND statusCategory = "To Do" AND updated >= "-15m" ORDER BY updated ASC',
+        'labels = "agentic" AND statusCategory = "To Do" ORDER BY updated ASC',
       );
       // ACME-1 is "To pick up", of the To Do category in the project's statuses document.
       expect(matches.map((match) => match.ref.key)).toEqual(['ACME-1']);

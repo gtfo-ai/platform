@@ -305,7 +305,8 @@ weeks ago may still carry it. So the form has two more checkbox lists: **Start w
 statuses** and **A ticket in these statuses is finished**. Until you change them they are ticked by
 your tracker's own categories — every *To Do* status starts work, every *Done* status is finished —
 and a line under them says what that means: *"With these settings, tickets in To Do, Ready start.
-Idea, Discovery wait. Released, Done are never started and stop a task."* *Pick up from*, when
+Idea, Discovery wait. Released, Done are never started, and stop a task that has not started its first
+run yet."* *Pick up from*, when
 mapped, always starts work too. A status of no known category never starts work. Ticking a status in
 one list unticks it in the other, and the form will not save a setting that starts nothing. Lists
 left as the categories tick them are saved as "follow the categories", so a status your tracker adds

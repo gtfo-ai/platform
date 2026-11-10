@@ -711,36 +711,10 @@
           "$ref": "#/$defs/IsoDateTime"
         },
         "type": {
-          "type": "string",
-          "const": "ticket.intake.skipped"
+          "$ref": "#/$defs/anon_ad1d0a5f"
         },
         "payload": {
-          "type": "object",
-          "properties": {
-            "project_id": {
-              "$ref": "#/$defs/Id"
-            },
-            "ticket": {
-              "$ref": "#/$defs/TicketRef"
-            },
-            "reason": {
-              "type": "string",
-              "enum": [
-                "assigned",
-                "status_not_startable"
-              ]
-            },
-            "status": {
-              "maxLength": 255,
-              "$ref": "#/$defs/NonEmptyString"
-            }
-          },
-          "required": [
-            "project_id",
-            "ticket",
-            "reason"
-          ],
-          "additionalProperties": false
+          "$ref": "#/$defs/anon_8403e099"
         }
       },
       "required": [
@@ -7308,6 +7282,34 @@
         }
       ]
     },
+    "anon_8403e099": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "ticket": {
+          "$ref": "#/$defs/TicketRef"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "assigned",
+            "status_not_startable"
+          ]
+        },
+        "status": {
+          "maxLength": 255,
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "project_id",
+        "ticket",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
     "anon_a837b7a4": {
       "type": "string",
       "enum": [
@@ -7316,6 +7318,10 @@
         "mr_note",
         "ticket_comment"
       ]
+    },
+    "anon_ad1d0a5f": {
+      "type": "string",
+      "const": "ticket.intake.skipped"
     },
     "anon_c983d978": {
       "type": "object",

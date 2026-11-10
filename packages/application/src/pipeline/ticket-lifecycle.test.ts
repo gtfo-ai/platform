@@ -1137,6 +1137,46 @@ describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 
     expect(runsCreated(harness)).toBe(0);
   });
 
+  it('a block with no slot keeps status_mapping, and the claim reads the mapping’s move as the platform’s own (review finding 1)', async () => {
+    const slots = { assign_owner: true };
+    const ticket = tracker({
+      status: 'To Do',
+      statusCategory: 'todo',
+      movedBeforeTheClaimTo: { status: 'In Progress', category: 'in_progress' },
+    });
+    const harness = harnessFor(ticket, lifecycle(slots), {
+      settings: {
+        ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', slots),
+        config: { version: 1, status_mapping: { refinement: 'In Progress' } },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(0);
+    expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
+    expect(runsCreated(harness)).toBeGreaterThan(0);
+  });
+
+  it('a hand-back after a status refusal is a person’s instruction: the claim does not refuse again (review ruling (a))', async () => {
+    const ticket = tracker({
+      status: 'To Do',
+      statusCategory: 'todo',
+      movedBeforeTheClaimTo: { status: 'Review In Progress', category: 'in_progress' },
+    });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    await handBackTaskCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      summary: 'I readied it, go',
+    });
+    await harness.drain();
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(1);
+    expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
+  });
+
   it('the claim meets the platform’s own in_progress status and proceeds', async () => {
     const ticket = tracker({
       status: 'To Do',

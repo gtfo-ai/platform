@@ -192,6 +192,19 @@ export const checkProposedLifecycles = async (
   // And the block's own rules against its sibling `pickup_status`, which the block's schema cannot
   // see (`ticketLifecycleSchema`'s docblock) — every provider's binding schema, not only Jira's.
   for (const { account, slots, pickUpFrom } of checked) {
+    // S-28.4: the pick-up status always starts work, so it cannot also mean a ticket is finished.
+    if (
+      pickUpFrom !== null &&
+      (slots.closed ?? []).some(
+        (name) => lifecycleStatusKey(name) === lifecycleStatusKey(pickUpFrom),
+      )
+    ) {
+      throw new HttpError(
+        400,
+        'invalid_binding_config',
+        `the lifecycle block of "${account.name}" lists "${pickUpFrom}" — the status tickets are picked up from — among the statuses that mean a ticket is finished; a status either starts work or finishes a ticket. Untick it in one of the two lists`,
+      );
+    }
     const names = namedStatuses(slots, pickUpFrom).map((entry) => entry.name);
     const clashes = validateLifecycle(slots, pickUpFrom, names).filter(
       (issue) => issue.code !== 'unknown_status',

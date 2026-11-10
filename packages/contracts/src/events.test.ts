@@ -685,6 +685,17 @@ describe('the claim and human-return events (BD-031, TD-029)', () => {
     ).toBe(false);
   });
 
+  it('requires the status on a status_not_startable skip and refuses it on an assigned one (S-28.4)', () => {
+    const skip = (payload: Record<string, unknown>) =>
+      domainEventSchema.safeParse(
+        withPayload('ticket.intake.skipped', { ...PAYLOADS['ticket.intake.skipped'], ...payload }),
+      ).success;
+    expect(skip({ reason: 'status_not_startable', status: 'Released' })).toBe(true);
+    expect(skip({ reason: 'status_not_startable' })).toBe(false);
+    expect(skip({ reason: 'assigned', status: 'Released' })).toBe(false);
+    expect(skip({ reason: 'assigned' })).toBe(true);
+  });
+
   it('takes a return made only of words, with no status', () => {
     expect(
       domainEventSchema.safeParse(

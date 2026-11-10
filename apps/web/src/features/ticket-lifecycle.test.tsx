@@ -731,7 +731,7 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
     expect(ticked(FINISHED)).toEqual(['Finished']);
     const preview = card.querySelector('[data-lifecycle="policy-preview"]');
     expect(preview?.textContent).toBe(
-      'With these settings, tickets in Sent back start. Doing, Waiting for review, Testing wait. Finished are never started and stop a task.',
+      'With these settings, tickets in Sent back start. Doing, Waiting for review, Testing wait. Finished are never started, and stop a task that has not started its first run yet.',
     );
     // Untouched, the defaults are saved as nothing: the categories stay the rule.
     const user = userEvent.setup();

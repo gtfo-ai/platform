@@ -69,6 +69,12 @@ describe('jiraCloudConfigSchema’s lifecycle block (WP-172 criterion 6)', () =>
     ).toEqual([expect.stringMatching(/^lifecycle\.returned\.0: /)]);
   });
 
+  it('refuses a pickup_status that the closed list names (S-28.4)', () => {
+    expect(
+      issuesOf({ ...BASE, pickup_status: 'Ready', lifecycle: { closed: ['Done', 'ready'] } }),
+    ).toEqual([expect.stringMatching(/^lifecycle\.closed\.1: .*finished/)]);
+  });
+
   it('accepts a lifecycle block when no pickup_status is set (pickup by label)', () => {
     expect(issuesOf({ ...BASE, lifecycle: { in_progress: 'Doing' } })).toEqual([]);
   });

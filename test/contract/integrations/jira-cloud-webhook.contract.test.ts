@@ -350,6 +350,28 @@ describe('jira-cloud webhooks', () => {
       expect(ready.events.map((event) => event.type)).toContain('ticket.matched');
     });
 
+    it('announces a labelled ticket that enters a startable status, and not one that leaves (S-28.4 review (b))', async () => {
+      const moved = (to: string, category: Record<string, unknown> | null) =>
+        binding.port.inbound.normalise(
+          binding.replay.delivery('webhook-issue-updated-status.json', {
+            patch: (body) => {
+              const changelog = body.changelog as { items: Record<string, unknown>[] };
+              (changelog.items[0] as Record<string, unknown>).toString = to;
+              (body.issue as { fields: Record<string, unknown> }).fields.status =
+                category === null ? { name: to } : { name: to, statusCategory: category };
+            },
+          }),
+          inboundContext(),
+        );
+      const readied = await moved('To pick up', { id: 2, key: 'new', name: 'To Do' });
+      expect(readied.events.map((event) => event.type)).toContain('ticket.matched');
+      const working = await moved('Doing', { id: 4, key: 'indeterminate', name: 'In Progress' });
+      expect(working.events.map((event) => event.type)).not.toContain('ticket.matched');
+      // No category on the delivery: it cannot say, so nothing new is announced.
+      const unsaid = await moved('To pick up', null);
+      expect(unsaid.events.map((event) => event.type)).not.toContain('ticket.matched');
+    });
+
     it('announces the label only in a start_from status when the binding names a list (S-28.4)', async () => {
       const listed = createJiraBinding({ config: { lifecycle: { start_from: ['Doing'] } } });
       const labelled = (name: string) =>
