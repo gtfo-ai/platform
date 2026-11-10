@@ -683,7 +683,11 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           signalPasses: 0,
         };
         expect(await store.tasks.recordMerge(tx, attempt)).toBe(true);
-        expect(await store.tasks.recordMerge(tx, { ...attempt, outcome: 'merged' })).toBe(false);
+        // One row per (task, head, kind): a second rebase row for the head is refused; a merge row
+        // for it would be its own kind (a head may carry a settled rebase and then its merge).
+        expect(await store.tasks.recordMerge(tx, { ...attempt, outcome: 'rebase_refused' })).toBe(
+          false,
+        );
         expect((await store.tasks.mergeFor(tx, stored.task.id, head))?.outcome).toBe('rebased');
         // A rebase in flight is not decisive: still due.
         expect(await due('2026-06-02T09:40:00.000Z' as IsoDateTime)).toBe(true);
