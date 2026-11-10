@@ -31,11 +31,14 @@
  * entry's duty carries the same key ({@link entryLifecycleKeyFor}) and runs under the same task
  * lease (`outbound.ts`), so it replays the move.
  *
- * **A failed write does not block anything** (decision 4): the executor leaves its audit row, the
- * duty logs a `warn` naming the slot, and the next moment moves the ticket on — `JOB_EXHAUSTION`'s
- * `notification_shaped` row.
+ * **A failed write does not block anything** (decision 4): the executor leaves its audit row (with
+ * its redacted error since S-28.10), the duty logs a `warn` naming the slot, and the next moment
+ * moves the ticket on — `JOB_EXHAUSTION`'s `notification_shaped` row. **It is not silent** (TD-029's
+ * amendment C (2), S-28.10): the failure is recorded in `task_provider_sync` (`./provider-sync.ts`)
+ * and the task page says *ticket status out of sync* with **Retry**; a later move that succeeds
+ * clears it.
  */
-import type { Id } from '@platform/contracts';
+import type { Id, LifecycleSingleSlot } from '@platform/contracts';
 import {
   compilePipeline,
   type LifecycleSignal,
@@ -52,9 +55,11 @@ import {
   integrationsForProject,
   namesAProviderTicket,
   noRunScopedSecrets,
+  type PipelineIntegrations,
   ticketWrites,
 } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData, type TaskTransactionOptions } from './jobs.js';
+import { clearOutOfSync, recordTicketStatusOutOfSync } from './provider-sync.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StoredTask } from './store.js';
 import { releaseTicket } from './ticket-release.js';
@@ -300,8 +305,9 @@ const moveTicket = async (
     );
     return;
   }
+  let integrations: PipelineIntegrations | null = null;
   try {
-    const integrations = await integrationsForProject(
+    integrations = await integrationsForProject(
       options.integrations,
       stored.task.projectId,
       noRunScopedSecrets(),
@@ -319,9 +325,50 @@ const moveTicket = async (
     }
     logger.warn(
       { task_id: taskId, slot: move.slot, err: error },
-      'the ticket could not be moved to its lifecycle slot; the stage runs regardless, and the next moment moves the ticket on',
+      'the ticket could not be moved to its lifecycle slot; the stage runs regardless, the task page says the ticket is out of sync, and the next moment (or Retry) moves the ticket on',
     );
+    // S-28.10 (TD-029's amendment C (2)): the failure is recorded and shown, never only logged.
+    await recordTicketStatusOutOfSync(options, {
+      stored,
+      slot: move.slot,
+      target: status,
+      error,
+      integrations,
+    });
+    return;
   }
+  // A move that went through: whatever was out of sync for the ticket's status no longer is.
+  await clearOutOfSync(options, taskId, 'ticket_status', logger);
+};
+
+/**
+ * **A move to one named lifecycle slot**, for a caller that is not a stage moment (S-28.10): the
+ * `mr_ready` duty moves the ticket to `ready_for_merge` once the merge request has read back
+ * non-draft (TD-029's amendment C (4)). An unmapped slot makes no call; the rest is
+ * {@link moveTicket}'s, the out-of-sync record included.
+ */
+export const moveTicketToSlot = async (
+  options: TaskTransactionOptions,
+  stored: StoredTask,
+  slot: LifecycleSingleSlot,
+  idempotencyKey: string,
+): Promise<boolean> => {
+  if (!namesAProviderTicket(stored.task.ticket)) {
+    return false;
+  }
+  const settings = await options.settings.forProject(stored.task.projectId);
+  const status = settings.ticketLifecycle?.slots[slot];
+  if (status === undefined) {
+    return false;
+  }
+  await moveTicket(options, {
+    taskId: stored.task.id,
+    status,
+    slot,
+    causeEventId: null,
+    idempotencyKey,
+  });
+  return true;
 };
 
 /**

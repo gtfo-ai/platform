@@ -58,6 +58,7 @@ import {
   resumeTaskCommand,
   retryRunCommand,
   retryStageCommand,
+  retryTicketSyncCommand,
   returnToStageCommand,
   reworkStageCommand,
   setTaskOwnerCommand,
@@ -96,6 +97,15 @@ export interface TaskCommands {
     readonly capUsd: number;
   }): Promise<{ readonly capUsd: number; readonly previousCapUsd: number }>;
   cancel(input: { readonly taskId: string; readonly userId: string }): Promise<void>;
+  /**
+   * **Retry** on *ticket status out of sync* (S-28.10): re-enqueues the failed lifecycle move and
+   * answers the status and slot it asks for again, for the audit row. `409 ticket_in_sync` when
+   * nothing is out of sync.
+   */
+  retryTicketSync(input: {
+    readonly taskId: string;
+    readonly userId: string;
+  }): Promise<{ readonly status: string; readonly slot: string | null }>;
   /**
    * Answers the attempt entered and the stage's run it stopped, if one was in flight (PROGRESS
    * backlog 494); the stop's `run_commands` id is derived from the `Idempotency-Key`.
@@ -298,6 +308,8 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
       }),
     cancel: async (input) =>
       cancelTaskCommand(deps, { taskId: id(input.taskId), userId: id(input.userId) }),
+    retryTicketSync: async (input) =>
+      retryTicketSyncCommand(deps, { taskId: id(input.taskId), userId: id(input.userId) }),
     retryStage: async (input) =>
       retryStageCommand(deps, {
         taskId: id(input.taskId),

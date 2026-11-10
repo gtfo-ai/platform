@@ -37,6 +37,7 @@ import { ErrorNotice, Loading } from '../ui/kit.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { chosenManualJobsOf } from './ci-manual-started.js';
 import { ConversationSeenNotice } from './conversation-seen.js';
+import { OutOfSyncNotice } from './out-of-sync.js';
 import { taskPagePrimary } from './page-primary.js';
 import { HandBackForm, TakenOverDetails, TakeOverAnswer } from './take-over.js';
 import { TaskActivity } from './task-activity.js';
@@ -137,6 +138,8 @@ const TaskTop = ({
         chosenJobs={chosenJobs}
         primary={primary}
       />
+      {/* S-28.10: a ticket status or a merge request out of sync, said rather than logged. */}
+      <OutOfSyncNotice detail={detail} commands={commands} />
     </>
   );
 };

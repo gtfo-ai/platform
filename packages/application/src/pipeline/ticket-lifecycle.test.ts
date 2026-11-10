@@ -980,6 +980,87 @@ describe('the lifecycle moments through the tracker (TD-029 decision 4)', () => 
   });
 });
 
+/**
+ * **A failed lifecycle move is visible** (S-28.10, TD-029's amendment C (2)). AUT-6655 left twenty
+ * failed `transition_ticket` calls and the task page said nothing. The failure is now recorded on
+ * the task — the slot, the status wanted, what the ticket showed, the statuses it could take, the
+ * provider's reason and code — and a later move that goes through clears it. Canary: the record
+ * call removed from `moveTicket` leaves `providerSync` empty in the first case.
+ */
+describe('a failed lifecycle move is recorded as out of sync (S-28.10)', () => {
+  const failingOn = (ticket: ReturnType<typeof tracker>, refused: string) => ({
+    ...ticket.port,
+    capabilities: () =>
+      ({ commentsRead: false, transitionsRead: true }) as ReturnType<
+        TaskManagementPort['capabilities']
+      >,
+    listTransitions: async () => [
+      { id: '31', name: 'Back to work', to: { name: 'In Progress', category: 'in_progress' } },
+      { id: '41', name: 'Ship it', to: { name: 'Released', category: 'done' } },
+    ],
+    transition: async (_ref: TicketRefInput, to: string) => {
+      ticket.calls.push(`transition:${to}`);
+      if (to === refused) {
+        throw new IntegrationError(
+          'invalid_request',
+          'fake-jira',
+          `no transition to ${to} from ${ticket.state.status}`,
+        );
+      }
+      const from = ticket.state.status;
+      ticket.state.status = to;
+      return { changed: from !== to, from, to };
+    },
+  });
+
+  const syncOf = async (harness: PipelineHarness) =>
+    harness.memory.transaction(async (scope) =>
+      harness.store.tasks.providerSync(scope.tx, taskOf(harness).task.id),
+    );
+
+  it('records the slot, the target, what the ticket showed, the moves it offered and the reason', async () => {
+    const ticket = tracker({ status: 'Ready for Merge' });
+    const harness = harnessFor(
+      { ...ticket, port: failingOn(ticket, 'Gone') },
+      lifecycle({ in_review: 'Gone' }),
+    );
+    await harness.publish([ticketMatched()]);
+    // The stage still ran (decision 4)…
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    // …and the failure is on the task, not only in a log.
+    const rows = await syncOf(harness);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      subject: 'ticket_status',
+      slot: 'in_review',
+      target: 'Gone',
+      observed: 'Ready for Merge',
+      available: ['In Progress', 'Released'],
+      reason_code: 'invalid_request',
+    });
+    expect(rows[0]?.reason).toContain('no transition to Gone');
+    expect(rows[0]?.attempts).toBeGreaterThanOrEqual(1);
+    // The audit row keeps the error too (amendment C (1)).
+    const failed = harness.audit
+      .entriesFor('transition_ticket')
+      .filter((entry) => entry.status === 'failed');
+    expect(failed[0]?.errorCode).toBe('invalid_request');
+    expect(failed[0]?.error).toContain('no transition to Gone');
+  });
+
+  it('clears the record when a later move goes through', async () => {
+    const ticket = tracker({ status: 'Ready for Merge' });
+    const harness = harnessFor(
+      { ...ticket, port: failingOn(ticket, 'Gone') },
+      lifecycle({ in_review: 'Gone', approved: 'Approved' }),
+    );
+    await harness.publish([ticketMatched()]);
+    expect(ticket.calls).toContain('transition:Gone');
+    expect(ticket.calls).toContain('transition:Approved');
+    expect(await syncOf(harness)).toEqual([]);
+  });
+});
+
 // ── (6): the intake skip ────────────────────────────────────────────────────
 
 describe('the intake skip (TD-029 decision 5)', () => {

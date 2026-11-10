@@ -27,6 +27,7 @@ import {
   createVirtualTimer,
   exactSecretRedactor,
   type IntegrationActionEntry,
+  IntegrationError,
   noSecretsRedactor,
   type SecretRedactor,
   StreamConflictError,
@@ -556,5 +557,88 @@ describe('the columns migration 0013 added', () => {
         [integrationId],
       ),
     ).rejects.toMatchObject({ code: '23514' });
+  });
+});
+
+/**
+ * **A failed row keeps what failed** (S-28.10, TD-029's amendment C (1), migration 0115). AUT-6655
+ * left twenty failed `transition_ticket` rows that said nothing about why. Through the real executor
+ * and the real adapter: the code is the `IntegrationError`'s, the message is the executor's own
+ * redacted text — the planted credential is not in it — and a successful row keeps neither.
+ */
+describe('a failed action stores its redacted error (S-28.10)', () => {
+  beforeEach(truncate);
+
+  const executorWith = (redactor: SecretRedactor) =>
+    createIntegrationActionExecutor({
+      egress: allowAnyIntegrationHost(),
+      auditLog: auditLog(),
+      redactor,
+      timer: createVirtualTimer({ autoAdvance: true }),
+      clock: { now: () => new Date().toISOString() as IsoDateTime },
+    });
+
+  const errorColumns = async () =>
+    (
+      await pool.query<{ status: string; error_code: string | null; error_message: string | null }>(
+        'select status, error_code, error_message from integration_actions order by created_at, id',
+      )
+    ).rows;
+
+  it('records the code and the redacted message on a failed row, and nothing on a successful one', async () => {
+    const executor = executorWith(
+      exactSecretRedactor([{ name: 'jira_api_token', value: PLANTED_CREDENTIAL }]),
+    );
+    const request = {
+      integration: {
+        integrationId,
+        provider: 'fake-task-management',
+        type: 'task_management' as const,
+        host: null,
+      },
+      action: 'transition_ticket',
+      mutating: true,
+      mode: 'normal' as const,
+      projectId,
+      taskId,
+      payload: { ticket_key: 'AUT-6655', to: 'In Progress' },
+      shadowResult: () => ({ changed: false }),
+      describeResult: (result: { changed: boolean }) => result,
+    };
+    await expect(
+      executor.execute({
+        ...request,
+        perform: async () => {
+          throw new IntegrationError(
+            'invalid_request',
+            'fake-task-management',
+            `no transition to In Progress from Ready for Merge (token ${PLANTED_CREDENTIAL})`,
+          );
+        },
+      }),
+    ).rejects.toThrow();
+    await executor.execute({ ...request, perform: async () => ({ changed: true }) });
+
+    const [failed, ok] = await errorColumns();
+    expect(failed?.status).toBe('failed');
+    expect(failed?.error_code).toBe('invalid_request');
+    expect(failed?.error_message).toContain('no transition to In Progress from Ready for Merge');
+    expect(failed?.error_message).not.toContain(PLANTED_CREDENTIAL);
+    expect(failed?.error_message).toContain('[REDACTED:integration:jira_api_token]');
+    expect(ok?.status).toBe('ok');
+    expect(ok?.error_code).toBeNull();
+    expect(ok?.error_message).toBeNull();
+  });
+
+  it('refuses, at the database, an error code that is not platform vocabulary', async () => {
+    await expect(
+      pool.query(
+        `insert into integration_actions
+           (integration_id, direction, action, payload, status, redaction_count, attempts,
+            error_code)
+         values ($1, 'out', 'transition_ticket', '{}'::jsonb, 'failed', 0, 1, 'no such move!')`,
+        [integrationId],
+      ),
+    ).rejects.toThrow(/integration_actions_error_code_shape/);
   });
 });

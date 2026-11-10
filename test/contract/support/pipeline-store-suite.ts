@@ -2124,6 +2124,45 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * S-28.10 (TD-029's amendment C): one row per subject while it is out of sync — a second
+       * failure replaces the figures and counts one more attempt; a success clears it.
+       */
+      it('records, re-records and clears a subject out of sync (S-28.10)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const failure = {
+          subject: 'ticket_status' as const,
+          slot: 'in_review',
+          target: 'In Review',
+          observed: 'Doing',
+          available: ['Ready for Merge', 'Finished'],
+          reason: 'no transition to "In Review" exists in this workflow',
+          reason_code: 'invalid_request',
+          failed_at: '2026-06-01T09:00:00.000Z',
+        };
+        expect(await store.tasks.providerSync(tx, stored.task.id)).toEqual([]);
+        await store.tasks.recordProviderSyncFailure(tx, stored.task.id, failure);
+        await store.tasks.recordProviderSyncFailure(tx, stored.task.id, {
+          ...failure,
+          observed: 'Ready for Merge',
+          failed_at: '2026-06-01T09:05:00.000Z',
+        });
+        expect(await store.tasks.providerSync(tx, stored.task.id)).toEqual([
+          {
+            ...failure,
+            observed: 'Ready for Merge',
+            failed_at: '2026-06-01T09:05:00.000Z',
+            attempts: 2,
+          },
+        ]);
+        expect(await store.tasks.clearProviderSync(tx, stored.task.id, 'merge_request_draft')).toBe(
+          false,
+        );
+        expect(await store.tasks.clearProviderSync(tx, stored.task.id, 'ticket_status')).toBe(true);
+        expect(await store.tasks.providerSync(tx, stored.task.id)).toEqual([]);
+      });
+
+      /**
        * S-28.1 (M28 ruling 4): a resume re-enters a paused attempt in place only when it has **no**
        * run, and moves the open row's entry instant; a closed row is never re-opened.
        */

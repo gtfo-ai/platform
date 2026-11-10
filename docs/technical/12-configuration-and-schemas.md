@@ -232,6 +232,7 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 >   in_review: "Waiting for review"
 >   approved: "Reviewed"
 >   qa: "Testing"
+>   ready_for_merge: "Ready for Merge" # S-28.10, optional: written only once the MR reads back non-draft
 >   returned: ["Sent back"]            # one or more
 >   done: "Finished"
 >   claim: true                         # default true when the block exists; a binding with no block never claims
@@ -243,6 +244,11 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 > It is not a slot, so it does not supersede `status_mapping`; but it is a key of the block, and **a
 > block that exists claims** (`claim` defaults to true) — so a binding that wants the write-back
 > without the claim adds `claim: false` beside it, as the Jira setup guide says.
+> **`ready_for_merge` (S-28.10, TD-029's amendment C (4))** is optional and is not a stage moment: the
+> `mr_ready` duty moves the ticket there only after it has read the merge request back **non-draft**,
+> so a tracker never says *ready* about a draft. Unmapped, it moves nothing and gets no readiness note.
+> A lifecycle move the tracker refuses is **recorded** (`task_provider_sync`) and shown on the task
+> page as *ticket status out of sync* with **Retry**, and cleared when a later move goes through.
 > Every slot is optional, and the example's names are invented. At save, the single slots must be
 > pairwise distinct and distinct from `pickup_status`, and `returned` must be disjoint from them. Every
 > name must be in the provider's `listStatuses()`, compared case-insensitively:

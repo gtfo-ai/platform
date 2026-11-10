@@ -36,6 +36,7 @@ import {
   TaskBudgetRaiseInsufficientError,
   TaskConflictExhaustedError,
   TaskNotPausedByItsCapError,
+  TicketInSyncError,
   UnknownAggregateError,
 } from '@platform/application';
 import type { ApiError } from '@platform/contracts';
@@ -239,6 +240,10 @@ export const commandRefusal = (
       { path: 'reserve_usd', message: String(figures.reserve_usd) },
       { path: 'cap_usd', message: String(figures.cap_usd) },
     ]);
+  }
+  if (error instanceof TicketInSyncError) {
+    // S-28.10: Retry on a ticket whose status is not out of sync — nothing to retry.
+    return new HttpError(409, 'ticket_in_sync', error.message);
   }
   if (error instanceof TaskBudgetNotRaisedError) {
     // WP-131 review round 1: a task's cap is only ever raised, so a figure not above the one in

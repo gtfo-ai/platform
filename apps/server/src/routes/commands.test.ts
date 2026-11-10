@@ -34,6 +34,7 @@ import {
   TaskBudgetRaiseInsufficientError,
   TaskConflictExhaustedError,
   TaskNotPausedByItsCapError,
+  TicketInSyncError,
   UnknownAggregateError,
 } from '@platform/application';
 import { type JsonObject, RUN_CANCEL_PAUSE_REASON, type UserRole } from '@platform/contracts';
@@ -202,6 +203,13 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
           : { capUsd: input.capUsd, previousCapUsd: 50 };
       },
       cancel: record('cancel'),
+      // S-28.10: the retry answers the status and slot for the audit row.
+      retryTicketSync: async (input) => {
+        const recorded = (await record('ticket-sync-retry')(input)) as unknown;
+        return recorded !== null && typeof recorded === 'object' && 'status' in (recorded as object)
+          ? (recorded as { status: string; slot: string | null })
+          : { status: 'In Progress', slot: 'in_progress' };
+      },
       retryStage: record('retry-stage'),
       returnToStage: record('return-to-stage'),
       rework: record('rework'),
@@ -308,6 +316,15 @@ const COMMANDS: readonly {
     otherBody: { reason: 'the ticket was withdrawn' },
     key: 'optional',
     role: 'maintainer',
+  },
+  {
+    // S-28.10: Retry on *ticket status out of sync* — the resume's permission, the key optional.
+    name: 'ticket-sync-retry',
+    path: `/api/tasks/${TASK}/ticket-sync/retry`,
+    body: {},
+    otherBody: { reason: 'Jira was down' },
+    key: 'optional',
+    role: 'member',
   },
   {
     name: 'retry-stage',
@@ -861,6 +878,12 @@ describe('what each refusal maps to', () => {
       error: new TaskNotPausedByItsCapError(TASK as never, 'paused', 'project'),
       status: 409,
       code: 'not_paused_by_task_cap',
+    },
+    {
+      // S-28.10: Retry on a ticket whose status is in sync — nothing to retry.
+      error: new TicketInSyncError(TASK as never),
+      status: 409,
+      code: 'ticket_in_sync',
     },
     {
       // WP-159 ruling (b): a retry's model nobody chose on purpose.

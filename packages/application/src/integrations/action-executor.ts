@@ -593,6 +593,20 @@ const chargeExtraRequests = <TResult>(
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 
+/** A code the audit row may keep: platform vocabulary, bounded, never free text (S-28.10). */
+const ERROR_CODE_SHAPE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * The failed row's `error_code` (S-28.10, TD-029's amendment C (1)): an `IntegrationError`'s own
+ * code, else the error's class name, else `null` — and `null` for anything outside
+ * {@link ERROR_CODE_SHAPE}, so no provider text ever reaches the column through it.
+ */
+const errorCodeOf = (error: unknown): string | null => {
+  const code =
+    error instanceof IntegrationError ? error.code : error instanceof Error ? error.name : null;
+  return code !== null && ERROR_CODE_SHAPE.test(code) ? code : null;
+};
+
 /**
  * What one scrub did, and what it could not do.
  *
@@ -821,6 +835,8 @@ export const createIntegrationActionExecutor = (
       readonly status: IntegrationActionStatus;
       readonly result: JsonObject | null;
       readonly error: string | null;
+      /** S-28.10: the failure's code, for a `failed` entry only. */
+      readonly errorCode?: string | null;
       readonly durationMs: number;
       readonly attempts: number;
       /**
@@ -850,6 +866,7 @@ export const createIntegrationActionExecutor = (
       payload: boundAuditJson(payload.value),
       result: result === null ? null : boundAuditJson(result.value),
       error: error === null ? null : boundAuditError(error.value),
+      errorCode: fields.errorCode ?? null,
       durationMs: fields.durationMs,
       occurredAt: options.clock.now(),
       redactionCount:
@@ -1120,6 +1137,7 @@ export const createIntegrationActionExecutor = (
             // never provider text. The only `result` a failed row carries.
             result: charged === null ? null : { searches: charged },
             error: errorMessage(error),
+            errorCode: errorCodeOf(error),
             durationMs,
             attempts: attempt,
           });

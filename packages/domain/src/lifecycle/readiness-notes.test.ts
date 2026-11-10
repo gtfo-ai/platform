@@ -9,6 +9,7 @@ import {
   bindingAccountPersonNote,
   LIFECYCLE_NOT_CONFIGURED_CODE,
   LIFECYCLE_NOTE_SLOTS,
+  LIFECYCLE_OPTIONAL_SLOTS,
   LIFECYCLE_SLOT_UNMAPPED_CODE,
   lifecycleReadinessNotes,
 } from './readiness-notes.js';
@@ -28,12 +29,18 @@ const FULL = {
 
 describe('the ticket lifecycle’s readiness notes', () => {
   it('names every slot the product names, the single slots included', () => {
+    // Every single slot is either noted or declared optional (S-28.10's `ready_for_merge`), never both.
     for (const slot of LIFECYCLE_SINGLE_SLOTS) {
-      expect(LIFECYCLE_NOTE_SLOTS).toContain(slot);
+      expect(LIFECYCLE_NOTE_SLOTS.includes(slot) !== LIFECYCLE_OPTIONAL_SLOTS.includes(slot)).toBe(
+        true,
+      );
     }
+    expect(LIFECYCLE_NOTE_SLOTS).not.toContain('ready_for_merge');
     expect(LIFECYCLE_NOTE_SLOTS).toContain('pick_up_from');
     expect(LIFECYCLE_NOTE_SLOTS).toContain('returned');
-    expect(LIFECYCLE_NOTE_SLOTS).toHaveLength(LIFECYCLE_SINGLE_SLOTS.length + 2);
+    expect(LIFECYCLE_NOTE_SLOTS).toHaveLength(
+      LIFECYCLE_SINGLE_SLOTS.length - LIFECYCLE_OPTIONAL_SLOTS.length + 2,
+    );
   });
 
   it('answers nothing for a fully mapped block', () => {

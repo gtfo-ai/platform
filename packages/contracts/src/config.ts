@@ -1089,6 +1089,9 @@ export const LIFECYCLE_SINGLE_SLOTS = [
   'in_review',
   'approved',
   'qa',
+  // S-28.10 (TD-029's amendment C (4)): optional, and written only after the merge request has
+  // read back non-draft — so a tracker never says *ready* about a draft.
+  'ready_for_merge',
   'done',
 ] as const;
 export type LifecycleSingleSlot = (typeof LIFECYCLE_SINGLE_SLOTS)[number];
@@ -1149,6 +1152,7 @@ export const ticketLifecycleSchema = z
     in_review: lifecycleStatusNameSchema.optional(),
     approved: lifecycleStatusNameSchema.optional(),
     qa: lifecycleStatusNameSchema.optional(),
+    ready_for_merge: lifecycleStatusNameSchema.optional(),
     returned: z.array(lifecycleStatusNameSchema).max(MAX_LIFECYCLE_RETURNED_STATUSES).optional(),
     done: lifecycleStatusNameSchema.optional(),
     claim: z.boolean().optional(),

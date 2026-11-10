@@ -102,6 +102,7 @@ import type {
   TicketMatch,
   TicketMatchRule,
   TicketRefInput,
+  TicketTransition,
   TransitionResult,
   UnassignResult,
 } from '../ports/integrations/task-management.js';
@@ -1279,6 +1280,34 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
     }
     return read(integrations, binding.ref, 'self_identity', {}, context, async () =>
       binding.port.selfIdentity(),
+    );
+  },
+
+  /**
+   * The statuses the ticket can move to **now** (WP-171's `listTransitions`), or `null` for no
+   * binding, a ticket no provider issued, or a provider that does not declare `transitionsRead`
+   * (BD-017: the flag is asked, never a call that would throw). S-28.10's out-of-sync record names
+   * them beside a failed lifecycle move. A read; unredacted, like every read here.
+   */
+  transitions: async (
+    ticket: TicketRefInput,
+    context: CallContext,
+  ): Promise<readonly TicketTransition[] | null> => {
+    const binding = integrations.taskManagement;
+    if (
+      binding === null ||
+      !namesAProviderTicket(ticket) ||
+      binding.port.capabilities().transitionsRead !== true
+    ) {
+      return null;
+    }
+    return read(
+      integrations,
+      binding.ref,
+      'list_transitions',
+      { ticket_key: ticket.key },
+      context,
+      async () => binding.port.listTransitions(ticket),
     );
   },
 

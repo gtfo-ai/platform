@@ -80,6 +80,7 @@ import {
   knowledgeProposalRecordSchema,
   offerWaitingSchema,
   projectRecordSchema,
+  providerSyncSchema,
   questionRecordSchema,
   runRecordSchema,
   sha256HexSchema,
@@ -2419,6 +2420,13 @@ export const taskDetailResponseSchema = z.strictObject({
    */
   ci_manual_started: ciManualStartedSchema.nullable().optional(),
   /**
+   * What is **out of sync** with the provider (S-28.10, TD-029's amendment C) — a lifecycle move the
+   * tracker refused, a merge request still a draft after it was marked ready — one entry per
+   * subject, {@link providerSyncSchema}; `[]` when nothing is. Optional on the wire as
+   * `ci_manual_not_run` is; `GET /api/tasks/:id` always sends it.
+   */
+  provider_sync: z.array(providerSyncSchema).optional(),
+  /**
    * Why a `queued` task waits, and what frees it (S-25.16): {@link queueWaitSchema}; `null` for
    * every other state, and for a reader that does not ask (an agent's `get_task_context`). Optional
    * on the wire as `ci_manual_not_run` is; `GET /api/tasks/:id` always sends it.
@@ -2607,6 +2615,13 @@ const requiredCommandTextSchema = nonEmptyStringSchema.max(MAX_COMMAND_TEXT_CHAR
 export const pauseTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const resumeTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const cancelTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
+/**
+ * `POST /api/tasks/:id/ticket-sync/retry` (S-28.10): the record names the move; `reason` is the
+ * person's own words for the audit row, as on a resume.
+ */
+export const retryTicketSyncRequestSchema = z.strictObject({
+  reason: commandTextSchema.optional(),
+});
 /**
  * `POST /api/tasks/:id/owner` — set the task's owner, or clear it (S-26.1, TD-031's 2026-11-06
  * amendment item 3). `user_id` is the new owner, `null` is nobody. Who may set whom is the domain's

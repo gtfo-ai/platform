@@ -1263,6 +1263,20 @@ Retry*; a Retry on a pipeline that is still held stops at once and says so rathe
 hour again. A task that stopped before the platform recorded these reads shows the sentence it did
 record, after *What the platform saw last:*.
 
+
+### When the ticket or the merge request does not follow
+
+The platform moves the ticket through the statuses your binding maps, and marks the merge request
+ready at **Ready for merge**. When the tracker refuses a move — the status does not exist any more,
+or the workflow has no way there from where the ticket is — the task carries on, and its page says
+so in a box of its own: *"Ticket status out of sync: Jira still says Ready for Merge; the platform
+wanted In Progress (when work starts) — Jira offers no such move from there (it offers: Released)."*,
+with Jira's own reason, how many times it refused, **Retry** (asks the tracker again) and **Open in
+Jira**. The box goes away by itself when a later move goes through. After marking the merge request
+ready, the platform reads it back; if it is still a draft, the page says *"The merge request is
+still a draft on GitLab"* with a link, and the task is escalated once the retries are spent. A
+binding may also map the optional **Ready for merge** slot: the ticket is moved there only once the
+merge request has read back as no longer a draft, so the tracker never says *ready* about a draft.
 ### QA, and sending a task back from QA or Ready
 
 When the project maps a *QA* status, a task created afterwards gets a human **QA** stage after the

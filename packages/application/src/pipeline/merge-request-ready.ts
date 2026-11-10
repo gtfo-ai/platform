@@ -25,7 +25,9 @@
  *     2026-10-03). Asking when unsure costs at worst one refused request; not asking leaves the CI
  *     gate waiting on a pipeline nobody started (WP-138 review round 1).
  *  2. **`mr_ready`** — on `task.stage.entered` for `ready_for_merge`: reads the merge request and
- *     removes the draft prefix when it has one (a re-entry nothing drafted writes nothing). Every
+ *     removes the draft prefix when it has one (a re-entry nothing drafted writes nothing), then
+ *     **reads it back** and fails loudly if it is still a draft (S-28.10); once it reads non-draft
+ *     the ticket moves to the optional `ready_for_merge` lifecycle slot. Every
  *     way into Ready is that event — the rebase gate's pass, a resume from a pause at Ready, the
  *     `ready_head_check` duty's entry — so each one is covered, keyed per entry.
  *  3. **`mr_draft`** — on `run.claimed` for a run of an **agent** stage of a task that has been at
@@ -70,8 +72,10 @@ import {
   type PipelineIntegrations,
 } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from './jobs.js';
+import { clearOutOfSync, recordMergeRequestStillDraft } from './provider-sync.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StoredTask } from './store.js';
+import { moveTicketToSlot } from './ticket-lifecycle.js';
 
 const IMPLEMENTATION_ARTIFACT = 'ImplementationNotes';
 
@@ -376,18 +380,61 @@ export const runMergeRequestReady = async (
   if (resolved.kind === 'skip') {
     return resolved.outcome;
   }
-  const { taskId, mr, integrations, context } = resolved;
+  const { stored, taskId, mr, integrations, context } = resolved;
   // Read first, as `mr_draft` does: a re-entry into Ready that nothing drafted in between (a
   // default-branch move re-checks the rebase gate and comes straight back) writes nothing.
   const live = await gitReads(integrations).mergeRequest(mr, context);
-  if (live === null || live.state !== 'opened' || !live.draft) {
+  if (live === null || live.state !== 'opened') {
+    return 'unchanged';
+  }
+  const slotKey = `ticket_lifecycle:${taskId}:ready_for_merge:${String(data.cause_event_id)}`;
+  if (!live.draft) {
+    await inSync(options, stored, slotKey);
     return 'unchanged';
   }
   const ready = await codeMergeRequestWrites(integrations).markReady(
     { ref: mr, idempotencyKey: `mr_ready:${taskId}:${mr.iid}:${String(data.cause_event_id)}` },
     context,
   );
-  return ready === null ? 'shadow' : 'marked_ready';
+  if (ready === null) {
+    return 'shadow';
+  }
+  /**
+   * **Read back, and fail loudly when the write did not take** (S-28.10, TD-029's amendment C (3)).
+   * AUT-6655's merge request stayed *Draft* while the platform believed it ready. The provider is
+   * asked again; a merge request still a draft is recorded as out of sync (the task page's Ready
+   * callout then says so) and the duty **throws**, so the queue retries it and its exhaustion is
+   * the existing bound-and-escalate (`JOB_EXHAUSTION`'s `mr_ready` row).
+   */
+  const after = await gitReads(integrations).mergeRequest(mr, context);
+  if (after !== null && after.state === 'opened' && after.draft) {
+    const reason =
+      'the merge request still reads as a draft after the platform marked it ready, so it cannot be merged as it stands';
+    await recordMergeRequestStillDraft(options, { taskId, reason });
+    throw new MergeRequestStillDraftError(taskId, mr.iid);
+  }
+  await inSync(options, stored, slotKey);
+  return 'marked_ready';
+};
+
+/** `mr_ready` wrote, read back, and the merge request is still a draft (S-28.10). */
+export class MergeRequestStillDraftError extends Error {
+  override readonly name = 'MergeRequestStillDraftError';
+  constructor(taskId: Id, iid: number) {
+    super(
+      `merge request !${String(iid)} of task ${taskId} still reads as a draft after it was marked ready`,
+    );
+  }
+}
+
+/**
+ * The merge request read back **non-draft**: it is in sync, and only now may the ticket say *ready
+ * for merge* — the optional `ready_for_merge` lifecycle slot (S-28.10, TD-029's amendment C (4)), so
+ * a tracker never says ready about a draft. An unmapped slot moves nothing.
+ */
+const inSync = async (options: DutyOptions, stored: StoredTask, slotKey: string): Promise<void> => {
+  await clearOutOfSync(options, stored.task.id, 'merge_request_draft');
+  await moveTicketToSlot(options, stored, 'ready_for_merge', slotKey);
 };
 
 export type MergeRequestDraftOutcome =

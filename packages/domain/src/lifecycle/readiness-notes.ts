@@ -34,6 +34,13 @@ export const LIFECYCLE_NOTE_SLOTS: readonly LifecycleNoteSlot[] = [
   'done',
 ];
 
+/**
+ * The single slots that get **no** note when unmapped (S-28.10): `ready_for_merge` is optional by
+ * design — unmapped, the tracker is simply not moved at Ready — so a note on every project would be
+ * noise rather than information.
+ */
+export const LIFECYCLE_OPTIONAL_SLOTS: readonly LifecycleNoteSlot[] = ['ready_for_merge'];
+
 export interface LifecycleReadinessNote {
   readonly code:
     | typeof LIFECYCLE_SLOT_UNMAPPED_CODE
@@ -59,6 +66,8 @@ const CONSEQUENCE: Readonly<Record<LifecycleNoteSlot, string>> = {
   returned:
     'returned is not mapped: no status of its own returns a task; a person moving the ticket back to the in progress or pick up from status still does, and so does a person’s ticket comment or merge request note',
   done: 'done is not mapped: the platform does not move the ticket when the merge request is merged',
+  ready_for_merge:
+    'ready for merge is not mapped: the platform does not move the ticket when the merge request is ready to merge',
 };
 
 /** The not-configured note's message (product/17: "neither claims tickets nor moves them"). */
