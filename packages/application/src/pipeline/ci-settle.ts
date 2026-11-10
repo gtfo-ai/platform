@@ -45,6 +45,7 @@ import { failingJobs } from './ci-log.js';
 import { asksForNamedJobs } from './ci-manual-jobs.js';
 import { enqueueCiPlays } from './ci-play.js';
 import {
+  boundedJobName,
   CI_GATE_STAGE,
   type CiReading,
   ciVerdictOf,
@@ -154,9 +155,14 @@ export const runCiSettle = async (
           taskId,
           projectId: stored.task.projectId,
           attempt: stored.task.stageAttempts[stage] ?? 1,
+          mode: stored.task.mode,
           headSha,
           pipelineId: pipeline.id,
-          jobs: verdict.judgement.toStart,
+          // Names redacted, then bounded, as the gate's own read carries them.
+          jobs: verdict.judgement.toStart.map((job) => ({
+            id: job.id,
+            name: boundedJobName(job.name, redact),
+          })),
         },
         data.cause_event_id,
       );

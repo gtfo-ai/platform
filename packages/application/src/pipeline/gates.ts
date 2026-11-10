@@ -93,6 +93,7 @@ import {
   DEFAULT_MANUAL_JOB_POLICY,
   judgeCiPipeline,
   type ManualJobPolicy,
+  manualJobModeOf,
   manualJobPolicyOf,
 } from './ci-manual-jobs.js';
 import {
@@ -251,7 +252,12 @@ export const rebaseAgainstCi = (
 export interface CiPlayJobs {
   readonly headSha: string;
   readonly pipelineId: string;
+  /** The git binding's provider name (`gitlab`), for the wait's words. */
+  readonly provider: string;
+  /** The `run` jobs `manual` now — ids as the provider sent them, names redacted then bounded. */
   readonly jobs: readonly Pick<PipelineStatus['jobs'][number], 'id' | 'name'>[];
+  /** The `run` **trigger** jobs `manual` now, names redacted then bounded: a person starts them. */
+  readonly triggers: readonly string[];
 }
 
 /**
@@ -751,18 +757,67 @@ export const pendingPipelineDetail = (
 };
 
 /**
- * S-28.7: the sentence a wait adds when the platform is starting jobs the project set to `run` —
- * names redacted, then bounded, as every job name the gate writes.
+ * **What a wait says about the jobs the project set to `run`** (S-28.7, TD-036's 2026-11-10
+ * amendment decisions 3 and 5) — built by the job that judged, from what this attempt recorded:
+ *  - a job it still owes a start: *the platform is starting the manual job "X" …*;
+ *  - a job it started that the provider still shows held: *the platform started "X" and waits …*;
+ *  - a job the provider refused the platform's account: decision 5's *the platform could not start
+ *    "X"; start it on gitlab or give the account Developer access*;
+ *  - a job on a binding that cannot start one: *… this git binding cannot start manual jobs …*;
+ *  - a trigger job: *"X" starts another pipeline, which the platform does not start …*;
+ *  - a trial task (`shadow`): the platform starts nothing.
+ * Names arrive redacted and bounded (`CiPlayJobs`). `null` when there is nothing to say.
  */
-export const startingDetail = (
-  toStart: readonly Pick<PipelineStatus['jobs'][number], 'name'>[],
-  redact: (text: string) => string,
-): string =>
-  `the platform is starting the manual ${toStart.length === 1 ? 'job' : 'jobs'} ${toStart
-    .map((job) => JSON.stringify(boundedJobName(job.name, redact)))
-    .join(
-      ', ',
-    )} the project set to run (pipeline.ci.manual_jobs), and waits for ${toStart.length === 1 ? 'its result' : 'their results'}`;
+export const ciPlayDetail = (
+  play: CiPlayJobs,
+  owed: ReadonlySet<string>,
+  recorded: readonly { readonly job_id: string; readonly outcome: string }[] | null,
+  shadow = false,
+): string | null => {
+  const quoted = (names: readonly string[]): string =>
+    names.map((name) => JSON.stringify(name)).join(', ');
+  const outcomeOf = (id: string): string | undefined =>
+    (recorded ?? []).find((entry) => entry.job_id === id)?.outcome;
+  const named = (pick: (job: CiPlayJobs['jobs'][number]) => boolean): string[] =>
+    play.jobs.filter(pick).map((job) => job.name);
+  const parts: string[] = [];
+  if (shadow && play.jobs.length > 0) {
+    parts.push(
+      `this is a trial task, so the platform starts no job: ${quoted(named(() => true))} waits for a person on ${play.provider}`,
+    );
+  } else {
+    const starting = named((job) => owed.has(job.id));
+    const started = named((job) => !owed.has(job.id) && outcomeOf(job.id) === 'started');
+    const refused = named((job) => outcomeOf(job.id) === 'refused');
+    const unsupported = named((job) => outcomeOf(job.id) === 'unsupported');
+    if (starting.length > 0) {
+      parts.push(
+        `the platform is starting the manual ${starting.length === 1 ? 'job' : 'jobs'} ${quoted(starting)} the project set to run (pipeline.ci.manual_jobs), and waits for ${starting.length === 1 ? 'its result' : 'their results'}`,
+      );
+    }
+    if (started.length > 0) {
+      parts.push(
+        `the platform started ${quoted(started)} and waits for ${play.provider} to run ${started.length === 1 ? 'it' : 'them'}`,
+      );
+    }
+    for (const name of refused) {
+      parts.push(
+        `the platform could not start ${JSON.stringify(name)}; start it on ${play.provider} or give the account Developer access`,
+      );
+    }
+    for (const name of unsupported) {
+      parts.push(
+        `the platform could not start ${JSON.stringify(name)}: this git binding cannot start manual jobs; start it on ${play.provider}`,
+      );
+    }
+  }
+  for (const name of play.triggers) {
+    parts.push(
+      `${JSON.stringify(name)} starts another pipeline, which the platform does not start; a person starts it on ${play.provider}`,
+    );
+  }
+  return parts.length === 0 ? null : parts.join('; ');
+};
 
 /** The pass's detail when manual jobs were left: the platform's sentence, the names bounded. */
 const passedWithManualDetail = (
@@ -1042,17 +1097,32 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
               heldAt,
             });
             const detail = pendingPipelineDetail(status, live?.draft === true, redact, heldAt);
-            // S-28.7: the jobs the project set to `run` that are `manual` now — the job enqueues
-            // their start after this read; the sentence says the platform is starting them.
-            return toStart.length === 0
+            /**
+             * S-28.7 (TD-036's 2026-11-10 amendment): the jobs the project set to `run` that are
+             * `manual` now, and the `run` trigger jobs (which the platform never starts). The job
+             * that asked enqueues the starts it still owes and words the wait from what this
+             * attempt recorded (`ciPlayDetail`) — the gate cannot see that record.
+             */
+            const triggers = status.jobs.filter(
+              (job) =>
+                job.status === 'manual' &&
+                job.trigger === true &&
+                manualJobModeOf(policy, job.name) === 'run',
+            );
+            return toStart.length === 0 && triggers.length === 0
               ? { kind: 'pending', detail }
               : {
                   kind: 'pending',
-                  detail: `${detail}; ${startingDetail(toStart, redact)}`,
+                  detail,
                   ciPlay: {
                     headSha,
                     pipelineId: status.id,
-                    jobs: toStart.map((job) => ({ id: job.id, name: job.name })),
+                    provider: binding.providerName ?? binding.ref.provider,
+                    jobs: toStart.map((job) => ({
+                      id: job.id,
+                      name: boundedJobName(job.name, redact),
+                    })),
+                    triggers: triggers.map((job) => boundedJobName(job.name, redact)),
                   },
                 };
           };

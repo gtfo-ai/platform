@@ -49,6 +49,7 @@ import {
 } from './ci-log.js';
 import { MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import {
+  ciPlayDetail,
   ciTimeoutMinutesOf,
   createGateEvaluator,
   type GateResult,
@@ -1399,12 +1400,14 @@ describe('manual jobs the project set to run (S-28.7)', () => {
       ciPlay: {
         headSha: HEAD_SHA,
         pipelineId: 'pipeline-1',
+        provider: 'fake-git',
         jobs: [{ id: 'job-build_composer', name: 'build_composer' }],
+        triggers: [],
       },
     });
-    expect((result as { detail: string }).detail).toContain(
-      'the platform is starting the manual job "build_composer" the project set to run (pipeline.ci.manual_jobs), and waits for its result',
-    );
+    // The gate cannot see what this attempt recorded, so it says nothing about starting: the job
+    // that asked words that (`ciPlayDetail`).
+    expect((result as { detail: string }).detail).not.toContain('starting');
     // The read is still recorded, as on every pending answer.
     expect(result).toHaveProperty('ciRead');
   });
@@ -1424,6 +1427,22 @@ describe('manual jobs the project set to run (S-28.7)', () => {
       expect(result.kind, JSON.stringify(config)).toBe('pending');
       expect(result, JSON.stringify(config)).not.toHaveProperty('ciPlay');
     }
+  });
+
+  it('never offers a trigger job set to run, and names it for a person instead', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      pipelineWith('manual', [
+        job('unit', 'success', false, 'test'),
+        { ...job('deploy:tenants', 'manual', false, 'test'), trigger: true },
+      ]),
+      { manualJobs: { 'deploy:tenants': 'run' } },
+    );
+    expect(result).toMatchObject({
+      kind: 'pending',
+      ciPlay: { jobs: [], triggers: ['deploy:tenants'] },
+    });
   });
 
   it('fails the gate when a played run job failed, even with allow_failure, naming the key', async () => {
@@ -1456,6 +1475,62 @@ describe('manual jobs the project set to run (S-28.7)', () => {
       { manualJobs: { e2e: 'ignore' } },
     );
     expect(result).toMatchObject({ kind: 'settled', passed: true });
+  });
+});
+
+/**
+ * S-28.7 (TD-036's 2026-11-10 amendment decision 5): the wait's words come from what the attempt
+ * recorded — "starting" only for a start still owed, the refusal by name, never both.
+ */
+describe('ciPlayDetail (S-28.7)', () => {
+  const play = {
+    headSha: HEAD_SHA,
+    pipelineId: '907',
+    provider: 'gitlab',
+    jobs: [
+      { id: '1', name: 'build_composer' },
+      { id: '2', name: 'codeception' },
+      { id: '3', name: 'crawler-test' },
+    ],
+    triggers: [],
+  };
+  const entry = (id: string, outcome: 'started' | 'refused' | 'unsupported') => ({
+    job_id: id,
+    outcome,
+  });
+
+  it('says starting for an owed start only', () => {
+    expect(ciPlayDetail(play, new Set(['1']), null)).toBe(
+      'the platform is starting the manual job "build_composer" the project set to run (pipeline.ci.manual_jobs), and waits for its result',
+    );
+  });
+
+  it('after a 403 says decision 5’s sentence on every poll, and never starting', () => {
+    const words = ciPlayDetail(play, new Set(), [entry('2', 'refused')]) ?? '';
+    expect(words).toBe(
+      'the platform could not start "codeception"; start it on gitlab or give the account Developer access',
+    );
+    expect(words).not.toContain('starting');
+  });
+
+  it('names a binding that cannot start, a start the provider has not shown yet, and a trigger', () => {
+    expect(
+      ciPlayDetail({ ...play, triggers: ['deploy:tenants'] }, new Set(), [
+        entry('1', 'started'),
+        entry('3', 'unsupported'),
+      ]),
+    ).toBe(
+      'the platform started "build_composer" and waits for gitlab to run it; ' +
+        'the platform could not start "crawler-test": this git binding cannot start manual jobs; start it on gitlab; ' +
+        '"deploy:tenants" starts another pipeline, which the platform does not start; a person starts it on gitlab',
+    );
+  });
+
+  it('says a trial task starts nothing, and nothing at all when there is nothing to say', () => {
+    expect(ciPlayDetail(play, new Set(), null, true)).toContain(
+      'this is a trial task, so the platform starts no job',
+    );
+    expect(ciPlayDetail({ ...play, jobs: [] }, new Set(), null)).toBeNull();
   });
 });
 
