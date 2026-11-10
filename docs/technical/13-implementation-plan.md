@@ -2103,9 +2103,9 @@ Rules:
 - **No test runs locally**: CI is the verdict.
 - **Migrations as landed:** 0111 S-28.2 (`task_conversation_handled`), 0112 S-28.7 (`task_stages.ci_manual_started`), 0113
   S-28.8 (`approvals.auto_decided`), 0114 S-28.6 (`users.max_tasks_in_flight`), 0115 S-28.5 (`ticket_status_sweeps`,
-  `ticket_status_stops`); all `additive`. The reservation was 0112 S-28.6, 0113 S-28.7, 0114 S-28.8 (S-28.5 had taken
+  `ticket_status_stops`), 0116 S-28.10 (`task_provider_sync`); all `additive`. The reservation was 0112 S-28.6, 0113 S-28.7, 0114 S-28.8 (S-28.5 had taken
   0116); the slices landed in merge trains in another order, and `migrations:check` (rule 6) refuses a new file that
-  sorts before one already on `main`, so each train renumbered to the next free number. The next free number is 0116.
+  sorts before one already on `main`, so each train renumbered to the next free number. The next free number is 0117.
 - Backlog findings take **1563–1566** (1562 is TD-037's stated residual).
 - A slice's PR fixes the docs it makes false (technical/02, 03, 06, 08, 12, the guides) and adds its own LEDGER line.
 - **Lanes (parallel):** S-28.1 · S-28.2 · S-28.4 → S-28.5 · S-28.6 · S-28.7 · S-28.8 · S-28.9 run at once; they share only

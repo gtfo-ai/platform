@@ -463,7 +463,7 @@ export const createMemoryPipelineStore = (
   const contextPacks = new Map<Id, ContextPackRecord>();
   /** `tasks.budget_cap_usd` (WP-131 review round 1): not on `StoredTask`, as `save` never names it. */
   const budgetCaps = new Map<Id, number>();
-  /** `task_provider_sync` (S-28.10, migration 0115), keyed `task_id#subject` like its primary key. */
+  /** `task_provider_sync` (S-28.10, migration 0116), keyed `task_id#subject` like its primary key. */
   const providerSyncRows = new Map<string, { readonly taskId: Id; readonly row: ProviderSync }>();
   /** `tasks.ticket_claim` (migration 0088, WP-177): not on `StoredTask`, as `save` never names it. */
   const ticketClaims = new Map<Id, StoredTicketClaim>();

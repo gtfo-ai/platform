@@ -837,7 +837,7 @@ export const taskDutyLeases = pgTable(
 
 /**
  * A task's ticket status or merge request **out of sync** (S-28.10, TD-029's amendment C, migration
- * 0115): one row per task and subject while it is, deleted when a later move or read-back
+ * 0116): one row per task and subject while it is, deleted when a later move or read-back
  * succeeds. One writer, `pipeline/provider-sync.ts`.
  */
 export const taskProviderSync = pgTable(

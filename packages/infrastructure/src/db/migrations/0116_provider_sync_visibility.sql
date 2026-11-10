@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0115 — a ticket or a merge request out of sync is visible, never silent (S-28.10, TD-029's
+-- 0116 — a ticket or a merge request out of sync is visible, never silent (S-28.10, TD-029's
 -- amendment C).
 --
 -- AUT-6655 left twenty failed `transition_ticket` calls: Jira stayed at *Ready for Merge* beside a

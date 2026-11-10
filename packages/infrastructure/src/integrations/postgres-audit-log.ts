@@ -189,7 +189,7 @@ export const createPostgresIntegrationAuditLog = (
         entry.redactionCount,
         entry.attempts,
         entry.occurredAt,
-        // S-28.10 (migration 0115): a failed row keeps what failed — the code and the message the
+        // S-28.10 (migration 0116): a failed row keeps what failed — the code and the message the
         // executor already redacted and bounded — so the row alone answers "why".
         entry.status === 'failed' ? (entry.errorCode ?? null) : null,
         entry.status === 'failed' ? entry.error : null,

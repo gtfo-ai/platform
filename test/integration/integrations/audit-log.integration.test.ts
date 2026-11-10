@@ -561,7 +561,7 @@ describe('the columns migration 0013 added', () => {
 });
 
 /**
- * **A failed row keeps what failed** (S-28.10, TD-029's amendment C (1), migration 0115). AUT-6655
+ * **A failed row keeps what failed** (S-28.10, TD-029's amendment C (1), migration 0116). AUT-6655
  * left twenty failed `transition_ticket` rows that said nothing about why. Through the real executor
  * and the real adapter: the code is the `IntegrationError`'s, the message is the executor's own
  * redacted text — the planted credential is not in it — and a successful row keeps neither.

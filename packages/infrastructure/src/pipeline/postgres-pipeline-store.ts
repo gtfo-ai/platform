@@ -1592,7 +1592,7 @@ export const createPostgresPipelineStore = (
     },
 
     providerSync: async (tx, taskId) => {
-      // S-28.10 (migration 0115): what is out of sync now, parsed with the published shape.
+      // S-28.10 (migration 0116): what is out of sync now, parsed with the published shape.
       const { rows } = await sqlOf(tx).query<Record<string, unknown>>(
         `select subject, slot, target, observed, available, reason, reason_code,
                 to_char(failed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as failed_at,

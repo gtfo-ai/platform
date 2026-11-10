@@ -5,7 +5,7 @@
  * AUT-6655 left twenty failed `transition_ticket` calls: Jira stayed at *Ready for Merge* beside a
  * **Draft** merge request, and nothing on the task page said so — a failed lifecycle move was a
  * `warn` log (decision 4) and `mr_ready` trusted its own write. This module is the one writer of
- * `task_provider_sync` (migration 0115):
+ * `task_provider_sync` (migration 0116):
  *
  * - {@link recordTicketStatusOutOfSync} — a lifecycle move failed: the slot, the status the
  *   platform wanted, the provider's reason (redacted and bounded), what the ticket showed when it
@@ -29,7 +29,7 @@ import { type PipelineIntegrations, ticketReads } from './integrations.js';
 import type { StoredTask } from './store.js';
 import type { TaskTransactionOptions } from './task-transaction.js';
 
-/** The column bounds of `task_provider_sync` (migration 0115). */
+/** The column bounds of `task_provider_sync` (migration 0116). */
 export const PROVIDER_SYNC_TEXT_CHARS = 255;
 export const PROVIDER_SYNC_REASON_CHARS = 2000;
 export const PROVIDER_SYNC_AVAILABLE_MAX = 50;
