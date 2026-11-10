@@ -791,7 +791,7 @@ one sentence with its next step (`apps/web/src/ui/words/worker-idle.ts`).
 **A person's limit on tasks in flight** (S-28.6, the M28 ruling B on BD-010). `pipeline.wip.max_tasks_per_owner`
 (1–200; the organisation's value is the default and the maximum, a project may tighten it, 3 when
 nobody states one) holds the tasks a person owns that are `active`, `returned`, `waiting_answers` or
-`waiting_approval`, across every project; `users.max_tasks_in_flight` (migration 0112) replaces the
+`waiting_approval`, across every project; `users.max_tasks_in_flight` (migration 0114) replaces the
 default for them, never above the organisation's value. Since S-28.6 `max_tasks_in_pipeline` no longer
 counts `paused` or `needs_human`. Enforced at admission only — intake and the scheduler, which skips a
 queued task whose owner is full and stops only on the project's ceiling, under a per-owner advisory

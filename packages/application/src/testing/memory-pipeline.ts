@@ -234,7 +234,7 @@ export interface MemoryPipelineStore extends PipelineStore {
   /** Every task, for a test that wants to look without a transaction. */
   snapshot(): readonly StoredTask[];
   /**
-   * `users.max_tasks_in_flight` (S-28.6, migration 0112) — a person's own limit, `null` for none.
+   * `users.max_tasks_in_flight` (S-28.6, migration 0114) — a person's own limit, `null` for none.
    * The store has no users table; this is what `ownerAdmission` answers as `personalLimit`.
    */
   setPersonalTaskLimit(userId: Id, limit: number | null): void;

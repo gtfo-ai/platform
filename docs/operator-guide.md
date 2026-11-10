@@ -1091,7 +1091,7 @@ at once, applied to the next task the platform starts (nothing already running i
   (`max_tasks_in_pipeline`), so a project whose queue was held by stopped tasks starts queued ones
   after the upgrade, at the next event the scheduler hears.
 
-Migration 0112 adds the nullable `users.max_tasks_in_flight`; it is additive.
+Migration 0114 adds the nullable `users.max_tasks_in_flight`; it is additive.
 
 **Upgrading past the build that recovers lost reminders (WP-108).** A question or approval open on
 the day of the upgrade that was never reminded about — open before reminders existed, given its

@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0112 — a person's own limit on their tasks in flight (S-28.6, the M28 ruling B on BD-010).
+-- 0114 — a person's own limit on their tasks in flight (S-28.6, the M28 ruling B on BD-010).
 --
 -- The owner's feedback: the platform had one limit per project on how many tasks are in the
 -- pipeline, and "this should be per worker (user), each can have a separate limit, configurable".

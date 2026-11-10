@@ -1,5 +1,5 @@
 /**
- * **A person's task limit, against PostgreSQL 18** (S-28.6, the M28 ruling B; migration 0112):
+ * **A person's task limit, against PostgreSQL 18** (S-28.6, the M28 ruling B; migration 0114):
  * the column's range is the database's too, the writer refuses a number above the organisation's
  * maximum and writes nothing, a change writes one `user.task_limit` row and a repeat none, a raise
  * names the projects holding the person's queued tasks, and the read counts exactly the states the
