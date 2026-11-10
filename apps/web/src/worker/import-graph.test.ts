@@ -12,7 +12,8 @@
  *   module the page renders (`ui/phase-track.tsx` was one);
  * - **nothing under `viz/`** is reached (the lazy visualisations; `bundle:check` also refuses their
  *   marker in the built page);
- * - every `ui/words/*` module the page reaches is one this test names, so a new one is a decision.
+ * - every `ui/words/*` module the page reaches is one this test names, so a new one is a decision;
+ * - **the markdown reader** (`ui/markdown.tsx`, `ui/markdown-parse.ts`, S-28.9) is never reached.
  *
  * The walker is calibrated by walking the SPA's entry, which must reach `humanize.ts`.
  *
@@ -86,6 +87,16 @@ describe('the worker page’s import graph (BACKLOG 1455)', () => {
   it('never reaches ui/humanize.ts, and nothing of viz/*', () => {
     expect(graph.has('ui/humanize.ts')).toBe(false);
     expect([...graph].filter((name) => name.startsWith('viz/'))).toEqual([]);
+  });
+
+  // S-28.9: the page shows no prose, so the markdown reader stays out of its ~2 kB of headroom.
+  it('never reaches the markdown reader, which the SPA does', () => {
+    expect(graph.has('ui/markdown.tsx')).toBe(false);
+    expect(graph.has('ui/markdown-parse.ts')).toBe(false);
+    // Calibrated: the walker does find both from a screen that renders prose.
+    const inbox = staticGraph('features/inbox.tsx');
+    expect(inbox.has('ui/markdown.tsx')).toBe(true);
+    expect(inbox.has('ui/markdown-parse.ts')).toBe(true);
   });
 
   it('reaches exactly the ui/words modules it names', () => {

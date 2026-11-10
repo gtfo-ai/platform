@@ -11,7 +11,9 @@
  * sanitiser to get wrong — a deviation from TD-013, which names `streamdown`, and recorded as an
  * amendment on that decision rather than only here. This module turns a string into *data* — segments and blocks — and
  * `untrusted.tsx` turns that data into React elements, which React escapes when it writes them
- * into the DOM. A string therefore cannot become markup at any point, which is a property of the
+ * into the DOM. **Markdown is read the same way** (S-28.9, the M28 ruling, which is the WP-20
+ * amendment's own reopening clause): `markdown-parse.ts` parses it into a tree of plain objects and
+ * `markdown.tsx` maps the tree to React elements — markdown to elements, never to HTML. A string therefore cannot become markup at any point, which is a property of the
  * pipeline rather than of a filter.
  *
  * That matters because the alternative has a specific, repeated failure: WP-10 escaped a string
@@ -144,10 +146,12 @@ export const safeHref = (candidate: string): string | null => {
 /**
  * Splits sanitised text into plain runs and links.
  *
- * Markdown link syntax is **not** interpreted: `[label](javascript:…)` renders as those literal
- * characters. Interpreting it would mean deciding a label separately from a destination, which is
- * how a link's visible text comes to disagree with where it goes — and the only reason to want it
- * is prettiness.
+ * Markdown link syntax is **not** interpreted *here*: this is the reading of a plain line. A
+ * document's `[label](url)` is read by `markdown-parse.ts` and rendered by `MarkdownLink` in
+ * `untrusted.tsx`, which answers the objection this docblock used to make (a label deciding
+ * separately from its destination can disagree with where the link goes) by showing the
+ * destination's host beside any label that is not the URL, and renders a refused URL as the literal
+ * source characters (S-28.9).
  */
 export const segmentInline = (value: string): InlineSegment[] => {
   const sanitised = sanitiseUntrusted(value);
@@ -183,10 +187,12 @@ export type TextBlock =
   | { readonly kind: 'paragraph'; readonly value: string }
   | { readonly kind: 'code'; readonly language: string | null; readonly value: string };
 
-const FENCE = /^\s{0,3}(?:```|~~~)\s*([A-Za-z0-9_+#.-]*)\s*$/u;
+/** A fence line — shared with `ui/markdown-parse.ts`, so the two readers agree on what opens one. */
+export const FENCE = /^\s{0,3}(?:```|~~~)\s*([A-Za-z0-9_+#.-]*)\s*$/u;
 
 /**
- * The single markdown construct this app understands: the fenced code block.
+ * Paragraphs and fenced code only — the reading `markdown-parse.ts` falls back to above its size
+ * guard (`MAX_MARKDOWN_CHARS`), and the renderer every prose site used before S-28.9.
  *
  * It is understood because *not* understanding it is worse — a diff or a stack trace collapsed
  * into a paragraph is unreadable, and unreadable transcripts are why the run screen exists. It is
@@ -195,7 +201,7 @@ const FENCE = /^\s{0,3}(?:```|~~~)\s*([A-Za-z0-9_+#.-]*)\s*$/u;
  * tag is kept as a label (rendered as text) and is **not** used to select a highlighter — shiki
  * behind a worker is follow-up, and it is the piece that would need its own review.
  *
- * Everything else — `#`, `**`, `[]()`, `<b>`, `|tables|` — renders literally.
+ * Everything else — `#`, `**`, `[]()`, `<b>`, `|tables|` — stays literal in this reading.
  */
 export const segmentBlocks = (value: string): TextBlock[] => {
   const sanitised = sanitiseUntrusted(value);

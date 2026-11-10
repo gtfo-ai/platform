@@ -132,7 +132,11 @@ test('a provider setup guide and a knowledge document are text as well', async (
     .getByRole('navigation', { name: 'Knowledge files' })
     .getByRole('button', { name: 'architecture.md' })
     .click();
-  await expect(page.getByText('# Architecture', { exact: false })).toBeVisible();
+  // S-28.9: the page's markdown is parsed to React elements — `# Architecture` is a heading now —
+  // while its `<script>` stays characters and its fence stays a code block.
+  await expect(page.locator('[data-markdown] h3', { hasText: 'Architecture' })).toBeVisible();
+  await expect(page.getByText(HOSTILE.script, { exact: false }).first()).toBeVisible();
+  await expect(page.locator('pre code').filter({ hasText: 'graph TD;' })).toBeVisible();
   expect(await page.locator('main script').count()).toBe(0);
   expect(await page.evaluate(PWNED)).toBeUndefined();
 });

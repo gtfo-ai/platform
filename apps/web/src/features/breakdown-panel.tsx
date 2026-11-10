@@ -24,7 +24,8 @@
  *
  * Everything on a row is untrusted (BD-022): the title, description, rationale and criteria are
  * model output over an untrusted epic, the reason is a person's words, and the ticket URL is what a
- * provider answered. Text goes through `UntrustedText`/`UntrustedProse`; the URL through
+ * provider answered. Text goes through `UntrustedText`/`UntrustedProse`/`UntrustedInline` (markdown as React
+ * elements, S-28.9); the URL through
  * `ExternalLink`.
  */
 import type { TicketBreakdownItem } from '@platform/contracts';
@@ -40,7 +41,8 @@ import {
   Loading,
   SectionHeading,
 } from '../ui/kit.js';
-import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { UntrustedInline, UntrustedProse } from '../ui/markdown.js';
+import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { BREAKDOWN_ITEM_STATUS_LABEL } from '../ui/words/records.js';
 
 const STATUS_TONE = {
@@ -103,7 +105,7 @@ const ChildRow = ({
       </ul>
     )}
     <p className="text-xs text-fg-muted">
-      <UntrustedText value={item.rationale} />
+      <UntrustedInline value={item.rationale} />
     </p>
     {item.reason === null ? null : (
       <p className="text-xs">

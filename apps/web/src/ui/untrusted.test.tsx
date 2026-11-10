@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { UntrustedProse } from './markdown.js';
 import {
   CodeText,
   CopyableUrl,
@@ -9,7 +10,6 @@ import {
   NumberedCode,
   TerminalLines,
   TerminalText,
-  UntrustedProse,
   UntrustedText,
 } from './untrusted.js';
 
@@ -155,10 +155,11 @@ describe('UntrustedProse', () => {
     expect(container.querySelectorAll('a')).toHaveLength(1);
   });
 
-  it('renders a heading, a table and raw HTML as literal text', () => {
+  it('renders a heading as a scaled-down element and raw HTML as literal text (S-28.9)', () => {
     const value = '# Title\n<b>bold</b>\n| a | b |';
     const { container } = render(<UntrustedProse value={value} />);
-    expect(container.textContent).toContain('# Title');
+    // Markdown is parsed to React elements now; HTML is still never parsed at all.
+    expect(container.querySelector('h3')?.textContent).toBe('Title');
     expect(container.textContent).toContain('<b>bold</b>');
     expect(container.querySelector('b')).toBeNull();
     expect(container.querySelector('h1')).toBeNull();

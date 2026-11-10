@@ -9,23 +9,23 @@
  *
  * The same walk allows the `href=` and `src=` attributes **in this file only**, so every URL the
  * application renders passes through `safeHref` here (`UntrustedText` for a link found in text,
- * `ExternalLink` for a link a DTO carried).
+ * `ExternalLink` for a link a DTO carried, `MarkdownLink` for a link a markdown document wrote).
+ *
+ * Prose — markdown — is rendered by `ui/markdown.tsx` (`UntrustedProse`, `UntrustedInline`), which
+ * builds React elements from the tree `ui/markdown-parse.ts` reads and writes its links through
+ * `MarkdownLink` here. It is a module of its own so the worker's local page, which imports this one
+ * and shows no prose, does not carry the parser (`worker/import-graph.test.ts`).
  */
 import {
   type AnchorHTMLAttributes,
   type ComponentPropsWithRef,
   type HTMLAttributes,
   type ReactElement,
+  type ReactNode,
   type Ref,
   useState,
 } from 'react';
-import {
-  safeHref,
-  sanitiseUntrusted,
-  segmentBlocks,
-  segmentInline,
-  stripAnsi,
-} from './untrusted-text.js';
+import { safeHref, sanitiseUntrusted, segmentInline, stripAnsi } from './untrusted-text.js';
 
 export interface UntrustedProps {
   readonly value: string;
@@ -397,40 +397,65 @@ export const NumberedCode = ({ value, className }: UntrustedProps): ReactElement
 };
 
 /**
- * Untrusted prose: paragraphs and fenced code blocks, nothing else.
+ * A link a **markdown document** wrote — `[label](url)`, `<https://…>` or an image's `![alt](url)`
+ * (S-28.9, the M28 ruling). `ui/markdown.tsx` renders the document; the anchor is written here,
+ * because this is the one module `no-html.test.ts` lets write a URL attribute.
  *
- * This is what assistant text, artifact bodies, ticket descriptions and MR comments render as.
- * TD-013's title names `streamdown`, and technical/09 offers react-markdown + rehype-sanitize as
- * the alternative; both convert to HTML, and the conversion is the risk. **The deviation is
- * recorded where the decision is** — see the WP-20 amendment in
- * `docs/decisions/technical/TD-013-ui-stack.md`, which also states what would reopen it (a
- * renderer that emits React elements from an AST without ever producing HTML).
+ * The objection `segmentInline`'s docblock recorded against markdown links — *a label can disagree
+ * with where the link goes* — is answered on screen rather than by refusing the syntax: when the
+ * label is not the URL (or its host), the destination's host is shown beside it, as the parser
+ * normalised it (`new URL().host`, so an internationalised host reads as its `xn--` form). A label
+ * that spoofs another URL therefore reads `https://gitlab.com/x (evil.example)`.
+ *
+ * A URL {@link safeHref} refuses is not a link and not a struck-through label: it is the **literal
+ * source** — `[click me](javascript:…)` as those characters — with the reason in the `title`.
  */
-export const UntrustedProse = ({ value, className }: UntrustedProps): ReactElement => (
-  <div className={`flex flex-col gap-2 ${className ?? ''}`}>
-    {segmentBlocks(value).map((block, index) =>
-      block.kind === 'paragraph' ? (
-        <p
-          // biome-ignore lint/suspicious/noArrayIndexKey: blocks are positional and never reordered.
-          key={index}
-          className="whitespace-pre-wrap text-sm leading-relaxed"
-        >
-          <UntrustedText value={block.value} />
-        </p>
-      ) : (
-        // biome-ignore lint/suspicious/noArrayIndexKey: blocks are positional and never reordered.
-        <figure key={index} className="m-0">
-          {block.language === null ? null : (
-            <figcaption className="pb-1 font-mono text-[11px] text-fg-muted">
-              {block.language}
-            </figcaption>
-          )}
-          <CodeText value={block.value} />
-        </figure>
-      ),
-    )}
-  </div>
-);
+export const MarkdownLink = ({
+  url,
+  source,
+  labelText,
+  children,
+}: {
+  readonly url: string;
+  /** The literal markdown the link was written as, shown when the URL is refused. */
+  readonly source: string;
+  /** The label's words, compared with the URL to decide whether the host is shown. */
+  readonly labelText: string;
+  readonly children: ReactNode;
+}): ReactElement => {
+  const resolved = safeHref(url);
+  if (resolved === null) {
+    return (
+      <span
+        data-link-refused="true"
+        title={`Not shown as a link: ${sanitiseUntrusted(url)} is not an http(s) URL.`}
+      >
+        {sanitiseUntrusted(source)}
+      </span>
+    );
+  }
+  const destination = new URL(resolved).host;
+  const label = labelText.trim().toLowerCase();
+  const labelIsTheUrl =
+    label === url.trim().toLowerCase() ||
+    label === resolved.toLowerCase() ||
+    label === destination.toLowerCase();
+  return (
+    <>
+      <a
+        href={resolved}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        className="text-accent underline underline-offset-2"
+      >
+        {children}
+      </a>
+      {labelIsTheUrl ? null : (
+        <span className="text-fg-muted" data-link-host="">{` (${destination})`}</span>
+      )}
+    </>
+  );
+};
 
 /** A JSON value rendered as text. Used for tool inputs and MCP payloads. */
 export const JsonView = ({ value }: { readonly value: unknown }): ReactElement => {

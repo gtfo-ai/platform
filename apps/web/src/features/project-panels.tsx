@@ -51,12 +51,13 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { UntrustedProse } from '../ui/markdown.js';
 import { NavList, type NavListGroup } from '../ui/nav-list.js';
 import { rowLink } from '../ui/row-link.js';
 import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
-import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { CodeText, JsonView, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import {
   BUDGET_SCOPE_LABEL,

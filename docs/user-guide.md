@@ -1317,8 +1317,9 @@ such, and so are the failing jobs past the fifth.
   Like any run it needs an instance whose runner is configured (section 13).
   Ask *why did it stop?* or *what am I supposed to decide?* and the answer starts from where the task
   is now — its stop, the escalation's reason and brief, the CI wait it is on or that ran out — in
-  plain sentences that name a run by its stage and attempt. The page shows the answer exactly as
-  written, so it never renders Markdown. A question that got no answer says why in words (*The
+  plain sentences that name a run by its stage and attempt. The answer's Markdown — lists, bold,
+  code, links — is shown formatted, built as page elements rather than HTML, so nothing in it can
+  run; a link whose text is not its own address shows where it really goes beside it. A question that got no answer says why in words (*The
   answer didn't come back in the expected shape*, *The run was cancelled before it answered*, …),
   links the run that tried, and offers **Ask again** with your question filled in; the platform
   never shows a half-shaped answer it could not check.
@@ -1382,9 +1383,10 @@ Then four tabs:
   worker — reads **no result** once the run has ended, never *running*. The model's words are prose between the steps, and its
   thinking stays folded under *Thinking*. The log scrolls in a pane of its own, sized to the window:
   at the bottom it follows the end; scroll up and it stays where you are, with **Paused updates, N
-  behind**, until you press **Follow tail**. Everything in it is rendered as **text**; the
-  application has no markdown-to-HTML step anywhere, on purpose, because all of it — model output,
-  tool results, file contents — is untrusted
+  behind**, until you press **Follow tail**. Everything in it is rendered as **text** or as
+  page elements built from it — the model's Markdown is formatted (headings, lists, bold, code,
+  tables), but the application has no markdown-to-HTML step anywhere, on purpose, because all of it
+  — model output, tool results, file contents — is untrusted
   ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)). The platform's and the CLI's
   own rows say what happened on the row — *The platform stopped the run · it stopped producing
   anything for too long*, *The model API failed; retrying · attempt 2 of 10 · rate limited*, *The CLI

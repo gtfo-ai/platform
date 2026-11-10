@@ -112,6 +112,31 @@ describe('TranscriptView', () => {
     expect(screen.getByText('$1.50', { exact: false })).toBeTruthy();
   });
 
+  // S-28.9: the model's words are markdown, rendered as elements — a streaming half stays text.
+  it('renders assistant text as markdown, and a half-written mark as the characters so far', () => {
+    const { container } = render(
+      <TranscriptView
+        blocks={[
+          {
+            kind: 'text',
+            id: 'a',
+            seq: 1,
+            at: AT,
+            text: '## Plan\n1. **Read** `retry.ts`\n2. Change it',
+            streaming: false,
+          },
+          { kind: 'text', id: 'b', seq: 2, at: AT, text: 'Now **writ', streaming: true },
+        ]}
+      />,
+    );
+    const [done, streaming] = [...container.querySelectorAll('[data-block-kind="text"]')];
+    expect(done?.querySelector('h4')?.textContent).toBe('Plan');
+    expect(done?.querySelectorAll('ol > li')).toHaveLength(2);
+    expect(done?.querySelector('strong')?.textContent).toBe('Read');
+    expect(done?.querySelector('code')?.textContent).toBe('retry.ts');
+    expect(streaming?.textContent).toContain('Now **writ');
+  });
+
   // S-23.22: the end row says why in the run page's words, never the SDK's raw reason.
   it.each([
     ['error_max_turns', 'Ended because: Ran out of turns'],

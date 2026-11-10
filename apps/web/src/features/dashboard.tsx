@@ -74,6 +74,7 @@ import {
   Metric,
 } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { markdownToPlainText } from '../ui/markdown-parse.js';
 import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
@@ -446,7 +447,8 @@ const NeedsYouBox = ({
         projectId: null,
         ticket: null,
         stage: question.stage,
-        text: firstLine(question.text),
+        // The question is markdown; its first line is a row title, so the marks come off.
+        text: markdownToPlainText(firstLine(question.text)),
         at: question.asked_at,
       }),
     ),

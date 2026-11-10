@@ -35,6 +35,7 @@ import { Blankslate } from '../ui/blankslate.js';
 import { Button, buttonClassName } from '../ui/button.js';
 import { configFieldLabel } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime } from '../ui/kit.js';
+import { UntrustedProse } from '../ui/markdown.js';
 import type { NavLinkProps } from '../ui/nav-item.js';
 import { PageHeader } from '../ui/page-header.js';
 import { PROVIDER_TRADEMARK_NOTICE, ProviderIcon } from '../ui/provider-icon.js';
@@ -42,7 +43,7 @@ import { formatAgo } from '../ui/relative-time.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StateLabel } from '../ui/status.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
-import { CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { CopyableUrl, UntrustedText } from '../ui/untrusted.js';
 import { INTEGRATION_HEALTH_LABEL, INTEGRATION_TYPE_LABEL } from '../ui/words/integrations.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {

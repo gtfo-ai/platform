@@ -217,6 +217,26 @@ describe('the ask-the-task thread', () => {
     expect(container.querySelector('b')).toBeNull();
   });
 
+  it('renders a markdown answer as elements: a list, bold and inline code (S-28.9)', async () => {
+    const answered: TaskAsk = {
+      ...ANSWERED,
+      answer: 'Two reasons:\n- **speed**: no join on `task_page`\n- **size**: one column',
+    };
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor([answered]), realtime: false }).element,
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-markdown] ul')).not.toBeNull();
+    });
+    const items = [...(container.querySelector('[data-markdown] ul')?.children ?? [])];
+    expect(items.map((item) => item.querySelector('strong')?.textContent)).toEqual([
+      'speed',
+      'size',
+    ]);
+    expect(items[0]?.querySelector('code')?.textContent).toBe('task_page');
+    expect(container.textContent).not.toContain('**speed**');
+  });
+
   it('links a run citation and an artifact citation, and names the ones it cannot link', async () => {
     const { container } = render(
       createApp({ fetchImpl: fetchFor([ANSWERED]), realtime: false }).element,

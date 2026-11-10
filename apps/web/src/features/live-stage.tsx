@@ -13,7 +13,8 @@
  * frame the run writes — so the clock moves while the agent works and stops when it is silent,
  * which is itself an answer to the question.
  *
- * The summary is the model's words (BD-022): a text node through `UntrustedText`, never markup.
+ * The summary is the model's words (BD-022): inline markdown through `UntrustedInline` — React
+ * elements, never markup.
  *
  * **Below the line, the run's transcript as it happens** (WP-154 (c), backlog 455 item (4)): the
  * run page's `TranscriptView` over the same store and the same `run:<id>` subscription this panel
@@ -27,7 +28,7 @@ import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { RUN_STATUS_LABEL, runSubject } from '../ui/humanize.js';
 import { Badge, Card, formatElapsed, formatInteger } from '../ui/kit.js';
-import { UntrustedText } from '../ui/untrusted.js';
+import { UntrustedInline } from '../ui/markdown.js';
 
 /** The bounded live transcript, in its own chunk (see the module note). */
 const LiveTranscript = lazy(async () => ({
@@ -111,7 +112,7 @@ export const LiveStagePanel = ({ run }: { readonly run: RunRecord }): ReactEleme
                 <Badge tone="accent">{`${formatInteger(progress.percent_complete)}%`}</Badge>
               )}
               <span data-testid="live-stage-progress">
-                <UntrustedText value={progress.summary} />
+                <UntrustedInline value={progress.summary} />
               </span>
               <span className="text-xs text-fg-muted">
                 {`${formatElapsed(progress.at, current)} ago`}

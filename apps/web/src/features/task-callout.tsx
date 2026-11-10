@@ -81,7 +81,8 @@ import type { useTaskCommands } from '../app/queries.js';
 import { Flash } from '../ui/flash.js';
 import { APPROVAL_KIND_LABEL, QUESTION_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
 import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
-import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { UntrustedInline, UntrustedProse } from '../ui/markdown.js';
+import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { ReadyBlockedNotice, readyBlockedPipeline } from './ci-manual-not-run.js';
@@ -168,7 +169,7 @@ const QuestionCard = ({
           {question.answer === null || question.answer === undefined ? null : (
             <>
               {' — '}
-              <UntrustedText value={question.answer} />
+              <UntrustedInline value={question.answer} />
             </>
           )}
         </p>

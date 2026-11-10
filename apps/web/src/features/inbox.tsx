@@ -49,6 +49,8 @@ import { DetailsDisclosure } from '../ui/details.js';
 import { stageLabel } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { UntrustedProse } from '../ui/markdown.js';
+import { markdownToPlainText } from '../ui/markdown-parse.js';
 import { NavList } from '../ui/nav-list.js';
 import { PageHeader } from '../ui/page-header.js';
 import { formatAgo } from '../ui/relative-time.js';
@@ -56,7 +58,7 @@ import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { inboxRows } from '../ui/task-status.js';
-import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { APPROVAL_WAIT_WORDS } from '../ui/words/approvals.js';
 import { ApprovalSummary } from './approval-summary.js';
@@ -219,7 +221,10 @@ const QuestionRow = ({
             >
               <ChevronRightIcon size={16} />
             </span>
-            <UntrustedText value={firstLine(question.text)} className="line-clamp-2" />
+            <UntrustedText
+              value={markdownToPlainText(firstLine(question.text))}
+              className="line-clamp-2"
+            />
           </button>
         }
         meta={

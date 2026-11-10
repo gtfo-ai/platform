@@ -6,8 +6,8 @@
  * ## Everything here is untrusted, in both directions
  *
  * The **question** is a human's free text and the **answer** is a model's, so both go through
- * `UntrustedProse`/`UntrustedText` as React text nodes (BD-022). There is no markdown-to-HTML step
- * and nothing to undo; `apps/web/src/no-html.test.ts` fails the build if one appears.
+ * `UntrustedProse`/`UntrustedText` (BD-022): markdown parsed to React elements (S-28.9), never to
+ * HTML, so there is nothing to undo; `apps/web/src/no-html.test.ts` fails the build on a markup sink.
  *
  * A **citation carries no URL**, deliberately: `askAnswerCitationSchema` names a *row* — a run id,
  * an artifact type and version, a `human_actions` id, a vault path — and this component builds the
@@ -47,7 +47,8 @@ import {
   Loading,
   SectionHeading,
 } from '../ui/kit.js';
-import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { UntrustedProse } from '../ui/markdown.js';
+import { UntrustedText } from '../ui/untrusted.js';
 import { ASK_CITATION_KIND_LABEL } from '../ui/words/records.js';
 
 /** The four states an ask can be in, as one line a person can read. */

@@ -1017,6 +1017,53 @@ describe('the needs-you callout', () => {
     });
   });
 
+  /**
+   * S-28.9 (the owner's screenshot): a plan written in markdown read as one wall of `**`, backticks
+   * and `1)` points. It is now a numbered list with bold lead-ins and inline code.
+   */
+  it('renders a markdown plan as a numbered list with bold lead-ins and inline code (S-28.9)', async () => {
+    const approach = [
+      'Round once, at the boundary:',
+      '1) **Add the column** `vat_cents` to invoices.',
+      '2) **Round** in `src/vat.ts`, never on read.',
+    ].join('\n');
+    start(
+      detail({ approvals: [APPROVAL_ROW], artifacts: [PLAN_REF] }, { state: 'waiting_approval' }),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+      {
+        [`/api/artifacts/${PLAN}`]: () =>
+          json({
+            id: PLAN,
+            task_id: TASK,
+            artifact_type: 'ImplementationPlan',
+            version: 2,
+            schema_version: '1',
+            produced_by_run_id: null,
+            created_at: AT,
+            redaction_count: 0,
+            markdown: null,
+            data: { ...PLAN_DATA, approach, risks: ['**drift** on `old` invoices'] },
+          }),
+      },
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const card = within(callout).getByRole('region', { name: 'Plan approval' });
+    await waitFor(() => {
+      expect(card.querySelector('[data-approval-plan="parsed"] ol')).not.toBeNull();
+    });
+    const steps = [...(card.querySelector('[data-approval-plan="parsed"] ol')?.children ?? [])];
+    expect(steps).toHaveLength(2);
+    expect(steps[0]?.querySelector('strong')?.textContent).toBe('Add the column');
+    expect(steps[0]?.querySelector('code')?.textContent).toBe('vat_cents');
+    expect(steps[1]?.textContent).toContain('2)');
+    // A list entry (the inline variant) reads its marks too.
+    const risks = within(card).getByText('Risks').parentElement;
+    expect(risks?.querySelector('strong')?.textContent).toBe('drift');
+    expect(risks?.querySelector('code')?.textContent).toBe('old');
+    expect(card.textContent).not.toContain('**');
+  });
+
   it('opens the same card from the header’s Review plan, and has no second approve dialog', async () => {
     const user = userEvent.setup();
     start(detail({ approvals: [APPROVAL_ROW] }, { state: 'waiting_approval' }));

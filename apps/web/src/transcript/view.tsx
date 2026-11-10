@@ -25,8 +25,9 @@ import { type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { terminalReasonLabel } from '../ui/humanize.js';
 import { Badge, Button, formatInteger, formatUsd } from '../ui/kit.js';
+import { UntrustedInline, UntrustedProse } from '../ui/markdown.js';
 import { StatusIcon } from '../ui/status.js';
-import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { CodeText, JsonView, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { toolDecisionLabel } from '../ui/words/tool-decisions.js';
 import type { ToolBlock, TranscriptBlock } from './blocks.js';
@@ -325,7 +326,7 @@ const BlockView = ({
             <Badge tone="accent">{`${formatInteger(block.percentComplete)}%`}</Badge>
           )}
           <span>
-            <UntrustedText value={block.summary} />
+            <UntrustedInline value={block.summary} />
           </span>
           {block.truncated ? (
             <span className="text-xs text-fg-muted">(shortened by the platform)</span>

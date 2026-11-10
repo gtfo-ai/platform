@@ -18,8 +18,10 @@
  * was shown. The header's *Review plan* moves focus here ({@link approvalCardId}); it opens nothing
  * else. Not the page's amber primary: the header's button is (one beacon per screen).
  *
- * **Everything in the plan is model output** (BD-022) and is rendered through `ui/untrusted.tsx` as
- * text — no markdown step, no link it did not pass through `safeHref`.
+ * **Everything in the plan is model output** (BD-022). Its prose is markdown and is rendered by
+ * `ui/markdown.tsx` as React elements (S-28.9: numbered steps, bold lead-ins and inline code read as
+ * such, never as `**` and backticks), its list entries by the inline variant; no string becomes
+ * markup and no link reaches the page without passing `safeHref`.
  */
 import type { ApprovalReason, ApprovalView, TaskDetailResponse } from '@platform/contracts';
 import { implementationPlanDataSchema, MAX_COMMAND_TEXT_CHARS } from '@platform/contracts';
@@ -31,7 +33,8 @@ import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { APPROVAL_KIND_LABEL, stageLabel } from '../ui/humanize.js';
 import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd, Loading } from '../ui/kit.js';
-import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { UntrustedInline, UntrustedProse } from '../ui/markdown.js';
+import { UntrustedText } from '../ui/untrusted.js';
 import { approveConsequence, reasonCopy, rejectConsequence, rejectNext } from './approval-text.js';
 
 type TaskCommands = ReturnType<typeof useTaskCommands>;
@@ -69,7 +72,7 @@ const TextList = ({ items }: { readonly items: readonly string[] }): ReactElemen
       {items.map((item, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: a plan's list is positional and never reordered.
         <li key={index}>
-          <UntrustedText value={item} />
+          <UntrustedInline value={item} />
         </li>
       ))}
     </ul>
@@ -120,7 +123,7 @@ const PlanBody = ({
               <li key={index}>
                 <UntrustedText value={file.path} className="font-mono text-xs" />
                 {' — '}
-                <UntrustedText value={file.change} />
+                <UntrustedInline value={file.change} />
               </li>
             ))}
           </ul>

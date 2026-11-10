@@ -4,10 +4,11 @@
  * artifact *addressable*: the ask thread's citation and the flow's *Open artifact* set the same
  * parameter, and a link that names one opens this tab on it (`./task-tab.ts`).
  *
- * **It renders JSON and prose as text, never markup, and never a link.** The document is a model's
- * structured output (BD-022), so its markdown goes through `UntrustedProse` and its data through
- * `UntrustedText` inside a `<pre>` — collapsed behind *Raw JSON* when the document has prose of its
- * own: no markdown step, no sanitiser, no `href` (`apps/web/src/no-html.test.ts`). `<pre>` is a
+ * **It renders JSON and prose as React elements, never markup.** The document is a model's
+ * structured output (BD-022), so its markdown goes through `UntrustedProse` (parsed to elements,
+ * S-28.9; a link only through `safeHref`, with its host shown when the label differs) and its data
+ * through `UntrustedText` inside a `<pre>` — collapsed behind *Raw JSON* when the document has prose
+ * of its own: no HTML step, no sanitiser (`apps/web/src/no-html.test.ts`). `<pre>` is a
  * layout decision about whitespace, not a rendering mode.
  *
  * Every artifact used to be a row a reader could see and not open: the task projection published
@@ -30,7 +31,8 @@ import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { ARTIFACT_TYPE_LABEL } from '../ui/humanize.js';
 import { EmptyState, ErrorNotice, formatDateTime, Loading } from '../ui/kit.js';
-import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { UntrustedProse } from '../ui/markdown.js';
+import { UntrustedText } from '../ui/untrusted.js';
 
 const ArtifactBody = ({
   taskId,

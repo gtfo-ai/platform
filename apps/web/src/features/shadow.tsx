@@ -76,10 +76,11 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { UntrustedProse } from '../ui/markdown.js';
 import { MetricStrip } from '../ui/metric-strip.js';
 import { ROW_LINK_HOST, ROW_LINK_LIFT, rowLink } from '../ui/row-link.js';
 import { StateLabel, StatusIcon } from '../ui/status.js';
-import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 
 /** `0.42` → `42 %`, the one place this screen turns a unit interval into a percentage. */
 const percent = (value: number): string => `${Math.round(value * 100)} %`;

@@ -471,6 +471,27 @@ describe('a question row', () => {
     expect(container.textContent).toContain('<img src=x');
     expect(container.querySelector('main img')).toBeNull();
   });
+
+  /** S-28.9: the owner's "missing MD parser" in the inbox — the title plain, the body as markdown. */
+  it('titles the row with the marks taken off and renders the expanded question as markdown', async () => {
+    inbox = {
+      questions: [
+        question({
+          text: '**Which** budget, `3` or `5`?\n1) **Three** keeps it fast\n2) **Five** is safer',
+        }),
+      ],
+      approvals: [],
+      ci_held: [],
+      escalated: [],
+    };
+    const container = await renderInbox(fakeServer().fetchImpl);
+    const toggle = screen.getByRole('button', { name: 'Which budget, 3 or 5?' });
+    await userEvent.setup().click(toggle);
+    const steps = [...(container.querySelector('main [data-markdown] ol')?.children ?? [])];
+    expect(steps).toHaveLength(2);
+    expect(steps[0]?.querySelector('strong')?.textContent).toBe('Three');
+    expect(container.querySelector('main [data-markdown] code')?.textContent).toBe('3');
+  });
 });
 
 describe('firstLine', () => {

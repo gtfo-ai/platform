@@ -105,7 +105,12 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
   }
   if (url.includes('/kb/doc')) {
     const path = new URL(url, 'http://localhost').searchParams.get('path') ?? '';
-    return json({ path, commit_sha: null, frontmatter: {}, content: `The page at ${path}.` });
+    // S-28.9: one page written in markdown, the way a vault page is.
+    const content =
+      path === 'guide.md'
+        ? '# Guide\n\n- **API** talks to `db`\n- see [the runbook](https://wiki.example.test/run)'
+        : `The page at ${path}.`;
+    return json({ path, commit_sha: null, frontmatter: {}, content });
   }
   if (url.endsWith('/api/projects')) {
     return json({
@@ -387,6 +392,21 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     expect(
       within(files).getByRole('button', { name: 'architecture.md' }).getAttribute('aria-pressed'),
     ).toBe('true');
+  });
+
+  it('renders a markdown document as elements: heading, list, bold, code and a link with its host', async () => {
+    treePaths = ['guide.md'];
+    await renderScreen();
+    const files = await screen.findByRole('navigation', { name: 'Knowledge files' });
+    await userEvent.setup().click(within(files).getByRole('button', { name: 'guide.md' }));
+    const heading = await screen.findByRole('heading', { name: 'Guide' });
+    const page = heading.closest('[data-markdown]');
+    expect(page?.querySelector('strong')?.textContent).toBe('API');
+    expect(page?.querySelector('code')?.textContent).toBe('db');
+    expect(page?.querySelectorAll('ul > li')).toHaveLength(2);
+    expect(page?.querySelector('a')?.getAttribute('href')).toBe('https://wiki.example.test/run');
+    expect(page?.querySelector('[data-link-host]')?.textContent).toBe(' (wiki.example.test)');
+    expect(page?.textContent).not.toContain('# Guide');
   });
 
   /**

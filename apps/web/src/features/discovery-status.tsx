@@ -37,6 +37,7 @@ import { useProjectReadiness, useRediscoveryGate, useTask } from '../app/queries
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { Badge, type BadgeTone, ErrorReason, formatDateTime, formatInteger } from '../ui/kit.js';
+import { UntrustedInline } from '../ui/markdown.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { latestProgressOf, liveStageRun } from './live-stage.js';
 
@@ -89,7 +90,7 @@ const RunningLine = ({ run }: { readonly run: RunRecord }): ReactElement => {
           {progress.percent_complete === null ? null : (
             <Badge tone="accent">{`${formatInteger(progress.percent_complete)}%`}</Badge>
           )}{' '}
-          <UntrustedText value={progress.summary} />
+          <UntrustedInline value={progress.summary} />
         </span>
       )}
       <Link to="/runs/$runId" params={{ runId: run.id }} className="text-accent underline">
@@ -189,7 +190,7 @@ export const DiscoveryStatus = ({
             {/* The brief says why in words; the reason is a producer's code (`run <id>: …` from
                 the lease sweep), so it is not shown (BACKLOG 1263). */}
             It is waiting for a person since {formatDateTime(escalation.at)}:{' '}
-            <UntrustedText value={escalation.brief} />
+            <UntrustedInline value={escalation.brief} />
             {escalation.brief_original_chars === null ? null : (
               <span className="text-fg-muted">
                 {' '}
