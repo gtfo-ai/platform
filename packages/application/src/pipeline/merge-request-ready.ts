@@ -57,7 +57,12 @@
  * marks it ready again, and nobody waits on the draft.
  */
 import type { Id } from '@platform/contracts';
-import { compilePipeline, READY_FOR_MERGE_STAGE, stageOf } from '@platform/domain';
+import {
+  compilePipeline,
+  MERGED_GATE_STAGE,
+  READY_FOR_MERGE_STAGE,
+  stageOf,
+} from '@platform/domain';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
@@ -137,6 +142,16 @@ const mergeRequestDraftStateHandler = (options: PipelineSagaOptions): EventHandl
   handle: async (context: HandlerContext) => {
     const event = context.event.event;
     if (event.type === 'task.stage.entered') {
+      if (event.payload.stage === MERGED_GATE_STAGE) {
+        // S-28.10: the merge request is merged — whatever said it was still a draft is history.
+        // In the handler's own transaction: a narrow delete, nothing for a job to call.
+        await options.store.tasks.clearProviderSync(
+          context.scope.tx,
+          event.payload.task_id,
+          'merge_request_draft',
+        );
+        return;
+      }
       if (event.payload.stage !== READY_FOR_MERGE_STAGE) {
         return;
       }
@@ -384,7 +399,12 @@ export const runMergeRequestReady = async (
   // Read first, as `mr_draft` does: a re-entry into Ready that nothing drafted in between (a
   // default-branch move re-checks the rebase gate and comes straight back) writes nothing.
   const live = await gitReads(integrations).mergeRequest(mr, context);
-  if (live === null || live.state !== 'opened') {
+  if (live === null) {
+    return 'unchanged';
+  }
+  if (live.state !== 'opened') {
+    // Merged or closed on the provider: a draft notice about it would outlive the draft (S-28.10).
+    await clearOutOfSync(options, taskId, 'merge_request_draft');
     return 'unchanged';
   }
   const slotKey = `ticket_lifecycle:${taskId}:ready_for_merge:${String(data.cause_event_id)}`;

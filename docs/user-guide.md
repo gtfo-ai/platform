@@ -1273,8 +1273,9 @@ so in a box of its own: *"Ticket status out of sync: Jira still says Ready for M
 wanted In Progress (when work starts) — Jira offers no such move from there (it offers: Released)."*,
 with Jira's own reason, how many times it refused, **Retry** (asks the tracker again) and **Open in
 Jira**. The box goes away by itself when a later move goes through. After marking the merge request
-ready, the platform reads it back; if it is still a draft, the page says *"The merge request is
-still a draft on GitLab"* with a link, and the task is escalated once the retries are spent. A
+ready, the platform reads it back; if it is still a draft, the **Ready** box itself says *"The merge
+request is still a draft on GitLab — it cannot be merged yet"* with a link to mark it ready, and the
+task is escalated once the retries are spent. A finished task shows none of this. A
 binding may also map the optional **Ready for merge** slot: the ticket is moved there only once the
 merge request has read back as no longer a draft, so the tracker never says *ready* about a draft.
 ### QA, and sending a task back from QA or Ready

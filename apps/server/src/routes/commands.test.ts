@@ -35,6 +35,7 @@ import {
   TaskConflictExhaustedError,
   TaskNotPausedByItsCapError,
   TicketInSyncError,
+  TicketSyncTaskFinishedError,
   UnknownAggregateError,
 } from '@platform/application';
 import { type JsonObject, RUN_CANCEL_PAUSE_REASON, type UserRole } from '@platform/contracts';
@@ -884,6 +885,12 @@ describe('what each refusal maps to', () => {
       error: new TicketInSyncError(TASK as never),
       status: 409,
       code: 'ticket_in_sync',
+    },
+    {
+      // S-28.10 review: and never on a finished task.
+      error: new TicketSyncTaskFinishedError(TASK as never, 'done'),
+      status: 409,
+      code: 'ticket_sync_task_finished',
     },
     {
       // WP-159 ruling (b): a retry's model nobody chose on purpose.

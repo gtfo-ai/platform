@@ -37,6 +37,7 @@ import {
   TaskConflictExhaustedError,
   TaskNotPausedByItsCapError,
   TicketInSyncError,
+  TicketSyncTaskFinishedError,
   UnknownAggregateError,
 } from '@platform/application';
 import type { ApiError } from '@platform/contracts';
@@ -240,6 +241,10 @@ export const commandRefusal = (
       { path: 'reserve_usd', message: String(figures.reserve_usd) },
       { path: 'cap_usd', message: String(figures.cap_usd) },
     ]);
+  }
+  if (error instanceof TicketSyncTaskFinishedError) {
+    // S-28.10: a finished task's ticket is no longer the platform's to move.
+    return new HttpError(409, 'ticket_sync_task_finished', error.message);
   }
   if (error instanceof TicketInSyncError) {
     // S-28.10: Retry on a ticket whose status is not out of sync — nothing to retry.

@@ -702,3 +702,46 @@ describe('a plan that went ahead without approval, on the card (S-28.8)', () => 
     expect(document.querySelector('[data-card-went-ahead]')).toBeNull();
   });
 });
+
+/**
+ * S-28.10 (TD-029's amendment C (3)): at Ready, a merge request that read back as a draft after the
+ * platform marked it ready is said **in the Ready callout** — it cannot be merged yet, what the
+ * platform does about it, and a link to mark it ready — and nothing is said once it is in sync.
+ */
+describe('the Ready callout over a merge request still a draft (S-28.10)', () => {
+  const ready = {
+    state: 'ready_for_merge' as const,
+    current_stage: 'ready_for_merge',
+    mr_ref: {
+      provider: 'gitlab',
+      iid: 7,
+      url: 'https://gitlab.example.invalid/acme/api/-/merge_requests/7',
+    },
+  };
+  const STILL_DRAFT = {
+    subject: 'merge_request_draft' as const,
+    slot: null,
+    target: 'ready',
+    observed: 'draft',
+    available: null,
+    reason: 'still a draft after it was marked ready',
+    reason_code: 'still_draft',
+    failed_at: RETURNED_AT,
+    attempts: 1,
+  };
+
+  it('says the merge request cannot be merged yet, and links to mark it ready', () => {
+    renderCallout(detail({ returns: [], stages: [], provider_sync: [STILL_DRAFT] }, ready));
+    const notice = screen.getByTestId('ready-still-draft-notice');
+    expect(notice.textContent).toContain(
+      'The merge request is still a draft on GitLab — it cannot be merged yet.',
+    );
+    expect(notice.textContent).toContain('Mark it ready on GitLab');
+    expect(notice.textContent).not.toMatch(/can be merged now/i);
+  });
+
+  it('says nothing about a draft when nothing is out of sync', () => {
+    renderCallout(detail({ returns: [], stages: [], provider_sync: [] }, ready));
+    expect(screen.queryByTestId('ready-still-draft-notice')).toBeNull();
+  });
+});

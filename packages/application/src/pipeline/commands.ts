@@ -103,6 +103,7 @@ import type {
   StoredTask,
 } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
+import { RETRY_KEY_PREFIX } from './ticket-lifecycle.js';
 import {
   type ApplyOptions,
   applyDecision,
@@ -2668,6 +2669,17 @@ export const handBackTaskCommand = async (
   );
 };
 
+/**
+ * **Retry** on a finished task (S-28.10): a done or cancelled task's ticket is no longer the
+ * platform's to move, so the record is history and nothing is retried (409).
+ */
+export class TicketSyncTaskFinishedError extends Error {
+  override readonly name = 'TicketSyncTaskFinishedError';
+  constructor(taskId: Id, state: string) {
+    super(`task ${taskId} is ${state}, so the platform no longer moves its ticket`);
+  }
+}
+
 /** **Retry** on a task whose ticket status is not out of sync: nothing to retry (409). */
 export class TicketInSyncError extends Error {
   override readonly name = 'TicketInSyncError';
@@ -2701,6 +2713,9 @@ export const retryTicketSyncCommand = async (
   if (found === null) {
     throw new TicketInSyncError(input.taskId);
   }
+  if (isTaskFinished(found.stored.task)) {
+    throw new TicketSyncTaskFinishedError(input.taskId, found.stored.task.state);
+  }
   if (deps.jobs === null) {
     throw new CommandsUnavailableError(
       'this process runs no job workers, so it cannot move the ticket. Ask an instance that runs the workers',
@@ -2714,7 +2729,7 @@ export const retryTicketSyncCommand = async (
     cause_event_id: wakeUp,
     status: found.row.target,
     ...(found.row.slot === null ? {} : { lifecycle_slot: found.row.slot }),
-    lifecycle_key: `ticket_lifecycle_retry:${input.taskId}:${wakeUp}`,
+    lifecycle_key: `${RETRY_KEY_PREFIX}${input.taskId}:${wakeUp}`,
   });
   return { status: found.row.target, slot: found.row.slot };
 };

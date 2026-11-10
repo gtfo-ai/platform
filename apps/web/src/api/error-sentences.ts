@@ -285,6 +285,8 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
     'The run has already ended, so there is nothing to stop or message. Re-run it from the task page if it is still needed.',
   budget_not_raised: 'The new cap must be above the cap in force. Enter a higher figure.',
   // S-28.10: Retry pressed on a ticket whose status is already where the platform wanted it.
+  ticket_sync_task_finished:
+    'The task has finished, so the platform no longer moves its ticket. Change the ticket’s status in the tracker if it still needs to move.',
   ticket_in_sync:
     'The ticket’s status is no longer out of sync, so there is nothing to retry. Reload the page to see where it stands.',
   // S-28.1 (M28 ruling 2): a raise the next run would still not fit under, with its arithmetic.

@@ -2433,8 +2433,8 @@ export const findTaskDetail = async (
     ci_manual_not_run: ciManualNotRunOf(stageRows),
     // S-28.7: the manual jobs the platform started (or could not) on the latest CI attempt.
     ci_manual_started: ciManualStartedOf(stageRows),
-    // S-28.10: what is out of sync with the provider, if anything.
-    provider_sync: await providerSyncFor(database, taskId),
+    // S-28.10: what is out of sync with the provider, if anything — nothing for a finished task.
+    provider_sync: await providerSyncFor(database, taskId, task.state),
     queue_wait: queueWaits.get(task.id) ?? null,
     manual_pause: manualPause,
     conversation_seen: conversationSeen,
@@ -2483,32 +2483,42 @@ export const findTaskDetail = async (
 export const providerSyncFor = async (
   database: Database,
   taskId: string,
+  state: string,
 ): Promise<readonly ProviderSync[]> => {
+  // A done or cancelled task's ticket and merge request are no longer the platform's to move: a
+  // record left from before is history, never a notice (S-28.10 review). A merged task's merge
+  // request is merged, so a "still a draft" record about it is history too.
+  if (state === 'done' || state === 'cancelled') {
+    return [];
+  }
+  const merged = state === 'merged' || state === 'retro';
   const rows = await database
     .select()
     .from(taskProviderSync)
     .where(eq(taskProviderSync.taskId, taskId))
     .orderBy(asc(taskProviderSync.failedAt), asc(taskProviderSync.subject));
-  return rows.map((row) => {
-    const parsed = providerSyncSchema.safeParse({
-      subject: row.subject,
-      slot: row.slot,
-      target: row.target,
-      observed: row.observed,
-      available: row.available,
-      reason: row.reason,
-      reason_code: row.reasonCode,
-      failed_at: row.failedAt.toISOString(),
-      attempts: row.attempts,
+  return rows
+    .filter((row) => !(merged && row.subject === 'merge_request_draft'))
+    .map((row) => {
+      const parsed = providerSyncSchema.safeParse({
+        subject: row.subject,
+        slot: row.slot,
+        target: row.target,
+        observed: row.observed,
+        available: row.available,
+        reason: row.reason,
+        reason_code: row.reasonCode,
+        failed_at: row.failedAt.toISOString(),
+        attempts: row.attempts,
+      });
+      if (!parsed.success) {
+        throw new UnprojectableRowError(
+          `task_provider_sync (${taskId}, ${row.subject})`,
+          'it does not parse as the published out-of-sync shape',
+        );
+      }
+      return parsed.data;
     });
-    if (!parsed.success) {
-      throw new UnprojectableRowError(
-        `task_provider_sync (${taskId}, ${row.subject})`,
-        'it does not parse as the published out-of-sync shape',
-      );
-    }
-    return parsed.data;
-  });
 };
 
 /**

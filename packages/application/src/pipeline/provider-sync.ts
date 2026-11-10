@@ -40,14 +40,30 @@ const REASON_CODE_SHAPE = /^[A-Za-z0-9_.-]{1,64}$/;
 const bounded = (text: string, max: number): string | null => {
   const trimmed = text.trim();
   if (trimmed === '') return null;
-  return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max - 1)}…`;
+  // By code points, so a cut never splits a surrogate pair (PostgreSQL's `length` counts the same).
+  const points = Array.from(trimmed);
+  return points.length <= max ? trimmed : `${points.slice(0, max - 1).join('')}…`;
 };
 
-/** The provider's reason, through the binding's redactor when there is one, and bounded. */
+/** What the row says when no binding redactor could see the failure's text. */
+export const UNREADABLE_BINDING_REASON =
+  'the platform could not load the project’s tracker connection, so the move was not attempted';
+
+/**
+ * The provider's reason, through the binding's redactor, and bounded. With no binding redactor —
+ * the connection itself failed to load — the error's text is **not** stored (it could carry the
+ * credential the loader was handling): a fixed platform sentence stands in, and the code says which.
+ */
 const reasonOf = (error: unknown, integrations: PipelineIntegrations | null): string => {
+  const redactor = integrations?.taskManagement?.redactor;
+  if (redactor === undefined) {
+    return UNREADABLE_BINDING_REASON;
+  }
   const raw = error instanceof Error ? error.message : String(error);
-  const redacted = integrations?.taskManagement?.redactor.redactText(raw).value ?? raw;
-  return bounded(redacted, PROVIDER_SYNC_REASON_CHARS) ?? 'the provider gave no reason';
+  return (
+    bounded(redactor.redactText(raw).value, PROVIDER_SYNC_REASON_CHARS) ??
+    'the provider gave no reason'
+  );
 };
 
 /** The failure's code — platform vocabulary, never provider text. */
