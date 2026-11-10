@@ -1806,7 +1806,11 @@ describe('S-28.14 — a ticket a person finished cancels its task automatically 
   });
 
   it('leaves a task at a human stage, and a merged one, alone', async () => {
-    for (const shape of [
+    const shapes: readonly {
+      readonly state: 'ready_for_merge' | 'needs_human';
+      readonly currentStage: string;
+      readonly stageAttempts: Record<string, number>;
+    }[] = [
       {
         state: 'ready_for_merge',
         currentStage: 'ready_for_merge',
@@ -1817,7 +1821,8 @@ describe('S-28.14 — a ticket a person finished cancels its task automatically 
         currentStage: 'retrospective',
         stageAttempts: { refinement: 1, implementation: 1, merged_gate: 1, retrospective: 1 },
       },
-    ] as const) {
+    ];
+    for (const shape of shapes) {
       const ticket = tracker({ stealAfterAssign: 'jane', status: 'To Do', statusCategory: 'todo' });
       const harness = harnessFor(ticket, lifecycle(slots), {
         settings: { ticketStatusPolicy: policy },

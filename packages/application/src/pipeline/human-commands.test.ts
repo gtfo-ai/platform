@@ -3837,8 +3837,9 @@ describe('a human’s way into Ready (WP-79)', () => {
     expect(count(/\bapplyDecision\(/g), 'applyDecision calls').toBe(1);
     expect(count(/\bmarkReadyForMerge\(/g), 'markReadyForMerge calls').toBe(1);
     // 5 since S-27.1 (BACKLOG 1480): the resume of a task paused out of an approval wait; 6 since
-    // S-28.1 (M28 ruling 4): the resume of a paused attempt that never ran, in place.
-    expect(count(/\btasks\s*\.\s*save\(/g), 'whole-row saves').toBe(6);
+    // S-28.1 (M28 ruling 4): the resume of a paused attempt that never ran, in place. 5 since
+    // S-28.14 (M28 ruling 4b): the cancellation's save moved to `task-cancel.ts`.
+    expect(count(/\btasks\s*\.\s*save\(/g), 'whole-row saves').toBe(5);
     // The domain commands it imports are the complete list of state changes it can make; each task
     // command's target state is named, and none is `ready_for_merge` except through `humanEnter`.
     // A new import (`enterStage`, `recordMerge`, `startRetrospective`, …) fails here first.
