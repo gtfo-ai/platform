@@ -608,6 +608,8 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     expect(asked.at(-1)).toEqual([
       {
         workerId: alice.workerId,
+        userId: ALICE,
+        userName: 'alice@example.test',
         blocked: false,
         running: 0,
         concurrency: 1,

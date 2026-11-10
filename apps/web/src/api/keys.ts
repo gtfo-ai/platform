@@ -41,6 +41,9 @@ export const queryKeys = {
   /** WP-280: the registered workers, and one pending device code's details by what was typed. */
   workers: ['workers'] as const,
   workerDevice: (userCode: string) => ['workers', 'device', userCode] as const,
+  /** S-28.6: your limit on tasks in flight, and every person's (an administrator's). */
+  myTaskLimit: ['me', 'task-limit'] as const,
+  orgTaskLimits: ['org', 'task-limits'] as const,
   /**
    * WP-41. Keyed by the filters, because a range and a bucket are two different answers rather than
    * one cached one — the shape `historyBootstraps` uses for its N.

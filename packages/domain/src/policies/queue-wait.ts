@@ -19,6 +19,7 @@ import {
 import {
   holdsPlace,
   orderQueue,
+  ownerAdmits,
   type QueueWaitReason,
   queueAdmissionOf,
   type WipBound,
@@ -37,15 +38,41 @@ export interface QueueLiveTask {
   readonly createdAt: IsoDateTime;
 }
 
+/**
+ * **A queued task's owner and their limit** (S-28.6, the M28 ruling B): who owns it, how many of
+ * their tasks are in flight anywhere (`countsTowardOwner`) against the limit they are held to here
+ * (`ownerLimitOf`), and those tasks — the holders a reader is shown.
+ */
+export interface QueueOwnerLoad {
+  readonly userId: string;
+  readonly name: string;
+  readonly count: number;
+  readonly limit: number;
+  readonly holders: readonly QueueLiveTask[];
+}
+
 /** The configuration key of each limit a queued task can wait behind — `WipBound`'s keys. */
 const WIP_KEY_OF = {
   max_parallel_tasks: 'pipeline.wip.max_parallel_tasks',
   max_tasks_in_pipeline: 'pipeline.wip.max_tasks_in_pipeline',
 } as const satisfies Record<QueueWaitReason, WipBound['key']>;
 
+/**
+ * The holder states a person decides to free the place (S-28.6: since a task at `needs_human` holds
+ * no pipeline place, the ones that still do and wait for a person are an answer or an approval).
+ */
+const WAITS_FOR_A_PERSON: ReadonlySet<TaskState> = new Set<TaskState>([
+  'waiting_answers',
+  'waiting_approval',
+  'needs_human',
+]);
+
+/** Whether a holder in `state` waits for a person's decision — what `holders.needs_human` counts. */
+export const waitsForAPerson = (state: TaskState): boolean => WAITS_FOR_A_PERSON.has(state);
+
 /** Waiting-for-a-person first (what a reader can act on), then the oldest, then the id. */
 const holderOrder = (a: QueueLiveTask, b: QueueLiveTask): number => {
-  const human = Number(b.state === 'needs_human') - Number(a.state === 'needs_human');
+  const human = Number(waitsForAPerson(b.state)) - Number(waitsForAPerson(a.state));
   if (human !== 0) {
     return human;
   }
@@ -66,6 +93,11 @@ export const queueWaitsOver = (
   taskIds: readonly string[],
   limits: WipLimits,
   bounded: readonly WipBound['key'][],
+  /**
+   * Each queued task's owner and their load (S-28.6), by task id — absent for an unowned task. A
+   * task the project's limits admit waits behind its owner's when they are at it.
+   */
+  owners: ReadonlyMap<string, QueueOwnerLoad> = new Map(),
 ): ReadonlyMap<string, QueueWait> => {
   const counts = wipCountsOf(live.map((task) => task.state));
   const admission = queueAdmissionOf(counts, limits);
@@ -97,6 +129,34 @@ export const queueWaitsOver = (
     if (at === undefined) {
       continue;
     }
+    const owner = owners.get(taskId);
+    if ((admission.status === 'admitted' || holders === null) && owner !== undefined) {
+      if (!ownerAdmits(owner.count, owner.limit)) {
+        const theirs = [...owner.holders].sort(holderOrder);
+        answers.set(taskId, {
+          status: 'waiting',
+          reason: 'max_tasks_per_owner',
+          count: owner.count,
+          limit: owner.limit,
+          owner: { user_id: owner.userId as Id, name: owner.name },
+          organisation_bound: false,
+          position: at,
+          queued: queue.length,
+          running,
+          pipeline,
+          holders: {
+            total: theirs.length,
+            needs_human: 0,
+            items: theirs.slice(0, MAX_QUEUE_WAIT_HOLDERS).map((task) => ({
+              task_id: task.id as Id,
+              ticket_key: task.ticketKey,
+              state: task.state,
+            })),
+          },
+        });
+        continue;
+      }
+    }
     answers.set(
       taskId,
       admission.status === 'admitted' || holders === null
@@ -113,7 +173,7 @@ export const queueWaitsOver = (
             pipeline,
             holders: {
               total: holders.length,
-              needs_human: holders.filter((task) => task.state === 'needs_human').length,
+              needs_human: holders.filter((task) => waitsForAPerson(task.state)).length,
               items: holders.slice(0, MAX_QUEUE_WAIT_HOLDERS).map((task) => ({
                 task_id: task.id as Id,
                 ticket_key: task.ticketKey,

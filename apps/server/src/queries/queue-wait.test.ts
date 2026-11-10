@@ -3,7 +3,7 @@
  * queue's order and the holders. The database half — the statement, the counts the store takes,
  * the routes — is `test/integration/server/queue-wait.integration.test.ts`.
  */
-import { MAX_QUEUE_WAIT_HOLDERS, type TaskState } from '@platform/contracts';
+import { type IsoDateTime, MAX_QUEUE_WAIT_HOLDERS, type TaskState } from '@platform/contracts';
 import { DEFAULT_WIP_LIMITS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { queueWaitsOf } from './queue-wait.js';
@@ -25,7 +25,8 @@ const task = (
 
 describe('queueWaitsOf', () => {
   it('names the pipeline limit, the holders and the position — the Autix shape', () => {
-    const stopped = Array.from({ length: 5 }, () => task('needs_human'));
+    // Since S-28.6 a task at needs_human holds no place; one waiting for an approval does.
+    const stopped = Array.from({ length: 5 }, () => task('waiting_approval'));
     const first = task('queued', { minute: 1 });
     const second = task('queued', { minute: 2 });
     const live = [...stopped, second, first];
@@ -46,7 +47,7 @@ describe('queueWaitsOf', () => {
         items: stopped.map((held) => ({
           task_id: held.id,
           ticket_key: held.ticketKey,
-          state: 'needs_human',
+          state: 'waiting_approval',
         })),
       },
     });
@@ -64,10 +65,11 @@ describe('queueWaitsOf', () => {
   it('answers admitted when the limits have room, with no holders', () => {
     const queued = task('queued');
     const answers = queueWaitsOf(
-      [task('active'), task('needs_human'), queued],
+      [task('active'), task('waiting_approval'), task('needs_human'), task('paused'), queued],
       [queued.id],
       DEFAULT_WIP_LIMITS,
     );
+    // S-28.6: the paused task and the one at needs_human hold no pipeline place.
     expect(answers.get(queued.id)).toEqual({
       status: 'admitted',
       position: 1,
@@ -81,7 +83,7 @@ describe('queueWaitsOf', () => {
     const running = [task('active'), task('returned')];
     const queued = task('queued');
     const answers = queueWaitsOf(
-      [task('needs_human'), ...running, queued],
+      [task('waiting_approval'), ...running, queued],
       [queued.id],
       DEFAULT_WIP_LIMITS,
     );
@@ -101,7 +103,7 @@ describe('queueWaitsOf', () => {
   it('carries both limits, and lists the pipeline’s holders when it is full too — review case (a)', () => {
     // 2 running + 3 stopped: the parallel limit refuses first, and the pipeline is full as well.
     const running = [task('active'), task('active')];
-    const stopped = [task('needs_human'), task('needs_human'), task('needs_human')];
+    const stopped = [task('waiting_approval'), task('waiting_answers'), task('waiting_approval')];
     const queued = task('queued');
     const wait = queueWaitsOf(
       [...running, ...stopped, queued],
@@ -121,7 +123,7 @@ describe('queueWaitsOf', () => {
 
   it('applies the limits it is given, not the defaults', () => {
     const queued = task('queued');
-    const live = [task('needs_human'), queued];
+    const live = [task('waiting_answers'), queued];
     const tight = { ...DEFAULT_WIP_LIMITS, maxTasksInPipeline: 1 };
     expect(queueWaitsOf(live, [queued.id], tight).get(queued.id)?.status).toBe('waiting');
     expect(queueWaitsOf(live, [queued.id], DEFAULT_WIP_LIMITS).get(queued.id)?.status).toBe(
@@ -130,8 +132,8 @@ describe('queueWaitsOf', () => {
   });
 
   it('lists people-waiting holders first, cut at the cap with the totals beside', () => {
-    const paused = Array.from({ length: 6 }, () => task('paused'));
-    const stopped = Array.from({ length: 6 }, () => task('needs_human'));
+    const paused = Array.from({ length: 6 }, () => task('ready_for_merge'));
+    const stopped = Array.from({ length: 6 }, () => task('waiting_approval'));
     const queued = task('queued');
     const limits = { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 20, maxTasksInPipeline: 12 };
     const wait = queueWaitsOf([...paused, ...stopped, queued], [queued.id], limits).get(queued.id);
@@ -141,8 +143,10 @@ describe('queueWaitsOf', () => {
     expect(wait.holders.total).toBe(12);
     expect(wait.holders.needs_human).toBe(6);
     expect(wait.holders.items).toHaveLength(MAX_QUEUE_WAIT_HOLDERS);
-    expect(wait.holders.items.slice(0, 6).every((held) => held.state === 'needs_human')).toBe(true);
-    expect(wait.holders.items[6]?.state).toBe('paused');
+    expect(wait.holders.items.slice(0, 6).every((held) => held.state === 'waiting_approval')).toBe(
+      true,
+    );
+    expect(wait.holders.items[6]?.state).toBe('ready_for_merge');
   });
 
   it('says the organisation binds only when the refusing limit is one it lowered (S-25.21)', () => {
@@ -156,6 +160,47 @@ describe('queueWaitsOf', () => {
     expect(bound(['pipeline.wip.max_parallel_tasks'])).toBe(true);
     expect(bound(['pipeline.wip.max_tasks_in_pipeline'])).toBe(false);
     expect(bound([])).toBe(false);
+  });
+
+  it('waits behind its owner’s limit when the project has room, with their holders (S-28.6)', () => {
+    const queued = task('queued');
+    const theirs = [task('active'), task('waiting_answers'), task('waiting_approval')];
+    const owner = {
+      userId: '00000000-0000-4000-8000-00000000a001',
+      name: 'Jan',
+      count: 3,
+      limit: 3,
+      holders: theirs.map((held) => ({
+        ...held,
+        priorityRank: 0,
+        createdAt: held.createdAt.toISOString() as IsoDateTime,
+      })),
+    };
+    const wait = queueWaitsOf(
+      [queued],
+      [queued.id],
+      DEFAULT_WIP_LIMITS,
+      [],
+      new Map([[queued.id, owner]]),
+    ).get(queued.id);
+    expect(wait).toMatchObject({
+      status: 'waiting',
+      reason: 'max_tasks_per_owner',
+      count: 3,
+      limit: 3,
+      owner: { user_id: owner.userId, name: 'Jan' },
+      holders: { total: 3, needs_human: 2 },
+    });
+    // Under their limit: admitted.
+    expect(
+      queueWaitsOf(
+        [queued],
+        [queued.id],
+        DEFAULT_WIP_LIMITS,
+        [],
+        new Map([[queued.id, { ...owner, count: 2 }]]),
+      ).get(queued.id)?.status,
+    ).toBe('admitted');
   });
 
   it('answers nothing for a task that is not queued at this read', () => {

@@ -1097,7 +1097,28 @@ export interface TaskRepository {
     tx: Transaction,
     projectId: Id,
   ): Promise<{ readonly activeTasks: number; readonly tasksInPipeline: number }>;
-  /** Queued tasks of a project, for the scheduler to order with `orderQueue`. */
+  /**
+   * **A person's tasks in flight, and their own limit** (S-28.6, the M28 ruling B): how many tasks
+   * they own across every project in the states `countsTowardOwner` counts (`active`, `returned`,
+   * `waiting_answers`, `waiting_approval`), and `users.max_tasks_in_flight` — `null` for none set
+   * (the default applies) or a user that does not exist.
+   *
+   * **It serialises admission per owner for the rest of `tx`**, as {@link counts} does per project:
+   * the SQL adapter takes a transaction-scoped advisory lock on the owner before counting, so two
+   * admissions of one person's tasks in one instant cannot both pass a limit (the in-memory store is
+   * single-threaded and needs none). A caller that also asks {@link counts} asks it **first**, so
+   * every admitter takes the two locks in one order — project, then owner.
+   */
+  ownerAdmission(
+    tx: Transaction,
+    ownerUserId: Id,
+  ): Promise<{ readonly inFlight: number; readonly personalLimit: number | null }>;
+  /**
+   * The projects where any of `ownerUserIds` owns a **queued** task (S-28.6), ordered by id — where
+   * a place a person freed (or a limit they raised) may start something. Empty for an empty list.
+   */
+  queuedProjectsOfOwners(tx: Transaction, ownerUserIds: readonly Id[]): Promise<readonly Id[]>;
+  /** Queued tasks of a project, each with its owner, for the scheduler to order with `orderQueue`. */
   queued(tx: Transaction, projectId: Id): Promise<readonly QueuedTask[]>;
   /** One `task_stages` row per entry (technical/03); `attempt` comes from the aggregate. */
   recordStageEntered(

@@ -53,6 +53,12 @@ export const users = pgTable('users', {
   banExpires: timestamp('ban_expires', { withTimezone: true }),
   /** WP-291 (migration 0093): set once, by the served Better Auth instance's session hook. */
   firstSignedInAt: timestamp('first_signed_in_at', { withTimezone: true }),
+  /**
+   * S-28.6 (migration 0112): how many of this person's tasks may be in flight at once — `null` for
+   * the default (`pipeline.wip.max_tasks_per_owner`), 1–200 otherwise, never above the
+   * organisation's value at read time.
+   */
+  maxTasksInFlight: integer('max_tasks_in_flight'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

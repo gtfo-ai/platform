@@ -24,6 +24,7 @@ import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: string;
+let ownerUserId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('pipeline-store-concurrency');
@@ -39,6 +40,11 @@ beforeAll(async () => {
       [org.rows[0]?.id],
     );
     projectId = project.rows[0]?.id as string;
+    // S-28.6: a person whose tasks the owner-admission case counts.
+    const owner = await client.query<{ id: string }>(
+      "insert into users (email, name, role) values ('owner@example.test', 'Owner', 'member') returning id",
+    );
+    ownerUserId = owner.rows[0]?.id as string;
   } finally {
     await client.end();
   }
@@ -55,6 +61,7 @@ runPipelineStoreConcurrencyContract({
     return {
       store: pipeline.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
       projectId,
+      ownerUserId,
       begin: async () => {
         const client = createTestClient(database.connectionString);
         await client.connect();

@@ -13,6 +13,7 @@ import {
   AUTONOMY_PRESETS,
   compilePipeline,
   DEFAULT_ITERATION_LIMITS,
+  DEFAULT_WIP_LIMITS,
   FEATURE_TEMPLATE,
   MAX_FEEDBACK_CHARS,
   materialiseAutonomy,
@@ -59,7 +60,7 @@ import {
 } from './saga.js';
 import { staticProjectSettings } from './settings.js';
 import { settlementInputs } from './settle.js';
-import type { NewRun } from './store.js';
+import type { NewRun, StoredTask } from './store.js';
 import { DefaultBranchChangedError } from './store.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
@@ -710,7 +711,9 @@ describe('intake', () => {
 
   it('queues a task the WIP limit will not admit', async () => {
     const harness = harnessWith({
-      settings: { wip: { maxParallelTasks: 2, maxTasksInPipeline: 1, maxParallelRuns: 4 } },
+      settings: {
+        wip: { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 2, maxTasksInPipeline: 1 },
+      },
     });
     // The first ticket runs to `ready_for_merge` and holds no active slot there…
     harness.script('refinement', {
@@ -779,7 +782,7 @@ describe('intake', () => {
    * only event that follows — and ACME-2 starts with nothing else happening. Before S-25.21 the
    * scheduler heard neither wait, and ACME-2 stayed `queued`.
    */
-  const ONE_RUNNING = { maxParallelTasks: 1, maxTasksInPipeline: 5, maxParallelRuns: 4 };
+  const ONE_RUNNING = { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 1, maxTasksInPipeline: 5 };
   const keyed = (harness: PipelineHarness, key: string) =>
     harness.store.snapshot().find((stored) => stored.task.ticket.key === key);
 
@@ -862,6 +865,95 @@ describe('intake', () => {
       }),
     ]);
     expect(states()).toEqual(['active', 'active', 'queued']);
+  });
+
+  /**
+   * S-28.6 (the M28 ruling B): **a person's own limit.** The project's places are opened only once
+   * every task is owned, through `config.changed` — the event a raise appends — so each start below
+   * is the scheduler's decision over the owners.
+   */
+  describe('a person’s limit on tasks in flight (S-28.6)', () => {
+    const JAN = '00000000-0000-4000-8000-00000000a001' as Id;
+    const BOB = '00000000-0000-4000-8000-00000000b001' as Id;
+    const tx = {} as never;
+    const own = async (harness: PipelineHarness, key: string, owner: Id) => {
+      const id = keyed(harness, key)?.task.id as Id;
+      const current = await harness.store.tasks.ownership(tx, id);
+      await harness.store.tasks.saveOwner(tx, id, {
+        expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+        next: {
+          ownerUserId: owner,
+          ownerSource: 'platform',
+          ownerChangedAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          ticketAssignee: null,
+        },
+      });
+    };
+    const opened = (diff: { key: string; from: string; to: string }[] = []) =>
+      event('config.changed', { project_id: PROJECT, scope: 'project', scope_id: null, diff });
+    /** ACME-1 active and Jan's; ACME-2 Jan's and ACME-3 Bob's queued behind it; one place each. */
+    const given = async () => {
+      const wip = {
+        ...DEFAULT_WIP_LIMITS,
+        maxParallelTasks: 1,
+        maxTasksInPipeline: 10,
+        maxTasksPerOwner: 1,
+      };
+      const harness = harnessWith({ runsAgents: false, settings: { wip } });
+      await harness.publish([
+        ticketMatched(),
+        ticketMatched('Story', 'ACME-2'),
+        ticketMatched('Story', 'ACME-3'),
+      ]);
+      await own(harness, TICKET.key, JAN);
+      await own(harness, 'ACME-2', JAN);
+      await own(harness, 'ACME-3', BOB);
+      wip.maxParallelTasks = 10;
+      return { harness, wip };
+    };
+    const states = (harness: PipelineHarness) =>
+      [TICKET.key, 'ACME-2', 'ACME-3'].map((key) => keyed(harness, key)?.task.state);
+
+    it('queues a person’s next task at their limit, and starts another person’s behind it', async () => {
+      const { harness } = await given();
+      await harness.publish([opened()]);
+      expect(states(harness)).toEqual(['active', 'queued', 'active']);
+    });
+
+    it('starts it once their own limit rises, on the event the raise appends', async () => {
+      const { harness } = await given();
+      await harness.publish([opened()]);
+      harness.store.setPersonalTaskLimit(JAN, 2);
+      await harness.publish([
+        opened([{ key: 'pipeline.wip.max_tasks_per_owner', from: '1', to: '2' }]),
+      ]);
+      expect(states(harness)).toEqual(['active', 'active', 'active']);
+    });
+
+    it('frees the person’s place when their task is paused or waits for a person to unblock it', async () => {
+      for (const stopped of ['paused', 'needs_human'] as const) {
+        const { harness } = await given();
+        await harness.publish([opened()]);
+        const first = keyed(harness, TICKET.key) as StoredTask;
+        await harness.store.tasks.save(tx, { ...first, task: { ...first.task, state: stopped } });
+        await harness.publish([opened()]);
+        expect(states(harness), stopped).toEqual([stopped, 'active', 'active']);
+      }
+    });
+
+    it('frees a project place too when a task is paused or waits for a person (S-28.6)', async () => {
+      const wip = { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 10, maxTasksInPipeline: 1 };
+      const harness = harnessWith({ runsAgents: false, settings: { wip } });
+      await harness.publish([ticketMatched(), ticketMatched('Story', 'ACME-2')]);
+      expect(keyed(harness, 'ACME-2')?.task.state).toBe('queued');
+      const first = keyed(harness, TICKET.key) as StoredTask;
+      await harness.store.tasks.save(tx, {
+        ...first,
+        task: { ...first.task, state: 'needs_human' },
+      });
+      await harness.publish([opened()]);
+      expect(keyed(harness, 'ACME-2')?.task.state).toBe('active');
+    });
   });
 
   /**

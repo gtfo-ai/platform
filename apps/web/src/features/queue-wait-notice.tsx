@@ -45,14 +45,23 @@ export const QueueWaitNotice = ({
   const holders = wait.status === 'waiting' ? wait.holders : null;
   const more = holders === null ? 0 : holders.total - holders.items.length;
   const organisation = organisationLimitSentence(wait);
-  const orgAdmin = useSession().data?.user.role === 'admin';
+  const session = useSession().data;
+  const orgAdmin = session?.user.role === 'admin';
+  // S-28.6: a person's own limit is changed on the Workers screen's *Your limit*, by them or an
+  // administrator — never on the project's settings.
+  const ownerWait = wait.status === 'waiting' && wait.reason === 'max_tasks_per_owner';
+  const mayChangeOwnerLimit =
+    ownerWait &&
+    (orgAdmin || (wait.owner !== undefined && wait.owner.user_id === session?.user.id));
   return (
     <section aria-label="What happens next" data-testid="queue-wait-notice">
       <Flash tone="info">
         <div className="flex flex-col gap-2" data-queue-wait={wait.status}>
           <p data-queue-sentence="">
             {/* Platform words around the ticket key, which is the provider's text. */}
-            <UntrustedText value={queueSentence(wait, ticketKey, mayDecide)} />
+            <UntrustedText
+              value={queueSentence(wait, ticketKey, mayDecide, session?.user.id ?? null)}
+            />
           </p>
           {holders === null || holders.items.length === 0 ? null : (
             <div className="flex flex-col gap-1">
@@ -93,9 +102,17 @@ export const QueueWaitNotice = ({
               )}
             </p>
           )}
+          {mayChangeOwnerLimit ? (
+            <p className="text-sm">
+              <Link to="/workers" className="text-link underline" data-queue-change-owner-limit="">
+                Change the limit
+              </Link>
+            </p>
+          ) : null}
           {!canChangeLimits ||
           projectKey === null ||
           wait.status === 'admitted' ||
+          ownerWait ||
           organisation !== null ? null : (
             <p className="text-sm">
               <Link

@@ -118,14 +118,17 @@ export const queueColumnNote = (
   tasks: readonly TaskListItem[],
   /** Whether the reader may decide or cancel the holders: they then wait for *you*. */
   mayDecide: boolean,
+  /** The reader: their own limit is said as *your* (S-28.6). */
+  readerId: string | null = null,
 ): string | null => {
-  for (const task of tasks) {
+  // S-28.6: the project's limits are the column's; a person's own limit is each card's, so the
+  // column says it only when nothing else holds the queue.
+  const waits = tasks.flatMap((task) => {
     const wait = task.state === 'queued' ? task.queue_wait : null;
-    if (wait !== null && wait !== undefined && wait.status === 'waiting') {
-      return queueNote(wait, mayDecide);
-    }
-  }
-  return null;
+    return wait !== null && wait !== undefined && wait.status === 'waiting' ? [wait] : [];
+  });
+  const first = waits.find((wait) => wait.reason !== 'max_tasks_per_owner') ?? waits[0];
+  return first === undefined ? null : queueNote(first, mayDecide, readerId);
 };
 
 const QueueColumnNote = ({
@@ -135,10 +138,12 @@ const QueueColumnNote = ({
   readonly tasks: readonly TaskListItem[];
   readonly mayDecide: boolean;
 }): ReactElement | null => {
-  const note = queueColumnNote(tasks, mayDecide);
+  const readerId = useSession().data?.user.id ?? null;
+  const note = queueColumnNote(tasks, mayDecide, readerId);
   return note === null ? null : (
     <p data-queue-note="" className="px-1 text-xs text-fg-muted">
-      {note}
+      {/* S-28.6: a person's limit names the tickets holding it — the provider's text. */}
+      <UntrustedText value={note} />
     </p>
   );
 };

@@ -1807,7 +1807,8 @@ export const MAX_QUEUE_WAIT_HOLDERS = 10;
  *   whether that limit is the organisation's maximum (S-25.21), and `holders` the tasks
  *   holding the places (below) — at most {@link MAX_QUEUE_WAIT_HOLDERS}, the ones waiting for a person
  *   first, then the oldest; `total` counts them all and `needs_human` those waiting for a person
- *   (`needs_human`), so a reader can say *5 of them wait for you* past the cut.
+ *   (`waiting_answers`, `waiting_approval` — since S-28.6 a task at `needs_human` or `paused` holds
+ *   no pipeline place), so a reader can say *5 of them wait for you* past the cut.
  *
  * `position` is the task's 1-based place in `orderQueue` (ticket priority, then age, then id) among
  * the project's `queued` tasks, `queued` their number. A ticket key is the provider's text (BD-022).
@@ -1833,9 +1834,16 @@ export const queueWaitSchema = z.discriminatedUnion('status', [
   }),
   z.strictObject({
     status: z.literal('waiting'),
-    reason: z.enum(['max_parallel_tasks', 'max_tasks_in_pipeline']),
+    /**
+     * `max_tasks_per_owner` (S-28.6, the M28 ruling B): the project has room, and the task's owner
+     * already has `count` tasks in flight against their `limit` — `owner` names them and `holders`
+     * are **their** tasks in flight, in any project.
+     */
+    reason: z.enum(['max_parallel_tasks', 'max_tasks_in_pipeline', 'max_tasks_per_owner']),
     count: z.int().nonnegative(),
     limit: z.int().positive(),
+    /** Whose limit, for `max_tasks_per_owner` only (absent otherwise). */
+    owner: z.strictObject({ user_id: idSchema, name: nonEmptyStringSchema }).optional(),
     /**
      * Whether `limit` is the **organisation's** maximum, which lowered what the project (or BD-010's
      * default) asked for (`resolveWipLimits`' `bounded`, S-25.21): raising the project's own value

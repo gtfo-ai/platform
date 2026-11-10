@@ -107,6 +107,8 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
     wip: {
       max_parallel_tasks: DEFAULT_WIP_LIMITS.maxParallelTasks,
       max_tasks_in_pipeline: DEFAULT_WIP_LIMITS.maxTasksInPipeline,
+      // S-28.6: a person's tasks in flight at once (the M28 ruling B).
+      max_tasks_per_owner: DEFAULT_WIP_LIMITS.maxTasksPerOwner,
     },
   },
   policies: {

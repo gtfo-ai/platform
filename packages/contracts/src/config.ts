@@ -178,6 +178,8 @@ export const pipelineLimitsSchema = z.strictObject({
 export const MAX_WIP_PARALLEL_TASKS = 50;
 /** The largest `max_tasks_in_pipeline` a document may state. */
 export const MAX_WIP_TASKS_IN_PIPELINE = 200;
+/** The largest `max_tasks_per_owner` a document (or a person's own limit) may state (S-28.6). */
+export const MAX_WIP_TASKS_PER_OWNER = 200;
 
 /**
  * BD-010's two per-project WIP limits — `pipeline.wip` (WP-91, PROGRESS backlog 224).
@@ -200,6 +202,15 @@ export const wipLimitsConfigSchema = z
   .strictObject({
     max_parallel_tasks: z.int().min(1).max(MAX_WIP_PARALLEL_TASKS).optional(),
     max_tasks_in_pipeline: z.int().min(1).max(MAX_WIP_TASKS_IN_PIPELINE).optional(),
+    /**
+     * **How many of one person's tasks are in flight at once** (S-28.6, the M28 ruling B; default
+     * 3): their owned tasks that are `active`, `returned`, `waiting_answers` or
+     * `waiting_approval` — not `paused`, not `needs_human`, not queued or finished. The
+     * organisation's value is the maximum (and the default); a project may tighten it; a person's
+     * own `users.max_tasks_in_flight` replaces the default for them, never above the
+     * organisation's value. An unowned task is bound by the project's two limits only.
+     */
+    max_tasks_per_owner: z.int().min(1).max(MAX_WIP_TASKS_PER_OWNER).optional(),
   })
   .superRefine((value, ctx) => {
     if (

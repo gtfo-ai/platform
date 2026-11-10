@@ -25,12 +25,26 @@ describe('resolveWipLimits', () => {
     );
   });
 
+  it('takes the per-person default from the organisation, lets a project tighten it, never raise it (S-28.6)', () => {
+    expect(resolveWipLimits(undefined, { max_tasks_per_owner: 5 }).limits).toMatchObject({
+      maxTasksPerOwner: 5,
+      ownerLimitMaximum: 5,
+    });
+    expect(
+      resolveWipLimits({ max_tasks_per_owner: 2 }, { max_tasks_per_owner: 5 }).limits,
+    ).toMatchObject({ maxTasksPerOwner: 2, ownerLimitMaximum: 5 });
+    const bounded = resolveWipLimits({ max_tasks_per_owner: 9 }, { max_tasks_per_owner: 5 });
+    expect(bounded.limits.maxTasksPerOwner).toBe(5);
+    expect(bounded.bounded).toEqual([
+      { key: 'pipeline.wip.max_tasks_per_owner', stated: 9, bound: 5 },
+    ]);
+  });
+
   it('bounds a default the organisation set lower, and never touches the run limit', () => {
     const result = resolveWipLimits(undefined, { max_tasks_in_pipeline: 2 });
     expect(result.limits).toEqual({
-      maxParallelTasks: DEFAULT_WIP_LIMITS.maxParallelTasks,
+      ...DEFAULT_WIP_LIMITS,
       maxTasksInPipeline: 2,
-      maxParallelRuns: DEFAULT_WIP_LIMITS.maxParallelRuns,
     });
     expect(result.bounded).toEqual([
       { key: 'pipeline.wip.max_tasks_in_pipeline', stated: 5, bound: 2 },

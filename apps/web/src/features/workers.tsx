@@ -114,6 +114,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
 import { WORKERS_POLICY_WORDS } from '../ui/words/workers-policy.js';
+import { TaskLimitCard } from './task-limit-card.js';
 import { workerReadinessOf } from './worker-readiness.js';
 import { SINCE_SKEW_MS, WORKER_LOCAL_PAGE } from './worker-wizard-steps.js';
 
@@ -690,6 +691,8 @@ export const WorkersScreen = (): ReactElement => {
           </>
         }
       />
+      {/* S-28.6 (the M28 ruling B): a person's limit on their tasks in flight, and its rule. */}
+      <TaskLimitCard admin={session.data?.user.role === 'admin'} />
       {workers.isPending ? <Skeleton label="Loading workers…" /> : null}
       {workers.isError ? (
         <ErrorNotice title="The workers could not be loaded." error={workers.error} />

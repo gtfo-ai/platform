@@ -406,6 +406,7 @@ export const effectiveConfigResponseOf = (input: {
       wip: {
         max_parallel_tasks: wip.limits.maxParallelTasks,
         max_tasks_in_pipeline: wip.limits.maxTasksInPipeline,
+        max_tasks_per_owner: wip.limits.maxTasksPerOwner,
       },
     },
   };

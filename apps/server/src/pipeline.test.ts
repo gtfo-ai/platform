@@ -227,6 +227,8 @@ describe('the project settings port', () => {
       maxParallelTasks: 2,
       maxTasksInPipeline: 5,
       maxParallelRuns: 4,
+      maxTasksPerOwner: 3,
+      ownerLimitMaximum: 200,
     });
     expect(await read({ version: 1, pipeline: { wip: { max_parallel_tasks: 1 } } })).toMatchObject({
       maxParallelTasks: 1,

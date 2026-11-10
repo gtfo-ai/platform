@@ -70,6 +70,7 @@ export const HUMAN_ACTION_WORDS: Readonly<Record<string, string>> = {
   'worker.device.approve': 'Approved a machine',
   'worker.device.deny': 'Refused a machine',
   'worker.claim_policy': 'Changed what a machine takes',
+  'user.task_limit': 'Changed a person’s limit on tasks in flight',
   'worker.claim_scope': 'Changed which projects a machine takes work from',
   'worker.pause': 'Paused a machine',
   'worker.resume': 'Resumed a machine',

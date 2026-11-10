@@ -222,6 +222,8 @@ export const idleReasonOfWorker = async (
     [
       {
         workerId,
+        userId: row.userId,
+        userName: row.userName ?? row.userEmail,
         blocked: claimBlockersOfRow(row, coreDigests, now).length > 0,
         running: row.running.length,
         concurrency: row.concurrency,
@@ -385,6 +387,8 @@ export const registerWorkerRoutes = async (
                 .filter((row) => row.revokedAt === null && row.state !== 'revoked')
                 .map((row) => ({
                   workerId: row.id,
+                  userId: row.userId,
+                  userName: row.userName ?? row.userEmail,
                   blocked: claimBlockersOfRow(row, digests, at).length > 0,
                   running: row.running.length,
                   concurrency: row.concurrency,

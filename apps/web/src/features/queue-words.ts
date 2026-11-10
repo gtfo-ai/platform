@@ -69,7 +69,12 @@ const full = (limit: { readonly count: number; readonly limit: number }): boolea
  *  - `running_stops` — only the running tasks full: one finishes, stops for a person, is paused or
  *    is cancelled.
  */
-export type QueueFreedBy = 'running_finishes' | 'pipeline_finishes' | 'running_stops';
+export type QueueFreedBy =
+  | 'running_finishes'
+  | 'pipeline_finishes'
+  | 'running_stops'
+  /** S-28.6: the owner's own limit — one of their tasks finishes, is paused or is handed on. */
+  | 'owner_frees';
 
 export interface QueueRelief {
   readonly freedBy: QueueFreedBy;
@@ -81,6 +86,11 @@ export interface QueueRelief {
 export const queueRelief = (wait: QueueWait): QueueRelief | null => {
   if (wait.status === 'admitted') {
     return null;
+  }
+  if (wait.reason === 'max_tasks_per_owner') {
+    // Which of the owner's queued tasks starts first is the queue's order across projects: no
+    // promise is made for this one.
+    return { freedBy: 'owner_frees', startsNext: false };
   }
   const pipelineFull = full(wait.pipeline);
   const runningFull = full(wait.running);
@@ -102,6 +112,9 @@ export const queueShort = (wait: QueueWait): string => {
   if (wait.status === 'admitted') {
     return `${place} · a place is free`;
   }
+  if (wait.reason === 'max_tasks_per_owner' && wait.owner !== undefined) {
+    return `${place} · ${wait.owner.name} has ${wait.count} of ${wait.limit} in flight`;
+  }
   return full(wait.pipeline)
     ? `${place} · ${wait.pipeline.count} of ${wait.pipeline.limit} places taken`
     : `${place} · ${wait.running.count} of ${wait.running.limit} running`;
@@ -111,17 +124,25 @@ export const queueShort = (wait: QueueWait): string => {
  * The column note: which limits are full, what holds them and what frees a place — the same for
  * every task of the queue. `null` for `admitted`, which has nothing holding it.
  */
-export const queueNote = (wait: QueueWait, mayDecide: boolean): string | null => {
+export const queueNote = (
+  wait: QueueWait,
+  mayDecide: boolean,
+  /** The reader's user id: their own limit is said as *you* / *your* (S-28.6). */
+  readerId: string | null = null,
+): string | null => {
   const relief = queueRelief(wait);
   if (wait.status === 'admitted' || relief === null) {
     return null;
   }
+  if (relief.freedBy === 'owner_frees') {
+    return ownerNote(wait, readerId);
+  }
   const { running, pipeline } = wait;
   if (relief.freedBy === 'running_stops') {
     return (
-      `Waiting for a place: this project runs at most ${tasks(running.limit)} at once, and ` +
-      `${are(running.count)} running. A place frees when one of them finishes, stops for a person, ` +
-      'is paused or is cancelled.'
+      `Waiting for a place: this project runs at most ${tasks(running.limit)} at once (the ` +
+      `project’s limit, not a person’s), and ${are(running.count)} running. A place frees when one ` +
+      'of them finishes, stops for a person, is paused or is cancelled.'
     );
   }
   const people = wait.holders.needs_human;
@@ -129,21 +150,60 @@ export const queueNote = (wait: QueueWait, mayDecide: boolean): string | null =>
   const forWhom =
     people === 0 ? '' : ` — ${people} of them ${people === 1 ? 'waits' : 'wait'} for ${whom}`;
   const held =
-    `Waiting for a place: this project holds at most ${tasks(pipeline.limit)} in its pipeline, ` +
-    `and ${are(pipeline.count)} in it${forWhom}`;
+    `Waiting for a place: this project holds at most ${tasks(pipeline.limit)} in its pipeline ` +
+    `(the project’s limit, not a person’s), and ${are(pipeline.count)} in it${forWhom}`;
   if (relief.freedBy === 'running_finishes') {
     return (
       `${held}; and it runs at most ${running.limit} at once, and ${are(running.count)} running. ` +
-      'A place frees when a running task finishes or is cancelled.'
+      'A place frees when a running task finishes, is paused, is cancelled or needs a person to ' +
+      'unblock it.'
     );
   }
   const decide =
     people === 0 || !mayDecide ? '.' : `, so decide ${people === 1 ? 'it' : 'them'} or cancel one.`;
-  return `${held}. A place frees when one of them finishes or is cancelled${decide}`;
+  return (
+    `${held}. A place frees when one of them finishes, is paused, is cancelled or needs a person ` +
+    `to unblock it${decide}`
+  );
+};
+
+/**
+ * **The owner's own limit** (S-28.6): "Waiting for a place: Jan owns 3 tasks in flight and Jan’s
+ * limit is 3. AUT-1, AUT-2, AUT-3 hold the places. …" — *you* / *your* to the owner themself. The
+ * counting rule is said in words: paused tasks and tasks waiting for a person to unblock them do
+ * not count, tasks waiting for an approval or an answer do.
+ */
+const ownerNote = (
+  wait: Extract<QueueWait, { status: 'waiting' }>,
+  readerId: string | null,
+): string => {
+  const self = wait.owner !== undefined && wait.owner.user_id === readerId;
+  const name = wait.owner?.name ?? 'Its owner';
+  const who = self ? 'you own' : `${name} owns`;
+  const whose = self ? 'your' : `${name}’s`;
+  const keys = wait.holders.items.map((holder) => holder.ticket_key);
+  const more = wait.holders.total - keys.length;
+  const holding =
+    keys.length === 0
+      ? ''
+      : ` ${keys.join(', ')}${more > 0 ? ` and ${more} more` : ''} ${
+          wait.holders.total === 1 ? 'holds the place' : 'hold the places'
+        }.`;
+  return (
+    `Waiting for a place: ${who} ${tasks(wait.count)} in flight and ${whose} limit is ${wait.limit}.` +
+    `${holding} A place frees when one finishes, is paused, or is handed to someone else. ` +
+    'Paused tasks and tasks waiting for a person to unblock them do not count; tasks waiting for ' +
+    'an approval or an answer do.'
+  );
 };
 
 /** The long form, for the task page: the note and this task's place. */
-export const queueSentence = (wait: QueueWait, ticketKey: string, mayDecide: boolean): string => {
+export const queueSentence = (
+  wait: QueueWait,
+  ticketKey: string,
+  mayDecide: boolean,
+  readerId: string | null = null,
+): string => {
   const relief = queueRelief(wait);
   if (wait.status === 'admitted' || relief === null) {
     return (
@@ -155,10 +215,12 @@ export const queueSentence = (wait: QueueWait, ticketKey: string, mayDecide: boo
   const place =
     ahead > 0
       ? `${ticketKey} is ${ordinal(wait.position)} in the queue: ${ahead === 1 ? '1 ticket is' : `${ahead} tickets are`} ahead of it.`
-      : relief.startsNext
-        ? `${ticketKey} is next in the queue and starts then.`
-        : `${ticketKey} is next in the queue and starts once the project is back under its limits.`;
-  return `${queueNote(wait, mayDecide) ?? ''} ${place}`;
+      : relief.freedBy === 'owner_frees'
+        ? `${ticketKey} is next in the queue and starts once its owner has a free place.`
+        : relief.startsNext
+          ? `${ticketKey} is next in the queue and starts then.`
+          : `${ticketKey} is next in the queue and starts once the project is back under its limits.`;
+  return `${queueNote(wait, mayDecide, readerId) ?? ''} ${place}`;
 };
 
 /**
@@ -168,7 +230,11 @@ export const queueSentence = (wait: QueueWait, ticketKey: string, mayDecide: boo
  * wait, and for `admitted`.
  */
 export const organisationLimitSentence = (wait: QueueWait): string | null => {
-  if (wait.status !== 'waiting' || !wait.organisation_bound) {
+  if (
+    wait.status !== 'waiting' ||
+    !wait.organisation_bound ||
+    wait.reason === 'max_tasks_per_owner'
+  ) {
     return null;
   }
   const allowed =

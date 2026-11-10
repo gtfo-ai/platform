@@ -382,7 +382,7 @@ const tightenManualJobs = (
   return withValue(merged.slice(0, MAX_REQUIRED_MANUAL_JOBS));
 };
 
-type WipKey = 'max_parallel_tasks' | 'max_tasks_in_pipeline';
+type WipKey = 'max_parallel_tasks' | 'max_tasks_in_pipeline' | 'max_tasks_per_owner';
 
 /**
  * `pipeline.wip` from the file, **never above** the settings' value or, where the settings are
@@ -404,6 +404,7 @@ const tightenWip = (
   for (const key of [
     'max_parallel_tasks',
     'max_tasks_in_pipeline',
+    'max_tasks_per_owner',
   ] as const satisfies readonly WipKey[]) {
     const stated = declared[key];
     const base = settings[key] ?? defaults[key];

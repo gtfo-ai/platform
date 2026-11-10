@@ -32,6 +32,7 @@ export * from './records.js';
 export * from './run-spec.js';
 export * from './runlet.js';
 export * from './schemas.js';
+export * from './task-limits.js';
 export * from './transcript.js';
 export * from './worker.js';
 export * from './worker-claim-blockers.js';

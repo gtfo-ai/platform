@@ -42,6 +42,8 @@ export interface PipelineStoreConcurrencyHarness {
   create(): Promise<{
     readonly store: PipelineStore;
     readonly projectId: Id;
+    /** A user who may own tasks (S-28.6): a `users` row where the store has one. */
+    readonly ownerUserId: Id;
     /** A fresh transaction, isolated from every other one this harness hands out. */
     begin(): Promise<DrivenTransaction>;
     cleanup(): Promise<void>;
@@ -64,6 +66,7 @@ export const runPipelineStoreConcurrencyContract = (
   describe(`PipelineStore concurrency — ${harness.name}`, () => {
     let store: PipelineStore;
     let projectId: Id;
+    let ownerUserId: Id;
     let begin: () => Promise<DrivenTransaction>;
 
     const taskFixture = (): StoredTask => ({
@@ -149,6 +152,7 @@ export const runPipelineStoreConcurrencyContract = (
       const context = await harness.create();
       store = context.store;
       projectId = context.projectId;
+      ownerUserId = context.ownerUserId;
       begin = context.begin;
       return async () => {
         await context.cleanup();
@@ -473,6 +477,39 @@ export const runPipelineStoreConcurrencyContract = (
       await second.rollback();
       expect(counted.activeTasks).toBe(before.activeTasks + 1);
       expect(counted.tasksInPipeline).toBe(before.tasksInPipeline + 1);
+    });
+
+    /**
+     * S-28.6 (the M28 ruling B): `ownerAdmission` serialises admission per **owner**, as `counts`
+     * does per project, so two intakes of one person's tickets in one instant cannot both pass
+     * their limit. The first admitter counts, inserts an active task and makes it the person's;
+     * the second counts while the first is still open, and must see it once it commits.
+     */
+    it('counts an owner’s admission another transaction made in the same instant, once it commits', async () => {
+      const first = await begin();
+      const before = await store.tasks.ownerAdmission(first.tx, ownerUserId);
+      const stored = taskFixture();
+      await store.tasks.insert(first.tx, stored);
+      const current = await store.tasks.ownership(first.tx, stored.task.id);
+      expect(
+        await store.tasks.saveOwner(first.tx, stored.task.id, {
+          expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+          next: {
+            ownerUserId,
+            ownerSource: 'platform',
+            ownerChangedAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+            ticketAssignee: null,
+          },
+        }),
+      ).toBe(true);
+      const second = await begin();
+      const pending = store.tasks.ownerAdmission(second.tx, ownerUserId);
+      // As the project case above: give the second count every chance to answer early.
+      await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 250))]);
+      await first.commit();
+      const counted = await pending;
+      await second.rollback();
+      expect(counted.inFlight).toBe(before.inFlight + 1);
     });
 
     /**

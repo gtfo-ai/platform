@@ -257,7 +257,11 @@ const refuseWipAboveOrganisation = async (
   const organisation = organisationSettingsForRequest(
     (await findConfigLayers(database, projectId))?.orgSettings,
   ).pipeline?.wip;
-  for (const key of ['max_parallel_tasks', 'max_tasks_in_pipeline'] as const) {
+  for (const key of [
+    'max_parallel_tasks',
+    'max_tasks_in_pipeline',
+    'max_tasks_per_owner',
+  ] as const) {
     const value = stated[key];
     const bound = organisation?.[key];
     if (value !== undefined && bound !== undefined && value > bound) {
