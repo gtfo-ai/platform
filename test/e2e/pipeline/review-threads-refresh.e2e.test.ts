@@ -43,6 +43,16 @@ describe('the review-thread refresh on an mr.updated resolution signal (backlog 
       }),
     ]);
     await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+    // Since S-28.3 every Developer run owes `conversation_replies`, which reads the discussions
+    // too; the per-signal read counts below are the refresh's alone, so the outbound queue is
+    // drained first (rule 87).
+    await pipeline.waitFor('no outbound duty owed', async () => {
+      const rows = await pipeline.query<{ owed: number }>(
+        `select count(*)::int as owed from pgboss.job
+          where name = 'pipeline.outbound' and state in ('created', 'retry', 'active')`,
+      );
+      return rows[0]?.owed === 0;
+    });
 
     const iid = pipeline.world.mr.iid;
     const threads = async () =>
