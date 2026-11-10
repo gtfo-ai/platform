@@ -874,6 +874,22 @@ export const createPostgresPipelineStore = (
       return rows.length > 0;
     },
 
+    ticketStatusStopOf: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{ status: string }>(
+        'select status from ticket_status_stops where task_id = $1',
+        [taskId],
+      );
+      return rows[0]?.status ?? null;
+    },
+
+    recordTicketStatusStop: async (tx, taskId, status, at) => {
+      await sqlOf(tx).query(
+        `insert into ticket_status_stops (task_id, status, stopped_at) values ($1, $2, $3)
+           on conflict (task_id) do update set status = excluded.status, stopped_at = excluded.stopped_at`,
+        [taskId, status, at],
+      );
+    },
+
     saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
       // Two columns, for the reason `saveWorkpad` is one: the backfill runs in the `stage.execute`
       // job beside the stage executor's transactions, and a whole-row write from there is a lost

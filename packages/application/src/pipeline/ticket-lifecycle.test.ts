@@ -1198,29 +1198,70 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
   const slots = { in_progress: 'Doing' };
   const policy = ticketStatusPolicyOf('Ready for the agent', slots);
   /** A task stopped at the claim (somebody else holds the ticket): `needs_human`, nothing running. */
-  const stoppedAtTheClaim = async (settings: Record<string, unknown> = {}) => {
+  const stoppedAtTheClaim = async (
+    settings: Record<string, unknown> = {},
+    mrState: 'opened' | 'merged' = 'opened',
+  ) => {
     const ticket = tracker({ stealAfterAssign: 'jane', status: 'To Do', statusCategory: 'todo' });
     const harness = harnessFor(ticket, lifecycle(slots), {
       settings: { ticketStatusPolicy: policy, ...settings },
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'success',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: '2026-06-01T09:30:00.000Z',
+        }),
+        getMergeRequest: async () => ({ ...mergeRequest, state: mrState }),
+      },
     });
     await harness.publish([ticketMatched()]);
     expect(taskOf(harness).task.state).toBe('needs_human');
     return { ticket, harness };
   };
-  /** Puts the task in `state`, as a pause or the WIP queue would have. */
-  const putIn = async (harness: PipelineHarness, state: 'paused' | 'queued') => {
+  /** Puts the task in `state`, as a pause, a resume or the WIP queue would have. */
+  const putIn = async (
+    harness: PipelineHarness,
+    state: 'paused' | 'queued',
+    withMergeRequest = false,
+  ) => {
     await harness.memory.transaction(async (scope) => {
       const stored = taskOf(harness);
-      await harness.store.tasks.save(scope.tx, { ...stored, task: { ...stored.task, state } });
+      await harness.store.tasks.save(scope.tx, {
+        ...stored,
+        task: { ...stored.task, state },
+        ...(withMergeRequest ? { mr: mergeRequest.ref } : {}),
+      });
     });
   };
-  const moved = (from: string, to: string) =>
-    event('ticket.status.changed', {
+  /** A webhook's status change, moved by a person the delivery names. */
+  const moved = (from: string, to: string): DomainEvent =>
+    ({
+      ...event('ticket.status.changed', {
+        project_id: PROJECT,
+        task_id: null,
+        ticket: { ...TICKET },
+        from,
+        to,
+      }),
+      actor: {
+        kind: 'integration',
+        integration_id: PROJECT,
+        provider: 'fake-jira',
+        identity: { ...identity('vk'), display_name: 'Vojtěch Kaizr' },
+      },
+    }) as DomainEvent;
+  /** A polled edit: no field names. */
+  const edited = () =>
+    event('ticket.updated', {
       project_id: PROJECT,
-      task_id: null,
       ticket: { ...TICKET },
-      from,
-      to,
+      updated_at: '2026-06-02T09:00:00.000Z',
+      changed_fields: [],
+      truncated: false,
     });
   const lastEscalation = (harness: PipelineHarness) =>
     eventsOf(harness, 'task.escalated').at(-1)?.payload as
@@ -1238,9 +1279,40 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     expect(taskOf(harness).task.state).toBe('needs_human');
     const escalation = lastEscalation(harness);
     expect(escalation?.reason).toBe('ticket_closed_in_tracker');
-    expect(escalation?.blocker_brief).toContain('ACME-1 was moved to "Released"');
+    expect(escalation?.blocker_brief).toContain(
+      'ACME-1 was moved to "Released" in the tracker by Vojtěch Kaizr',
+    );
     expect(escalation?.blocker_brief).toContain('Cancel the task, or move the ticket back');
     expect(ticket.lifecycleCalls()).toHaveLength(calls);
+  });
+
+  it('a person’s resume is not undone: a later polled edit of a still-closed ticket stops nothing (review finding 3)', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim();
+    await putIn(harness, 'paused');
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    await harness.publish([moved('To Do', 'Released')]);
+    await harness.drain();
+    expect(lastEscalation(harness)?.reason).toBe('ticket_closed_in_tracker');
+    const stops = eventsOf(harness, 'task.escalated').length;
+    // A person resumes it, the ticket still Released; then any edit arrives (a comment, say).
+    await putIn(harness, 'paused');
+    await harness.publish([edited()]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(stops);
+  });
+
+  it('a merge request merged by hand closed the ticket: the task is not stopped (review ruling 4)', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim({}, 'merged');
+    await putIn(harness, 'paused', true);
+    const before = eventsOf(harness, 'task.escalated').length;
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    await harness.publish([moved('Ready for Merge', 'Released')]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
   });
 
   it('closed while queued: the task is cancelled with the reason', async () => {

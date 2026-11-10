@@ -784,6 +784,15 @@ export interface TaskRepository {
    * that found the same task claim it once. Answers whether this call recorded it.
    */
   claimTicketStatusSweep(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
+  /** The status the task's last reverse-sync stop acted on (S-28.5 review, migration 0116), or `null`. */
+  ticketStatusStopOf(tx: Transaction, taskId: Id): Promise<string | null>;
+  /** Records (upserts) the status a reverse-sync stop acted on, in the stop's transaction. */
+  recordTicketStatusStop(
+    tx: Transaction,
+    taskId: Id,
+    status: string,
+    at: IsoDateTime,
+  ): Promise<void>;
   /**
    * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
    * (WP-79, PROGRESS backlog 243).

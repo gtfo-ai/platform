@@ -472,6 +472,8 @@ export const createMemoryPipelineStore = (
   const ownerBackfills = new Map<Id, OwnerBackfillState>();
   /** S-28.5: the one-off ticket-status sweep's records, task id → `swept_at`. */
   const ticketStatusSweeps = new Map<Id, string>();
+  /** S-28.5 review: the status each task's last reverse-sync stop acted on. */
+  const ticketStatusStops = new Map<Id, string>();
   const backfillOf = (taskId: Id): OwnerBackfillState =>
     ownerBackfills.get(taskId) ?? NO_OWNER_BACKFILL;
   const backfillClaimable = (
@@ -1181,6 +1183,10 @@ export const createMemoryPipelineStore = (
       }
       ticketStatusSweeps.set(taskId, at);
       return true;
+    },
+    ticketStatusStopOf: async (_tx, taskId) => ticketStatusStops.get(taskId) ?? null,
+    recordTicketStatusStop: async (_tx, taskId, status) => {
+      ticketStatusStops.set(taskId, status);
     },
     settleOwnerBackfill: async (_tx, taskId, at) => {
       const state = backfillOf(taskId);

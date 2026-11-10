@@ -168,6 +168,11 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // claimant owns (the server's, or a worker's claim route), under `retryOnTaskConflict`; a task
   // that already moved answers `false` from its `IllegalTransitionError`.
   ['packages/application/src/pipeline/claim-admission.ts', 1],
+  // S-28.5 (M28 ruling 4): the reverse sync's cancel of a queued task and its amended brief for a
+  // task already in `needs_human`, in the duty's own task transaction that re-loads the task, under
+  // `retryOnTaskConflict` (`inTaskTransaction`); a spent bound escalates through it. Its escalation
+  // goes through `applyDecision`, whose save is `transitions.ts`'s.
+  ['packages/application/src/pipeline/ticket-status-recheck.ts', 2],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */

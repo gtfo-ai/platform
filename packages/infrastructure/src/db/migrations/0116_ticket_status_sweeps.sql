@@ -26,3 +26,21 @@ values ('ticket_status_sweeps', 'read_write');
 
 comment on table ticket_status_sweeps is
   'The one-off ticket-status sweep (S-28.5, M28 ruling 5): a row per live task whose ticket the sweep re-read once, written before the read is enqueued. The earliest swept_at is the sweep''s cutoff: tasks created after it are never swept.';
+
+-- The status a reverse-sync stop acted on (S-28.5 review): one row per task, upserted in the stop's
+-- transaction. A wake-up that is not a status change (a polled edit, the platform's own comment
+-- echo, the sweep) re-reads the ticket and stops the task again only when the status differs from
+-- this one — so a person who resumed a task while its ticket stays closed is not stopped again by
+-- every edit. A `ticket.status.changed` (a real move) always decides afresh.
+create table ticket_status_stops (
+  task_id uuid primary key references tasks (id) on delete cascade,
+  status text not null,
+  stopped_at timestamptz not null,
+  constraint ticket_status_stops_status_shape check (length(status) between 1 and 255)
+);
+
+insert into platform_table_policy (table_name, app_access)
+values ('ticket_status_stops', 'read_write');
+
+comment on table ticket_status_stops is
+  'The tracker status a reverse-sync stop (S-28.5, M28 ruling 4) acted on, per task: a later wake-up that is not a status change stops the task again only for a different status. Redacted, bounded provider text.';

@@ -807,6 +807,18 @@ export const ticketStatusSweeps = pgTable('ticket_status_sweeps', {
 });
 
 /**
+ * The status a reverse-sync stop acted on (migration 0116, S-28.5 review): a later wake-up that is
+ * not a status change stops the task again only for a different status.
+ */
+export const ticketStatusStops = pgTable('ticket_status_stops', {
+  taskId: uuid('task_id')
+    .primaryKey()
+    .references(() => tasks.id, { onDelete: 'cascade' }),
+  status: text('status').notNull(),
+  stoppedAt: timestamp('stopped_at', { withTimezone: true }).notNull(),
+});
+
+/**
  * WP-184's per-task duty lease (migration 0091): who performs a group of one task's outbound duties
  * right now. Claimed before the first provider call, renewed while its holder works, deleted when it
  * is done; the instants are the claimant's clock. The migration's header carries the reasoning.
