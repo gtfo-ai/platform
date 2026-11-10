@@ -555,7 +555,9 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
      * branch's *name*, and the name is now the stored `projects.default_branch` — no read.
      * **Three since backlog 486**: the gate passes back into `ready_for_merge`, and the `mr_ready`
      * duty reads the merge request to learn whether it is a draft — and, finding it ready, writes
-     * nothing.
+     * nothing. **Five since S-28.13**: the `ready_merge_check` duty `mr_ready` then enqueues lists
+     * the discussions (the approving review's own threads to close — none here) and reads the
+     * merge request's mergeability.
      */
     const started = startHarness({ ownPaths: ['src/totals.ts'] });
     await started.harness.publish([ticketMatched()]);
@@ -585,7 +587,13 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
       .filter((entry) => entry.integrationId === '00000000-0000-4000-8000-00000000a001')
       .map((entry) => entry.action)
       .sort();
-    expect(reads).toEqual(['get_merge_request', 'get_merge_request', 'read_codeowners']);
+    expect(reads).toEqual([
+      'get_merge_request',
+      'get_merge_request',
+      'get_merge_request',
+      'list_discussions',
+      'read_codeowners',
+    ]);
     expect(started.diffReads).toEqual([IID]);
   });
 

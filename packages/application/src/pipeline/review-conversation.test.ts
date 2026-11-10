@@ -1111,6 +1111,7 @@ describe('(5) a shadow task', () => {
     expect(w.recorded.commented).toEqual([]);
     const writes = [
       'create_discussion',
+      'create_merge_request_note',
       'reply_to_discussion',
       'resolve_discussion',
       'add_comment',
@@ -1120,7 +1121,9 @@ describe('(5) a shadow task', () => {
         expect({ action, status: entry.status }).toEqual({ action, status: 'would_have' });
       }
     }
-    expect(w.auditLog.entriesFor('create_discussion')).toHaveLength(4);
+    // Three findings, and (S-28.13) the summary as a general note.
+    expect(w.auditLog.entriesFor('create_discussion')).toHaveLength(3);
+    expect(w.auditLog.entriesFor('create_merge_request_note')).toHaveLength(1);
     expect(w.auditLog.entriesFor('reply_to_discussion')).toHaveLength(1);
     expect(w.auditLog.entriesFor('add_comment')).toHaveLength(1);
     // The finding thread's resolve and, since S-28.3, the person's thread the fixed reply answered.
@@ -1142,7 +1145,11 @@ describe('WP-184: the pre-plan step and the outbound duty take turns under the t
 
     // Three findings and one summary: one call each, whichever performer ran first.
     expect(w.recorded.created).toHaveLength(4);
-    const statuses = w.auditLog.entriesFor('create_discussion').map((row) => row.status);
+    // S-28.13: the three findings are threads, the summary a general note.
+    const statuses = [
+      ...w.auditLog.entriesFor('create_discussion'),
+      ...w.auditLog.entriesFor('create_merge_request_note'),
+    ].map((row) => row.status);
     expect(statuses.filter((status) => status === 'ok')).toHaveLength(4);
     expect(statuses.filter((status) => status === 'replayed')).toHaveLength(4);
   });
@@ -1170,8 +1177,11 @@ describe('WP-184: the pre-plan step and the outbound duty take turns under the t
     expect(w.auditLog.entriesFor('create_discussion')).toEqual([]);
 
     await w.outboundFindings();
-    const rows = w.auditLog.entriesFor('create_discussion');
-    // Three findings and the summary: one row each.
+    const rows = [
+      ...w.auditLog.entriesFor('create_discussion'),
+      ...w.auditLog.entriesFor('create_merge_request_note'),
+    ];
+    // Three findings and (S-28.13) the summary as a general note: one row each.
     expect(rows.map((row) => row.status)).toEqual([
       'would_have',
       'would_have',
@@ -1497,15 +1507,18 @@ describe('(S-28.13) the platform closes its own threads after an approval (M28 r
     expect(closing[0]?.markdown).toContain('Left as is.');
     expect(closing[0]?.markdown).toContain('reopen this thread and write what you want here');
     expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['nit-not-changed']);
-    // The approving review's own summary is a note, and nothing of it is left open.
+    // The approving review's own summary is a note; of the platform's threads only the one a
+    // person wrote in is still open.
     expect(
-      w.discussions.filter(
-        (discussion) =>
-          discussion.resolvable &&
-          !discussion.resolved &&
-          discussion.notes[0]?.author.external_id === BOT.external_id,
-      ),
-    ).toEqual([]);
+      w.discussions
+        .filter(
+          (discussion) =>
+            discussion.resolvable &&
+            !discussion.resolved &&
+            discussion.notes[0]?.author.external_id === BOT.external_id,
+        )
+        .map((discussion) => discussion.id),
+    ).toEqual(['finding-person']);
   });
 
   /** A replay posts no second note and resolves nothing again — and a person's reopen stands. */

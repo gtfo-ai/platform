@@ -1497,12 +1497,14 @@ describe('the review conversation through the pipeline (WP-179)', () => {
     // One finding thread and one summary note, both through the executor — and, since WP-184,
     // replayed once by the other performer: the outbound duty and the `business_review` job's
     // pre-plan step name the same keys, so the second turn makes no call.
+    // S-28.13: the summary is a general note, audited under its own action.
     expect(harness.audit.entriesFor('create_discussion').map((entry) => entry.status)).toEqual([
       'ok',
-      'ok',
-      'replayed',
       'replayed',
     ]);
+    expect(
+      harness.audit.entriesFor('create_merge_request_note').map((entry) => entry.status),
+    ).toEqual(['ok', 'replayed']);
 
     harness.script(
       'implementation',

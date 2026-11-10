@@ -882,7 +882,10 @@ describe('the review of the human merge request, through the whole walk (WP-45)'
     await harness.drain();
     const review = reviewTaskOf(harness);
     const threads = harness.audit.entries.filter(
-      (entry) => entry.action === 'create_discussion' && entry.taskId === review?.task.id,
+      (entry) =>
+        // S-28.13: the review's summary is a general note (`create_merge_request_note`).
+        (entry.action === 'create_discussion' || entry.action === 'create_merge_request_note') &&
+        entry.taskId === review?.task.id,
     );
     // The positive half first (standing rule 29): the posting duty really ran for this task.
     expect(threads.length).toBeGreaterThan(0);
