@@ -245,7 +245,8 @@ describe('the project settings port', () => {
       pickUpFrom: 'To pick up',
       startFrom: null,
       closed: null,
-      onTicketClosed: 'stop',
+      // M28 ruling 4b (S-28.14): a binding that does not choose cancels.
+      onTicketClosed: 'cancel',
     });
     const listed = await portOver([
       binding({ lifecycle: { start_from: ['Ready'], closed: ['Released'] } }),

@@ -32,6 +32,7 @@ import {
 import type { BindingLifecycle } from './binding-lifecycle.js';
 import { cancelTaskCommand, handBackTaskCommand, reworkStageCommand } from './commands.js';
 import { staticPipelineIntegrations } from './integrations.js';
+import { claimRunOffer } from './offers.js';
 import { setTaskOwnerCommand } from './owner-sync.js';
 import { staticProjectSettings } from './settings.js';
 import { INITIAL_TASK_VERSION, type StoredTask } from './store.js';
@@ -1182,13 +1183,13 @@ describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 
     });
   });
 
-  it('the claim refuses a ticket released while its task waited: needs_human, the status named, no assign, no run', async () => {
+  it('under stop, the claim refuses a ticket released while its task waited: needs_human, the status named, no assign, no run', async () => {
     const ticket = tracker({
       status: 'To Do',
       statusCategory: 'todo',
       movedBeforeTheClaimTo: { status: 'Released', category: 'done' },
     });
-    const harness = withPolicy(ticket);
+    const harness = withPolicy(ticket, { in_progress: 'Doing', on_ticket_closed: 'stop' });
     await harness.publish([ticketMatched()]);
 
     const stored = taskOf(harness);
@@ -1206,6 +1207,32 @@ describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 
     expect(runsCreated(harness)).toBe(0);
     // A status refusal is not somebody else's ticket: no comment on it.
     expect(ticket.state.comments).toEqual([]);
+  });
+
+  it('by default, the claim of a ticket released while its task waited cancels the task, says why, and leaves the ticket where it is (S-28.14)', async () => {
+    const ticket = tracker({
+      status: 'To Do',
+      statusCategory: 'todo',
+      movedBeforeTheClaimTo: { status: 'Released', category: 'done' },
+    });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+    await harness.drain();
+
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(0);
+    expect(eventsOf(harness, 'ticket.claim.refused')[0]?.payload).toMatchObject({
+      reason: 'ticket_closed_in_tracker',
+    });
+    const cancelled = eventsOf(harness, 'task.cancelled');
+    expect(cancelled).toHaveLength(1);
+    expect((cancelled[0]?.payload as { outcome: string } | undefined)?.outcome).toBe(
+      'Cancelled automatically: ACME-1 is "Released" in the tracker, a status that means it is finished.',
+    );
+    expect(cancelled[0]?.actor).toMatchObject({ kind: 'system' });
+    expect(ticket.calls).not.toContain('assignToSelf');
+    expect(ticket.state.status).toBe('Released');
+    expect(runsCreated(harness)).toBe(0);
   });
 
   it('the claim refuses a first claim of a ticket a person took meanwhile (ticket_not_startable)', async () => {
@@ -1291,9 +1318,13 @@ describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 
 
 // ── S-28.5: the reverse sync and the sweep ─────────────────────────────────
 
-describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruling 4)', () => {
+describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruling 4), under on_ticket_closed: stop', () => {
   const slots = { in_progress: 'Doing' };
-  const policy = ticketStatusPolicyOf('Ready for the agent', slots);
+  // S-28.14: `stop` is the explicit choice now — the default is `cancel` (its own describe below).
+  const policy = ticketStatusPolicyOf('Ready for the agent', {
+    ...slots,
+    on_ticket_closed: 'stop',
+  });
   /** A task stopped at the claim (somebody else holds the ticket): `needs_human`, nothing running. */
   const stoppedAtTheClaim = async (
     settings: Record<string, unknown> = {},
@@ -1437,8 +1468,10 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     await harness.publish([moved('To Do', 'Done')]);
     await harness.drain();
     expect(taskOf(harness).task.state).toBe('cancelled');
+    // S-28.14: the outcome is a sentence a person reads, never the reason's code.
     expect(eventsOf(harness, 'task.cancelled').at(-1)?.payload).toMatchObject({
-      outcome: 'ticket_closed_in_tracker',
+      outcome:
+        'Cancelled automatically: ACME-1 is "Done" in the tracker, a status that means it is finished.',
     });
   });
 
@@ -1529,7 +1562,8 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
       await harness.drain();
       expect(taskOf(harness).task.state).toBe('cancelled');
       expect(eventsOf(harness, 'task.cancelled').at(-1)?.payload).toMatchObject({
-        outcome: 'ticket_taken_by_person',
+        outcome:
+          'Cancelled automatically: ACME-1 was moved to "Ready for Merge" in the tracker, a status the platform did not set — a person seems to be working on it.',
       });
     });
 
@@ -1564,7 +1598,7 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
       expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
     });
 
-    it('a closed status still stops a running task that has not merged', async () => {
+    it('a closed status still ends a task that ran and has not merged — cancelled, by default (S-28.14)', async () => {
       const { ticket, harness } = await reached();
       await putIn(harness, 'paused', false, {
         stageAttempts: { refinement: 1, implementation: 1 },
@@ -1574,7 +1608,7 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
       ticket.state.statusCategory = 'done';
       await harness.publish([moved('Doing', 'Released')]);
       await harness.drain();
-      expect(lastEscalation(harness)?.reason).toBe('ticket_closed_in_tracker');
+      expect(taskOf(harness).task.state).toBe('cancelled');
     });
 
     it('a task past its code review, whose ticket the platform’s own in_review moment moved, is left alone', async () => {
@@ -1633,6 +1667,202 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     expect(lastEscalation(harness)?.reason).toBe('ticket_closed_in_tracker');
     // Idempotent: the task is recorded, so the next pass finds nothing.
     expect(await pass()).toEqual({ found: 0, enqueued: 0 });
+  });
+});
+
+// ── S-28.14: a finished ticket cancels its task (M28 ruling 4b) ─────────────
+
+describe('S-28.14 — a ticket a person finished cancels its task automatically (M28 ruling 4b)', () => {
+  const slots = { in_progress: 'Doing' };
+  /** The default policy: no `on_ticket_closed`, so `cancel`. */
+  const policy = ticketStatusPolicyOf('Ready for the agent', slots);
+  const released = (from: string): DomainEvent =>
+    event('ticket.status.changed', {
+      project_id: PROJECT,
+      task_id: null,
+      ticket: { ...TICKET },
+      from,
+      to: 'Released',
+    });
+  const notified = (harness: PipelineHarness, notificationClass: string) =>
+    harness.jobs.history.filter((request) => {
+      const data = request.data as { duty?: string; notification_class?: string };
+      return data.duty === 'notify' && data.notification_class === notificationClass;
+    });
+  const sweep = (harness: PipelineHarness) =>
+    recoverTicketStatusSweep(
+      { unitOfWork: harness.memory, jobs: harness.jobs },
+      { tasks: harness.store.tasks },
+      {
+        now: '2026-06-02T09:00:00.000Z' as IsoDateTime,
+        olderThan: '2999-01-01T00:00:00.000Z' as IsoDateTime,
+        limit: 100,
+      },
+    );
+  /** Writes the task's row as a stage, a gate or the merge left it. */
+  const putAt = async (
+    harness: PipelineHarness,
+    task: Partial<StoredTask['task']>,
+    withMergeRequest = false,
+  ) =>
+    harness.memory.transaction(async (scope) => {
+      const stored = taskOf(harness);
+      await harness.store.tasks.save(scope.tx, { ...stored, task: { ...stored.task, ...task } });
+      if (withMergeRequest) {
+        await harness.store.tasks.recordMergeRequest(scope.tx, stored.task.id, mergeRequest.ref);
+      }
+    });
+
+  it('a running task: cancelled, its run told to stop, its people told once, its merge request and its ticket left alone', async () => {
+    const ticket = tracker({ status: 'Ready for the agent', statusCategory: 'todo' });
+    const harness = harnessFor(ticket, lifecycle(slots), {
+      runsAgents: false,
+      settings: { ticketStatusPolicy: policy },
+      git: {
+        getMergeRequest: async () => mergeRequest,
+        closeMergeRequest: async () => {
+          throw new Error('the platform must never touch the merge request');
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const [offer] = harness.store.offerRows();
+    if (offer === undefined) throw new Error('the stage offered no run');
+    // A claimant holds the run: it is running.
+    await harness.memory.transaction(async (scope) =>
+      claimRunOffer(harness.store.offers, scope.tx, {
+        eligibility: { runId: offer.runId },
+        claimantKind: 'server',
+        owner: 'server:holder',
+        expiresAt: new Date(Date.parse(harness.clock.now()) + 300_000).toISOString() as never,
+        now: harness.clock.now() as never,
+      }),
+    );
+    await putAt(harness, {}, true);
+    expect(taskOf(harness).task.state).toBe('active');
+    const callsBefore = ticket.calls.length;
+
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    await harness.publish([released('Doing')]);
+    await harness.drain();
+
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(0);
+    const cancelled = eventsOf(harness, 'task.cancelled');
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.actor).toMatchObject({ kind: 'system' });
+    expect((cancelled[0]?.payload as { outcome: string } | undefined)?.outcome).toBe(
+      'Cancelled automatically: ACME-1 is "Released" in the tracker, a status that means it is finished. Its merge request #7 is still open — close or merge it yourself: https://git.example.test/acme/api/-/merge_requests/7',
+    );
+    // The person's *Cancel task* path: the claimed run is told to stop through its lease holder.
+    expect(harness.store.runCommandRows().map((row) => row.instruction.kind)).toEqual(['cancel']);
+    expect(notified(harness, 'task_cancelled')).toHaveLength(1);
+    expect(notified(harness, 'escalation')).toHaveLength(0);
+    // The ticket stays Released: the release unassigns, and never moves it back to pick up.
+    const after = ticket.calls.slice(callsBefore);
+    expect(after.filter((call) => call.startsWith('transition:'))).toEqual([]);
+    expect(ticket.state.status).toBe('Released');
+
+    // Seen again — a polled edit, the sweep — nothing more happens.
+    await harness.publish([released('Released')]);
+    await harness.drain();
+    expect(eventsOf(harness, 'task.cancelled')).toHaveLength(1);
+    expect(notified(harness, 'task_cancelled')).toHaveLength(1);
+  });
+
+  it('AUT-6676: a task an earlier rule stopped in needs_human for its released ticket is cancelled by the sweep, nobody clicking', async () => {
+    const ticket = tracker({ stealAfterAssign: 'jane', status: 'To Do', statusCategory: 'todo' });
+    const harness = harnessFor(ticket, lifecycle(slots), {
+      settings: { ticketStatusPolicy: policy },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const taskId = taskOf(harness).task.id;
+    // S-28.5's rule stopped it for *Released* and its sweep recorded it, at an earlier revision.
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.tasks.recordTicketStatusStop(
+        scope.tx,
+        taskId,
+        'Released',
+        '2026-06-02T08:00:00.000Z' as IsoDateTime,
+      );
+      await harness.store.tasks.claimTicketStatusSweep(
+        scope.tx,
+        taskId,
+        '2026-06-02T08:00:00.000Z' as IsoDateTime,
+        '2026-06-02T08:00:00.000Z' as IsoDateTime,
+      );
+    });
+
+    expect(await sweep(harness)).toEqual({ found: 1, enqueued: 1 });
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect(eventsOf(harness, 'task.cancelled')).toHaveLength(1);
+    expect(notified(harness, 'task_cancelled')).toHaveLength(1);
+    expect(await sweep(harness)).toEqual({ found: 0, enqueued: 0 });
+  });
+
+  it('leaves a task at a human stage, and a merged one, alone', async () => {
+    for (const shape of [
+      {
+        state: 'ready_for_merge',
+        currentStage: 'ready_for_merge',
+        stageAttempts: { refinement: 1, implementation: 1, ready_for_merge: 1 },
+      },
+      {
+        state: 'needs_human',
+        currentStage: 'retrospective',
+        stageAttempts: { refinement: 1, implementation: 1, merged_gate: 1, retrospective: 1 },
+      },
+    ] as const) {
+      const ticket = tracker({ stealAfterAssign: 'jane', status: 'To Do', statusCategory: 'todo' });
+      const harness = harnessFor(ticket, lifecycle(slots), {
+        settings: { ticketStatusPolicy: policy },
+      });
+      await harness.publish([ticketMatched()]);
+      await putAt(harness, {
+        state: shape.state,
+        currentStage: shape.currentStage as Slug,
+        stageAttempts: shape.stageAttempts,
+      });
+      ticket.state.status = 'Released';
+      ticket.state.statusCategory = 'done';
+      await harness.publish([released('Doing')]);
+      await harness.drain();
+      expect(taskOf(harness).task.state, shape.state).toBe(shape.state);
+      expect(eventsOf(harness, 'task.cancelled'), shape.state).toHaveLength(0);
+    }
+  });
+
+  it('under stop, a running task still escalates with one click to cancel', async () => {
+    const ticket = tracker({ stealAfterAssign: 'jane', status: 'To Do', statusCategory: 'todo' });
+    const harness = harnessFor(ticket, lifecycle(slots), {
+      settings: {
+        ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', {
+          ...slots,
+          on_ticket_closed: 'stop',
+        }),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    await putAt(harness, {
+      state: 'paused',
+      currentStage: 'implementation' as Slug,
+      stageAttempts: { refinement: 1, implementation: 1 },
+    });
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    await harness.publish([released('Doing')]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(
+      (eventsOf(harness, 'task.escalated').at(-1)?.payload as { reason: string } | undefined)
+        ?.reason,
+    ).toBe('ticket_closed_in_tracker');
+    expect(eventsOf(harness, 'task.cancelled')).toHaveLength(0);
   });
 });
 

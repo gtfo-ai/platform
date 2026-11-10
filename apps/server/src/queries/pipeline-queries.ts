@@ -82,6 +82,7 @@ import type {
   RunStartFailure,
   RunStatus,
   RunStoppedReason,
+  TaskCancellation,
   TaskConflict,
   TaskConversationSeen,
   TaskDetailRecord,
@@ -2369,6 +2370,7 @@ export const findTaskDetail = async (
     owners,
     waiting,
     escalation,
+    cancellation,
     queueWaits,
   ] = await Promise.all([
     modelUsageFor(
@@ -2397,6 +2399,8 @@ export const findTaskDetail = async (
       ? null
       : waitingForTasks(database, [taskId], options.coreDigests ?? null),
     escalationFor(database, task),
+    // S-28.14: why a cancelled task was cancelled, and whether the platform did it.
+    cancellationFor(database, task),
     // S-25.16: why a queued task waits — the scheduler's admission, its limits and its order.
     options.wipLimits === undefined || task.state !== 'queued'
       ? new Map<string, QueueWait>()
@@ -2442,6 +2446,7 @@ export const findTaskDetail = async (
     returns: returnsOf(setbackRows, compiledPipelineOf(task)),
     stop: stopOf(task, setbackRows),
     escalation,
+    cancellation,
     loop_limits: frozenLimits(task.iterationLimits),
     stages: stageRows.map((row) => ({
       stage: row.stage,
@@ -2556,6 +2561,48 @@ export const escalationFor = async (
     .limit(1);
   const row = rows[0];
   return row === undefined ? null : escalationOfRow(row);
+};
+
+/**
+ * **Why a cancelled task was cancelled** (M28 ruling 4b, S-28.14): its newest `task.cancelled`
+ * event's `outcome` and instant, and whether the platform did it (the event's actor is not a
+ * person). Read only for a `cancelled` task; the same order and the same cut as
+ * {@link escalationFor}, and `null` for a payload with no outcome rather than an invented one.
+ */
+export const cancellationFor = async (
+  database: Database,
+  task: { readonly id: string; readonly state: string },
+): Promise<TaskCancellation | null> => {
+  if (task.state !== 'cancelled') {
+    return null;
+  }
+  const rows = await database
+    .select({ occurredAt: events.occurredAt, payload: events.payload, actor: events.actor })
+    .from(events)
+    .where(
+      and(
+        eq(events.streamType, 'task'),
+        eq(events.streamId, task.id),
+        eq(events.type, 'task.cancelled'),
+      ),
+    )
+    .orderBy(desc(events.occurredAt), desc(events.position))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const outcome = (row.payload as { readonly outcome?: unknown } | null)?.outcome;
+  if (typeof outcome !== 'string' || outcome === '') {
+    return null;
+  }
+  const actorKind = (row.actor as { readonly kind?: unknown } | null)?.kind;
+  return {
+    at: isoRequired(row.occurredAt),
+    outcome: outcome.slice(0, NOTIFICATION_DETAIL_MAX),
+    outcome_original_chars: outcome.length > NOTIFICATION_DETAIL_MAX ? outcome.length : null,
+    automatic: actorKind !== 'user',
+  };
 };
 
 /**

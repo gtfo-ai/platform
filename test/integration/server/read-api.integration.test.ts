@@ -1068,6 +1068,70 @@ describe('the task projection', () => {
   });
 
   /**
+   * **Why a cancelled task was cancelled** (S-28.14, M28 ruling 4b): the newest `task.cancelled`
+   * outcome, only while the task is `cancelled`, `automatic` when the platform (not a person) did it.
+   */
+  it('publishes a cancelled task’s outcome and who cancelled it, and nothing for any other task', async () => {
+    const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
+      (await pool.query<T>(text, values)).rows[0] as T;
+    const org = await one<{ id: string }>(
+      "insert into organizations (name) values ('cancellation-read') returning id",
+    );
+    const project = await one<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'cancelread', 'Cancellation read', 'https://git.example.test/acme/cancelread.git')
+       returning id`,
+      [org.id],
+    );
+    const taskAt = async (key: string, state: string) =>
+      (
+        await one<{ id: string }>(
+          `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                              current_stage, stage_attempts)
+           values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', $3,
+                   'refinement', jsonb_build_object('refinement', 1)) returning id`,
+          [project.id, key, state],
+        )
+      ).id;
+    const cancelledEvent = async (
+      taskId: string,
+      actor: Record<string, unknown>,
+      outcome: string,
+    ) => {
+      await pool.query(
+        `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
+         values ('task', $1, 1, 'task.cancelled', $2::jsonb, $3::jsonb, '2026-11-10T10:00:00Z')`,
+        [
+          taskId,
+          JSON.stringify({ project_id: project.id, task_id: taskId, outcome }),
+          JSON.stringify(actor),
+        ],
+      );
+    };
+    const outcome =
+      'Cancelled automatically: CAN-1 is "Released" in Jira, a status that means it is finished.';
+    const automatic = await taskAt('CAN-1', 'cancelled');
+    await cancelledEvent(automatic, { kind: 'system', component: 'pipeline' }, outcome);
+    expect((await findTaskDetail(drizzled, automatic))?.cancellation).toEqual({
+      at: '2026-11-10T10:00:00.000Z',
+      outcome,
+      outcome_original_chars: null,
+      automatic: true,
+    });
+
+    const byPerson = await taskAt('CAN-2', 'cancelled');
+    await cancelledEvent(
+      byPerson,
+      { kind: 'user', user_id: '00000000-0000-4000-8000-0000000000e1' },
+      'cancelled by a human',
+    );
+    expect((await findTaskDetail(drizzled, byPerson))?.cancellation?.automatic).toBe(false);
+
+    const live = await taskAt('CAN-3', 'active');
+    expect((await findTaskDetail(drizzled, live))?.cancellation).toBeNull();
+  });
+
+  /**
    * **The escalation's reason key on the board's page and in the Inbox** (backlog 1360, S-25.14):
    * the same newest `task.escalated` the task read answers, for the whole page in one statement.
    * Both directions (rule 42): a task that is not `needs_human` publishes `null` on its card and is

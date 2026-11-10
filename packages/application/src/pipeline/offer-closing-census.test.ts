@@ -116,9 +116,18 @@ const SAVE_SITES: ReadonlyMap<string, Closing> = new Map<string, Closing>([
   ['packages/application/src/pipeline/config-refusal.ts', CLOSES],
   // S-22.14 (backlog 744): a claim refused at admission pauses its task after closing its offer.
   ['packages/application/src/pipeline/claim-admission.ts', CLOSES],
-  // S-28.5: the reverse sync cancels a queued task after `closeStageOffer`, and escalates through
-  // `applyDecision`; its amend leaves a `needs_human` task, which has no live offer, where it is.
-  ['packages/application/src/pipeline/ticket-status-recheck.ts', CLOSES],
+  // S-28.5: the reverse sync escalates through `applyDecision` and (S-28.14) cancels through
+  // `task-cancel.ts`, which closes first; its one save left is the amend of a `needs_human` task.
+  [
+    'packages/application/src/pipeline/ticket-status-recheck.ts',
+    {
+      closes: false,
+      because:
+        'its only save is the amended brief of a needs_human task, which holds no live offer; its cancel is task-cancel.ts and its escalation applyDecision',
+    },
+  ],
+  // S-28.14: the one cancellation — `closeStageOffer` before the save.
+  ['packages/application/src/pipeline/task-cancel.ts', CLOSES],
 ]);
 
 const SAVE = /\btasks\.save\s*\(/;

@@ -891,6 +891,15 @@ platform back to the ticket's assignee; it is the lifecycle form's third switch,
 the tracker** (S-26.8a, a maintainer's, saved with the lifecycle), and the binding's account needs
 *Assign Issues* (the Jira setup guide, step 2).
 
+**A ticket a person finishes cancels its task** (S-28.14): the block's `on_ticket_closed` is `cancel`
+by default — a live task whose ticket moves to a finished status (`lifecycle.closed`, or the
+tracker's Done category) is cancelled automatically, never at QA or Ready for merge, never once its
+merge request merged, and its merge request is never touched (the cancellation says so). `stop`
+(escalate to *Needs you*, the behaviour before S-28.14) and `ignore` remain; a binding that saved
+`stop` keeps it, and one that never chose follows the new default with no migration. After the
+upgrade the recovery pass re-reads every live task's ticket once, so a task an earlier release
+stopped for its finished ticket is cancelled without anybody clicking.
+
 ### The five providers that ship
 
 Each has its own setup guide, written for the provider's own screens — scopes, tokens, webhook

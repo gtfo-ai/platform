@@ -36,7 +36,9 @@
  * a ticket moved to a `closed` status while its task waited refuses every claim with
  * `ticket_closed_in_tracker` (unless the binding says `on_ticket_closed: ignore`), and a first claim
  * of a ticket no longer startable refuses with `ticket_not_startable`. Nothing is written to the
- * tracker; the task is escalated with a brief naming the status. It runs only where the claim runs
+ * tracker; the task is escalated with a brief naming the status — except a `closed` ticket under
+ * `on_ticket_closed: cancel` (the default since S-28.14, M28 ruling 4b), whose task is **cancelled**
+ * through the person's *Cancel task* steps (`./task-cancel.ts`). It runs only where the claim runs
  * — a claiming binding — and a binding that does not claim is left to the reverse sync.
  *
  * When the claim does assign, the binding's account is written into `tasks.ticket_assignee` in the
@@ -83,6 +85,7 @@ import type {
   DomainEvent,
   ExternalIdentity,
   Id,
+  IsoDateTime,
   Slug,
   StoredTicketClaim,
   TicketClaimHeldBy,
@@ -120,6 +123,7 @@ import {
 import type { OutboundJobData } from './jobs.js';
 import { type ClaimReadFacts, recordClaimAssign, syncOwnerOnClaimRead } from './owner-sync.js';
 import { PIPELINE_ACTOR, type StoredTask } from './store.js';
+import { cancelTaskInScope, ticketMovedCancelOutcome } from './task-cancel.js';
 import { retryOnTaskConflict } from './task-conflict.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 import { releaseTicket } from './ticket-release.js';
@@ -239,6 +243,15 @@ export const ensureTicketClaim = async (
     return PROCEED;
   }
 
+  const statusPolicy =
+    settings.ticketStatusPolicy === null || settings.ticketStatusPolicy === undefined
+      ? null
+      : // Finding 1: the legacy `status_mapping`'s writes are the platform's own, too.
+        withStatusMappingStatuses(
+          settings.ticketStatusPolicy,
+          lifecycle.slots,
+          settings.config.status_mapping,
+        );
   let attempt: ClaimAttempt;
   try {
     attempt = await claim(
@@ -248,14 +261,7 @@ export const ensureTicketClaim = async (
       lifecycle,
       request,
       first,
-      settings.ticketStatusPolicy === null || settings.ticketStatusPolicy === undefined
-        ? null
-        : // Finding 1: the legacy `status_mapping`'s writes are the platform's own, too.
-          withStatusMappingStatuses(
-            settings.ticketStatusPolicy,
-            lifecycle.slots,
-            settings.config.status_mapping,
-          ),
+      statusPolicy,
       humanCommanded,
     );
   } catch (error) {
@@ -291,13 +297,17 @@ export const ensureTicketClaim = async (
         reason: attempt.statusRefusal.reason,
         status: attempt.statusRefusal.status,
       },
-      'the ticket moved to a status work does not start from while the task waited; the task is escalated and no run starts',
+      'the ticket moved to a status work does not start from while the task waited; no run starts',
     );
     return refuse(options, integrations, stored, request, {
       reason: attempt.statusRefusal.reason,
       assignee: null,
       code: null,
       status: attempt.statusRefusal.status,
+      // M28 ruling 4b (S-28.14): a finished ticket cancels its task rather than stopping it.
+      cancel:
+        attempt.statusRefusal.reason === 'ticket_closed_in_tracker' &&
+        statusPolicy?.onTicketClosed === 'cancel',
     });
   }
 
@@ -781,6 +791,13 @@ const refuse = async (
     readonly code: string | null;
     /** The status a status refusal read (S-28.4), redacted and bounded. */
     readonly status?: string;
+    /**
+     * Cancel the task instead of escalating it (M28 ruling 4b, S-28.14): a `closed` ticket under
+     * `on_ticket_closed: cancel`. The person's *Cancel task* steps (`./task-cancel.ts`), attributed
+     * to the platform, and the status recorded as a ticket-status stop so the release leaves the
+     * ticket where the person put it.
+     */
+    readonly cancel?: boolean;
   },
 ): Promise<TicketClaimOutcome> => {
   const { task } = stored;
@@ -832,6 +849,37 @@ const refuse = async (
         ...current,
         task: { ...current.task, sequence: current.task.sequence + 1 },
       };
+      const context = {
+        ids: options.ids,
+        actor: PIPELINE_ACTOR,
+        clock: options.clock as never,
+        correlationId: task.id,
+        causeEventId: null,
+      };
+      if (refusal.cancel === true && refusal.status !== undefined) {
+        const outcome = ticketMovedCancelOutcome({
+          key: current.task.ticket.key,
+          provider: current.task.ticket.provider,
+          status: refusal.status,
+          reason: 'ticket_closed_in_tracker',
+          mergeRequest: current.mr === null ? null : { ref: current.mr, open: null },
+        });
+        // The refusal first on the stream, then the cancellation (its offer closed first inside).
+        await scope.events.append([refused]);
+        await cancelTaskInScope(options, scope, after, context, {
+          outcome,
+          offerCode: 'stage_left',
+          offerReason: 'the task was cancelled: ticket_closed_in_tracker',
+          stageNote: outcome,
+        });
+        await options.store.tasks.recordTicketStatusStop(
+          scope.tx,
+          task.id,
+          refusal.status,
+          options.clock.now() as IsoDateTime,
+        );
+        return true;
+      }
       const applied = await applyDecision({
         offerClosing: { events: scope.events, broadcast: scope.broadcast },
         store: options.store,
@@ -845,13 +893,7 @@ const refuse = async (
         stored: after,
         decision: { kind: 'escalate', reason: refusal.reason, blockerBrief },
         escalationOutcome: refusal.reason,
-        context: {
-          ids: options.ids,
-          actor: PIPELINE_ACTOR,
-          clock: options.clock as never,
-          correlationId: task.id,
-          causeEventId: null,
-        },
+        context,
         causedByEventId: null,
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       });

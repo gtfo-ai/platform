@@ -281,7 +281,8 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 > the screen's, drawn from that field (WP-182).
 >
 > **The status policy** (S-28.4, TD-029 amendment B): the block also takes `start_from`, `closed` and
-> `on_ticket_closed` (defaults: the tracker's To Do / Done categories, `stop`), and applies to every
+> `on_ticket_closed` (defaults: the tracker's To Do / Done categories, `cancel` — `stop` until S-28.14,
+> M28 ruling 4b; `cancel` \| `stop` \| `ignore`, and a stored `stop` is kept), and applies to every
 > task-management binding, block or not. What counts as startable, closed, **hands-off** or neither is
 > one pure function, `ticketStatusDisposition` (`packages/domain/src/lifecycle/status-disposition.ts`):
 > hands-off is a status of the In Progress category that is neither startable nor closed and — for a

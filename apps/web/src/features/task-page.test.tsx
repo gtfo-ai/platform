@@ -1372,6 +1372,51 @@ describe('the needs-you callout', () => {
     ).toBe('the run was cancelled');
   });
 
+  it('says why the platform cancelled a task whose ticket a person finished, with its merge request (S-28.14)', async () => {
+    start(
+      detail(
+        {
+          cancellation: {
+            at: AT,
+            outcome:
+              'Cancelled automatically: ACME-1 is "Released <b>x</b>" in Jira, a status that means it is finished. Its merge request !7 is still open — close or merge it yourself: https://git.example.invalid/acme/api/-/merge_requests/7',
+            outcome_original_chars: null,
+            automatic: true,
+          },
+        },
+        { state: 'cancelled', mr_ref: GITLAB_MR },
+      ),
+    );
+    const notice = await screen.findByRole('region', { name: 'Cancelled' });
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    const outcome = notice.querySelector('[data-cancelled-outcome]');
+    expect(outcome?.textContent).toContain(
+      'Cancelled automatically: ACME-1 is "Released <b>x</b>" in Jira',
+    );
+    expect(outcome?.textContent).toContain('Its merge request !7 is still open');
+    // The tracker's status name is provider text: never markup (BD-022).
+    expect(outcome?.querySelector('b')).toBeNull();
+    expect(within(notice).getByRole('link', { name: /Open the merge request/ })).toBeTruthy();
+  });
+
+  it('draws no cancellation notice for a task a person cancelled (S-28.14)', async () => {
+    start(
+      detail(
+        {
+          cancellation: {
+            at: AT,
+            outcome: 'cancelled by a human',
+            outcome_original_chars: null,
+            automatic: false,
+          },
+        },
+        { state: 'cancelled' },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByRole('region', { name: 'Cancelled' })).toBeNull();
+  });
+
   // S-25.20: AUT-6655 read the generic options sentence first and the cause after it.
   it('leads with the cause, then the next step, and says the options last (S-25.20)', async () => {
     start(ciTimedOut());

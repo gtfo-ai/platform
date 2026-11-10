@@ -343,3 +343,108 @@ describe('ticketStatusStopDecision — the reverse sync (M28 ruling 4, S-28.5)',
     expect(ticketStatusDisposition('In Progress', 'in_progress', mapped, true)).toBe('not_ready');
   });
 });
+
+describe('ticketStatusStopDecision under on_ticket_closed: cancel (M28 ruling 4b, S-28.14)', () => {
+  const LIVE = [
+    'queued',
+    'active',
+    'returned',
+    'waiting_answers',
+    'waiting_approval',
+    'paused',
+    'needs_human',
+  ];
+  const decide = (over: Partial<Parameters<typeof ticketStatusStopDecision>[0]>) =>
+    ticketStatusStopDecision({
+      state: 'active',
+      humanStage: false,
+      merged: false,
+      disposition: 'closed',
+      onTicketClosed: 'cancel',
+      mayAmend: false,
+      ...over,
+    });
+
+  it('is the default of a binding that does not say, and a stored `stop` keeps `stop`', () => {
+    expect(DEFAULT_TICKET_STATUS_POLICY.onTicketClosed).toBe('cancel');
+    expect(ticketStatusPolicyOf(null, { in_progress: 'Doing' }).onTicketClosed).toBe('cancel');
+    expect(ticketStatusPolicyOf(null, { on_ticket_closed: 'stop' }).onTicketClosed).toBe('stop');
+    expect(ticketStatusPolicyOf(null, { on_ticket_closed: 'ignore' }).onTicketClosed).toBe(
+      'ignore',
+    );
+  });
+
+  it('cancels a closed ticket’s task in every live state — a needs_human one already stopped included, moved or not', () => {
+    for (const state of LIVE) {
+      for (const mayAmend of [true, false]) {
+        expect(decide({ state, mayAmend }), `${state} mayAmend=${String(mayAmend)}`).toEqual({
+          kind: 'cancel',
+          reason: 'ticket_closed_in_tracker',
+        });
+      }
+    }
+  });
+
+  it('keeps every exemption: finished, merged, a human stage', () => {
+    for (const state of ['done', 'cancelled', 'merged', 'retro']) {
+      expect(decide({ state })).toEqual({ kind: 'none' });
+    }
+    for (const state of LIVE) {
+      expect(decide({ state, merged: true })).toEqual({ kind: 'none' });
+    }
+    for (const state of ['qa', 'ready_for_merge', 'needs_human', 'paused']) {
+      expect(decide({ state, humanStage: true })).toEqual({ kind: 'none' });
+    }
+  });
+
+  it('leaves the hands-off table unchanged, and a startable or waiting status alone', () => {
+    expect(decide({ state: 'queued', disposition: 'hands_off' })).toEqual({
+      kind: 'cancel',
+      reason: 'ticket_taken_by_person',
+    });
+    expect(decide({ disposition: 'hands_off' })).toEqual({
+      kind: 'escalate',
+      reason: 'ticket_taken_by_person',
+    });
+    expect(decide({ state: 'needs_human', disposition: 'hands_off' })).toEqual({ kind: 'none' });
+    expect(decide({ disposition: 'startable' })).toEqual({ kind: 'none' });
+    expect(decide({ disposition: 'not_ready' })).toEqual({ kind: 'none' });
+  });
+
+  it('the three choices, state by state, for a closed ticket', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...LIVE),
+        fc.constantFrom('cancel' as const, 'stop' as const, 'ignore' as const),
+        fc.boolean(),
+        (state, choice, mayAmend) => {
+          const kind = decide({ state, onTicketClosed: choice, mayAmend }).kind;
+          const expected =
+            choice === 'ignore'
+              ? 'none'
+              : choice === 'cancel' || state === 'queued'
+                ? 'cancel'
+                : state === 'needs_human'
+                  ? mayAmend
+                    ? 'amend'
+                    : 'none'
+                  : 'escalate';
+          expect(kind).toBe(expected);
+        },
+      ),
+    );
+  });
+
+  it('a claim refuses a closed ticket under cancel as under stop; only ignore proceeds', () => {
+    for (const choice of ['cancel', 'stop'] as const) {
+      expect(
+        claimStatusDecision({
+          status: 'Released',
+          category: 'done',
+          policy: { ...DEFAULT_TICKET_STATUS_POLICY, onTicketClosed: choice },
+          first: true,
+        }),
+      ).toEqual({ kind: 'refuse', reason: 'ticket_closed_in_tracker' });
+    }
+  });
+});

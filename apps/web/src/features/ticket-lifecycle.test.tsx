@@ -736,7 +736,7 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
     expect(ticked(FINISHED)).toEqual(['Finished']);
     const preview = card.querySelector('[data-lifecycle="policy-preview"]');
     expect(preview?.textContent).toBe(
-      'With these settings, tickets in Sent back start. Doing, Waiting for review, Testing wait. Finished are never started and stop a task.',
+      'With these settings, tickets in Sent back start. Doing, Waiting for review, Testing wait. Finished are never started and cancel a task.',
     );
     // Untouched, the defaults are saved as nothing: the categories stay the rule.
     const user = userEvent.setup();
@@ -746,7 +746,7 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
     expect('start_from' in lifecycle || 'closed' in lifecycle).toBe(false);
   });
 
-  it('saves a changed list, unticks a status from the other list, and the stop switch off as ignore', async () => {
+  it('saves a changed list, unticks a status from the other list, and the ignore choice as ignore', async () => {
     const state = world();
     renderSettings(state);
     const card = await lifecycleCard();
@@ -765,8 +765,8 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
       ).checked,
     ).toBe(false);
     await user.click(
-      within(card).getByRole('checkbox', {
-        name: 'Stop a task when a person moves its ticket to a finished status',
+      within(card).getByRole('radio', {
+        name: 'Keep working: a finished ticket does not affect its task.',
       }),
     );
     await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
@@ -781,6 +781,50 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
         on_ticket_closed: 'ignore',
       },
     });
+  });
+
+  it('offers the three choices for a finished ticket, cancel by default, each in one sentence (S-28.14)', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const group = within(card).getByRole('group', {
+      name: 'When a person moves a task’s ticket to a finished status',
+    });
+    const radios = within(group).getAllByRole('radio') as HTMLInputElement[];
+    expect(radios.map((radio) => radio.value)).toEqual(['cancel', 'stop', 'ignore']);
+    expect(radios.map((radio) => radio.checked)).toEqual([true, false, false]);
+    expect(
+      within(group).getByRole('radio', {
+        name: 'Cancel the task automatically. Its merge request, if any, is left for you to close or merge. (Default)',
+      }),
+    ).toBeTruthy();
+    // Choosing stop saves stop; the preview says what it does.
+    const user = userEvent.setup();
+    await user.click(
+      within(group).getByRole('radio', {
+        name: 'Stop the task and wait for a person, who cancels it or moves the ticket back.',
+      }),
+    );
+    expect(card.querySelector('[data-lifecycle="policy-preview"]')?.textContent).toContain(
+      'Finished are never started and stop a task.',
+    );
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(
+      (trackerConfigOf(state.puts[0]).lifecycle as Record<string, unknown>).on_ticket_closed,
+    ).toBe('stop');
+  });
+
+  it('saves the default as nothing, so a block that never chose keeps following it (S-28.14)', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(
+      'on_ticket_closed' in (trackerConfigOf(state.puts[0]).lifecycle as Record<string, unknown>),
+    ).toBe(false);
   });
 
   it('lists the tickets intake did not start, with the status in words (S-28.5)', async () => {
@@ -839,7 +883,12 @@ describe('the lifecycle helpers', () => {
     );
     expect(draft.startFrom).toEqual(['Doing']);
     expect(draft.closed).toEqual([]);
-    expect(draft.stopOnClosed).toBe(false);
+    expect(draft.onClosed).toBe('ignore');
+    // S-28.14: a stored `stop` keeps `stop`; a block without the key reads `cancel`.
+    expect(
+      lifecycleDraftOf({ lifecycle: { on_ticket_closed: 'stop' } }, STATUSES).draft.onClosed,
+    ).toBe('stop');
+    expect(lifecycleDraftOf({ lifecycle: {} }, STATUSES).draft.onClosed).toBe('cancel');
     expect(dropped).toEqual([{ slot: 'closed', name: 'Gone' }]);
     expect(statusPolicyPreview(draft, STATUSES)).toEqual({
       start: ['Doing', 'Testing'],

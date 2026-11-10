@@ -117,7 +117,12 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // to the wait (`resumeIntoApprovalWait`) inside `writeTask`, with the command's ending.
   // 6 since S-28.1 (M28 ruling 4): the resume of a paused attempt that never ran re-enters it in
   // place (`resumeAttemptInPlace`) inside `writeTask`, with the command's ending.
-  ['packages/application/src/pipeline/commands.ts', 6],
+  // 5 since S-28.14 (M28 ruling 4b): the cancellation's save moved to `task-cancel.ts`.
+  ['packages/application/src/pipeline/commands.ts', 5],
+  // S-28.14 (M28 ruling 4b): the one cancellation — a person's *Cancel task* (inside `writeTask`,
+  // with the command's ending) and the platform's cancel of a task whose ticket a person finished
+  // (inside the reverse sync's or the claim's `inTaskTransaction`, under `retryOnTaskConflict`).
+  ['packages/application/src/pipeline/task-cancel.ts', 1],
   ['packages/application/src/pipeline/dead-letter.ts', 1],
   ['packages/application/src/pipeline/deadlines.ts', 1],
   // The lease sweep's two escalations: a run not at its task's current entry (WP-47), and an
@@ -171,8 +176,9 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // S-28.5 (M28 ruling 4): the reverse sync's cancel of a queued task and its amended brief for a
   // task already in `needs_human`, in the duty's own task transaction that re-loads the task, under
   // `retryOnTaskConflict` (`inTaskTransaction`); a spent bound escalates through it. Its escalation
-  // goes through `applyDecision`, whose save is `transitions.ts`'s.
-  ['packages/application/src/pipeline/ticket-status-recheck.ts', 2],
+  // goes through `applyDecision`, whose save is `transitions.ts`'s. 1 since S-28.14: its cancel is
+  // `task-cancel.ts`'s.
+  ['packages/application/src/pipeline/ticket-status-recheck.ts', 1],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
@@ -210,7 +216,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
-  it('counts forty-six, which is the number the change states', () => {
+  it('counts forty-five, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -263,7 +269,9 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // 44 since S-28.1: the in-place resume of a paused attempt (`commands.ts`).
     // **Plus two at S-28.5**: the reverse sync's cancel of a queued task and its amended brief
     // (`ticket-status-recheck.ts`), in the duty's own task transaction under `retryOnTaskConflict`.
-    expect(total).toBe(46);
+    // **Minus one at S-28.14**: the person's cancel and the reverse sync's cancel became one save,
+    // `task-cancel.ts`'s (commands.ts 6 → 5, ticket-status-recheck.ts 2 → 1, task-cancel.ts 1).
+    expect(total).toBe(45);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   }, 15_000);
 
@@ -424,12 +432,12 @@ describe('every entry, completion and cancellation closes the attempt it ends (W
   // WP-249: slowest of 10 green CI runs 1549 ms (median 1146 ms); 2× it, 15 s floor.
   it('finds the endings it claims to, so a vacuous census cannot pass', () => {
     // Two entries (`enter` and `resumeAtStage`, backlog 495) and two completions in the
-    // transitions, one cancellation in the commands.
+    // transitions, the one cancellation in `task-cancel.ts` (the commands' until S-28.14).
     expect(census().get('packages/application/src/pipeline/transitions.ts')).toEqual({
       endings: 4,
       closes: 4,
     });
-    expect(census().get('packages/application/src/pipeline/commands.ts')).toEqual({
+    expect(census().get('packages/application/src/pipeline/task-cancel.ts')).toEqual({
       endings: 1,
       closes: 1,
     });

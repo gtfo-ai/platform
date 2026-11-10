@@ -124,7 +124,7 @@ carries the rule's label or enters its status.
 from: the binding's `lifecycle.start_from` list (with `pickup_status` beside it), or — when the list
 is absent — every status of Jira's **To Do** status category. A status in `lifecycle.closed` (absent:
 the **Done** category) means a person finished the ticket: it is never started, and a task waiting for
-its first agent run stops when its ticket moves there, and so — since S-28.5 — does a task already working (a queued one is cancelled; never at QA or Ready for merge) (`on_ticket_closed: ignore` turns that off). The
+its first agent run, or already working, is **cancelled** when its ticket moves there (since S-28.14 — never at QA or Ready for merge, never once merged, and its merge request is left for a person) (`on_ticket_closed: stop` waits for a person instead, `ignore` turns it off). The
 project's *Ticket lifecycle* form sets all three with checkboxes; the platform reads each issue's
 `status.statusCategory` to apply the defaults, so no status name is assumed. A label webhook for a
 ticket in any other status is not announced, and intake checks every match again after reading the

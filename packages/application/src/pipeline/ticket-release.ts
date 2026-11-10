@@ -2,7 +2,8 @@
  * **The ticket release** — BD-031 ruling 5, TD-029 decision 5 (WP-177; its own module since
  * WP-178).
  *
- * Unassign the binding's own account and move the ticket to `pick_up_from` when that is mapped,
+ * Unassign the binding's own account and move the ticket to `pick_up_from` when that is mapped —
+ * unless a person moved it to a finished or working status the platform acted on (S-28.14, below) —
  * then record `released_at` and `ticket.released`. Two callers:
  *
  *  - the `ticket_release` duty (`runTicketRelease`, `ticket-lifecycle.ts`), for a cancelled task
@@ -66,7 +67,12 @@ export const releaseTicket = async (
     const stored = await options.store.tasks.load(scope.tx, taskId);
     return stored === null
       ? null
-      : { stored, claim: await options.store.tasks.ticketClaim(scope.tx, taskId) };
+      : {
+          stored,
+          claim: await options.store.tasks.ticketClaim(scope.tx, taskId),
+          // S-28.14: the status a ticket-status stop or cancellation acted on, if any.
+          movedByPerson: await options.store.tasks.ticketStatusStopOf(scope.tx, taskId),
+        };
   });
   if (read === null || read.claim === null || read.claim.released_at !== null) {
     return;
@@ -82,7 +88,17 @@ export const releaseTicket = async (
   }
   const { task } = stored;
   const settings = await options.settings.forProject(task.projectId);
-  const pickUpFrom = settings.ticketLifecycle?.pickUpFrom ?? null;
+  /**
+   * **A ticket a person moved stays where they put it** (M28 ruling 4b, S-28.14): a task the
+   * platform stopped or cancelled because its ticket was finished (*Released*) or taken by a person
+   * records that status (`ticket_status_stops`), and moving the ticket back to `pick_up_from` on its
+   * cancellation would reopen a released ticket — and put it back where intake starts work. The
+   * unassign still runs: the platform's account holds nothing on a ticket it no longer works.
+   * Residual, stated: a person who resumed such a task, moved the ticket back themselves and then
+   * cancelled it is not moved back either.
+   */
+  const pickUpFrom =
+    read.movedByPerson === null ? (settings.ticketLifecycle?.pickUpFrom ?? null) : null;
   const writeContext = {
     projectId: task.projectId,
     taskId,

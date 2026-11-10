@@ -65,6 +65,10 @@
  * paused it — or that a *Cancel run* did — when, what they gave as the reason, and *Resume* for a
  * reader who may. Neutral information, never *Needs you*.
  *
+ * **A task the platform cancelled, why** (S-28.14, the read's `cancellation`): a task whose ticket
+ * a person finished is cancelled automatically, and the slot says so in the cancellation's own
+ * words, with its merge request — which the platform never touches — one click away.
+ *
  * **The escalation's order** (S-25.20): the cause leads (the brief, or the stop's sentence), then
  * its next step, and the options sentence ("This task is waiting for a person. Send it back…")
  * comes last, beside the buttons it describes — AUT-6655 read generic-first.
@@ -73,6 +77,7 @@ import {
   type ApprovalView,
   type QuestionRecord,
   RUN_CANCEL_PAUSE_REASON,
+  type TaskCancellation,
   type TaskDetailResponse,
   type TaskManualPause,
   type TaskRecord,
@@ -337,6 +342,38 @@ const PausedNotice = ({
   );
 };
 
+/**
+ * **A task the platform cancelled** (M28 ruling 4b, S-28.14, the read's `cancellation`): why, in the
+ * cancellation's own words — the ticket's key, its status in the tracker and, when the task has
+ * one, that its merge request was left for a person — with the merge request one click away.
+ * Neutral information: the task is over, and nothing is asked of the reader but the merge request.
+ */
+const CancelledNotice = ({
+  cancellation,
+  mrUrl,
+}: {
+  readonly cancellation: TaskCancellation;
+  readonly mrUrl: string | null;
+}): ReactElement => (
+  <section aria-label="Cancelled" data-testid="cancelled-notice">
+    <Flash tone="info" title="Cancelled automatically">
+      <div className="flex flex-col gap-2 pt-1">
+        <p data-cancelled-outcome="">
+          {/* Platform words around the tracker's status name (BD-022). */}
+          <UntrustedText value={cancellation.outcome} />
+          {cancellation.outcome_original_chars === null ? null : ' (shortened)'}
+        </p>
+        <p className="text-sm text-fg-muted">{formatDateTime(cancellation.at)}</p>
+        {mrUrl === null ? null : (
+          <div>
+            <ExternalLink url={mrUrl} label="Open the merge request" />
+          </div>
+        )}
+      </div>
+    </Flash>
+  </section>
+);
+
 /** Whether the callout has anything to say — the page draws nothing in its place otherwise. */
 export const calloutReasons = (input: {
   readonly state: TaskRecord['state'];
@@ -467,6 +504,12 @@ const CalloutSlot = ({
   // S-25.14: the ticket is somebody else's — the callout says whose, with the ways out in the box.
   const heldElsewhere = reasons.includes('escalation') && heldElsewhereStop(detail);
   if (first === undefined) {
+    // S-28.14 (M28 ruling 4b): a task the platform cancelled says why, in the outcome's words.
+    if (task.state === 'cancelled' && detail.cancellation?.automatic === true) {
+      return (
+        <CancelledNotice cancellation={detail.cancellation} mrUrl={task.mr_ref?.url ?? null} />
+      );
+    }
     // S-25.20: a task a person paused says who, when and why, and how it goes on — information.
     if (task.state === 'paused' && task.paused_reason === 'manual') {
       return (

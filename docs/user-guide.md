@@ -305,7 +305,7 @@ weeks ago may still carry it. So the form has two more checkbox lists: **Start w
 statuses** and **A ticket in these statuses is finished**. Until you change them they are ticked by
 your tracker's own categories — every *To Do* status starts work, every *Done* status is finished —
 and a line under them says what that means: *"With these settings, tickets in To Do, Ready start.
-Idea, Discovery wait. Released, Done are never started and stop a task."* *Pick up from*, when
+Idea, Discovery wait. Released, Done are never started and cancel a task."* *Pick up from*, when
 mapped, always starts work too. A status of no known category never starts work. Ticking a status in
 one list unticks it in the other, and the form will not save a setting that starts nothing. Lists
 left as the categories tick them are saved as "follow the categories", so a status your tracker adds
@@ -321,27 +321,38 @@ What the platform does with them:
 - **Start** on the board, for a ticket whose status does not start work, is refused with a sentence
   naming the status; nothing is recorded. Move the ticket to a starting status first (or add that
   status to the list).
-- A task that waited (queued behind the limits, or behind a check) reads its ticket again before
-  its first agent run, as part of the claim: a ticket moved meanwhile to a finished status stops the
-  task in **Needs you** — *"The ticket was finished in the tracker"*, with *Cancel the task, or move
-  the ticket back to continue* — and one a person moved into a working status stops it with *"The
-  ticket moved to a status work doesn't start from"*. Nothing is written to the tracker. This check
-  runs where the claim runs (a tracker whose lifecycle claims). The switch **Stop a task when a
-  person moves its ticket to a finished status** (on by default) turns the first of these off.
-- **A task already working stops too** (since S-28.5). When a person moves a live task's ticket to a
-  finished status, the platform re-reads the ticket and stops: a **queued** task is cancelled (it
-  never ran); any other one stops its run and waits in **Needs you** with *"AUT-6676 was moved to
-  Released in Jira by Vojtěch Kaizr on 2026-11-04; the platform stopped working on it. Cancel the
-  task, or move the ticket back to continue."* A task already waiting for you because its ticket
-  was assigned elsewhere gets the same words, so the one click is *Cancel task*. A person moving the
-  ticket into a working status the platform did not set (*Review In Progress*, say) stops it the same
-  way with *"A person moved the ticket into their own work"*. A task is never stopped for a status
-  the platform itself writes (the lifecycle's slots, *Returned*, or the older status mapping), at
-  QA or Ready for merge (a person is working the ticket there), or after its merge request merged.
-  The platform cancels only a task that never ran; one that may have a merge request is yours to
-  cancel.
+- **When a person moves a task's ticket to a finished status** — three choices under the lists, one
+  sentence each (since S-28.14):
+  - **Cancel the task automatically** (the default). Whatever the task was doing — queued, running,
+    waiting for an answer or an approval, paused, or already waiting for you in **Needs you** — it is
+    cancelled: its run is stopped, an approval it waited for is withdrawn, and its people are told
+    once, in plain words: *"Cancelled automatically: AUT-6676 is "Released" in Jira, a status that
+    means it is finished."* The task page says the same under **Cancelled automatically**. **Its
+    merge request is never touched**: when it has one the message says so and links it — *"Its merge
+    request !12 is still open — close or merge it yourself"* — and the ticket stays where the person
+    put it (the platform only takes its own account off it).
+  - **Stop the task and wait for a person**: the behaviour before S-28.14. The task stops its run and
+    waits in **Needs you** with *"AUT-6676 was moved to Released in Jira by Vojtěch Kaizr on
+    2026-11-04; the platform stopped working on it. Cancel the task, or move the ticket back to
+    continue."* — so the one click is *Cancel task* (a queued task, which never ran, is cancelled).
+    A project that saved this choice keeps it.
+  - **Keep working**: a finished ticket does not affect its task.
+- Either way it is checked twice: when a person moves the ticket (the platform re-reads it), and
+  before a task's first agent run, as part of the claim — a task that waited (queued behind the
+  limits, or behind a check) whose ticket was finished meanwhile is cancelled (or, under *Stop*,
+  stopped in **Needs you** with *"The ticket was finished in the tracker"*). This second check runs
+  where the claim runs (a tracker whose lifecycle claims). Nothing is written to the tracker but the
+  platform's own account taken off the ticket.
+- **A person taking the ticket** into a working status the platform did not set (*Review In
+  Progress*, say) stops the task in **Needs you** with *"A person moved the ticket into their own
+  work"* (a queued task is cancelled), whichever choice above is made; a first claim of such a
+  ticket stops with *"The ticket moved to a status work doesn't start from"*.
+- A task is never cancelled or stopped for a status the platform itself writes (the lifecycle's
+  slots, *Returned*, or the older status mapping), at QA or Ready for merge (a person is working the
+  ticket there), or after its merge request merged.
 - **Once after the upgrade** the platform re-reads every live task's ticket a single time, so a
-  ticket finished before this release stops its task too.
+  ticket finished before this release — and a task an earlier release stopped in **Needs you** for
+  it — is cancelled too, without anybody clicking.
 - **Tickets not started** — under the two lists, the newest tickets that matched the pick-up rule but
   did not become tasks, each with why (*"Skipped AUT-6676: its status is Released, …"*).
 

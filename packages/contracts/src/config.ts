@@ -1070,9 +1070,13 @@ export const MAX_LIFECYCLE_POLICY_STATUSES = 20;
 
 /**
  * What the platform does with a live task whose ticket a person moved to a `closed` status (M28
- * ruling 1): `stop` — the default — stops it, `ignore` leaves it to run.
+ * ruling 1, amended by M28 ruling 4b, S-28.14): `cancel` — the default since S-28.14 — cancels it
+ * automatically in every live state (never at a human stage, never once merged, and never touching
+ * its merge request); `stop` stops it in `needs_human` with *Cancel task* as the one click (the
+ * default until S-28.14, kept for a project that wants a person to decide); `ignore` leaves it to
+ * run. A stored block that says `stop` keeps `stop`; a block without the key reads the default.
  */
-export const ON_TICKET_CLOSED = ['stop', 'ignore'] as const;
+export const ON_TICKET_CLOSED = ['cancel', 'stop', 'ignore'] as const;
 export type OnTicketClosed = (typeof ON_TICKET_CLOSED)[number];
 
 /**
@@ -1171,11 +1175,11 @@ export const ticketLifecycleSchema = z
       .optional(),
     /**
      * The statuses that mean a person **finished** the ticket (M28 ruling 1): a ticket in one is
-     * never started, and a live task whose ticket moves into one is stopped (`on_ticket_closed`).
+     * never started, and a live task whose ticket moves into one is cancelled (`on_ticket_closed`).
      * Absent means every status whose tracker category is Done.
      */
     closed: z.array(lifecycleStatusNameSchema).max(MAX_LIFECYCLE_POLICY_STATUSES).optional(),
-    /** `stop` (the reader's default) or `ignore` — see {@link ON_TICKET_CLOSED}. */
+    /** `cancel` (the reader's default), `stop` or `ignore` — see {@link ON_TICKET_CLOSED}. */
     on_ticket_closed: z.enum(ON_TICKET_CLOSED).optional(),
   })
   .superRefine((block, ctx) => {

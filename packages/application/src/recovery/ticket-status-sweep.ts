@@ -42,8 +42,13 @@ export const TICKET_STATUS_SWEEP_PER_PASS = 20;
  * and a record this revision writes is `greatest(now, revision)`, so it is never due again. Only
  * tasks created before it are swept: a later one went through intake and the claim under the
  * corrected rule. Bump it when the rule that decides a stop changes.
+ *
+ * **Bumped at S-28.14** (M28 ruling 4b): `on_ticket_closed: cancel` became the default, so a task an
+ * earlier revision stopped in `needs_human` for its finished ticket (AUT-6676, AUT-6746) is due
+ * again and is cancelled without anybody clicking — the recheck's per-status guard does not hold a
+ * cancellation back.
  */
-export const TICKET_STATUS_SWEEP_REVISION_AT = '2026-11-11T00:00:00.000Z' as IsoDateTime;
+export const TICKET_STATUS_SWEEP_REVISION_AT = '2026-11-12T00:00:00.000Z' as IsoDateTime;
 
 export interface TicketStatusSweepRecoverySite {
   readonly tasks: Pick<TaskRepository, 'ticketStatusSweepDue' | 'claimTicketStatusSweep'>;
@@ -95,7 +100,7 @@ export const recoverTicketStatusSweep = async (
   if (enqueued.length > 0) {
     (options.logger ?? silentLogger).info(
       { enqueued: enqueued.length, task_ids: enqueued },
-      'live tasks had their ticket’s status re-read once, so a ticket a person finished before this release stops its task (S-28.5)',
+      'live tasks had their ticket’s status re-read once, so a ticket a person finished before this release ends its task (S-28.5, S-28.14)',
     );
   }
   return { found: due.length, enqueued: enqueued.length };

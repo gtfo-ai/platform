@@ -12,7 +12,8 @@
  *    own statement of when a ticket is ready.
  *  - `closed` — the statuses that mean a person finished the ticket. Absent: every status whose
  *    category is **Done**.
- *  - `on_ticket_closed` — `stop` (default) or `ignore`, read by the reverse sync.
+ *  - `on_ticket_closed` — `cancel` (default since S-28.14, M28 ruling 4b), `stop` or `ignore`, read
+ *    by the reverse sync and the claim.
  *
  * A status of an **unknown** category is never startable. Every name is compared as the slots
  * compare ({@link lifecycleStatusKey}: trimmed, case-insensitive).
@@ -24,7 +25,7 @@
  * terms), intake ({@link intakeStatusDecision}) and the claim before the first run
  * ({@link claimStatusDecision}).
  */
-import type { TicketLifecycle, TicketStatusCategory } from '@platform/contracts';
+import type { OnTicketClosed, TicketLifecycle, TicketStatusCategory } from '@platform/contracts';
 import { LIFECYCLE_SINGLE_SLOTS, lifecycleStatusKey } from '@platform/contracts';
 import { lifecycleMapsAnySlot } from './claim.js';
 
@@ -36,7 +37,7 @@ export interface TicketStatusPolicy {
   readonly startFrom: readonly string[] | null;
   /** `closed`, or `null` for the tracker's Done category. */
   readonly closed: readonly string[] | null;
-  readonly onTicketClosed: 'stop' | 'ignore';
+  readonly onTicketClosed: OnTicketClosed;
   /**
    * The statuses the platform's own lifecycle writes or reads as a person handing work back: the
    * five single slots and `returned` (TD-029 decision 1). For a ticket the platform holds, a move
@@ -63,7 +64,8 @@ export const ticketStatusPolicyOf = (
   pickUpFrom,
   startFrom: block?.start_from ?? null,
   closed: block?.closed ?? null,
-  onTicketClosed: block?.on_ticket_closed ?? 'stop',
+  // M28 ruling 4b (S-28.14): absent is `cancel`; a stored `stop` keeps `stop`.
+  onTicketClosed: block?.on_ticket_closed ?? 'cancel',
   mappedStatuses: [],
   platformStatuses:
     block === null || block === undefined
@@ -222,7 +224,8 @@ export type ClaimStatusDecision =
  * may find its ticket moved by the time its first agent run is admitted.
  *
  *  - A `closed` ticket refuses every claim (`ticket_closed_in_tracker`), unless the binding says
- *    `on_ticket_closed: ignore`.
+ *    `on_ticket_closed: ignore`; under `cancel` (the default since S-28.14) the claim's caller then
+ *    cancels the task rather than escalating it (`ticket-claim.ts`).
  *  - A **first** claim refuses a ticket that is not startable any more (`ticket_not_startable`) —
  *    a person took it (`hands_off`) or put it back to wait (`not_ready`). **No status is exempt**
  *    (S-28.11, the production defect AUT-6743): a first automatic claim is a task that never ran,
@@ -277,7 +280,12 @@ export type TicketStatusStopReason = 'ticket_closed_in_tracker' | 'ticket_taken_
 /** What the reverse sync does with a live task whose ticket it re-read. */
 export type TicketStatusStop =
   | { readonly kind: 'none' }
-  /** A **queued** task — it never ran, holds nothing, and has no merge request: cancelled. */
+  /**
+   * The task is cancelled by the platform: a **queued** one whatever the disposition (it never ran,
+   * holds nothing, and has no merge request), and — under `on_ticket_closed: cancel` (M28 ruling
+   * 4b) — **every** live one whose ticket is closed, through the person's *Cancel task* path (its
+   * offer closed, its run stopped, its approval withdrawn). Its merge request is never touched.
+   */
   | { readonly kind: 'cancel'; readonly reason: TicketStatusStopReason }
   /** A task that ran or waits: its offer closed and its run stopped, then `needs_human`. */
   | { readonly kind: 'escalate'; readonly reason: TicketStatusStopReason }
@@ -285,7 +293,7 @@ export type TicketStatusStop =
   | { readonly kind: 'amend'; readonly reason: TicketStatusStopReason };
 
 /**
- * **The reverse sync's table** (M28 ruling 4, S-28.5). `disposition` is
+ * **The reverse sync's table** (M28 ruling 4, S-28.5; M28 ruling 4b, S-28.14). `disposition` is
  * {@link ticketStatusDisposition}'s answer with `platformHolds: true` — a live task's ticket — over
  * a policy that already counts `status_mapping`'s targets as the platform's own
  * ({@link withStatusMappingStatuses}), so **a status the platform wrote is never a reason to stop**.
@@ -295,14 +303,18 @@ export type TicketStatusStop =
  *    there a person is working the ticket — QA moves it through their own statuses, and a merge
  *    may move it to Done before the platform hears `mr.merged`. Stopping there would race the
  *    person the stage waits for.
- *  - `closed` (unless `on_ticket_closed: ignore`): a `queued` task is cancelled; a task in
- *    `needs_human` has its escalation amended (say one stopped `ticket_assigned_elsewhere`), so the
- *    one click is *Cancel task* — only when the caller saw the ticket **move** (`mayAmend`: a
- *    status change, or the sweep), never on every polled edit of a ticket that stays closed;
- *    every other live state escalates. A task that may have an open merge request is never
- *    cancelled by the platform.
- *  - `hands_off`: a `queued` task is cancelled with `ticket_taken_by_person`; one already in
- *    `needs_human` is left (a person already decides); every other live state escalates.
+ *  - `closed` under `on_ticket_closed: cancel` (the default since S-28.14): **every** live state is
+ *    cancelled — queued, running, waiting, paused and `needs_human` (a task an earlier rule already
+ *    stopped for its closed ticket included). The owner's words: a released ticket has no agent
+ *    working on it. The merge request, if any, is left for a person (the cancellation says so).
+ *  - `closed` under `stop`: a `queued` task is cancelled; a task in `needs_human` has its escalation
+ *    amended (say one stopped `ticket_assigned_elsewhere`), so the one click is *Cancel task* — only
+ *    when the caller saw the ticket **move** (`mayAmend`: a status change, or the sweep), never on
+ *    every polled edit of a ticket that stays closed; every other live state escalates.
+ *  - `closed` under `ignore`: nothing.
+ *  - `hands_off` (unchanged by M28 ruling 4b): a `queued` task is cancelled with
+ *    `ticket_taken_by_person`; one already in `needs_human` is left (a person already decides);
+ *    every other live state escalates.
  *  - `startable`, `not_ready`: nothing.
  */
 export const ticketStatusStopDecision = (input: {
@@ -316,7 +328,7 @@ export const ticketStatusStopDecision = (input: {
    */
   readonly merged: boolean;
   readonly disposition: TicketStatusDisposition;
-  readonly onTicketClosed: 'stop' | 'ignore';
+  readonly onTicketClosed: OnTicketClosed;
   /** A `needs_human` task's escalation may be amended: the caller saw the status move (or sweeps). */
   readonly mayAmend: boolean;
 }): TicketStatusStop => {
@@ -332,7 +344,7 @@ export const ticketStatusStopDecision = (input: {
   }
   const reason: TicketStatusStopReason =
     disposition === 'closed' ? 'ticket_closed_in_tracker' : 'ticket_taken_by_person';
-  if (state === 'queued') {
+  if (state === 'queued' || (disposition === 'closed' && input.onTicketClosed === 'cancel')) {
     return { kind: 'cancel', reason };
   }
   if (state === 'needs_human') {

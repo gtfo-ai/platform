@@ -5,12 +5,20 @@
  * S-28.4 bounds where a task **starts** (intake, the claim). This module bounds where it keeps
  * going: when a live task's ticket moves to a status that means a person finished it (`closed`, or
  * the Done category), or into a working status the platform did not put it in (`hands_off`), the
- * task stops — a **queued** task is cancelled (`ticket_closed_in_tracker` /
- * `ticket_taken_by_person`), any other live one has its offer closed and its run stopped the way an
- * escalation does (`applyDecision`, which closes the stage offer first — TD-031 decision 13) and
- * waits in `needs_human` with a brief that says who moved the ticket, when, and what to do. A task
- * that may have an open merge request is never cancelled by the platform. The table is the domain's
- * `ticketStatusStopDecision`.
+ * task stops. The table is the domain's `ticketStatusStopDecision`:
+ *
+ *  - **`closed` under `on_ticket_closed: cancel`** — the default since S-28.14 (M28 ruling 4b, the
+ *    owner's words: a released ticket has no agent working on it) — the task is **cancelled** in
+ *    every live state through the person's *Cancel task* path (`./task-cancel.ts`: its offer closed,
+ *    a claimed run told to stop, its approval withdrawn), attributed to the platform, with an
+ *    outcome that names the ticket, the status and — when it has one — its merge request, which is
+ *    **never touched** (`ticketMovedCancelOutcome`). A task an earlier rule already stopped in
+ *    `needs_human` for its closed ticket is cancelled too: the per-status guard below does not hold
+ *    a cancellation back.
+ *  - **`closed` under `stop`** (and `hands_off` under any): a **queued** task is cancelled, any
+ *    other live one has its offer closed and its run stopped the way an escalation does
+ *    (`applyDecision`, which closes the stage offer first — TD-031 decision 13) and waits in
+ *    `needs_human` with a brief that says who moved the ticket, when, and what to do.
  *
  * ## Never for the platform's own moves
  *
@@ -39,7 +47,6 @@ import {
 } from '@platform/contracts';
 import {
   amendEscalation,
-  cancelTask,
   compilePipeline,
   isMergedTask,
   isTerminalTaskState,
@@ -59,11 +66,11 @@ import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { OutboundJobData, PipelineOutboundData } from './jobs.js';
-import { closeStageOffer } from './offer-withdrawal.js';
 import { PIPELINE_ACTOR, type PipelineStore, type StoredTask } from './store.js';
+import { cancelTaskInScope, ticketMovedCancelOutcome, trackerWord } from './task-cancel.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 import { readTicketForTask } from './ticket-snapshot.js';
-import { applyDecision, CANCELLED_OUTCOME, closeCurrentStageRow } from './transitions.js';
+import { applyDecision } from './transitions.js';
 
 /** The handler's registered name. */
 export const TICKET_STATUS_RECHECK_HANDLER = 'pipeline.ticket.status.recheck';
@@ -147,10 +154,6 @@ export const ticketStatusRecheckHandlers = (options: {
   readonly store: PipelineStore;
   readonly jobs: Jobs;
 }): readonly EventHandler[] => [ticketStatusRecheckHandler(options)];
-
-/** The tracker's word, for the brief: Jira, GitLab, or *the tracker*. */
-const trackerWord = (provider: string): string =>
-  provider.startsWith('jira') ? 'Jira' : provider.startsWith('gitlab') ? 'GitLab' : 'the tracker';
 
 /**
  * The brief a stopped task carries — platform text around the ticket's key, the status name (the
@@ -242,6 +245,7 @@ export const runTicketStatusRecheck = async (
    * is read (outside every transaction, through the executor); merged means the task's own delivery
    * closed the ticket and the merge path owns the ending. A read that fails stops nothing.
    */
+  let mergeRequestOpen: boolean | null = null;
   if (disposition === 'closed' && loaded.mr !== null && !isMergedTask(loaded.task)) {
     let mergedByHand = true;
     try {
@@ -255,6 +259,8 @@ export const runTicketStatusRecheck = async (
         taskId,
       });
       mergedByHand = live?.state === 'merged';
+      // S-28.14: a cancellation says whether the merge request it leaves alone is still open.
+      mergeRequestOpen = live === null ? null : live.state === 'opened';
     } catch (error) {
       if (error instanceof TransactionOpenError) {
         throw error;
@@ -285,7 +291,14 @@ export const runTicketStatusRecheck = async (
        * acted on, so a person who resumed it while the ticket stays closed is not stopped by every
        * later edit. A `ticket.status.changed` is a move and decides afresh.
        */
-      if (data.status_moved !== true) {
+      /**
+       * **Except a cancellation** (M28 ruling 4b, S-28.14): under `on_ticket_closed: cancel` a closed
+       * ticket ends its task, so a stop recorded for that status was an earlier rule's (or `stop`'s
+       * before the binding changed) — AUT-6676, stopped in `needs_human` for *Released* — and the
+       * sweep must cancel it without anybody clicking. Cancelled is terminal, so it acts once.
+       */
+      const cancels = disposition === 'closed' && policy.onTicketClosed === 'cancel';
+      if (data.status_moved !== true && !cancels) {
         const actedOn = await options.store.tasks.ticketStatusStopOf(scope.tx, taskId);
         if (actedOn !== null && lifecycleStatusKey(actedOn) === lifecycleStatusKey(read.status)) {
           return { kind: 'none' } as const;
@@ -302,14 +315,30 @@ export const runTicketStatusRecheck = async (
       if (decision.kind === 'none') {
         return decision;
       }
-      const brief = ticketStatusStopBrief({
-        key: stored.task.ticket.key,
-        provider: stored.task.ticket.provider,
-        status: read.status,
-        reason: decision.reason,
-        movedBy: data.moved_by ?? null,
-        movedAt: data.moved_at ?? null,
-      });
+      const brief =
+        decision.kind === 'cancel'
+          ? ticketMovedCancelOutcome({
+              key: stored.task.ticket.key,
+              provider: stored.task.ticket.provider,
+              status: read.status,
+              reason: decision.reason,
+              mergeRequest:
+                stored.mr === null
+                  ? null
+                  : {
+                      ref: stored.mr,
+                      // What the read above saw, for the merge request it read; else not claimed.
+                      open: stored.mr.url === loaded.mr?.url ? mergeRequestOpen : null,
+                    },
+            })
+          : ticketStatusStopBrief({
+              key: stored.task.ticket.key,
+              provider: stored.task.ticket.provider,
+              status: read.status,
+              reason: decision.reason,
+              movedBy: data.moved_by ?? null,
+              movedAt: data.moved_at ?? null,
+            });
       await applyStop(options, scope, stored, decision, brief);
       await options.store.tasks.recordTicketStatusStop(
         scope.tx,
@@ -336,7 +365,10 @@ const contextOf = (options: TaskTransactionOptions, taskId: Id) => ({
   causeEventId: null,
 });
 
-/** One decision, applied in the caller's task transaction. */
+/**
+ * One decision, applied in the caller's task transaction. `brief` is the escalation's brief, or —
+ * for a cancellation — the `task.cancelled` outcome.
+ */
 const applyStop = async (
   options: TaskTransactionOptions,
   scope: TransactionScope,
@@ -376,29 +408,12 @@ const applyStop = async (
     await scope.events.append(applied.events);
     return;
   }
-  // `cancel`: a queued task — it never ran, so it has no offer, no run and no merge request.
-  const totals = await options.store.runs.totalsFor(scope.tx, stored.task.id);
-  const cancelled = cancelTask(
-    stored.task,
-    {
-      outcome: decision.reason,
-      totals: {
-        cost_usd: totals.costUsd,
-        is_estimate: totals.isEstimate,
-        unmeasured_runs: totals.unmeasuredRuns,
-        runs: totals.runs,
-        wall_ms: totals.wallMs,
-      },
-    },
-    context,
-  );
-  const closing = await closeStageOffer(options, scope, {
-    taskId: stored.task.id,
-    code: 'stage_left',
-    reason: `the task was cancelled: ${decision.reason}`,
-    context,
+  // `cancel`: a queued task, or — under `on_ticket_closed: cancel` — any live task whose ticket is
+  // closed. The person's *Cancel task* steps, attributed to the platform (`./task-cancel.ts`).
+  await cancelTaskInScope(options, scope, stored, context, {
+    outcome: brief,
+    offerCode: 'stage_left',
+    offerReason: `the task was cancelled: ${decision.reason}`,
+    stageNote: brief,
   });
-  await options.store.tasks.save(scope.tx, { ...stored, task: cancelled.aggregate });
-  await closeCurrentStageRow(options.store, scope.tx, stored.task, CANCELLED_OUTCOME, brief);
-  await scope.events.append([...closing.events, ...cancelled.events]);
 };

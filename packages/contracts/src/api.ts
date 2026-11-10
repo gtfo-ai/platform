@@ -1109,6 +1109,24 @@ export const taskEscalationSchema = z.strictObject({
 });
 export type TaskEscalation = z.infer<typeof taskEscalationSchema>;
 
+/**
+ * **Why a cancelled task was cancelled** (M28 ruling 4b, S-28.14) — its newest `task.cancelled`
+ * event's `outcome`, with the instant, published only while the task is `cancelled`. `automatic`
+ * says the platform cancelled it (the event's actor is the platform, not a person) — a task whose
+ * ticket a person finished in the tracker is cancelled that way, and the task page says so in the
+ * outcome's own words ("Cancelled automatically: AUT-123 is "Released" in Jira, …"). The outcome
+ * is platform text around provider text (the status name), so it is rendered as untrusted text,
+ * bounded at 1 000 characters like the escalation's brief, `outcome_original_chars` its length
+ * before the cut (`null` when nothing was cut).
+ */
+export const taskCancellationSchema = z.strictObject({
+  at: isoDateTimeSchema,
+  outcome: nonEmptyStringSchema.max(1_000),
+  outcome_original_chars: z.int().positive().nullable(),
+  automatic: z.boolean(),
+});
+export type TaskCancellation = z.infer<typeof taskCancellationSchema>;
+
 /** The longest reason a {@link taskManualPauseSchema} carries before it is cut. */
 export const MAX_TASK_PAUSE_REASON_CHARS = 500;
 
@@ -2387,6 +2405,12 @@ export const taskDetailResponseSchema = z.strictObject({
    * task whose stream holds no escalation with both strings.
    */
   escalation: taskEscalationSchema.nullable(),
+  /**
+   * Why the task was cancelled, while it is `cancelled` (S-28.14): {@link taskCancellationSchema};
+   * `null` for every other task. Optional on the wire as `queue_wait` is; `GET /api/tasks/:id`
+   * always sends it.
+   */
+  cancellation: taskCancellationSchema.nullable().optional(),
   /**
    * The task's frozen iteration limits over the defaults — the board's {@link taskListItemSchema}
    * `loop_limits`, so the page can say *round 2 of 3*. `null` when the stored limits do not parse.

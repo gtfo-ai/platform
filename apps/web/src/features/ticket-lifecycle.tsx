@@ -41,7 +41,9 @@
  *   block stores no list, with a preview line that says which statuses start, which wait and which
  *   are never started. A ticked set equal to the category default is saved **absent**, so a status
  *   the tracker adds to the category later is covered; any other set is saved as the list. The
- *   *stop* switch is `on_ticket_closed`. At least one status must start work.
+ *   three choices below them are `on_ticket_closed` — *cancel* (the default since S-28.14, M28
+ *   ruling 4b), *stop* or *ignore*, one plain sentence each (`ON_CLOSED_COPY`); the default is saved
+ *   absent unless the overlay already stores a choice. At least one status must start work.
  *
  * Status names are provider text (BD-022). They are rendered as React text — in an `<option>` or a
  * checkbox's label, through `sanitiseUntrusted`; everywhere else through `UntrustedText`.
@@ -53,6 +55,7 @@ import {
   lifecycleStatusKey,
   MAX_LIFECYCLE_POLICY_STATUSES,
   MAX_LIFECYCLE_RETURNED_STATUSES,
+  type OnTicketClosed,
   type TicketStatus,
   type TicketStatusCategory,
 } from '@platform/contracts';
@@ -133,9 +136,31 @@ export interface LifecycleDraft {
   readonly startFrom: readonly string[] | null;
   /** `closed` (S-28.4): the ticked statuses, or `null` for the tracker's Done category. */
   readonly closed: readonly string[] | null;
-  /** `on_ticket_closed` (S-28.4): stop a task whose ticket a person finishes. On by default. */
-  readonly stopOnClosed: boolean;
+  /**
+   * `on_ticket_closed` (S-28.4; three choices since S-28.14, M28 ruling 4b): what happens to a task
+   * whose ticket a person finishes. `cancel` by default.
+   */
+  readonly onClosed: OnTicketClosed;
 }
+
+/** A stored `on_ticket_closed`, or the reader's default (`cancel`) for anything else. */
+const onClosedOf = (stored: unknown): OnTicketClosed =>
+  stored === 'stop' || stored === 'ignore' ? stored : 'cancel';
+
+/** The three `on_ticket_closed` choices, in the order the form offers them, one sentence each. */
+export const ON_CLOSED_COPY: readonly { readonly value: OnTicketClosed; readonly label: string }[] =
+  [
+    {
+      value: 'cancel',
+      label:
+        'Cancel the task automatically. Its merge request, if any, is left for you to close or merge. (Default)',
+    },
+    {
+      value: 'stop',
+      label: 'Stop the task and wait for a person, who cancels it or moves the ticket back.',
+    },
+    { value: 'ignore', label: 'Keep working: a finished ticket does not affect its task.' },
+  ];
 
 /** The status policy's two lists (S-28.4). */
 export type PolicyList = 'start_from' | 'closed';
@@ -296,7 +321,8 @@ export const lifecycleDraftOf = (
       assignOwner: block?.assign_owner === true,
       startFrom: policyList('start_from'),
       closed: policyList('closed'),
-      stopOnClosed: block?.on_ticket_closed !== 'ignore',
+      // S-28.14: a stored choice is kept; absent is the reader's default, `cancel`.
+      onClosed: onClosedOf(block?.on_ticket_closed),
     },
     dropped,
   };
@@ -348,8 +374,10 @@ export const lifecycleOverlayOf = (
   if (draft.closed !== null && !sameStatuses(draft.closed, defaults.closed)) {
     lifecycle.closed = [...draft.closed];
   }
-  if (!draft.stopOnClosed || typeof storedBlock?.on_ticket_closed === 'string') {
-    lifecycle.on_ticket_closed = draft.stopOnClosed ? 'stop' : 'ignore';
+  // S-28.14: the default (`cancel`) is saved absent unless the overlay already stores a choice, so
+  // a block that never chose keeps following the default; a stored `stop` is kept as `stop`.
+  if (draft.onClosed !== 'cancel' || typeof storedBlock?.on_ticket_closed === 'string') {
+    lifecycle.on_ticket_closed = draft.onClosed;
   }
   const pickup = draft.names.pick_up_from;
   return {
@@ -610,7 +638,11 @@ const PolicyPreview = ({
         <>
           {' '}
           <NameList names={preview.finished} /> are never started
-          {draft.stopOnClosed ? ' and stop a task.' : '.'}
+          {draft.onClosed === 'cancel'
+            ? ' and cancel a task.'
+            : draft.onClosed === 'stop'
+              ? ' and stop a task.'
+              : '.'}
         </>
       )}
     </p>
@@ -833,15 +865,23 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
             }
           />
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            data-lifecycle-stop-on-closed=""
-            checked={draft.stopOnClosed}
-            onChange={(event) => setDraft({ ...draft, stopOnClosed: event.target.checked })}
-          />
-          Stop a task when a person moves its ticket to a finished status
-        </label>
+        <fieldset className="flex flex-col gap-1 text-sm" data-lifecycle-on-closed="">
+          <legend className="font-medium">
+            When a person moves a task’s ticket to a finished status
+          </legend>
+          {ON_CLOSED_COPY.map((choice) => (
+            <label key={choice.value} className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="lifecycle-on-ticket-closed"
+                value={choice.value}
+                checked={draft.onClosed === choice.value}
+                onChange={() => setDraft({ ...draft, onClosed: choice.value })}
+              />
+              {choice.label}
+            </label>
+          ))}
+        </fieldset>
         <PolicyPreview draft={draft} statuses={items} />
         <SkippedTickets projectId={projectId} />
       </div>

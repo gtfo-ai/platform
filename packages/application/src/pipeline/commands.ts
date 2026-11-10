@@ -35,7 +35,6 @@ import {
   answerQuestion,
   assertNoPendingApproval,
   assertRunTransition,
-  cancelTask,
   canTransitionTask,
   compilePipeline,
   decideApproval,
@@ -63,7 +62,6 @@ import {
   TaskMergedError,
   takeOverTask,
   taskBranchName,
-  withdrawApproval,
 } from '@platform/domain';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -102,15 +100,10 @@ import type {
   StoredRun,
   StoredTask,
 } from './store.js';
+import { cancelTaskInScope } from './task-cancel.js';
 import { retryOnTaskConflict } from './task-conflict.js';
 import { RETRY_KEY_PREFIX } from './ticket-lifecycle.js';
-import {
-  type ApplyOptions,
-  applyDecision,
-  CANCELLED_OUTCOME,
-  closeCurrentStageRow,
-  ESCALATED_OUTCOME,
-} from './transitions.js';
+import { type ApplyOptions, applyDecision, ESCALATED_OUTCOME } from './transitions.js';
 
 export interface TaskCommandDependencies {
   readonly unitOfWork: UnitOfWork;
@@ -1208,52 +1201,15 @@ export const cancelTaskCommand = async (
   input: { readonly taskId: Id; readonly userId: Id },
 ): Promise<void> =>
   writeTask(deps, { ...input, what: 'cancelling the task' }, async (scope, stored, context) => {
-    const totals = await deps.store.runs.totalsFor(scope.tx, stored.task.id);
-    const decision = cancelTask(
-      stored.task,
-      {
-        outcome: 'cancelled by a human',
-        totals: {
-          cost_usd: totals.costUsd,
-          is_estimate: totals.isEstimate,
-          // WP-131 (backlog 403): what `cost_usd` excludes, so a reader of the total is told.
-          unmeasured_runs: totals.unmeasuredRuns,
-          runs: totals.runs,
-          wall_ms: totals.wallMs,
-        },
-      },
-      context,
-    );
-    // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
-    const closing = await closeStageOffer(deps, scope, {
-      taskId: stored.task.id,
-      code: 'cancelled_by_human',
-      reason: 'the task was cancelled by a human',
-      context,
+    // The one cancellation (`./task-cancel.ts`), which the platform's own cancel of a task whose
+    // ticket a person finished runs too (M28 ruling 4b, S-28.14).
+    await cancelTaskInScope(deps, scope, stored, context, {
+      outcome: 'cancelled by a human',
+      offerCode: 'cancelled_by_human',
+      offerReason: 'the task was cancelled by a human',
+      stageNote: 'the task was cancelled by a human',
       actorUserId: input.userId,
     });
-    await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
-    // The attempt the task was at can never resume now, paused or not (WP-46, backlog 212).
-    await closeCurrentStageRow(
-      deps.store,
-      scope.tx,
-      stored.task,
-      CANCELLED_OUTCOME,
-      'the task was cancelled by a human',
-    );
-    // S-27.1 (review of #113): an approval the task still waited for is withdrawn — nobody can
-    // decide it now, and since an approval never expires it would stay in the Inbox for ever. The
-    // aggregate records it on the approval's stream, as a decision does (`withdrawApproval`).
-    const waiting = await pendingApproval(deps.store, scope.tx, stored.task.id);
-    const withdrawn = waiting === null ? null : withdrawApproval(waiting.approval, context);
-    if (waiting !== null && withdrawn !== null) {
-      await deps.store.approvals.save(scope.tx, { ...waiting, approval: withdrawn.aggregate });
-    }
-    await scope.events.append([
-      ...closing.events,
-      ...decision.events,
-      ...(withdrawn?.events ?? []),
-    ]);
     return { result: undefined, work: null };
   });
 

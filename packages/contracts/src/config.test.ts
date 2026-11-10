@@ -766,7 +766,11 @@ describe('ticketLifecycleSchema', () => {
       on_ticket_closed: 'ignore',
     };
     expect(ticketLifecycleSchema.parse(block)).toEqual(block);
-    expect(ticketLifecycleSchema.safeParse({ on_ticket_closed: 'cancel' }).success).toBe(false);
+    // M28 ruling 4b (S-28.14): `cancel` is a choice — the default — beside `stop` and `ignore`.
+    for (const choice of ['cancel', 'stop', 'ignore']) {
+      expect(ticketLifecycleSchema.safeParse({ on_ticket_closed: choice }).success).toBe(true);
+    }
+    expect(ticketLifecycleSchema.safeParse({ on_ticket_closed: 'escalate' }).success).toBe(false);
     // An empty start_from would start nothing; absent is the To Do category.
     expect(ticketLifecycleSchema.safeParse({ start_from: [] }).success).toBe(false);
     expect(ticketLifecycleSchema.safeParse({ closed: [] }).success).toBe(true);
