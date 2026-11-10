@@ -60,7 +60,7 @@ import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { APPROVAL_WAIT_WORDS } from '../ui/words/approvals.js';
 import { ApprovalSummary } from './approval-summary.js';
-import { reviewVerb } from './approval-text.js';
+import { reviewVerb, waitingLine } from './approval-text.js';
 import { escalationShort } from './escalation-short.js';
 import { ciHeldSentence } from './gate-wait-words.js';
 import { WaitingWords } from './waiting-words.js';
@@ -306,6 +306,10 @@ const ApprovalRow = ({
         {/* No deadline, whatever the read carries: an approval never expires (S-27.1). */}
         <span>
           {timeLine('requested', approval.requested_at, null, nowMs, APPROVAL_WAIT_WORDS)}
+        </span>
+        {/* S-28.8: why it waits, every recorded reason in one line (a class name is project text). */}
+        <span className="basis-full" data-approval-waiting="">
+          <UntrustedText value={waitingLine(approval.reasons)} />
         </span>
       </span>
     }

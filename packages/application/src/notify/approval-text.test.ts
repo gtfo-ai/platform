@@ -258,8 +258,8 @@ describe('the plan a message shows', () => {
       reviewUrl: 'https://agentic.example.test/tasks/t-1',
     }).markdown.split('\n');
     expect(lines[0]).toBe('**ACME-1 is waiting for an approval**');
-    expect(lines).toContain('Asked because:');
-    expect(lines.indexOf('Asked because:')).toBeLessThan(
+    expect(lines).toContain('Waiting for your approval because:');
+    expect(lines.indexOf('Waiting for your approval because:')).toBeLessThan(
       lines.indexOf('Review the plan on the task page: https://agentic.example.test/tasks/t-1'),
     );
     expect(lines.at(-1)).toBe('https://tickets.example.test/browse/ACME-1');

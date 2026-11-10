@@ -664,3 +664,40 @@ describe('the Ready callout over a pipeline the provider still shows blocked (S-
     expect(screen.queryByTestId('ready-blocked-notice')).toBeNull();
   });
 });
+
+/**
+ * S-28.8: a card whose plan the low-risk rule let go ahead says so while it is implemented — muted,
+ * because it asks nothing — and says nothing once a setback has something to say, or after
+ * Implementation.
+ */
+describe('a plan that went ahead without approval, on the card (S-28.8)', () => {
+  const card = {
+    ...TASK,
+    state: 'active' as const,
+    current_stage: 'implementation',
+    stages: [],
+    open_questions: 0,
+    pending_approvals: 0,
+    plan_went_ahead: true,
+    loop_limits: LIMITS,
+    gate_wait: null,
+    latest_return: null,
+    stop: null,
+    escalation_reason: null,
+  } satisfies TaskListItem;
+
+  it('says so, muted, while the task implements it', () => {
+    render(<SetbackLine task={card} />);
+    const line = document.querySelector('[data-card-went-ahead]');
+    expect(line?.textContent).toBe('Plan went ahead without approval');
+    expect(line?.className).toContain('text-fg-muted');
+  });
+
+  it('says nothing after Implementation, nor for a plan a person approved', () => {
+    render(<SetbackLine task={{ ...card, current_stage: 'code_review' }} />);
+    expect(document.querySelector('[data-card-went-ahead]')).toBeNull();
+    cleanup();
+    render(<SetbackLine task={{ ...card, plan_went_ahead: false }} />);
+    expect(document.querySelector('[data-card-went-ahead]')).toBeNull();
+  });
+});

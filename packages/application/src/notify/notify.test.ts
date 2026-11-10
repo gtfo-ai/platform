@@ -1393,7 +1393,7 @@ describe('an approval notification', () => {
       'Decide on the task page: this chat binding cannot receive a click.',
     );
     expect(message.markdown).toContain('**Plan v1**');
-    expect(message.markdown).toContain('Asked because:');
+    expect(message.markdown).toContain('Waiting for your approval because:');
     expect(message.markdown).toContain(`https://agentic.example.test/tasks/${taskId}`);
   });
 

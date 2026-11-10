@@ -40,7 +40,7 @@ import type {
   RiskFactor,
   Size,
 } from '@platform/contracts';
-import { RISK_FACTORS } from '@platform/contracts';
+import { PLAN_APPROVAL_RISK_DEFAULT, RISK_FACTORS } from '@platform/contracts';
 import {
   type PlanApprovalInput,
   type PlanApprovalReason,
@@ -70,11 +70,11 @@ export interface PlanApprovalRiskPolicy {
  * the rule by un-ticking factors, never by the default doing it.
  */
 export const PLAN_APPROVAL_RISK_DEFAULTS: PlanApprovalRiskPolicy = {
-  enabled: false,
-  maxRisk: 'low',
-  minConfidence: 'high',
-  maxSize: 'M',
-  alwaysAsk: RISK_FACTORS,
+  enabled: PLAN_APPROVAL_RISK_DEFAULT.enabled,
+  maxRisk: PLAN_APPROVAL_RISK_DEFAULT.max_risk,
+  minConfidence: PLAN_APPROVAL_RISK_DEFAULT.min_confidence,
+  maxSize: PLAN_APPROVAL_RISK_DEFAULT.max_size,
+  alwaysAsk: PLAN_APPROVAL_RISK_DEFAULT.always_ask,
 };
 
 /** The policy a project's `policies.plan_approval_risk` block states, defaults filled in. */

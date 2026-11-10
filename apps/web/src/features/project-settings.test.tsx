@@ -1026,6 +1026,102 @@ describe('the verification mode', () => {
 });
 
 /**
+ * S-28.8 (the M28 ruling amending BD-006): *Let low-risk plans go ahead without approval* — off by
+ * default, with its examples and what it leaves unchanged on screen, and each control writing the
+ * whole settings document with the hash it read.
+ */
+describe('the low-risk plan rule', () => {
+  const recording =
+    (puts: { url: string; body: unknown }[], base: typeof fetch): typeof fetch =>
+    async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'PUT' && url.endsWith('/config')) {
+        puts.push({ url, body: JSON.parse(String(init.body)) });
+        return json({ hash: 'cafebabe', autonomy_level: 'supervised', not_applied: [] });
+      }
+      return base(input, init);
+    };
+
+  it('is off by default and says what goes ahead, what waits and what is unchanged', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const toggle = (await screen.findByRole('checkbox', {
+      name: 'Let low-risk plans go ahead without approval',
+    })) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('A one-file text fix the agent is sure of goes ahead.');
+    expect(text).toContain('Anything touching database migrations waits for you.');
+    expect(text).toContain('a plan that touches a sensitive area');
+    // Every factor of the checklist is ticked by default, worded — never a key name.
+    const migrations = screen.getByRole('checkbox', {
+      name: 'Database migrations or stored data',
+    }) as HTMLInputElement;
+    expect(migrations.checked).toBe(true);
+    expect(text).not.toMatch(/schema_migration|plan_approval_risk|always_ask/);
+  });
+
+  it('switches the rule on by writing the whole document with the hash it read', async () => {
+    const puts: { url: string; body: unknown }[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: recording(
+          puts,
+          fetchFor({}, { config: { config: { version: 1, policies: { probation_tasks: 2 } } } }),
+        ),
+        realtime: false,
+      }).element,
+    );
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Let low-risk plans go ahead without approval' }),
+    );
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]?.body).toEqual({
+      config: {
+        version: 1,
+        policies: { probation_tasks: 2, plan_approval_risk: { enabled: true } },
+      },
+      base_hash: 'deadbeef',
+    });
+  });
+
+  it('unticks one factor and keeps every other, in the platform’s order', async () => {
+    const puts: { url: string; body: unknown }[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: recording(
+          puts,
+          fetchFor(
+            {},
+            {
+              config: {
+                config: { version: 1, policies: { plan_approval_risk: { enabled: true } } },
+              },
+            },
+          ),
+        ),
+        realtime: false,
+      }).element,
+    );
+    await user.click(
+      await screen.findByRole('checkbox', {
+        name: 'Protected files (tests, CI, agent configuration)',
+      }),
+    );
+    await waitFor(() => expect(puts).toHaveLength(1));
+    const body = puts[0]?.body as
+      | { config: { policies: { plan_approval_risk: { enabled: boolean; always_ask: string[] } } } }
+      | undefined;
+    const written = body?.config.policies.plan_approval_risk;
+    expect(written?.enabled).toBe(true);
+    expect(written?.always_ask).not.toContain('protected_paths');
+    expect(written?.always_ask).toContain('schema_migration');
+    expect(written?.always_ask).toHaveLength(11);
+  });
+});
+
+/**
  * The cap editor left Rules & limits for the Budgets tab (S-25.7, product/10's 2026-11-06 IA
  * amendment): the settings page points there, draws no cap field of its own, and the Trial run
  * section links to the Trial page.

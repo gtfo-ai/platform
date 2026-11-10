@@ -21,7 +21,12 @@
  * **Everything in the plan is model output** (BD-022) and is rendered through `ui/untrusted.tsx` as
  * text — no markdown step, no link it did not pass through `safeHref`.
  */
-import type { ApprovalReason, ApprovalView, TaskDetailResponse } from '@platform/contracts';
+import type {
+  ApprovalReason,
+  ApprovalView,
+  PlanSelfAssessment,
+  TaskDetailResponse,
+} from '@platform/contracts';
 import { implementationPlanDataSchema, MAX_COMMAND_TEXT_CHARS } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, type ReactNode, useState } from 'react';
@@ -32,6 +37,7 @@ import { DetailsDisclosure } from '../ui/details.js';
 import { APPROVAL_KIND_LABEL, stageLabel } from '../ui/humanize.js';
 import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd, Loading } from '../ui/kit.js';
 import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { RISK_FACTOR_WORDS } from '../ui/words/plan-risk.js';
 import { approveConsequence, reasonCopy, rejectConsequence, rejectNext } from './approval-text.js';
 
 type TaskCommands = ReturnType<typeof useTaskCommands>;
@@ -75,8 +81,43 @@ const TextList = ({ items }: { readonly items: readonly string[] }): ReactElemen
     </ul>
   );
 
+/**
+ * The Architect's own assessment of its plan (S-28.8): how sure and how risky, the factors it named,
+ * its reasons and the questions it left open — all model output, so text only. A plan without one
+ * says so, because the low-risk rule makes such a plan wait.
+ */
+export const SelfAssessment = ({
+  assessment,
+}: {
+  readonly assessment: PlanSelfAssessment | undefined;
+}): ReactElement => (
+  <Section title="The agent’s own assessment">
+    {assessment === undefined ? (
+      <p className="text-sm text-fg-muted" data-plan-assessment="missing">
+        The plan does not say how sure the agent is or how risky it is.
+      </p>
+    ) : (
+      <div className="flex flex-col gap-1 text-sm" data-plan-assessment="">
+        <p>
+          <span className="font-semibold">{`${assessment.risk_level} risk, ${assessment.confidence} confidence`}</span>
+          {assessment.risk_factors.length === 0
+            ? ' · no risk named'
+            : ` · the plan ${[...new Set(assessment.risk_factors)].map((factor) => RISK_FACTOR_WORDS[factor]).join(', ')}`}
+        </p>
+        <TextList items={assessment.reasons} />
+        {assessment.open_questions.length === 0 ? null : (
+          <>
+            <p className="text-xs font-semibold text-fg-muted">Open questions</p>
+            <TextList items={assessment.open_questions} />
+          </>
+        )}
+      </div>
+    )}
+  </Section>
+);
+
 /** The plan the approval is about, read by its id and shown open (F1). */
-const PlanBody = ({
+export const PlanBody = ({
   taskId,
   subject,
 }: {
@@ -131,6 +172,7 @@ const PlanBody = ({
           <TextList items={plan.risks} />
         </Section>
       )}
+      <SelfAssessment assessment={plan.self_assessment} />
       <DetailsDisclosure summary="Read the whole plan" defaultOpen>
         <div className="flex flex-col gap-3 pt-2" data-approval-plan-whole="">
           {plan.affected_modules.length === 0 ? null : (
@@ -195,7 +237,7 @@ const Reasons = ({
   readonly reasons: readonly ApprovalReason[] | null | undefined;
   readonly projectKey: string | null;
 }): ReactElement => (
-  <Section title="Why you are asked">
+  <Section title="Waiting for your approval because">
     {reasons === null || reasons === undefined ? (
       <p className="text-sm text-fg-muted" data-approval-reasons="not-recorded">
         Not recorded: this approval was asked before approvals recorded their reasons.

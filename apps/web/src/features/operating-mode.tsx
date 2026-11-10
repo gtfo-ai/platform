@@ -10,7 +10,9 @@
  *
  * Step 4 has five items and this file has five sections, in the document's order:
  *
- * 1. **The autonomy dial** (BD-027) — including *Custom*, the differences, and "re-apply preset".
+ * 1. **The autonomy dial** (BD-027) — including *Custom*, the differences, and "re-apply preset" —
+ *    followed since S-28.8 by **Low-risk plans** (`./low-risk-plans.tsx`), the opt-in rule that lets
+ *    a plan the platform and the agent both call low-risk go ahead without approval.
  * 2. **Feature toggles**, each carrying product/19:124's five card fields.
  * 3. **Risk classes** — the configured set, the proposal, and the checklists accepting asks for.
  * 4. **Budgets**, including the separate shadow and maintenance budgets.
@@ -77,6 +79,7 @@ import {
 import { UntrustedText } from '../ui/untrusted.js';
 import { actorName, humanActionWords } from '../ui/words/human-actions.js';
 import { AUTONOMY_LEVEL_LABEL, BUDGET_WINDOW_LABEL } from '../ui/words/settings.js';
+import { LowRiskPlans } from './low-risk-plans.js';
 import { useStepActionTone } from './step-action-tone.js';
 
 /**
@@ -1304,6 +1307,7 @@ export const OperatingMode = ({
 }): ReactElement => (
   <div className="flex flex-col gap-3">
     <AutonomyDial projectId={projectId} />
+    <LowRiskPlans projectId={projectId} />
     <FeatureToggles projectId={projectId} />
     <RiskClasses projectId={projectId} />
     {budgets}

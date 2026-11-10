@@ -3073,6 +3073,22 @@ describe('the board card’s glance on the task page', () => {
     expect(quiet?.pending_approvals).toBe(0);
     // `1.5` is not a limit: unknown, so the card says the count alone.
     expect(quiet?.loop_limits).toBeNull();
+    // S-28.8: neither task's newest plan approval was decided by the low-risk rule.
+    expect(card?.plan_went_ahead).toBe(false);
+    expect(quiet?.plan_went_ahead).toBe(false);
+    // The idle task's plan went ahead; an older person's approval does not hide the newer one, and
+    // a newer pending plan approval on the busy task would (the newest plan approval decides).
+    await pool.query(
+      `insert into approvals (task_id, kind, status, auto_decided, requested_at)
+       values ($1, 'plan', 'approved', false, now() - interval '2 hours'),
+              ($1, 'plan', 'approved', true, now() - interval '1 hour'),
+              ($2, 'plan', 'approved', true, now() - interval '2 hours')`,
+      [idle, busy],
+    );
+    const again = await listProjectTasks(drizzled, boardId, { limit: 50 });
+    expect(again?.items.find((item) => item.id === idle)?.plan_went_ahead).toBe(true);
+    // The busy task's pending plan approval (requested now) is newer than its auto-decided one.
+    expect(again?.items.find((item) => item.id === busy)?.plan_went_ahead).toBe(false);
 
     await pool.query('delete from tasks where project_id = $1', [boardId]);
     await pool.query('delete from projects where id = $1', [boardId]);

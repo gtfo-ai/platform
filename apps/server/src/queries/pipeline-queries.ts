@@ -1364,7 +1364,9 @@ const ciEndingOf = (row: {
 
 /**
  * How many of each page task's questions are `open` and approvals `pending` (S-23.9a) — the same
- * predicates the inbox lists by, so a card's count and the inbox never disagree.
+ * predicates the inbox lists by, so a card's count and the inbox never disagree — and, since
+ * S-28.8, which tasks' **newest** plan approval the platform decided itself under the low-risk rule
+ * (`approvals.auto_decided`): the card's *Plan went ahead without approval*.
  */
 const openAsksFor = async (
   database: Database,
@@ -1372,11 +1374,12 @@ const openAsksFor = async (
 ): Promise<{
   readonly questions: ReadonlyMap<string, number>;
   readonly approvals: ReadonlyMap<string, number>;
+  readonly wentAhead: ReadonlySet<string>;
 }> => {
   if (taskIds.length === 0) {
-    return { questions: new Map(), approvals: new Map() };
+    return { questions: new Map(), approvals: new Map(), wentAhead: new Set() };
   }
-  const [open, pending] = await Promise.all([
+  const [open, pending, newestPlans] = await Promise.all([
     database
       .select({ taskId: questions.taskId, count: sql<number>`count(*)::int` })
       .from(questions)
@@ -1387,10 +1390,19 @@ const openAsksFor = async (
       .from(approvals)
       .where(and(inArray(approvals.taskId, [...taskIds]), eq(approvals.status, 'pending')))
       .groupBy(approvals.taskId),
+    database
+      .selectDistinctOn([approvals.taskId], {
+        taskId: approvals.taskId,
+        autoDecided: approvals.autoDecided,
+      })
+      .from(approvals)
+      .where(and(inArray(approvals.taskId, [...taskIds]), eq(approvals.kind, 'plan')))
+      .orderBy(approvals.taskId, desc(approvals.requestedAt), desc(approvals.id)),
   ]);
   return {
     questions: new Map(open.map((row) => [row.taskId, Number(row.count)])),
     approvals: new Map(pending.map((row) => [row.taskId, Number(row.count)])),
+    wentAhead: new Set(newestPlans.filter((row) => row.autoDecided).map((row) => row.taskId)),
   };
 };
 
@@ -3029,6 +3041,7 @@ export const listProjectTasks = async (
         row.task.state === 'needs_human' ? (escalations.get(row.task.id)?.reason ?? null) : null,
       open_questions: asks.questions.get(row.task.id) ?? 0,
       pending_approvals: asks.approvals.get(row.task.id) ?? 0,
+      plan_went_ahead: asks.wentAhead.has(row.task.id),
       loop_limits: frozenLimits(row.task.iterationLimits),
       gate_wait: gateWaitOf(row.task, stageRows.get(row.task.id)?.gate ?? []),
       queue_wait: queueWaits.get(row.task.id) ?? null,

@@ -7,10 +7,14 @@ import { type ApprovalReason, approvalReasonSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   approveConsequence,
+  lowRiskAutoOf,
   reasonCopy,
+  reasonShort,
   rejectNext,
   reviewVerb,
   subjectLine,
+  waitingLine,
+  wentAheadLine,
 } from './approval-text.js';
 
 /** One reason per code, and both sources where a reason has a source. */
@@ -35,6 +39,43 @@ const SAMPLES: readonly ApprovalReason[] = [
   { code: 'size_unknown' },
   { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'S', files: 2 },
 ];
+
+/**
+ * S-28.8: every reason has a short clause for the one-line *Waiting for your approval because: …*
+ * the Inbox shows, in plain words — no code name, no snake_case value on screen.
+ */
+describe('reasonShort and the waiting line', () => {
+  it('has a short clause for every code, with no raw value in it', () => {
+    for (const reason of SAMPLES) {
+      const short = reasonShort(reason);
+      expect(short.length, reason.code).toBeGreaterThan(5);
+      expect(short, reason.code).not.toMatch(/\b[a-z]+_[a-z_]+\b/);
+    }
+  });
+
+  it('says who found each risk, as the owner asked for it', () => {
+    expect(
+      waitingLine([
+        { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
+        { code: 'confidence_below', confidence: 'medium', minimum: 'high' },
+      ]),
+    ).toBe(
+      'Waiting for your approval because: touches database migrations or stored data (found by the platform); confidence medium (the agent’s own assessment).',
+    );
+    expect(waitingLine(null)).toBe('Waiting for your approval; why was not recorded.');
+  });
+
+  it('says what the rule saw when a plan went ahead', () => {
+    const auto = lowRiskAutoOf([
+      { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'S', files: 2 },
+    ]);
+    expect(wentAheadLine(auto)).toBe(
+      'Plan went ahead without approval: low risk, high confidence, 2 files.',
+    );
+    expect(lowRiskAutoOf([{ code: 'probation', completed: 1, of: 5 }])).toBeNull();
+    expect(wentAheadLine(null)).toBe('Plan went ahead without approval.');
+  });
+});
 
 describe('reasonCopy', () => {
   it('covers every code in the vocabulary', () => {

@@ -235,7 +235,7 @@ const reasonLines = (reasons: readonly ApprovalReason[] | null): string[] =>
   reasons === null
     ? ['Why it was asked was not recorded.']
     : [
-        'Asked because:',
+        'Waiting for your approval because:',
         ...reasons.map((reason) => `- ${approvalReasonWords(reason)}`),
         'The task page says how to stop being asked for each reason.',
       ];
