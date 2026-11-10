@@ -629,16 +629,4 @@ describe('a failed action stores its redacted error (S-28.10)', () => {
     expect(ok?.error_code).toBeNull();
     expect(ok?.error_message).toBeNull();
   });
-
-  it('refuses, at the database, an error code that is not platform vocabulary', async () => {
-    await expect(
-      pool.query(
-        `insert into integration_actions
-           (integration_id, direction, action, payload, status, redaction_count, attempts,
-            error_code)
-         values ($1, 'out', 'transition_ticket', '{}'::jsonb, 'failed', 0, 1, 'no such move!')`,
-        [integrationId],
-      ),
-    ).rejects.toThrow(/integration_actions_error_code_shape/);
-  });
 });

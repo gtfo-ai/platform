@@ -988,7 +988,10 @@ describe('the lifecycle moments through the tracker (TD-029 decision 4)', () => 
  * call removed from `moveTicket` leaves `providerSync` empty in the first case.
  */
 describe('a failed lifecycle move is recorded as out of sync (S-28.10)', () => {
-  const failingOn = (ticket: ReturnType<typeof tracker>, refused: string) => ({
+  const failingOn = (
+    ticket: ReturnType<typeof tracker>,
+    refused: string,
+  ): Partial<TaskManagementPort> => ({
     ...ticket.port,
     capabilities: () =>
       ({ commentsRead: false, transitionsRead: true }) as ReturnType<

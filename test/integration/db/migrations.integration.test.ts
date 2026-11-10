@@ -139,6 +139,8 @@ const EXPECTED_TABLES = [
   // WP-184 (migration 0091): who performs a group of one task's outbound duties right now — the
   // executor's idempotency record is written after the call, so it cannot make two performers wait.
   'task_duty_leases',
+  // S-28.10 (migration 0115): a task's ticket status or merge request out of sync, while it is.
+  'task_provider_sync',
   'task_stages',
   'tasks',
   // WP-40 (migration 0033): the epic split's queue, one row per proposed child ticket. `approvals`
@@ -344,6 +346,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('task_conversation_handled', 'read_write', null),
       // WP-184 (migration 0091): claimed, renewed in place and deleted by its holder.
       row('task_duty_leases', 'read_write', null),
+      // S-28.10 (migration 0115): upserted on a failure, deleted when the subject is in sync again.
+      row('task_provider_sync', 'read_write', null),
       // WP-40 (migration 0033): the epic-split queue. `read_write` because a row is written once by
       // the stage's handler, moved once by a human's decision and stamped once by the duty.
       row('ticket_breakdown_items', 'read_write', null),

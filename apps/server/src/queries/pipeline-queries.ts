@@ -2434,7 +2434,7 @@ export const findTaskDetail = async (
     // S-28.7: the manual jobs the platform started (or could not) on the latest CI attempt.
     ci_manual_started: ciManualStartedOf(stageRows),
     // S-28.10: what is out of sync with the provider, if anything — nothing for a finished task.
-    provider_sync: await providerSyncFor(database, taskId, task.state),
+    provider_sync: [...(await providerSyncFor(database, taskId, task.state))],
     queue_wait: queueWaits.get(task.id) ?? null,
     manual_pause: manualPause,
     conversation_seen: conversationSeen,
