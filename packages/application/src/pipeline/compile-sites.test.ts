@@ -120,6 +120,10 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 1,
     how: "the stranded-stage recovery's question *is this an agent or gate stage?* (WP-108): the loaded row's `stored.pipelineDial`, as `stage.execute` itself compiles it",
   },
+  'packages/application/src/pipeline/ticket-status-recheck.ts': {
+    sites: 1,
+    how: "the reverse sync's escalation (S-28.5), inside its own task transaction: the re-loaded row's `stored.pipelineDial` — the escalation closes the stage's row as every escalation does",
+  },
   'packages/application/src/pipeline/ticket-claim.ts': {
     sites: 1,
     how: "the claim's refusal (WP-177), inside its own escalation transaction: the re-loaded row's `current.pipelineDial` — the escalation the claim raises closes the stage's row as every escalation does",
