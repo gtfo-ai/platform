@@ -1147,7 +1147,7 @@ describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 
     const harness = harnessFor(ticket, lifecycle(slots), {
       settings: {
         ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', slots),
-        config: { version: 1, status_mapping: { refinement: 'In Progress' } },
+        config: { status_mapping: { refinement: 'In Progress' } },
       },
     });
     await harness.publish([ticketMatched()]);

@@ -355,8 +355,8 @@ describe('jira-cloud webhooks', () => {
         binding.port.inbound.normalise(
           binding.replay.delivery('webhook-issue-updated-status.json', {
             patch: (body) => {
-              const changelog = body.changelog as { items: Record<string, unknown>[] };
-              (changelog.items[0] as Record<string, unknown>).toString = to;
+              const changelog = body.changelog as { items: { toString: string }[] };
+              (changelog.items[0] as { toString: string }).toString = to;
               (body.issue as { fields: Record<string, unknown> }).fields.status =
                 category === null ? { name: to } : { name: to, statusCategory: category };
             },
