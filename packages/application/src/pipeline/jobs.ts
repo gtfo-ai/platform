@@ -2208,7 +2208,8 @@ const returnForHumanWords = async (
     words,
     horizon: read.horizon,
     redactor,
-    reopened: decision.reopened ?? [],
+    // The decision was made over these window words, so its reopened words are among them.
+    reopened: (decision.reopened ?? []) as readonly WindowWord[],
   });
   if (feedback.redactions > 0) {
     logger.info(
