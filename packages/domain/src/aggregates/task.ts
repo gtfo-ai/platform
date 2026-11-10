@@ -17,6 +17,7 @@ import type {
   ApprovalRecord,
   ArtifactRef,
   Id,
+  PausedBudgetFigures,
   PausedBudgetScope as PausedBudgetScopeWire,
   QuestionRecord,
   RunStatus,
@@ -594,6 +595,11 @@ export const pauseTask = (
     readonly reason: PauseReason;
     /** Which cap, for a `budget` pause (WP-131 review round 2); absent for the other reasons. */
     readonly budgetScope?: PausedBudgetScope;
+    /**
+     * What the admission compared, for a `budget` pause (S-28.1, M28 ruling 1): absent when the
+     * caller does not know the figures, and never recorded for the other reasons.
+     */
+    readonly budgetFigures?: PausedBudgetFigures;
   },
   context: CommandContext,
 ): TaskDecision => {
@@ -607,6 +613,54 @@ export const pauseTask = (
     ...(input.reason === 'budget' && input.budgetScope !== undefined
       ? { budget_scope: input.budgetScope }
       : {}),
+    ...(input.reason === 'budget' && input.budgetFigures !== undefined
+      ? { budget_figures: input.budgetFigures }
+      : {}),
+  });
+  return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
+};
+
+/**
+ * **A paused task goes on with the attempt it paused on** (S-28.1, M28 ruling 4): the resume of a
+ * stage attempt that never had a run — a budget pause at admission, a pause pressed before the
+ * stage's job fired — re-enters the **same** attempt instead of opening a new one, so attempt
+ * numbers grow only when something ran. AUT-6655's four raises each opened an attempt that ran
+ * nothing (implementation 4 → 8), which read as the pipeline restarting from scratch.
+ *
+ * The aggregate checks what it can see — the task is `paused`, at a stage it has an attempt of, and
+ * not merged — and the caller checks the rest (`resumeTaskCommand`): the attempt's `task_stages` row
+ * is still open and no run was ever created for it. `task.stage.entered` is emitted with the
+ * attempt **unchanged**, so every consumer of an entry hears the resume exactly as it heard a new
+ * attempt's, and the ones keyed per attempt (the ticket's lifecycle move) replay rather than repeat.
+ */
+export const resumePausedAttempt = (
+  task: Task,
+  input: { readonly resumeReason?: string },
+  context: CommandContext,
+): TaskDecision => {
+  if (isMergedTask(task)) {
+    throw new TaskMergedError(task.state, task.currentStage ?? 'active');
+  }
+  const stage = task.currentStage;
+  const attempt = stage === null ? undefined : task.stageAttempts[stage];
+  if (task.state !== 'paused' || stage === null || attempt === undefined) {
+    throw new InvariantViolationError(
+      'resume of a paused attempt',
+      `task ${task.id} is "${task.state}" at ${stage === null ? 'no stage' : `"${stage}"`}${attempt === undefined ? ' with no attempt' : ''}: only a paused task resumes the attempt it paused on`,
+    );
+  }
+  const next = withState(task, 'active');
+  const recorder = recorderFor(task, context);
+  recorder.emit('task.resumed', {
+    project_id: task.projectId,
+    task_id: task.id,
+    reason: input.resumeReason ?? null,
+  });
+  recorder.emit('task.stage.entered', {
+    project_id: task.projectId,
+    task_id: task.id,
+    stage,
+    attempt,
   });
   return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
 };

@@ -322,6 +322,7 @@ const baseTask = {
   budget_cap_usd: 50,
   paused_reason: null,
   paused_budget_scope: null,
+  paused_budget_figures: null,
   cost_estimated_usd: 6,
   // WP-28: the refinement estimate and its provenance. Deliberately **not** equal to
   // `cost_actual_usd`, so the accuracy the page renders is a ratio a constant could not produce.

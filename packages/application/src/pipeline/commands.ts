@@ -18,6 +18,7 @@ import type {
   Effort,
   Id,
   IsoDateTime,
+  PausedBudgetFigures,
   RunStatus,
   Slug,
   TokenUsage,
@@ -56,6 +57,7 @@ import {
   recordFeedback,
   resetAgentIterations,
   resumeIntoApprovalWait,
+  resumePausedAttempt,
   stageOf,
   steerRun,
   TaskMergedError,
@@ -84,8 +86,14 @@ import { isWorkerLeaseOwner } from './offers.js';
 import { toRunAggregate } from './run-aggregate.js';
 import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
 import type { ProjectSettingsPort } from './settings.js';
-import { configuredStageAgent } from './settings.js';
-import type { StageExecutionJob } from './stage-executor.js';
+import { configuredStageAgent, settingsAdmission } from './settings.js';
+import {
+  runBudgetUsd,
+  type StageExecutionJob,
+  taskBudgetExhausted,
+  taskBudgetFigures,
+  withTaskCap,
+} from './stage-executor.js';
 import type {
   LockedRun,
   PipelineStore,
@@ -879,6 +887,31 @@ export class TaskBudgetNotRaisedError extends Error {
 }
 
 /**
+ * **A raise that cannot help** (S-28.1, M28 ruling 2): the task's next run would still not fit
+ * under the new cap — `spent + held + the stage's run budget` is above it — so the resume after it
+ * would pause the task again two seconds later and open nothing but a confusing attempt. AUT-6655's
+ * owner raised 50 → 51 → 52 → 53 → 54 against a minimum of 50.99 + 40 reserve-worth of headroom
+ * that none of them met. A 409 at the route, carrying the minimum and its parts.
+ */
+export class TaskBudgetRaiseInsufficientError extends Error {
+  override readonly name = 'TaskBudgetRaiseInsufficientError';
+  readonly requestedCapUsd: number;
+  readonly figures: PausedBudgetFigures;
+
+  constructor(requestedCapUsd: number, figures: PausedBudgetFigures) {
+    super(
+      `a cap of ${requestedCapUsd} USD cannot let this task continue: it has spent ` +
+        `${figures.spent_usd} USD` +
+        (figures.held_usd > 0 ? `, holds ${figures.held_usd} USD for runs nobody measured` : '') +
+        ` and the next "${figures.stage}" run reserves up to ${figures.reserve_usd} USD, so the ` +
+        `cap must be at least ${figures.required_cap_usd} USD`,
+    );
+    this.requestedCapUsd = requestedCapUsd;
+    this.figures = figures;
+  }
+}
+
+/**
  * A raise on a task that its **own** cap did not pause (WP-131 review round 2): running, paused by a
  * person, or paused by another cap. A 409 at the route, naming which.
  */
@@ -926,6 +959,38 @@ export const raiseTaskBudgetCommand = async (
         : null;
     if (pausedBy !== 'task') {
       throw new TaskNotPausedByItsCapError(input.taskId, stored.task.state, pausedBy);
+    }
+    /**
+     * S-28.1 (M28 ruling 2): **a raise that cannot let the task continue is refused**, before
+     * anything is written — the same question the next admission asks (`taskBudgetExhausted`, with
+     * the requested cap in place), over the same live figures: the spend, the hold and the run
+     * budget of the stage the task stopped at. A configuration this release cannot read leaves the
+     * run budget unknown, and the raise is then only held to "above the cap in force", as before:
+     * the admission refuses that task by name anyway.
+     */
+    const stage = stored.task.currentStage;
+    if (stage !== null) {
+      const readable = settingsAdmission(
+        await deps.settings.forProject(stored.task.projectId, scope.tx),
+      );
+      if (readable.kind === 'readable') {
+        const held = await deps.store.runs.heldFor(
+          scope.tx,
+          input.taskId,
+          runBudgetUsd(readable.settings, stage),
+        );
+        const requested = withTaskCap(readable.settings, input.capUsd);
+        if (taskBudgetExhausted(stored, requested, stage, held)) {
+          const current = withTaskCap(
+            readable.settings,
+            await deps.store.tasks.budgetCap(scope.tx, input.taskId),
+          );
+          throw new TaskBudgetRaiseInsufficientError(
+            input.capUsd,
+            taskBudgetFigures(stored, current, stage, held),
+          );
+        }
+      }
     }
     const written = await deps.store.tasks.raiseBudgetCap(scope.tx, {
       taskId: input.taskId,
@@ -990,6 +1055,11 @@ export const resumeTaskCommand = async (
         }
       }
       const stage = resumeTargetOf(stored, currentStageOrThrow(stored, 'resume'));
+      // S-28.1 (M28 ruling 4): an attempt that never ran is resumed, not replaced.
+      const inPlace = await resumeAttemptInPlace(deps, scope, stored, context, stage);
+      if (inPlace !== null) {
+        return { result: undefined, work: { job: inPlace } };
+      }
       const work = await humanEnter(deps, scope, stored, context, {
         stage,
         via: 'resume',
@@ -999,6 +1069,77 @@ export const resumeTaskCommand = async (
       return { result: undefined, work };
     },
   );
+};
+
+/**
+ * **The resume of a paused attempt that never ran, in place** (S-28.1, M28 ruling 4): attempt numbers
+ * grow only when something ran. Before it, every resume entered the stage as a new attempt, so a task
+ * the task cap paused at admission, raised and resumed four times went from attempt 4 to 8 with four
+ * attempts that ran nothing — on the task page, the pipeline restarting from scratch (AUT-6655).
+ *
+ * Taken only when every one of these holds, and `null` (the ordinary new attempt) otherwise:
+ *  - the task is **`paused`** at the stage it resumes to — a `needs_human` task's attempt was closed
+ *    by its escalation (`closeParkedStageRow`), and an attempt something closed is never re-opened;
+ *  - the stage is an **agent** stage — a gate's attempt carries its check count and its CI wait in
+ *    the job and the row, and `ready_for_merge` is entered only through the `ready_head_check` duty;
+ *  - the attempt's `task_stages` row is **open** — `absent` (a task older than every entry's row)
+ *    has nothing to re-enter;
+ *  - the attempt has **no run at all**, of any status. One that had a run — a claim refused at
+ *    admission (`claim-admission.ts`), a cancelled offer, a pause pressed during a run — is that run's
+ *    record: the stranded-stage pass reads the entry's newest run as *this entry already ran* and
+ *    escalates rather than re-enqueues it, and the next prompt's `previousRun` would read the old
+ *    ending as this attempt's. Those resumes still open a new attempt, which then did run something.
+ *
+ * The row's `entered_at` is moved to now (`reenterOpenStage`), so the stranded-stage pass reads the
+ * resume as a fresh entry; `task.stage.entered` is appended with the attempt unchanged
+ * (`resumePausedAttempt`), so every consumer of an entry hears it as it heard a new attempt's.
+ */
+const resumeAttemptInPlace = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  stored: StoredTask,
+  context: CommandContext,
+  stage: Slug,
+): Promise<StageExecutionJob | null> => {
+  const { task } = stored;
+  const attempt = task.stageAttempts[stage];
+  if (task.state !== 'paused' || task.currentStage !== stage || attempt === undefined) {
+    return null;
+  }
+  const pipeline = compilePipeline(
+    task.template,
+    stored.template,
+    stored.pipelineDial,
+    stored.qaStage,
+  );
+  if (stageOf(pipeline, stage)?.kind !== 'agent') {
+    return null;
+  }
+  if ((await deps.store.tasks.stageAttemptState(scope.tx, task.id, stage, attempt)) !== 'open') {
+    return null;
+  }
+  if ((await deps.store.tasks.stageAttemptRuns(scope.tx, task.id, stage, attempt)) > 0) {
+    return null;
+  }
+  // The rule `humanEnter` asks first (S-27.1): no way round a pending approval, in place or not.
+  assertNoPendingApproval(task, await pendingApprovalOf(deps.store, scope.tx, task.id), {
+    stage,
+    move: 'resume',
+  });
+  const decision = resumePausedAttempt(task, {}, context);
+  if (
+    !(await deps.store.tasks.reenterOpenStage(scope.tx, {
+      taskId: task.id,
+      stage,
+      attempt,
+      causedByEventId: null,
+    }))
+  ) {
+    return null;
+  }
+  await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
+  await scope.events.append(decision.events);
+  return { taskId: task.id, projectId: task.projectId, stage, attempt };
 };
 
 /**

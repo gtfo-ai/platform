@@ -627,7 +627,7 @@ export const registerCommandRoutes = async (
     body: resumeTaskRequestSchema,
     summary: 'Resume the task at the stage it stopped at',
     description:
-      'Re-enters the current stage and enqueues it; no iteration round is spent, because the task stood still rather than going round. A task paused at `ready_for_merge` is not moved by the request: the answer reads `paused`, and the `ready_head_check` duty then compares the branch head with the one the gates judged — the same head re-enters `rebase_gate`, which re-reads the target branch and the Code review’s confirmation of any protected path CI excused before it lets the task wait for the merge again (WP-105), and a different or unreadable head re-enters `ci_gate` (WP-79); neither spends a loop. A template that runs no rebase gate waits for the merge again directly on the same head. A state the task cannot leave for that stage answers 409 naming the transition.',
+      'Re-enters the current stage and enqueues it; no iteration round is spent, because the task stood still rather than going round. A paused task whose current attempt of an agent stage never had a run (a budget pause at admission) re-enters that same attempt rather than a new one, so attempt numbers grow only when something ran (S-28.1). A task paused at `ready_for_merge` is not moved by the request: the answer reads `paused`, and the `ready_head_check` duty then compares the branch head with the one the gates judged — the same head re-enters `rebase_gate`, which re-reads the target branch and the Code review’s confirmation of any protected path CI excused before it lets the task wait for the merge again (WP-105), and a different or unreadable head re-enters `ci_gate` (WP-79); neither spends a loop. A template that runs no rebase gate waits for the merge again directly on the same head. A state the task cannot leave for that stage answers 409 naming the transition.',
     params: () => ({}),
     perform: async ({ deps, taskId, userId }) => deps.resume({ taskId, userId }),
   });
@@ -649,7 +649,7 @@ export const registerCommandRoutes = async (
     body: raiseTaskBudgetRequestSchema,
     summary: 'Raise this task’s own cap',
     description:
-      'The task cap (product/09, BD-010: "a human can raise it") for this task alone, stored on the task and read by every later admission in place of the default. A figure not above the cap in force answers 409 `budget_not_raised`; nothing lowers a cap. The task is not moved: a task paused for its budget is resumed through `POST /api/tasks/:id/resume`. The audit row names the cap it replaced.',
+      'The task cap (product/09, BD-010: "a human can raise it") for this task alone, stored on the task and read by every later admission in place of the default. A figure not above the cap in force answers 409 `budget_not_raised`, and a cap the next run would still not fit under (what the task has spent and holds plus the run budget of the stage it stopped at) answers 409 `budget_raise_insufficient` with the minimum and its parts in `details` (S-28.1); nothing lowers a cap. The task is not moved: a task paused for its budget is resumed through `POST /api/tasks/:id/resume`. The audit row names the cap it replaced.',
     params: (body) => ({ cap_usd: body.cap_usd }),
     auditResult: (result: { readonly capUsd: number; readonly previousCapUsd: number }) => ({
       before_cap_usd: result.previousCapUsd,

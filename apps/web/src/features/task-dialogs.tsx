@@ -20,7 +20,12 @@
  * so each submit button is disabled until its own contract is satisfiable. A dialog closes when its
  * command was **accepted**; a refusal stays in the dialog, beside the fields that caused it.
  */
-import type { RetryStageResponse, TakenOver, TaskDetailResponse } from '@platform/contracts';
+import type {
+  PausedBudgetFigures,
+  RetryStageResponse,
+  TakenOver,
+  TaskDetailResponse,
+} from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import type { useTakeOverCommands, useTaskCommands } from '../app/queries.js';
 import { Dialog } from '../ui/dialog.js';
@@ -28,6 +33,7 @@ import { stageLabel } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field, formatUsd } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { minimumCapUsd, raiseExplanation, suggestedCapUsd } from './budget-pause-words.js';
 import { PauseDialog } from './pause-dialog.js';
 import { HandBackForm, TakeOverForm } from './take-over.js';
 
@@ -208,30 +214,47 @@ const Submit = ({
 /**
  * **Raise this task's cap** (WP-131 review round 1) — offered on a task its own budget paused, the
  * one way out of that pause: the cap is raised through `POST /api/tasks/:id/budget`, then the task is
- * resumed through the existing resume command. Only a figure above the cap in force is offered; the
- * server refuses the rest (409 `budget_not_raised`) and nothing here lowers a cap.
+ * resumed through the existing resume command.
+ *
+ * **Since S-28.1 (M28 ruling 2) it says the arithmetic and offers the minimum**: what the task has
+ * spent, what the next run of its stage reserves (a ceiling, not spend), and the smallest cap that
+ * lets it continue — pre-filled, rounded up to a whole dollar. A figure below that minimum is not
+ * sent, and the server refuses one anyway (409 `budget_raise_insufficient`, said here in the dialog
+ * rather than in a toast, M28 ruling 5); the resume is sent only after a raise the server accepted.
+ * A pause recorded without its figures falls back to "above the cap in force"; nothing lowers a cap.
  */
 const RaiseTaskCap = ({
   capUsd,
+  figures,
   commands,
   onDone,
 }: {
   readonly capUsd: number;
+  readonly figures: PausedBudgetFigures | null;
   readonly commands: TaskCommands;
   readonly onDone: () => void;
 }): ReactElement => {
-  const [value, setValue] = useState<number | null>(null);
-  const valid = value !== null && Number.isFinite(value) && value > capUsd;
+  const minimum = figures === null ? null : minimumCapUsd(figures);
+  const [value, setValue] = useState<number | null>(
+    figures === null ? null : suggestedCapUsd(figures),
+  );
+  const valid =
+    value !== null &&
+    Number.isFinite(value) &&
+    value > capUsd &&
+    (minimum === null || value >= minimum);
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs text-fg-muted">
-        {`This task's cap is ${formatUsd(capUsd)}. Raise it and the task resumes at the stage it stopped at; a run nobody measured stays held at its cap and is never counted as spent.`}
+      <p className="text-xs text-fg-muted" data-raise-explanation="">
+        {figures === null
+          ? `This task's cap is ${formatUsd(capUsd)}. Raise it and the task resumes at the stage it stopped at; a run nobody measured stays held at its cap and is never counted as spent.`
+          : raiseExplanation(figures)}
       </p>
       <Field
         label="New cap (USD)"
-        hint={`Above ${formatUsd(capUsd)}.`}
+        hint={minimum === null ? `Above ${formatUsd(capUsd)}.` : `At least ${formatUsd(minimum)}.`}
         type="number"
-        min={capUsd}
+        min={minimum ?? capUsd}
         step="any"
         value={value ?? ''}
         onChange={(event) => {
@@ -265,6 +288,7 @@ export const TaskDialogs = ({
   taskId,
   ticketKey,
   capUsd,
+  budgetFigures = null,
   takenOver,
   merged,
   form,
@@ -277,6 +301,8 @@ export const TaskDialogs = ({
   /** The ticket key, for the pause dialog's title (S-25.23). */
   readonly ticketKey: string;
   readonly capUsd: number;
+  /** The budget pause's arithmetic (S-28.1), `null` when the pause recorded none. */
+  readonly budgetFigures?: PausedBudgetFigures | null;
   readonly takenOver: TakenOver | null;
   readonly merged: boolean;
   readonly form: StageCommandForm;
@@ -467,7 +493,14 @@ export const TaskDialogs = ({
       )}
 
       <Dialog {...shown('raise_budget')} title="Raise this task's cap">
-        <RaiseTaskCap capUsd={capUsd} commands={commands} onDone={close} />
+        {/* Keyed on the minimum, so a later pause's figures pre-fill afresh (S-28.1). */}
+        <RaiseTaskCap
+          key={budgetFigures?.required_cap_usd ?? 'no-figures'}
+          capUsd={capUsd}
+          figures={budgetFigures}
+          commands={commands}
+          onDone={close}
+        />
       </Dialog>
     </>
   );

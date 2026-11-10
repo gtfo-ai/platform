@@ -16,6 +16,7 @@ import {
   configFieldLabel,
   QUESTION_STATUS_LABEL,
   RUN_STATUS_LABEL,
+  stageLabel,
   TASK_STATE_LABEL,
   wordInSentence,
 } from '../ui/humanize.js';
@@ -39,6 +40,18 @@ const listWords = (items: readonly string[]): string =>
   items.length <= 1
     ? (items[0] ?? '')
     : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+
+/**
+ * A dollar figure a `details` entry carries, as the screens print one — rounded **up** to the cent
+ * for a minimum (`'up'`), so "at least $50.99" is never a hair below what the server admits.
+ */
+const dollarsOf = (value: string | undefined, rounding: 'up' | 'near'): string | null => {
+  const usd = value === undefined ? Number.NaN : Number(value);
+  if (!Number.isFinite(usd)) return null;
+  const cents =
+    rounding === 'up' ? Math.ceil(Number((usd * 100).toFixed(6)) - 1e-9) : Math.round(usd * 100);
+  return new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' }).format(cents / 100);
+};
 
 /** An instant as the screens print one ("9 Nov 2026, 14:05"), or the text itself if it is none. */
 const instantWords = (iso: string): string => {
@@ -270,6 +283,21 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
   run_not_live:
     'The run has already ended, so there is nothing to stop or message. Re-run it from the task page if it is still needed.',
   budget_not_raised: 'The new cap must be above the cap in force. Enter a higher figure.',
+  // S-28.1 (M28 ruling 2): a raise the next run would still not fit under, with its arithmetic.
+  budget_raise_insufficient: (error) => {
+    const minimum = dollarsOf(detailOf(error, 'required_cap_usd'), 'up');
+    const spent = dollarsOf(detailOf(error, 'spent_usd'), 'near');
+    const reserve = dollarsOf(detailOf(error, 'reserve_usd'), 'near');
+    const stage = detailOf(error, 'stage');
+    if (minimum === null) {
+      return 'That cap is still too low for the task’s next run to start. Enter a higher figure.';
+    }
+    const parts =
+      spent !== null && reserve !== null
+        ? `It has spent ${spent} and the next ${stage === undefined ? '' : `${stageLabel(stage)} `}run reserves up to ${reserve} (a ceiling, not spend). `
+        : '';
+    return `That cap is too low for the task to continue. ${parts}Enter at least ${minimum}.`;
+  },
   not_paused_by_task_cap:
     'The task is not paused by its own cost cap, so there is no cap here to raise. If a project or organisation budget stopped it, raise that one under Budgets.',
   budget_override_unsupported:

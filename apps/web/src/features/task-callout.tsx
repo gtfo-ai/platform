@@ -20,8 +20,9 @@
  *   task's `tracker_assignee`, leads, the ways out are in the box, and the brief is under *Details*.
  *   Beside a structured stop (`detail.stop`), whose next step says to retry the stage, the
  *   *Retry stage…* here is the page's one amber primary (S-25.15, `./page-primary.ts`);
- * - **a budget pause** — whose cap is spent, and where it is raised (the header's primary raises
- *   a task's own cap);
+ * - **a budget pause** — in numbers (S-28.1): what it spent, what the next run reserves, by how
+ *   much that would exceed the cap and the minimum that lets it continue, and where the cap is
+ *   raised (the header's primary raises a task's own cap) — never "spent its cap" when it has not;
  * - **a proposed breakdown waiting for a maintainer** — the epic split's panel, with its decision.
  *   A breakdown with nothing left to decide, or a caller who may not decide it, is on the Overview.
  *
@@ -80,11 +81,12 @@ import { type ReactElement, useState } from 'react';
 import type { useTaskCommands } from '../app/queries.js';
 import { Flash } from '../ui/flash.js';
 import { APPROVAL_KIND_LABEL, QUESTION_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
-import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
+import { Badge, Button, Card, ErrorNotice, formatDateTime } from '../ui/kit.js';
 import { UntrustedInline, UntrustedProse } from '../ui/markdown.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
+import { budgetPauseSentence } from './budget-pause-words.js';
 import { ReadyBlockedNotice, readyBlockedPipeline } from './ci-manual-not-run.js';
 import { CiWaitStop, GateWaitNotice, gateWaitHeld, openGateWait } from './gate-wait.js';
 import { type TaskPrimaryAction, taskPagePrimary } from './page-primary.js';
@@ -233,27 +235,15 @@ const escalationReason = (
 };
 
 /**
- * Why a budget pause waits, and on whom (WP-131): only a task's **own** cap is raised from this page
- * (the header's *Raise this task's cap…*, for a caller with `budget.write`); a project's or an
- * organisation's is raised where that cap is set.
+ * Why a budget pause waits, and on whom (WP-131) — in numbers since S-28.1 (M28 ruling 3,
+ * `./budget-pause-words.ts`): only a task's **own** cap is raised from this page (the header's
+ * *Raise the cap…*, for a caller with `budget.write`); a project's or an organisation's is raised
+ * where that cap is set.
  */
 export const budgetReason = (
-  task: Pick<TaskRecord, 'paused_budget_scope' | 'budget_cap_usd'>,
+  task: Pick<TaskRecord, 'paused_budget_scope' | 'paused_budget_figures' | 'budget_cap_usd'>,
   canRaise: boolean,
-): string => {
-  switch (task.paused_budget_scope) {
-    case 'task':
-      return canRaise
-        ? `It has spent its cap of ${formatUsd(task.budget_cap_usd)}. Raise the cap and it resumes at the stage it stopped at.`
-        : `It has spent its cap of ${formatUsd(task.budget_cap_usd)}. A person who may change budgets can raise it.`;
-    case 'project':
-      return 'Its project has spent its budget. It resumes once the project’s budget is raised, where that cap is set.';
-    case 'organization':
-      return 'The organisation has spent its budget. It resumes once the organisation’s budget is raised, where that cap is set.';
-    default:
-      return 'A budget it counts against is spent.';
-  }
-};
+): string => budgetPauseSentence(task, canRaise);
 
 /**
  * The platform's own words for a pause, which the notice never prints as a person's *why*: the fixed

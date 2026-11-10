@@ -115,7 +115,9 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // 5 since S-27.1 (BACKLOG 1480): the resume of a task paused out of an approval wait goes back
   // to the wait (`resumeIntoApprovalWait`) inside `writeTask`, with the command's ending.
-  ['packages/application/src/pipeline/commands.ts', 5],
+  // 6 since S-28.1 (M28 ruling 4): the resume of a paused attempt that never ran re-enters it in
+  // place (`resumeAttemptInPlace`) inside `writeTask`, with the command's ending.
+  ['packages/application/src/pipeline/commands.ts', 6],
   ['packages/application/src/pipeline/dead-letter.ts', 1],
   ['packages/application/src/pipeline/deadlines.ts', 1],
   // The lease sweep's two escalations: a run not at its task's current entry (WP-47), and an
@@ -436,6 +438,10 @@ describe('every entry, completion and cancellation closes the attempt it ends (W
  * reason never reached the architect — the product owner inserted the row by hand. Same syntactic
  * limits as the censuses above; the behaviour is asserted in `saga.test.ts` (`plan approval`,
  * `questions`).
+ *
+ * **`resumePausedAttempt(` is deliberately not an entry here** (S-28.1, M28 ruling 4): it re-enters an
+ * attempt whose row is still **open** — the command checks `stageAttemptState` first — so there is
+ * no row to open, and it moves that row's `entered_at` with the narrow `reenterOpenStage` instead.
  */
 const ENTRY_CALL = /\benterStage\s*\(|\bresumeStage\s*\(/g;
 const ROW_OPENED_CALL = /\.recordStageEntered\s*\(/g;

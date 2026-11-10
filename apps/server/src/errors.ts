@@ -33,6 +33,7 @@ import {
   SteerWindowClosedError,
   StreamConflictError,
   TaskBudgetNotRaisedError,
+  TaskBudgetRaiseInsufficientError,
   TaskConflictExhaustedError,
   TaskNotPausedByItsCapError,
   UnknownAggregateError,
@@ -223,6 +224,20 @@ export const commandRefusal = (
   if (error instanceof TaskNotPausedByItsCapError) {
     // WP-131 review round 2: the raise is for a task its **own** cap paused, and only that.
     return new HttpError(409, 'not_paused_by_task_cap', error.message);
+  }
+  if (error instanceof TaskBudgetRaiseInsufficientError) {
+    // S-28.1 (M28 ruling 2): a raise the next run would still not fit under, refused with the
+    // minimum and its parts as fields, so the dialog can say them without parsing the message.
+    const { figures } = error;
+    return new HttpError(409, 'budget_raise_insufficient', error.message, [
+      { path: 'required_cap_usd', message: String(figures.required_cap_usd) },
+      { path: 'requested_cap_usd', message: String(error.requestedCapUsd) },
+      { path: 'stage', message: figures.stage },
+      { path: 'spent_usd', message: String(figures.spent_usd) },
+      { path: 'held_usd', message: String(figures.held_usd) },
+      { path: 'reserve_usd', message: String(figures.reserve_usd) },
+      { path: 'cap_usd', message: String(figures.cap_usd) },
+    ]);
   }
   if (error instanceof TaskBudgetNotRaisedError) {
     // WP-131 review round 1: a task's cap is only ever raised, so a figure not above the one in

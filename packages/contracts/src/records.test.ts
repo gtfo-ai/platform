@@ -108,6 +108,7 @@ describe('records', () => {
       budget_cap_usd: 50,
       paused_reason: null,
       paused_budget_scope: null,
+      paused_budget_figures: null,
       cost_estimated_usd: 0,
       estimate_usd: 2.5,
       estimate_basis: 'project_history' as const,

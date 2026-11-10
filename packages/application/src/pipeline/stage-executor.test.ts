@@ -28,6 +28,7 @@ import {
   resumeTaskCommand,
   retryStageCommand,
   TaskBudgetNotRaisedError,
+  TaskBudgetRaiseInsufficientError,
   TaskNotPausedByItsCapError,
 } from './commands.js';
 import { RUN_START_RETRY_MS } from './jobs.js';
@@ -1909,10 +1910,11 @@ describe('the task budget holds a run nobody measured (WP-131, backlog 402)', ()
         .map((event) => (event.payload as { budget_scope?: string }).budget_scope),
     ).toEqual(['task']);
 
-    // A figure not above the cap in force (20, this task's default) is refused and moves nothing…
+    // A figure the next run would still not fit under (0 spent + 15 held + 15 reserve = 30) is
+    // refused and moves nothing (S-28.1) — 20, the cap in force, among them…
     await expect(
       raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 20 }),
-    ).rejects.toBeInstanceOf(TaskBudgetNotRaisedError);
+    ).rejects.toBeInstanceOf(TaskBudgetRaiseInsufficientError);
     // …a raise answers the cap it replaced…
     await expect(
       raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 40 }),
@@ -1941,6 +1943,177 @@ describe('the task budget holds a run nobody measured (WP-131, backlog 402)', ()
     // Both runs ended unmeasured and both are held: the raise released nothing.
     expect(held).toEqual({ heldUsd: 30, heldRuns: 2 });
     expect(taskOf(harness).costActualUsd).toBe(0);
+  });
+
+  /**
+   * **S-28.1 (M28 rulings 1, 2 and 4)** — AUT-6655's shape at this harness's figures: the pause
+   * records its arithmetic, a raise below the minimum is refused with it and writes nothing, and the
+   * raise that suffices resumes the **same** attempt (it never ran) and admits the run.
+   *
+   * Canaries: the pause built without `budgetFigures` fails the first assertion; the raise without
+   * the insufficiency check accepts 25 (the cap then reads 25); the resume through `humanEnter`
+   * enters attempt 3 instead of 2.
+   */
+  it('records the pause’s figures, refuses a raise below the minimum, and resumes the attempt that never ran (S-28.1)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'timed_out',
+          terminalReason: 'timed_out',
+          costUnmeasured: true,
+          error: 'the platform stopped the run: timed_out',
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    await retryStageCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+    });
+    await harness.drain();
+    const paused = taskOf(harness);
+    expect(paused.task.state).toBe('paused');
+    // The retry entered attempt 2, and the pause refused its run before one existed.
+    expect(paused.task.stageAttempts.refinement).toBe(2);
+    expect(harness.specs).toHaveLength(1);
+    // M28 ruling 6's premise: a pause at admission writes no offer, so `mr_draft` (which waits for
+    // `run.offered`) has nothing to fire on.
+    const offeredAttempts = (): unknown[] =>
+      harness
+        .events()
+        .filter((event) => event.type === 'run.offered')
+        .map((event) => (event.payload as { attempt?: number }).attempt);
+    expect(offeredAttempts()).toEqual([1]);
+
+    // M28 ruling 1: the six figures, on the pause itself.
+    const pauses = harness.events().filter((event) => event.type === 'task.paused');
+    expect(pauses.map((event) => event.payload)).toEqual([
+      expect.objectContaining({
+        reason: 'budget',
+        budget_scope: 'task',
+        budget_figures: {
+          stage: 'refinement',
+          spent_usd: 0,
+          held_usd: 15,
+          reserve_usd: 15,
+          cap_usd: 20,
+          required_cap_usd: 30,
+        },
+      }),
+    ]);
+
+    // M28 ruling 2: a raise the next run would still not fit under is refused, with the minimum…
+    const refused = await raiseTaskBudgetCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      capUsd: 25,
+    }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(TaskBudgetRaiseInsufficientError);
+    expect((refused as TaskBudgetRaiseInsufficientError).figures).toMatchObject({
+      required_cap_usd: 30,
+      spent_usd: 0,
+      held_usd: 15,
+      reserve_usd: 15,
+      cap_usd: 20,
+    });
+    // …and writes nothing: the cap is still the default.
+    expect(
+      await harness.memory.transaction(async (scope) =>
+        harness.store.tasks.budgetCap(scope.tx, taskId),
+      ),
+    ).toBeNull();
+    // Exactly the minimum is accepted — the admission's own comparison, a run that fills the cap.
+    await expect(
+      raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 30 }),
+    ).resolves.toEqual({ capUsd: 30, previousCapUsd: 20 });
+
+    const entered = harness.events().filter((event) => event.type === 'task.stage.entered').length;
+    await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+    await harness.drain();
+
+    // M28 ruling 4: admitted, on the attempt that paused — attempt numbers grow only when a run ran.
+    expect(harness.specs).toHaveLength(2);
+    const resumed = taskOf(harness);
+    expect(resumed.task.stageAttempts.refinement).toBe(2);
+    const reentries = harness
+      .events()
+      .filter((event) => event.type === 'task.stage.entered')
+      .slice(entered);
+    expect(reentries.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ stage: 'refinement', attempt: 2 }),
+    ]);
+    expect(offeredAttempts()).toEqual([1, 2]);
+  });
+
+  /**
+   * The other side of M28 ruling 4: an attempt that **had** a run is that run's record — a claim
+   * refused at admission withdraws its offer and ends its run `cancelled` at the measured zero — so
+   * its resume opens a new attempt, as before. Canary: dropping the `stageAttemptRuns` check resumes
+   * attempt 2 in place.
+   */
+  it('opens a new attempt when the paused attempt had a run, even one that ran nothing (S-28.1)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'timed_out',
+          terminalReason: 'timed_out',
+          costUnmeasured: true,
+          error: 'the platform stopped the run: timed_out',
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const stored = taskOf(harness);
+    const taskId = stored.task.id;
+    await retryStageCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+    });
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(2);
+    // Attempt 2 gets a run that ended before its CLI was asked for — a withdrawn offer's shape.
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.runs.insert(scope.tx, {
+        id: harness.ids.next(),
+        taskId,
+        projectId: stored.task.projectId,
+        stage: 'refinement' as Slug,
+        role: 'product_manager',
+        mode: 'normal',
+        attempt: 2,
+        model: 'claude-opus-5',
+        effort: 'medium',
+        promptVersion: 'harness@1',
+        systemPrompt: null,
+        userPrompt: null,
+        redactionCount: 0,
+        contextPack: null,
+        settings: null,
+        reserveUsd: null,
+        promptsWithheld: null,
+        providerMode: 'api',
+        status: 'cancelled',
+        terminalReason: 'cancelled',
+        sessionId: null,
+        numTurns: 0,
+        usage: null,
+        cost: null,
+        wallMs: 0,
+        createdAt: harness.clock.now(),
+        startedAt: null,
+      });
+    });
+    await raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 30 });
+    await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+    await harness.drain();
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(3);
+    expect(harness.specs).toHaveLength(2);
   });
 
   /**

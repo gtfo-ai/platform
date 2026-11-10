@@ -1405,6 +1405,24 @@ export const createMemoryPipelineStore = (
       if (row === undefined) return 'absent';
       return row.state === 'running' && row.exitedAt === null ? 'open' : 'closed';
     },
+    // S-28.1: the SQL's join through `runs.task_stage_id`, here the run's own stage and attempt.
+    stageAttemptRuns: async (_tx, taskId, stage, attempt) =>
+      [...runs.values()].filter(
+        (run) => run.taskId === taskId && run.stage === stage && run.attempt === attempt,
+      ).length,
+    reenterOpenStage: async (_tx, entry) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === entry.taskId &&
+          candidate.stage === entry.stage &&
+          candidate.attempt === entry.attempt,
+      );
+      if (row === undefined || row.state !== 'running' || row.exitedAt !== null) return false;
+      sequence += 1;
+      row.enteredAt = sequence;
+      row.enteredAtMs = stageClock();
+      return true;
+    },
     stageAttemptEntry: async (_tx, taskId, stage, attempt) => {
       const row = stages.find(
         (candidate) =>

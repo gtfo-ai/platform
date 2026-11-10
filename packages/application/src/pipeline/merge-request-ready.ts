@@ -28,8 +28,12 @@
  *     removes the draft prefix when it has one (a re-entry nothing drafted writes nothing). Every
  *     way into Ready is that event — the rebase gate's pass, a resume from a pause at Ready, the
  *     `ready_head_check` duty's entry — so each one is covered, keyed per entry.
- *  3. **`mr_draft`** — on `task.stage.entered` for an **agent** stage of a task that has been at
- *     `ready_for_merge` before (`stageAttempts.ready_for_merge ≥ 1`): an agent is about to change
+ *  3. **`mr_draft`** — on `run.offered` for an **agent** stage of a task that has been at
+ *     `ready_for_merge` before (`stageAttempts.ready_for_merge ≥ 1`) — that is, once the stage's run
+ *     is **admitted** (its budget passed and its offer written), never on the stage's entry
+ *     (S-28.1, M28 ruling 6): AUT-6655's return to implementation drafted the merge request and then
+ *     paused at the task cap, so the merge request read *Draft* while nothing ran. A task paused for
+ *     its budget leaves the merge request as it was. An agent is about to change
  *     the merge request again (a reviewer's comments sent it back, the rebase gate's conflict
  *     resolution, a person's return), so it is put back to draft until the task is Ready again. A
  *     **gate** re-entry from Ready (a default-branch move re-checks the rebase gate, a person's push
@@ -117,24 +121,43 @@ const mergeRequestPipelineHandler = (options: PipelineSagaOptions): EventHandler
 });
 
 /**
- * `task.stage.entered` → `mr_ready` for Ready, `mr_draft` for an agent stage after Ready. One
- * handler for the one event type, because both answers read the same loaded row.
+ * `task.stage.entered` for Ready → `mr_ready`; `run.offered` for an agent stage after Ready →
+ * `mr_draft` (S-28.1, M28 ruling 6: the run admitted, not the stage entered). One handler, because
+ * both answers read the same loaded row.
  */
 const mergeRequestDraftStateHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.merge-request.draft-state',
   priority: 120,
-  eventTypes: ['task.stage.entered'],
+  eventTypes: ['task.stage.entered', 'run.offered'],
   handle: async (context: HandlerContext) => {
     const event = context.event.event;
-    if (event.type !== 'task.stage.entered') {
+    if (event.type === 'task.stage.entered') {
+      if (event.payload.stage !== READY_FOR_MERGE_STAGE) {
+        return;
+      }
+      const atReady = await options.store.tasks.load(context.scope.tx, event.payload.task_id);
+      if (atReady !== null && atReady.mr !== null) {
+        enqueueAfterCommit(options, context, 'mr_ready', event.payload);
+      }
+      return;
+    }
+    if (event.type !== 'run.offered' || event.payload.kind !== 'stage') {
+      return;
+    }
+    const offeredStage = event.payload.stage;
+    if (offeredStage === null) {
       return;
     }
     const stored = await options.store.tasks.load(context.scope.tx, event.payload.task_id);
     if (stored === null || stored.mr === null) {
       return;
     }
-    if (event.payload.stage === READY_FOR_MERGE_STAGE) {
-      enqueueAfterCommit(options, context, 'mr_ready', event.payload);
+    // The offer of the attempt the task is on: a late dispatch for an attempt it has left drafts
+    // nothing, and the duty re-validates on fire that the task is still `active`.
+    if (
+      stored.task.currentStage !== offeredStage ||
+      stored.task.stageAttempts[offeredStage] !== event.payload.attempt
+    ) {
       return;
     }
     if ((stored.task.stageAttempts[READY_FOR_MERGE_STAGE] ?? 0) < 1) {
@@ -146,7 +169,7 @@ const mergeRequestDraftStateHandler = (options: PipelineSagaOptions): EventHandl
       stored.pipelineDial,
       stored.qaStage,
     );
-    if (stageOf(pipeline, event.payload.stage)?.kind !== 'agent') {
+    if (stageOf(pipeline, offeredStage)?.kind !== 'agent') {
       return;
     }
     enqueueAfterCommit(options, context, 'mr_draft', event.payload);

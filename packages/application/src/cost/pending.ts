@@ -133,7 +133,7 @@
  * serialising lock on the scope row (the project, the organisation, the batch) taken before the
  * read, which is a decision about lock ordering across every admitter and not this change's.
  */
-import type { Slug } from '@platform/contracts';
+import type { PausedBudgetFigures, Slug } from '@platform/contracts';
 
 /**
  * The runs of a scope **nobody measured**, held at the reservations they were admitted at (WP-131).
@@ -224,3 +224,51 @@ export const capSpendDetail = (admission: CapAdmission, stage: Slug): string =>
   ` of ${admission.capUsd} USD` +
   (admission.heldRuns > 0 ? `, with ${holdDetail(admission)}` : '') +
   `, and "${stage}" may spend ${admission.reserveUsd} more`;
+
+/**
+ * **How far below a cap a sum may sit and still read as filling it** — one millionth of a dollar,
+ * the precision of `tasks.budget_cap_usd` (`numeric(12,6)`). A cap a person sets to exactly the
+ * figure the page offered must admit the run, and `10.99 + 0 + 40` is not `50.99` in binary floating
+ * point for every operand (S-28.1).
+ */
+export const CAP_TOLERANCE_USD = 0.000_001;
+
+/** The parts of a pause's arithmetic, before the minimum is derived from them. */
+export interface BudgetFigureParts {
+  readonly stage: Slug;
+  readonly spentUsd: number;
+  readonly heldUsd: number;
+  readonly reserveUsd: number;
+  readonly capUsd: number;
+}
+
+/** A figure rounded **up** to the cap column's six decimals, never down past what it rounds. */
+const upToMicroDollars = (usd: number): number =>
+  Math.ceil(Number((usd * 1_000_000).toFixed(3)) - 1e-6) / 1_000_000;
+
+/**
+ * **A pause's arithmetic** (S-28.1, M28 ruling 1): the four figures the admission compared, and
+ * `required_cap_usd` — the smallest cap that would have admitted the run, `spent + held + reserve`,
+ * rounded up to the column's precision. Never derived from anything but the parts given.
+ */
+export const budgetFiguresOf = (parts: BudgetFigureParts): PausedBudgetFigures => ({
+  stage: parts.stage,
+  spent_usd: parts.spentUsd,
+  held_usd: parts.heldUsd,
+  reserve_usd: parts.reserveUsd,
+  cap_usd: parts.capUsd,
+  required_cap_usd: upToMicroDollars(parts.spentUsd + parts.heldUsd + parts.reserveUsd),
+});
+
+/**
+ * A {@link CapAdmission}'s figures: the ledger's charge as the spend, and what is committed but not
+ * charged — live runs the ledger has not recorded and runs nobody measured — as the hold.
+ */
+export const capAdmissionFigures = (admission: CapAdmission, stage: Slug): PausedBudgetFigures =>
+  budgetFiguresOf({
+    stage,
+    spentUsd: admission.spentUsd,
+    heldUsd: admission.pendingUsd + admission.heldUsd,
+    reserveUsd: admission.reserveUsd,
+    capUsd: admission.capUsd,
+  });

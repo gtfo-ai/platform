@@ -31,6 +31,7 @@ import {
   StageNotReachedError,
   SteerWindowClosedError,
   TaskBudgetNotRaisedError,
+  TaskBudgetRaiseInsufficientError,
   TaskConflictExhaustedError,
   TaskNotPausedByItsCapError,
   UnknownAggregateError,
@@ -842,6 +843,19 @@ describe('what each refusal maps to', () => {
       code: 'budget_not_raised',
     },
     {
+      // S-28.1 (M28 ruling 2): …and never to a cap the next run would still not fit under.
+      error: new TaskBudgetRaiseInsufficientError(50.5, {
+        stage: 'implementation',
+        spent_usd: 10.99,
+        held_usd: 0,
+        reserve_usd: 40,
+        cap_usd: 50,
+        required_cap_usd: 50.99,
+      }),
+      status: 409,
+      code: 'budget_raise_insufficient',
+    },
+    {
       // WP-131 review round 2: …and only for a task its own cap paused.
       error: new TaskNotPausedByItsCapError(TASK as never, 'paused', 'project'),
       status: 409,
@@ -1092,6 +1106,36 @@ describe('raising a task’s cap (WP-131)', () => {
     const reply = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 50 }, 'raise-2');
     expect(reply.status).toBe(409);
     expect(reply.body.error?.code).toBe('budget_not_raised');
+    expect(world.actions).toEqual([]);
+  });
+
+  /**
+   * S-28.1 (M28 ruling 2): AUT-6655's raises — 51, 52, 53, 54 against a minimum of 50.99 + nothing,
+   * here 50.5 — are refused through the real router with the minimum and its parts as `details`,
+   * and audited nowhere: the raise did not happen.
+   */
+  it('answers 409 budget_raise_insufficient with the minimum and its parts, and audits nothing', async () => {
+    world.role = 'maintainer';
+    world.throws = new TaskBudgetRaiseInsufficientError(50.5, {
+      stage: 'implementation',
+      spent_usd: 10.99,
+      held_usd: 0,
+      reserve_usd: 40,
+      cap_usd: 50,
+      required_cap_usd: 50.99,
+    });
+    const reply = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 50.5 }, 'raise-i1');
+    expect(reply.status).toBe(409);
+    expect(reply.body.error?.code).toBe('budget_raise_insufficient');
+    expect(reply.body.error?.details).toEqual([
+      { path: 'required_cap_usd', message: '50.99' },
+      { path: 'requested_cap_usd', message: '50.5' },
+      { path: 'stage', message: 'implementation' },
+      { path: 'spent_usd', message: '10.99' },
+      { path: 'held_usd', message: '0' },
+      { path: 'reserve_usd', message: '40' },
+      { path: 'cap_usd', message: '50' },
+    ]);
     expect(world.actions).toEqual([]);
   });
 

@@ -58,6 +58,7 @@ import {
   feedbackRecordSchema,
   jsonObjectSchema,
   knowledgeProposalRecordSchema,
+  pausedBudgetFiguresSchema,
   pausedBudgetScopeSchema,
   questionRecordSchema,
   taskOwnerSourceSchema,
@@ -486,6 +487,12 @@ export const taskPausedEvent = defineEvent('task.paused', {
    * the task page offers no raise for it.
    */
   budget_scope: pausedBudgetScopeSchema.optional(),
+  /**
+   * What the admission compared (S-28.1, M28 ruling 1): the spend, the hold, the run budget that did
+   * not fit, the cap, and the cap that would have admitted it. **Optional and additive**: a pause
+   * appended before it, and a pause whose cap's figures the platform does not know, carry none.
+   */
+  budget_figures: pausedBudgetFiguresSchema.optional(),
 });
 
 export const taskResumedEvent = defineEvent('task.resumed', {

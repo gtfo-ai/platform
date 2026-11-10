@@ -4,7 +4,7 @@
  * endpoint parsers read the record and the real client sends the two commands: the raise, with an
  * `Idempotency-Key`, and then the existing resume.
  */
-import type { TaskDetailResponse } from '@platform/contracts';
+import type { PausedBudgetFigures, TaskDetailResponse } from '@platform/contracts';
 import { cleanup, render, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,7 +32,21 @@ interface Shape {
   readonly pausedReason: 'budget' | 'manual' | null;
   readonly scope?: 'task' | 'project' | null;
   readonly canRaise?: boolean;
+  /** The pause's arithmetic (S-28.1); none for a pause recorded before it. */
+  readonly figures?: PausedBudgetFigures | null;
+  /** The raise's answer: accepted, or refused as too low (S-28.1, M28 ruling 2). */
+  readonly raise?: 'accepted' | 'insufficient';
 }
+
+/** AUT-6655's figures: $10.99 spent of a $50 cap, the next Implementation run reserving $40. */
+const AUT_6655: PausedBudgetFigures = {
+  stage: 'implementation',
+  spent_usd: 10.99,
+  held_usd: 0,
+  reserve_usd: 40,
+  cap_usd: 50,
+  required_cap_usd: 50.99,
+};
 
 const detail = (runs: never[], shape: Shape): TaskDetailResponse =>
   ({
@@ -61,6 +75,7 @@ const detail = (runs: never[], shape: Shape): TaskDetailResponse =>
       budget_cap_usd: 50,
       paused_reason: shape.pausedReason,
       paused_budget_scope: shape.scope ?? null,
+      paused_budget_figures: shape.figures ?? null,
       cost_estimated_usd: 0,
       estimate_usd: null,
       estimate_basis: null,
@@ -136,6 +151,27 @@ const open = (shape: Shape) => {
         body: JSON.parse(String(init.body ?? '{}')),
         key: headers.get('idempotency-key'),
       });
+      if (shape.raise === 'insufficient' && path === `/api/tasks/${TASK}/budget`) {
+        // The server's refusal of a raise the next run would still not fit under (S-28.1).
+        return json(
+          {
+            error: {
+              code: 'budget_raise_insufficient',
+              message: 'a cap of 50.5 USD cannot let this task continue',
+              details: [
+                { path: 'required_cap_usd', message: '50.99' },
+                { path: 'requested_cap_usd', message: '50.5' },
+                { path: 'stage', message: 'implementation' },
+                { path: 'spent_usd', message: '10.99' },
+                { path: 'held_usd', message: '0' },
+                { path: 'reserve_usd', message: '40' },
+                { path: 'cap_usd', message: '50' },
+              ],
+            },
+          },
+          409,
+        );
+      }
       return json({ task_id: TASK, state: 'active', current_stage: 'refinement', performed: true });
     }
     if (path === `/api/tasks/${TASK}`) return json(detail([], shape));
@@ -182,9 +218,9 @@ describe('raising a task’s cap (WP-131)', () => {
       (await view.findByRole('region', { name: 'Needs you' })).querySelector('[data-budget-reason]')
         ?.textContent,
     ).toBe(
-      'It has spent its cap of $50.00. Raise the cap and it resumes at the stage it stopped at.',
+      'Its next run did not fit under its cap of $50.00: what it has spent plus what that run may spend is above it. Raise the cap and it continues at the stage it stopped at; finished stages are not redone.',
     );
-    await user.click(await view.findByRole('button', { name: "Raise this task's cap…" }));
+    await user.click(await view.findByRole('button', { name: 'Raise the cap…' }));
     await waitFor(() => {
       expect(view.getByText("Raise this task's cap", { selector: 'button' })).toBeTruthy();
     });
@@ -218,10 +254,76 @@ describe('raising a task’s cap (WP-131)', () => {
       expect(view.container.textContent).toContain('Cost so far');
     });
     // Neither the header nor its menu — open, every case here can be cancelled — carries a raise.
-    expect(view.queryByRole('button', { name: "Raise this task's cap…" })).toBeNull();
+    expect(view.queryByRole('button', { name: 'Raise the cap…' })).toBeNull();
     await user.click(await view.findByRole('button', { name: 'Task actions' }));
     expect(await view.findByRole('menuitem', { name: 'Cancel task…' })).toBeTruthy();
-    expect(view.queryByRole('menuitem', { name: "Raise this task's cap…" })).toBeNull();
+    expect(view.queryByRole('menuitem', { name: 'Raise the cap…' })).toBeNull();
     expect(view.queryByText("Raise this task's cap")).toBeNull();
+  });
+});
+
+/**
+ * **The pause in numbers, and a raise that cannot help refused** (S-28.1, M28 rulings 2, 3 and 5) —
+ * AUT-6655: $10.99 spent of a $50.00 cap, the next Implementation run reserving up to $40.00. The
+ * page said "It has spent its cap of $50.00"; the owner raised to 51, 52, 53 and 54, each accepted
+ * and each paused again.
+ */
+describe('a budget pause says its arithmetic (S-28.1)', () => {
+  it('says what was spent, what the next run reserves, by how much it would exceed the cap and the minimum', async () => {
+    const { view } = open({ pausedReason: 'budget', scope: 'task', figures: AUT_6655 });
+    const reason = (await view.findByRole('region', { name: 'Needs you' })).querySelector(
+      '[data-budget-reason]',
+    );
+    expect(reason?.textContent).toBe(
+      'Paused before starting Implementation: spent $10.99 of the $50.00 cap; the next run reserves up to $40.00, which would exceed the cap by $0.99. Raise the cap to at least $50.99 — the task then continues at Implementation; finished stages are not redone.',
+    );
+    // Never "spent its cap" for a task that has not.
+    expect(view.container.textContent).not.toContain('spent its cap');
+  });
+
+  it('pre-fills the minimum rounded up to a dollar, explains the reserve, and refuses less', async () => {
+    const user = userEvent.setup();
+    const { view, sent } = open({ pausedReason: 'budget', scope: 'task', figures: AUT_6655 });
+    await user.click(await view.findByRole('button', { name: 'Raise the cap…' }));
+    const field = (await view.findByLabelText('New cap (USD)')) as HTMLInputElement;
+    expect(field.value).toBe('51');
+    expect(view.baseElement.querySelector('[data-raise-explanation]')?.textContent).toBe(
+      'Spent $10.99. The next Implementation run reserves up to $40.00 — a ceiling, not spend: unused reserve is returned. The cap must be at least $50.99 for the task to continue.',
+    );
+    const button = view.getByText("Raise this task's cap", {
+      selector: 'button',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    // A figure above the cap in force but below the minimum is not sent: it would pause again.
+    await user.clear(field);
+    await user.type(field, '50.5');
+    expect(button.disabled).toBe(true);
+    await user.clear(field);
+    await user.type(field, '50.99');
+    expect(button.disabled).toBe(false);
+    await user.click(button);
+    await waitFor(() => {
+      expect(sent.map((entry) => entry.path)).toEqual([
+        `/api/tasks/${TASK}/budget`,
+        `/api/tasks/${TASK}/resume`,
+      ]);
+    });
+    expect(sent[0]?.body).toEqual({ cap_usd: 50.99 });
+  });
+
+  it('shows the server’s refusal in the dialog and resumes nothing (M28 ruling 5)', async () => {
+    const user = userEvent.setup();
+    // A pause recorded before its figures: the dialog cannot know the minimum, so the server says it.
+    const { view, sent } = open({ pausedReason: 'budget', scope: 'task', raise: 'insufficient' });
+    await user.click(await view.findByRole('button', { name: 'Raise the cap…' }));
+    await user.type(await view.findByLabelText('New cap (USD)'), '50.5');
+    await user.click(view.getByText("Raise this task's cap", { selector: 'button' }));
+    await waitFor(() => {
+      expect(view.baseElement.textContent).toContain(
+        'That cap is too low for the task to continue. It has spent $10.99 and the next Implementation run reserves up to $40.00 (a ceiling, not spend). Enter at least $50.99.',
+      );
+    });
+    // The raise was refused, so the resume was never sent.
+    expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/budget`]);
   });
 });

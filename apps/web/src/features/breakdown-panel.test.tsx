@@ -56,6 +56,7 @@ const TASK_DETAIL: TaskDetailResponse = {
     budget_cap_usd: 50,
     paused_reason: null,
     paused_budget_scope: null,
+    paused_budget_figures: null,
     cost_estimated_usd: 0,
     estimate_usd: null,
     estimate_basis: null,

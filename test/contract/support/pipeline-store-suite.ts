@@ -2077,6 +2077,93 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * S-28.1 (M28 ruling 4): a resume re-enters a paused attempt in place only when it has **no**
+       * run, and moves the open row's entry instant; a closed row is never re-opened.
+       */
+      it('counts an attempt’s runs, and re-enters an open row only (S-28.1)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const stage = 'implementation' as Slug;
+        expect(await store.tasks.stageAttemptRuns(tx, stored.task.id, stage, 1)).toBe(0);
+        expect(
+          await store.tasks.reenterOpenStage(tx, {
+            taskId: stored.task.id,
+            stage,
+            attempt: 1,
+            causedByEventId: null,
+          }),
+        ).toBe(false);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage,
+          attempt: 1,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.stageAttemptRuns(tx, stored.task.id, stage, 1)).toBe(0);
+        expect(
+          await store.tasks.reenterOpenStage(tx, {
+            taskId: stored.task.id,
+            stage,
+            attempt: 1,
+            causedByEventId: null,
+          }),
+        ).toBe(true);
+        expect((await store.tasks.stageAttemptEntry(tx, stored.task.id, stage, 1))?.open).toBe(
+          true,
+        );
+        await store.runs.insert(tx, {
+          id: nextId(),
+          taskId: stored.task.id,
+          projectId,
+          stage,
+          role: 'developer',
+          mode: 'normal',
+          attempt: 1,
+          model: 'claude-opus-5',
+          effort: 'medium',
+          promptVersion: 'basic@1+developer',
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
+          contextPack: null,
+          settings: null,
+          reserveUsd: null,
+          promptsWithheld: null,
+          providerMode: 'api',
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: '2026-06-01T09:00:00.000Z',
+          startedAt: null,
+        });
+        // Any run counts, a cancelled one that never started included; another attempt has none.
+        expect(await store.tasks.stageAttemptRuns(tx, stored.task.id, stage, 1)).toBe(1);
+        expect(await store.tasks.stageAttemptRuns(tx, stored.task.id, stage, 2)).toBe(0);
+        await store.tasks.closeOpenStage(tx, {
+          taskId: stored.task.id,
+          stage,
+          attempt: 1,
+          outcome: 'escalated',
+          reason: 'stopped for a person',
+        });
+        expect(
+          await store.tasks.reenterOpenStage(tx, {
+            taskId: stored.task.id,
+            stage,
+            attempt: 1,
+            causedByEventId: null,
+          }),
+        ).toBe(false);
+        expect((await store.tasks.stageAttemptEntry(tx, stored.task.id, stage, 1))?.open).toBe(
+          false,
+        );
+      });
+
+      /**
        * Backlog 1078: `ci_pending_read` has one writer, which writes **only an open row**, and a
        * closed attempt keeps its last read for the next attempt's first read to compare with.
        */
