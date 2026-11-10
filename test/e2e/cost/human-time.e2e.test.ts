@@ -203,6 +203,16 @@ describe('human time, from events this instance really produced', () => {
       )[0]?.review_threads ?? null;
     const discussionReads = () =>
       pipeline.gitCalls().filter((call) => call.method === 'listDiscussions').length;
+    // Since S-28.3 every Developer run owes `conversation_replies`, which reads the discussions
+    // too (its still-open pass); the per-signal read count below is about the refresh alone, so
+    // the outbound queue is drained first (rule 87: bind the wait to what the count reads).
+    await pipeline.waitFor('no outbound duty owed', async () => {
+      const rows = await pipeline.query<{ owed: number }>(
+        `select count(*)::int as owed from pgboss.job
+          where name = 'pipeline.outbound' and state in ('created', 'retry', 'active')`,
+      );
+      return rows[0]?.owed === 0;
+    });
     let resolvedSoFar = 0;
     for (const author of ['ada', 'grace']) {
       const thread = pipeline.git.addHumanDiscussion({

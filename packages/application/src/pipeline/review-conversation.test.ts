@@ -883,7 +883,9 @@ describe('(3) the replies', () => {
     const w = await replied();
     const words = [...mergeRequestWords(w.discussions), ...ticketCommentWords(w.comments)];
     const platform = words.filter((word) => word.text.includes('agentic:reply:'));
-    expect(platform).toHaveLength(4);
+    // Four replies were posted; the person's thread the fixed reply answered is resolved since
+    // S-28.3 (M28 ruling R3), and the window reads no resolved discussion — so three are read.
+    expect(platform).toHaveLength(3);
     const decision = humanReturnDecision({
       stage: 'ready_for_merge',
       slots: { lifecycle: {}, pickUpFrom: null },
@@ -1270,7 +1272,7 @@ describe('(R3) resolving a person’s thread after the Developer’s reply', () 
     const w = await world({
       resolveUnsupported: true,
       discussions: [personThread('p-fixed')],
-      artifacts: [notesArtifact([kinds[0]])],
+      artifacts: [notesArtifact(kinds.slice(0, 1))],
     });
     await w.replies();
     expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['p-fixed']);
@@ -1290,7 +1292,7 @@ describe('(R3) resolving a person’s thread after the Developer’s reply', () 
         { ...note(PERSON, 'And the footer too.'), created_at: '2026-06-01T09:30:00.000Z' },
       ],
     };
-    const w = await world({ discussions: [thread], artifacts: [notesArtifact([kinds[0]])] });
+    const w = await world({ discussions: [thread], artifacts: [notesArtifact(kinds.slice(0, 1))] });
     await w.replies();
     expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['p-fixed']);
     expect(w.recorded.resolved).toEqual([]);
@@ -1304,7 +1306,7 @@ describe('(R3) resolving a person’s thread after the Developer’s reply', () 
     const w = await world({
       liveHead: HEAD,
       discussions: [personThread('p-fixed')],
-      artifacts: [notesArtifact([kinds[0]])],
+      artifacts: [notesArtifact(kinds.slice(0, 1))],
     });
     await w.replies();
     expect(w.recorded.resolved).toEqual([]);
@@ -1348,7 +1350,7 @@ describe('(R3) resolving a person’s thread after the Developer’s reply', () 
   it('tells a person’s open thread the run did not answer that it is still open, once', async () => {
     const w = await world({
       discussions: [personThread('p-fixed'), personThread('p-silent')],
-      artifacts: [notesArtifact([kinds[0]])],
+      artifacts: [notesArtifact(kinds.slice(0, 1))],
     });
     await w.replies();
     await w.replies();
