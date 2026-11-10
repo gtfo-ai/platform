@@ -46,3 +46,60 @@ export const readyBlockedWords = (
   requires: `. If this project requires pipelines to succeed, ${provider} won’t merge it until`,
   start: count === 1 ? `has run: start it on ${provider}.` : `have run: start them on ${provider}.`,
 });
+
+/** A manual job's three choices in `pipeline.ci.manual_jobs` (S-28.7), as the settings card says them. */
+export const MANUAL_JOB_MODE_LABEL = {
+  run: 'Start it automatically',
+  wait: 'Wait for a person',
+  ignore: 'Don’t run, don’t wait',
+} as const;
+
+/** What each choice does, under its label. */
+export const MANUAL_JOB_MODE_HINT = {
+  run: 'The platform starts it when the pipeline holds it, and its result counts: if it fails, CI fails.',
+  wait: 'A person starts it in the git host; CI waits for it, and its result counts.',
+  ignore:
+    'Never started and never counted, even when the git host shows the pipeline blocked at it.',
+} as const;
+
+/**
+ * **What the platform did about a job set to run** (S-28.7), around the job's name the caller
+ * renders as untrusted text; `provider` is the provider's display name.
+ *  - started, while CI waits: *Started build_composer for you — waiting for its result.*
+ *  - started, afterwards: *The platform started build_composer for you.*
+ *  - refused: *Could not start codeception: the platform's GitLab account may not run it. Start it in
+ *    GitLab, or give the account permission.*
+ *  - unsupported: *Could not start codeception: this GitLab connection cannot start manual jobs.
+ *    Start it in GitLab.*
+ */
+export const manualStartedWords = (
+  outcome: 'started' | 'refused' | 'unsupported',
+  provider: string,
+  waiting: boolean,
+): { readonly lead: string; readonly tail: string } => {
+  switch (outcome) {
+    case 'started':
+      return waiting
+        ? { lead: 'Started', tail: 'for you — waiting for its result.' }
+        : { lead: 'The platform started', tail: 'for you.' };
+    case 'refused':
+      return {
+        lead: 'Could not start',
+        tail: `: ${provider === 'the git provider' ? 'the platform’s account on the git provider' : `the platform’s ${provider} account`} may not run it. Start it in ${provider}, or give the account permission.`,
+      };
+    case 'unsupported':
+      return {
+        lead: 'Could not start',
+        tail: `: this ${provider} connection cannot start manual jobs. Start it in ${provider}.`,
+      };
+  }
+};
+
+/** *nette-tester is manual and not set to run — not run, not counted.* (S-28.7) */
+export const MANUAL_NOT_SET_TAIL = 'is manual and not set to run — not run, not counted.';
+
+/** The link a wait on a person offers when the held job has no choice yet (S-28.7). */
+export const START_NEXT_TIME = 'Have the platform start it next time';
+
+/** The settings card's anchor, which *Have the platform start it next time* links to (S-28.7). */
+export const MANUAL_CI_JOBS_ANCHOR = 'manual-ci-jobs';

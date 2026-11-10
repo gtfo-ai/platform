@@ -39,8 +39,10 @@ import { Badge, Card, ErrorReason, formatMinutes, formatUsd, Metric } from '../u
 import { type Status, StatusIcon } from '../ui/status.js';
 import { Tooltip } from '../ui/tooltip.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
-import { ManualNotRunLinks, ManualNotRunValue } from './ci-manual-not-run.js';
+import { ManualNotRunLinks, ManualNotRunValue, ManualNotSet } from './ci-manual-not-run.js';
+import { ManualStartedLines } from './ci-manual-started.js';
 import { unmeasuredRunsText } from './cost-text.js';
+import { providerName } from './gate-wait.js';
 import {
   CRITERION_STATUS,
   checklistsAppliedLines,
@@ -310,6 +312,7 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
     ciGate?.state === 'completed' && ciValue === 'green'
       ? (detail.ci_manual_not_run ?? null)
       : null;
+  const started = detail.ci_manual_started ?? null;
   const rebaseGate = latestStageRow(stages, 'rebase_gate');
   const openQuestions = questions.filter((question) => question.status === 'open').length;
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending').length;
@@ -323,11 +326,26 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
         "The CI check's verdict on the merge request's latest commit, from the git host's own pipeline; when it needs you, it says why it could not decide.",
       // The jobs' pages are linked here, in the basis, never inside the row's `<summary>`.
       basis:
-        notRun === null ? (
+        notRun === null && started === null ? (
           gateBasisText(ciGate, 'ci_gate')
         ) : (
           <>
-            {gateBasisText(ciGate, 'ci_gate')} <ManualNotRunLinks notRun={notRun} />
+            {gateBasisText(ciGate, 'ci_gate')}
+            {/* S-28.7: what the platform started for the project, and what it left alone. */}
+            {started === null ? null : (
+              <ManualStartedLines
+                started={started}
+                provider={providerName(detail.task.mr_ref?.provider ?? null)}
+                waiting={ciGate?.state === 'running'}
+                inline
+              />
+            )}
+            {notRun === null ? null : (
+              <>
+                {' '}
+                <ManualNotRunLinks notRun={notRun} /> <ManualNotSet notRun={notRun} />
+              </>
+            )}
           </>
         ),
       required: true,

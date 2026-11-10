@@ -628,6 +628,52 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     expect(checking.text()).not.toContain('was not run');
   });
 
+  /**
+   * S-28.7: the CI row says what the platform started for the project, what it could not start
+   * (TD-036's 2026-11-10 amendment decision 5), and what it left alone and did not count.
+   */
+  it('says the jobs the platform started, could not start, and left alone (S-28.7)', async () => {
+    const view = await render$(
+      detailWith({
+        stages: [stage('ci_gate', 1, 'completed', 'protected_paths_clean')],
+        artifacts: [],
+        ci_manual_not_run: {
+          pipeline_id: '907',
+          pipeline_url: null,
+          pipeline_status: 'manual' as const,
+          jobs: [{ name: 'nette-tester', stage: 'test_optional', url: null }],
+          checked_at: '2026-09-12T10:00:00.000Z',
+        },
+        ci_manual_started: [
+          {
+            job_id: '9071',
+            pipeline_id: '907',
+            name: 'build_composer',
+            url: null,
+            at: '2026-09-12T09:50:00.000Z',
+            outcome: 'started' as const,
+          },
+          {
+            job_id: '9074',
+            pipeline_id: '907',
+            name: 'codeception',
+            url: null,
+            at: '2026-09-12T09:55:00.000Z',
+            outcome: 'refused' as const,
+          },
+        ],
+      }),
+    );
+    await waitFor(() => expect(view.text()).toContain('CI status'));
+    expect(view.text()).toContain('The platform started build_composer for you.');
+    expect(view.text()).toContain(
+      'Could not start codeception: the platform’s account on the git provider may not run it.',
+    );
+    expect(view.text()).toContain(
+      'nette-tester is manual and not set to run — not run, not counted.',
+    );
+  });
+
   it('does not call an escalated gate a person sent the task back from red (backlog 483)', async () => {
     const view = await render$(
       detailWith({ stages: [stage('ci_gate', 1, 'returned', 'escalated')], artifacts: [] }),

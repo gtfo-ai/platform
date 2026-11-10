@@ -549,6 +549,8 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
     'Budgets',
     'Notifications',
     'Who changed what',
+    // S-28.7: which manual CI jobs the platform starts, waits for, or leaves alone.
+    'Manual CI jobs',
   ]) {
     await expect(section.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }

@@ -16,7 +16,11 @@
 import type { CiManualNotRun, TaskDetailResponse } from '@platform/contracts';
 import { Fragment, type ReactElement } from 'react';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
-import { manualNotRunWords, readyBlockedWords } from '../ui/words/ci-manual-jobs.js';
+import {
+  MANUAL_NOT_SET_TAIL,
+  manualNotRunWords,
+  readyBlockedWords,
+} from '../ui/words/ci-manual-jobs.js';
 import { providerName } from './gate-wait.js';
 
 const LINK = 'text-link underline';
@@ -112,3 +116,18 @@ export const ReadyBlockedNotice = ({
     </p>
   );
 };
+
+/**
+ * S-28.7: *nette-tester is manual and not set to run — not run, not counted.* — one sentence per job
+ * the pass left unstarted, so the Checks row says why a held job did not count.
+ */
+export const ManualNotSet = ({ notRun }: { readonly notRun: CiManualNotRun }): ReactElement => (
+  <span data-ci-manual-not-set="">
+    {notRun.jobs.map((job, index) => (
+      <Fragment key={`${job.name}:${String(index)}`}>
+        {index === 0 ? null : ' '}
+        <UntrustedText value={job.name} /> {MANUAL_NOT_SET_TAIL}
+      </Fragment>
+    ))}
+  </span>
+);

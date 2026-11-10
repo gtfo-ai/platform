@@ -982,6 +982,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/projects/${fixtures.IDS.project}/ticket-statuses`]: fixtures.ticketStatuses,
         // S-28.5: the tickets intake skipped (none here), read beside the lifecycle form.
         [`/api/projects/${fixtures.IDS.project}/skipped-tickets`]: { items: [] },
+        // S-28.7: the manual CI jobs seen in recent task pipelines, for the Rules & limits card.
+        [`/api/projects/${fixtures.IDS.project}/ci/manual-jobs`]: fixtures.manualJobsSeen,
         // S-26.8b's follow-up: the people *Assign…* offers (the fake ignores `?task_id=`).
         [`/api/projects/${fixtures.IDS.project}/owner-candidates`]: fixtures.ownerCandidates,
         '/api/org/budgets': fixtures.orgBudgets,

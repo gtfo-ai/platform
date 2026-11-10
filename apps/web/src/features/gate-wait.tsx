@@ -30,10 +30,11 @@
  * The words live here rather than in `ui/humanize.ts`, which the remote worker's page imports too
  * (BACKLOG 1299): this module is the task page's only, so its sentences cost that page nothing.
  */
-import type { GateWait, TaskState, TaskStop } from '@platform/contracts';
+import type { CiManualStarted, GateWait, TaskState, TaskStop } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement, ReactNode } from 'react';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { ManualStartedLines, StartNextTime } from './ci-manual-started.js';
 import { ciHeldSentence } from './gate-wait-words.js';
 
 /** The provider's display name; one this build does not name is said generically. */
@@ -196,6 +197,7 @@ export const GateWaitNotice = ({
   provider,
   projectKey,
   nowMs,
+  started = null,
 }: {
   readonly wait: GateWait;
   /** The merge request's provider id (`gitlab`), for "in GitLab". */
@@ -203,25 +205,49 @@ export const GateWaitNotice = ({
   /** The board's key, when the page has it: the draft note's link. */
   readonly projectKey: string | null;
   readonly nowMs?: number;
+  /**
+   * S-28.7: what the platform did on this attempt about the jobs the project set to run
+   * (`ci_manual_started`); the lines for this pipeline are said under the wait.
+   */
+  readonly started?: CiManualStarted | null;
 }): ReactElement => {
+  const here = (started ?? []).filter((entry) => entry.pipeline_id === wait.pipeline_id);
+  const lines =
+    here.length === 0 ? null : (
+      <ManualStartedLines
+        started={here as CiManualStarted}
+        provider={providerName(provider)}
+        waiting
+      />
+    );
   if (gateWaitHeld(wait)) {
+    // S-28.7: a person is waited for at a job the platform did not start — offer to change that.
+    const startedByPlatform =
+      wait.held_job !== null && here.some((entry) => entry.name === wait.held_job);
     return (
       <div data-gate-wait="held" className="flex flex-col gap-1">
         <p data-gate-wait-sentence="">
           CI is waiting for someone to start <HeldJob wait={wait} /> in {providerName(provider)}.
           Start it there and the task continues.
         </p>
+        {lines}
         <p className="text-xs text-fg-muted" data-gate-wait-time="">
           <PipelineName wait={wait} capital /> · {gateWaitTime(wait, nowMs)}.
         </p>
+        {projectKey !== null && !startedByPlatform ? (
+          <StartNextTime projectKey={projectKey} />
+        ) : null}
         {wait.draft ? <DraftNote projectKey={projectKey} /> : null}
       </div>
     );
   }
   return (
-    <p data-gate-wait="running">
-      CI is {runningWord(wait)} (<PipelineName wait={wait} />, {gateWaitTime(wait, nowMs)}).
-    </p>
+    <div data-gate-wait="running" className="flex flex-col gap-1">
+      <p>
+        CI is {runningWord(wait)} (<PipelineName wait={wait} />, {gateWaitTime(wait, nowMs)}).
+      </p>
+      {lines}
+    </div>
   );
 };
 

@@ -74,6 +74,7 @@ import {
   kbHealthResponseSchema,
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
+  manualJobsSeenResponseSchema,
   myIdentityListSchema,
   myTaskLimitResponseSchema,
   orgAuditResponseSchema,
@@ -447,6 +448,14 @@ export interface Endpoints {
   readonly skippedTickets: (
     projectId: string,
   ) => Promise<z.output<typeof skippedTicketsResponseSchema>>;
+  /**
+   * `GET /api/projects/:id/ci/manual-jobs` — the manual CI jobs seen in the project's recent task
+   * pipelines (S-28.7), what the *Manual CI jobs* card offers a choice for. A maintainer's read:
+   * `409 no_git_binding` without a git host, `503 manual_jobs_unavailable` when it cannot be read.
+   */
+  readonly manualJobsSeen: (
+    projectId: string,
+  ) => Promise<z.output<typeof manualJobsSeenResponseSchema>>;
   /**
    * `GET /api/projects/:id/owner-candidates?task_id=` — the people *Assign…* offers (S-26.1's
    * follow-up, S-26.8b's picker): exactly those the owner command accepts, by name, each with
@@ -995,6 +1004,10 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     skippedTickets: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/skipped-tickets`, {
         schema: skippedTicketsResponseSchema,
+      }),
+    manualJobsSeen: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/ci/manual-jobs`, {
+        schema: manualJobsSeenResponseSchema,
       }),
     ownerCandidates: (projectId, taskId) =>
       client.get(`/api/projects/${seg(projectId)}/owner-candidates`, {

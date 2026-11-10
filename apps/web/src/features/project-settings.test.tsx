@@ -134,6 +134,8 @@ const fetchFor = (
     readonly onPost?: (url: string, body: unknown, headers: Headers) => Response | undefined;
     /** WP-91: fields of `GET …/config` a test replaces (the WIP limits, a last export). */
     readonly config?: Record<string, unknown>;
+    /** S-28.7: `GET …/ci/manual-jobs`'s answer. @default no pipeline read yet. */
+    readonly manualJobs?: Record<string, unknown>;
   } = {},
 ) =>
   (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -151,6 +153,11 @@ const fetchFor = (
       return json({ items: options.bindings ?? [] });
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
+    if (url.includes('/ci/manual-jobs')) {
+      return json(
+        options.manualJobs ?? { jobs: [], names_seen: [], heads_read: 0, heads_unread: 0 },
+      );
+    }
     if (url.includes('/autonomy')) return json(autonomy(dial));
     if (url.includes('/audit')) return json(AUDIT);
     if (url.includes('/budgets')) return json({ items: [] });
@@ -1096,5 +1103,165 @@ describe('the project budgets’ one Save', () => {
     expect(document.querySelector('[data-budget-window="week"]')?.textContent).not.toContain(
       'was not saved',
     );
+  });
+});
+
+/**
+ * S-28.7 (TD-036's 2026-11-10 amendment): the *Manual CI jobs* card — the jobs seen in recent
+ * pipelines with a three-way choice, a typed name flagged when no pipeline has it, a trigger job's
+ * *Start it automatically* refused, and the repository file's refused `run` said.
+ */
+describe('the manual CI jobs card (S-28.7)', () => {
+  const SEEN = {
+    jobs: [
+      {
+        name: 'build_composer',
+        stage: 'build-deps',
+        blocking: true,
+        trigger: false,
+        deploy_like: false,
+        seen_in: 3,
+      },
+      {
+        name: 'nette-tester',
+        stage: 'test_optional',
+        blocking: false,
+        trigger: false,
+        deploy_like: false,
+        seen_in: 2,
+      },
+      {
+        name: 'deploy:tenants:hetzner',
+        stage: 'deploy',
+        blocking: false,
+        trigger: true,
+        deploy_like: true,
+        seen_in: 1,
+      },
+    ],
+    names_seen: ['build_composer', 'deploy:tenants:hetzner', 'nette-tester', 'phpstan'],
+    heads_read: 3,
+    heads_unread: 0,
+  };
+
+  const card = async () => {
+    const heading = await screen.findByRole('heading', { name: 'Manual CI jobs' });
+    return heading.closest('section, div.flex') as HTMLElement;
+  };
+
+  it('offers a three-way choice per seen job and saves it as pipeline.ci.manual_jobs', async () => {
+    const puts: { url: string; body: unknown }[] = [];
+    render(
+      createApp({
+        fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (init?.method === 'PUT' && url.endsWith('/config')) {
+            puts.push({ url, body: JSON.parse(String(init.body)) });
+            return json({ hash: 'cafebabe', autonomy_level: 'supervised', not_applied: [] });
+          }
+          return fetchFor(
+            {},
+            {
+              manualJobs: SEEN,
+              config: {
+                config: {
+                  version: 1,
+                  pipeline: { ci: { required_manual_jobs: ['build_composer'] } },
+                },
+              },
+            },
+          )(input, init);
+        }) as typeof fetch,
+        realtime: false,
+      }).element,
+    );
+    await card();
+    const build = await screen.findByRole('group', { name: /build_composer/ });
+    expect(within(build).getByText('blocks the pipeline')).toBeTruthy();
+    for (const label of ['Start it automatically', 'Wait for a person', 'Don’t run, don’t wait']) {
+      expect(within(build).getByRole('radio', { name: new RegExp(label) })).toBeTruthy();
+    }
+    expect(
+      within(await screen.findByRole('group', { name: /nette-tester/ })).getByText('optional'),
+    ).toBeTruthy();
+    await userEvent.click(within(build).getByRole('radio', { name: /Start it automatically/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save manual job choices' }));
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    const sent = puts.find((put) => put.url.endsWith('/config'))?.body as {
+      config: { pipeline: { ci: Record<string, unknown> } };
+      base_hash: string;
+    };
+    expect(sent.config.pipeline.ci).toEqual({
+      // A name the list said `wait` for leaves the list when it is chosen to start.
+      required_manual_jobs: [],
+      manual_jobs: { build_composer: 'run' },
+    });
+    expect(sent.base_hash).toBe('deadbeef');
+  });
+
+  it('refuses Start it automatically for a trigger job, saying a person starts it', async () => {
+    render(createApp({ fetchImpl: fetchFor({}, { manualJobs: SEEN }), realtime: false }).element);
+    const trigger = await screen.findByRole('group', { name: /deploy:tenants:hetzner/ });
+    expect(
+      (within(trigger).getByRole('radio', { name: /Start it automatically/ }) as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      within(trigger).getByText(
+        /trigger jobs can’t be started by the platform — a person starts them/,
+      ),
+    ).toBeTruthy();
+    expect(within(trigger).getByText('looks like a deployment')).toBeTruthy();
+  });
+
+  it('flags a typed name no recent pipeline has, and says the draft rule', async () => {
+    render(createApp({ fetchImpl: fetchFor({}, { manualJobs: SEEN }), realtime: false }).element);
+    await card();
+    expect(
+      screen.getByText(
+        /the platform keeps it a draft until the task is ready, so choose which held jobs it should start itself/,
+      ),
+    ).toBeTruthy();
+    await userEvent.type(
+      screen.getByRole('textbox', { name: /A job not listed yet/ }),
+      'codecepton',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Add job' }));
+    const typed = await screen.findByRole('group', { name: /codecepton/ });
+    expect(within(typed).getByText(/never seen in a pipeline/)).toBeTruthy();
+    // A seen name is not flagged.
+    const seen = screen.getByRole('group', { name: /build_composer/ });
+    expect(within(seen).queryByText(/never seen in a pipeline/)).toBeNull();
+  });
+
+  it('says what the repository file asked for and was not applied', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            manualJobs: SEEN,
+            config: {
+              not_applied: [
+                {
+                  key: 'pipeline.ci.manual_jobs.codeception',
+                  reason: 'only the project settings may tell the platform to start a manual job',
+                },
+              ],
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    await card();
+    expect(
+      await screen.findByText(
+        /only the project settings may tell the platform to start a manual job/,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/the repository’s settings file may only add Wait for a person/),
+    ).toBeTruthy();
   });
 });

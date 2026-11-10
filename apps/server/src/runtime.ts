@@ -107,6 +107,7 @@ import {
   createOrganisationAccountCredentials,
 } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
+import { createManualJobsSeenReader } from './manual-jobs-seen.js';
 import { createMetrics, type Metrics } from './metrics.js';
 import {
   composeOnboardingRecording,
@@ -127,6 +128,7 @@ import { serverClaimantRunning } from './queries/execution-queries.js';
 import { countStaleCommandClaims } from './queries/idempotency-queries.js';
 import { readLiveEvents } from './queries/live-event-queries.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
+import { findRecentTaskHeads } from './queries/project-queries.js';
 import { anySignInRecorded, recordFirstSignIn } from './queries/setup-state-queries.js';
 import { createPostgresWorkerStore } from './queries/worker-queries.js';
 import { createReadinessCheck } from './readiness.js';
@@ -1084,6 +1086,24 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         : null;
 
     /**
+     * The manual CI jobs seen in a project's recent task pipelines (S-28.7): the same executor and
+     * project-integrations port as the statuses read, and the same refusal by name without a stack.
+     */
+    const manualJobsSeen =
+      capabilities.api && stack !== null
+        ? createManualJobsSeenReader({
+            integrations: createProjectIntegrationsPort({
+              pool: database.pool,
+              secretKey: config.secretKey,
+              stack,
+            }),
+            recentHeads: async (projectId, limit) =>
+              findRecentTaskHeads(database.db, projectId, limit),
+            logger: loggerPort,
+          })
+        : null;
+
+    /**
      * A person's own account link (S-26.6): every process that serves the API composes it; the
      * *I wrote it on …* read goes through the process's one executor, and an API process with no
      * integration stack answers that one route by name.
@@ -1388,6 +1408,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       taskStart,
       projectConfig,
       ticketStatuses,
+      manualJobsSeen,
       identityLinks,
       shadowGate,
       // WP-157 (a): one broken organisation chat account, named once on the integration list.

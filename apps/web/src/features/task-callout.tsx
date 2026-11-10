@@ -491,6 +491,7 @@ const CalloutSlot = ({
               provider={provider}
               projectKey={projectKey}
               nowMs={nowMs}
+              started={detail.ci_manual_started ?? null}
             />
           </Flash>
         </section>
@@ -595,6 +596,7 @@ const CalloutSlot = ({
               provider={provider}
               projectKey={projectKey}
               nowMs={nowMs}
+              started={detail.ci_manual_started ?? null}
             />
           ) : null}
           {heldElsewhere ? (

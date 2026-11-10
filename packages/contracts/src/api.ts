@@ -1881,6 +1881,49 @@ export const ciManualStartedSchema = z
 export type CiManualStarted = z.infer<typeof ciManualStartedSchema>;
 export type CiManualStartedJob = CiManualStarted[number];
 
+/** How many recent task heads `GET …/ci/manual-jobs` reads (S-28.7). */
+export const MAX_MANUAL_JOBS_SEEN_HEADS = 5;
+/** The most manual jobs that read lists, and the most job names it reports as seen (S-28.7). */
+export const MAX_MANUAL_JOBS_SEEN = 100;
+export const MAX_JOB_NAMES_SEEN = 500;
+
+/**
+ * **The manual CI jobs seen in this project's recent task pipelines** (S-28.7, the M28 ruling) —
+ * `GET /api/projects/:project_id/ci/manual-jobs`, what the *Manual CI jobs* settings card offers a
+ * choice for. Read from the latest pipeline of at most {@link MAX_MANUAL_JOBS_SEEN_HEADS} recent
+ * task heads, through `IntegrationActionExecutor`; cached briefly per project.
+ *
+ * Every string is the **provider's** text (BD-022), redacted by the git binding's redactor and cut
+ * at {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; a reader renders it as untrusted text.
+ *  - `jobs` — each job seen at `manual` in any of those pipelines, once by name: its `stage`,
+ *    whether it **blocks** the pipeline (`allow_failure: false`), whether it is a **trigger** job
+ *    (the platform never starts one), whether its name or stage reads like a deployment
+ *    (`deploy_like`, a hint only), and in how many of the pipelines read it was seen;
+ *  - `names_seen` — every job name seen in those pipelines, whatever its status, so a choice for a
+ *    name no pipeline has can be flagged as never seen;
+ *  - `heads_read` / `heads_unread` — how many heads answered, and how many could not be read.
+ */
+export const manualJobsSeenResponseSchema = z.strictObject({
+  jobs: z
+    .array(
+      z.strictObject({
+        name: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS),
+        stage: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS).nullable(),
+        blocking: z.boolean(),
+        trigger: z.boolean(),
+        deploy_like: z.boolean(),
+        seen_in: z.int().positive(),
+      }),
+    )
+    .max(MAX_MANUAL_JOBS_SEEN),
+  names_seen: z
+    .array(nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS))
+    .max(MAX_JOB_NAMES_SEEN),
+  heads_read: z.int().nonnegative(),
+  heads_unread: z.int().nonnegative(),
+});
+export type ManualJobsSeenResponse = z.infer<typeof manualJobsSeenResponseSchema>;
+
 /** The most holding tasks {@link queueWaitSchema} lists; `holders.total` counts them all. */
 export const MAX_QUEUE_WAIT_HOLDERS = 10;
 
