@@ -902,7 +902,9 @@ export class TaskBudgetRaiseInsufficientError extends Error {
     super(
       `a cap of ${requestedCapUsd} USD cannot let this task continue: it has spent ` +
         `${figures.spent_usd} USD` +
-        (figures.held_usd > 0 ? `, holds ${figures.held_usd} USD for runs nobody measured` : '') +
+        (figures.held_usd > 0
+          ? `, holds ${figures.held_usd} USD for ${figures.held_runs} ${figures.held_runs === 1 ? 'run' : 'runs'} nobody measured`
+          : '') +
         ` and the next "${figures.stage}" run reserves up to ${figures.reserve_usd} USD, so the ` +
         `cap must be at least ${figures.required_cap_usd} USD`,
     );

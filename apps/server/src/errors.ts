@@ -235,6 +235,7 @@ export const commandRefusal = (
       { path: 'stage', message: figures.stage },
       { path: 'spent_usd', message: String(figures.spent_usd) },
       { path: 'held_usd', message: String(figures.held_usd) },
+      { path: 'held_runs', message: String(figures.held_runs) },
       { path: 'reserve_usd', message: String(figures.reserve_usd) },
       { path: 'cap_usd', message: String(figures.cap_usd) },
     ]);

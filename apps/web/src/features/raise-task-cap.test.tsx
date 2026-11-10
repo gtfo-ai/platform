@@ -43,6 +43,7 @@ const AUT_6655: PausedBudgetFigures = {
   stage: 'implementation',
   spent_usd: 10.99,
   held_usd: 0,
+  held_runs: 0,
   reserve_usd: 40,
   cap_usd: 50,
   required_cap_usd: 50.99,
@@ -164,6 +165,7 @@ const open = (shape: Shape) => {
                 { path: 'stage', message: 'implementation' },
                 { path: 'spent_usd', message: '10.99' },
                 { path: 'held_usd', message: '0' },
+                { path: 'held_runs', message: '0' },
                 { path: 'reserve_usd', message: '40' },
                 { path: 'cap_usd', message: '50' },
               ],
@@ -288,7 +290,7 @@ describe('a budget pause says its arithmetic (S-28.1)', () => {
     const field = (await view.findByLabelText('New cap (USD)')) as HTMLInputElement;
     expect(field.value).toBe('51');
     expect(view.baseElement.querySelector('[data-raise-explanation]')?.textContent).toBe(
-      'Spent $10.99. The next Implementation run reserves up to $40.00 — a ceiling, not spend: unused reserve is returned. The cap must be at least $50.99 for the task to continue.',
+      'Spent $10.99. The next Implementation run reserves up to $40.00 — a ceiling, not spend: unused reserve is returned. The cap must be at least $50.99 for the task to continue. A project that wants a smaller reserve lowers Implementation’s run budget in its configuration.',
     );
     const button = view.getByText("Raise this task's cap", {
       selector: 'button',

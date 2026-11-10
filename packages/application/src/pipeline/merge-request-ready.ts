@@ -28,12 +28,13 @@
  *     removes the draft prefix when it has one (a re-entry nothing drafted writes nothing). Every
  *     way into Ready is that event — the rebase gate's pass, a resume from a pause at Ready, the
  *     `ready_head_check` duty's entry — so each one is covered, keyed per entry.
- *  3. **`mr_draft`** — on `run.offered` for an **agent** stage of a task that has been at
+ *  3. **`mr_draft`** — on `run.claimed` for a run of an **agent** stage of a task that has been at
  *     `ready_for_merge` before (`stageAttempts.ready_for_merge ≥ 1`) — that is, once the stage's run
- *     is **admitted** (its budget passed and its offer written), never on the stage's entry
- *     (S-28.1, M28 ruling 6): AUT-6655's return to implementation drafted the merge request and then
- *     paused at the task cap, so the merge request read *Draft* while nothing ran. A task paused for
- *     its budget leaves the merge request as it was. An agent is about to change
+ *     is **admitted twice over**: its budget passed at the offer and again at the claim's re-check
+ *     (`claim-admission.ts`, whose refusal rolls the claim back, so no `run.claimed` is appended) —
+ *     never on the stage's entry (S-28.1, M28 ruling 6): AUT-6655's return to implementation drafted
+ *     the merge request and then paused at the task cap, so the merge request read *Draft* while
+ *     nothing ran. A task paused for its budget leaves the merge request as it was. An agent is about to change
  *     the merge request again (a reviewer's comments sent it back, the rebase gate's conflict
  *     resolution, a person's return), so it is put back to draft until the task is Ready again. A
  *     **gate** re-entry from Ready (a default-branch move re-checks the rebase gate, a person's push
@@ -121,14 +122,14 @@ const mergeRequestPipelineHandler = (options: PipelineSagaOptions): EventHandler
 });
 
 /**
- * `task.stage.entered` for Ready → `mr_ready`; `run.offered` for an agent stage after Ready →
- * `mr_draft` (S-28.1, M28 ruling 6: the run admitted, not the stage entered). One handler, because
- * both answers read the same loaded row.
+ * `task.stage.entered` for Ready → `mr_ready`; `run.claimed` for an agent stage's run after Ready →
+ * `mr_draft` (S-28.1, M28 ruling 6: the run admitted at the offer and at the claim, not the stage
+ * entered). One handler, because both answers read the same loaded row.
  */
 const mergeRequestDraftStateHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.merge-request.draft-state',
   priority: 120,
-  eventTypes: ['task.stage.entered', 'run.offered'],
+  eventTypes: ['task.stage.entered', 'run.claimed'],
   handle: async (context: HandlerContext) => {
     const event = context.event.event;
     if (event.type === 'task.stage.entered') {
@@ -141,22 +142,24 @@ const mergeRequestDraftStateHandler = (options: PipelineSagaOptions): EventHandl
       }
       return;
     }
-    if (event.type !== 'run.offered' || event.payload.kind !== 'stage') {
+    if (event.type !== 'run.claimed') {
       return;
     }
-    const offeredStage = event.payload.stage;
-    if (offeredStage === null) {
+    // The run's stage attempt, through its link; an ask's run belongs to no stage.
+    const run = await options.store.runs.load(context.scope.tx, event.payload.run_id);
+    const offeredStage = run?.stage ?? null;
+    if (run === null || offeredStage === null) {
       return;
     }
     const stored = await options.store.tasks.load(context.scope.tx, event.payload.task_id);
     if (stored === null || stored.mr === null) {
       return;
     }
-    // The offer of the attempt the task is on: a late dispatch for an attempt it has left drafts
+    // A run of the attempt the task is on: a late dispatch for an attempt it has left drafts
     // nothing, and the duty re-validates on fire that the task is still `active`.
     if (
       stored.task.currentStage !== offeredStage ||
-      stored.task.stageAttempts[offeredStage] !== event.payload.attempt
+      stored.task.stageAttempts[offeredStage] !== run.attempt
     ) {
       return;
     }

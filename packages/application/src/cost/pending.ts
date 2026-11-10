@@ -238,6 +238,8 @@ export interface BudgetFigureParts {
   readonly stage: Slug;
   readonly spentUsd: number;
   readonly heldUsd: number;
+  /** How many runs nobody measured are in {@link heldUsd} (BD-010 2026-11-10, decision 2). */
+  readonly heldRuns: number;
   readonly reserveUsd: number;
   readonly capUsd: number;
 }
@@ -255,6 +257,7 @@ export const budgetFiguresOf = (parts: BudgetFigureParts): PausedBudgetFigures =
   stage: parts.stage,
   spent_usd: parts.spentUsd,
   held_usd: parts.heldUsd,
+  held_runs: parts.heldRuns,
   reserve_usd: parts.reserveUsd,
   cap_usd: parts.capUsd,
   required_cap_usd: upToMicroDollars(parts.spentUsd + parts.heldUsd + parts.reserveUsd),
@@ -269,6 +272,7 @@ export const capAdmissionFigures = (admission: CapAdmission, stage: Slug): Pause
     stage,
     spentUsd: admission.spentUsd,
     heldUsd: admission.pendingUsd + admission.heldUsd,
+    heldRuns: admission.heldRuns,
     reserveUsd: admission.reserveUsd,
     capUsd: admission.capUsd,
   });

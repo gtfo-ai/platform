@@ -1507,7 +1507,8 @@ export const createPostgresPipelineStore = (
       // S-28.1: an open row only — a closed attempt is never re-opened by a resume in place.
       const result = await sqlOf(tx).query(
         `update task_stages
-            set entered_at = clock_timestamp(), caused_by_event_id = $4
+            set entered_at = clock_timestamp(),
+                caused_by_event_id = coalesce($4::uuid, caused_by_event_id)
           where task_id = $1 and stage = $2 and attempt = $3
             and state = 'running' and exited_at is null`,
         [entry.taskId, entry.stage, entry.attempt, entry.causedByEventId],

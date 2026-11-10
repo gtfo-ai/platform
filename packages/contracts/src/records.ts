@@ -321,6 +321,12 @@ export const pausedBudgetFiguresSchema = z.strictObject({
   stage: slugSchema,
   spent_usd: usdSchema,
   held_usd: usdSchema,
+  /**
+   * How many runs `held_usd` is for that **nobody measured** (BD-010's 2026-11-10 amendment, decision
+   * 2) — the *N* of *"held for N runs nobody measured"*. For a `budgets` row or a feature cap,
+   * `held_usd` also counts live runs the ledger has not recorded, which this count does not.
+   */
+  held_runs: z.int().nonnegative(),
   reserve_usd: usdSchema,
   cap_usd: usdSchema,
   required_cap_usd: usdSchema,

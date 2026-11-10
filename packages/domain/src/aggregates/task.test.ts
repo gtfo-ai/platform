@@ -497,6 +497,7 @@ describe('pause, escalate, take over, hand back', () => {
       stage: 'implementation',
       spent_usd: 10.99,
       held_usd: 0,
+      held_runs: 0,
       reserve_usd: 40,
       cap_usd: 50,
       required_cap_usd: 50.99,
