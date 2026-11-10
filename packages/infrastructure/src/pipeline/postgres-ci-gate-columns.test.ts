@@ -196,7 +196,9 @@ describe('ci_manual_started (S-28.7, migration 0113)', () => {
         { ...STARTED, job_id: 'build_composer' },
       ),
     ).rejects.toThrow();
-    expect(calls.filter((call) => call.text.includes('update'))).toEqual([]);
+    // Only the locking read was sent (`… for update`); no `update` statement.
+    expect(calls.filter((call) => call.text.trimStart().startsWith('update'))).toEqual([]);
+    expect(calls).toHaveLength(1);
     const corrupt = recording([{ ci_manual_started: [{ ...STARTED, extra: true }] }]);
     await expect(store().tasks.ciManualStartedOf(corrupt.tx, TASK, 'ci_gate', 2)).rejects.toThrow();
     const none = recording([{ ci_manual_started: null }]);
