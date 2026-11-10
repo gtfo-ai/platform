@@ -56,7 +56,7 @@ describe('budget pause words (S-28.1)', () => {
       false,
     );
     expect(sentence).toContain(
-      'spent $10.99 of the $50.00 cap, with $15.00 held for runs nobody measured;',
+      'spent $10.99 of the $50.00 cap, with $15.00 held for 1 run nobody measured;',
     );
     expect(sentence).toContain('which would exceed the cap by $15.99.');
     expect(sentence).toContain(

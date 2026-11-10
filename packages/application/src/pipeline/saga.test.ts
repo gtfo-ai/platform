@@ -4674,9 +4674,12 @@ describe('human merge-request comments (BD-007)', () => {
 
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
     expect(harness.types().filter((type) => type === 'task.stage.returned')).toHaveLength(1);
+    // Since S-28.1 (M28 ruling 6) the draft is decided on the implementation run's **claim**, not on
+    // the stage's entry; this harness drains the outbound queue after the run has settled, so the
+    // write lands while the task is already at the CI gate — still before Ready, which is the rule.
     expect(tracker.toggles).toEqual([
       { draft: false, stage: 'ready_for_merge' },
-      { draft: true, stage: 'implementation' },
+      { draft: true, stage: 'ci_gate' },
       { draft: false, stage: 'ready_for_merge' },
     ]);
   });
