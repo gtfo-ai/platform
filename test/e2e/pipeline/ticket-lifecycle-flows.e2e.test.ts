@@ -724,8 +724,16 @@ const expectReviewConversation = async (
     expect(reply.notes[0]?.body).toContain(`_In reply to note ${persons[0]?.notes[0]?.id ?? ''}._`);
   }
   for (const person of persons) {
-    // The person's word is answered by the run after the human return, not before.
-    expect(stepAt(log, 'reply', person.id)).toBeGreaterThan(runAt(log, 'implementation', 3));
+    // The person's word is answered by the run after the human return, not before. A *still
+    // open* note an earlier run's duty posted (S-28.3) is an earlier reply step on the same
+    // thread, so the answer is the thread's last reply.
+    const repliesToPerson = log.filter(
+      (step) => step.kind === 'reply' && step.detail === person.id,
+    ).length;
+    expect(repliesToPerson).toBe(1 + stillOpen.length);
+    expect(stepAt(log, 'reply', person.id, repliesToPerson - 1)).toBeGreaterThan(
+      runAt(log, 'implementation', 3),
+    );
   }
   const gitActions = pipeline.git.core.calls.map((call) => call.action);
   expect(gitActions.filter((action) => action === 'resolve_discussion')).toHaveLength(2);
