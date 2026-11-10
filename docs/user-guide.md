@@ -520,6 +520,27 @@ overrides **none** of the four: from the file they are *not applied* (step 6 bel
 marks the two that set nothing by themselves: `review_only` (the Review-only card is the switch) and
 `suggested_readiness_min`.
 
+**Low-risk plans go ahead without approval** (opt-in, *Settings → Rules & limits*, under the dial).
+Off by default. Switched on, a plan that would wait only because of its size or because the dial
+asks for every plan goes ahead with nobody asked when **both** hold: the platform
+finds none of the ticked risks in the plan itself — database migrations or stored data, sign-in or
+security code, payments, a public API, CI or infrastructure, new dependencies, more than ten files,
+protected files, a proposal to split the ticket, an unclear specification, or a sensitive area — and
+the agent's own assessment (which every plan now carries: how sure it is, how risky, the risks it
+names and the questions it left open) is inside three limits you choose: how risky a plan may be
+(default *low*), how sure the agent must be (default *high*) and how large the plan may be (default
+*M*). *A one-file text fix the agent is sure of goes ahead; anything touching database migrations
+waits for you.* The agent's word can only add a reason to wait, never remove one the platform found,
+and a plan that does not assess itself waits. Unchanged either way: a plan touching a sensitive area,
+and the plans of the project's first tasks, always wait. The rule never makes a plan wait that would
+not have waited without it; at **Autonomous** nothing changes. A plan with no files listed, or with a
+pattern instead of files, always waits. A plan
+that went ahead keeps its approval in the task's history — approved by the platform, nobody named —
+and the task page says *Plan went ahead without approval: low risk, high confidence, 2 files*, with
+**See plan** and, while it is being implemented, **Pause** and **Send back…**; the board card says
+*Plan went ahead without approval* too. The repository's `.agentic/config.yml` can only make the
+rule stricter (switch it off, lower a limit, tick more risks), never turn it on.
+
 **The dial and the maintenance pipeline.** The dial's *level* applies to scheduled maintenance chores
 and its per-stage policies do not. At **Observe** the nightly pass creates no chore — Observe means no
 agent merge requests — and the Maintenance card says *Paused at Observe* while the feature is on
@@ -1107,10 +1128,14 @@ asked — so you never approve blind:
   the whole plan** (open as well) with the alternatives, data and API changes, the test plan and the
   rest. It is *the* plan the approval was asked about — its version and stage attempt are named — not
   whatever plan is newest. A budget approval shows the estimate and the threshold it crossed.
-- **Why you are asked**: every reason the platform recorded — the project's first tasks get extra
+- **Waiting for your approval because**: every reason the platform recorded — the project's first tasks get extra
   checks (*This project's first 5 tasks get extra checks, and 2 of them are done*), the plan touches a
   sensitive area (named), its size reached the threshold, **How much agents do alone** or a stage
-  override asks for every plan, or the estimate is above the budget threshold.
+  override asks for every plan, or the estimate is above the budget threshold — and, with *Low-risk
+  plans* on, each risk with who found it (*touches database migrations (found by the platform)*;
+  *confidence medium (the agent's own assessment)*), open questions, or a plan that does not assess
+  itself. The Inbox row says the same in one line, and so does the chat message. The plan view shows
+  **The agent's own assessment**.
 - **How to stop being asked**, under each reason, with a link to the setting that retires it: **How
   much agents do alone** or the size threshold (*Settings → Rules & limits*), a stage override
   (*Repository configuration*), the sensitive-area rule (keeping it is recommended), or the extra

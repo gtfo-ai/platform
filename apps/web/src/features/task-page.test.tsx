@@ -1404,6 +1404,157 @@ describe('the needs-you callout', () => {
   });
 });
 
+/**
+ * S-28.8 (the M28 ruling amending BD-006): a plan that waits says why in one heading with every
+ * reason and who found it; a plan that went ahead under the low-risk rule says so, with what the
+ * rule saw, the plan and the two ways to stop it while it is implemented.
+ */
+describe('the low-risk plan rule on the task page', () => {
+  const ASSESSED_PLAN = {
+    ...PLAN_DATA,
+    self_assessment: {
+      confidence: 'medium',
+      risk_level: 'low',
+      risk_factors: ['payments'],
+      reasons: [`one rounding change ${HOSTILE}`],
+      open_questions: ['Should old invoices be recomputed?'],
+    },
+  };
+
+  it('says why a plan waits, naming who found each risk', async () => {
+    start(
+      detail(
+        {
+          approvals: [
+            {
+              ...APPROVAL_ROW,
+              reasons: [
+                { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
+                { code: 'confidence_below', confidence: 'medium', minimum: 'high' },
+              ],
+            },
+          ],
+          artifacts: [PLAN_REF],
+        },
+        { state: 'waiting_approval' },
+      ),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+      {
+        [`/api/artifacts/${PLAN}`]: () =>
+          json({
+            id: PLAN,
+            task_id: TASK,
+            artifact_type: 'ImplementationPlan',
+            version: 2,
+            schema_version: '1',
+            produced_by_run_id: null,
+            created_at: AT,
+            redaction_count: 0,
+            markdown: null,
+            data: ASSESSED_PLAN,
+          }),
+      },
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const card = within(callout).getByRole('region', { name: 'Plan approval' });
+    expect(card.textContent).toContain('Waiting for your approval because');
+    expect(card.querySelector('[data-approval-reason="risk_factor"]')?.textContent).toContain(
+      'The plan touches database migrations or stored data (found by the platform).',
+    );
+    expect(card.querySelector('[data-approval-reason="confidence_below"]')?.textContent).toContain(
+      'medium (its own assessment)',
+    );
+    expect(
+      within(card).getAllByRole('link', { name: 'Low-risk plans' })[0]?.getAttribute('href'),
+    ).toBe('/projects/acme/settings/policies');
+    // The plan's own assessment is on the card, its model text as text (BD-022).
+    await waitFor(() => {
+      expect(card.querySelector('[data-plan-assessment=""]')).not.toBeNull();
+    });
+    const assessment = card.querySelector('[data-plan-assessment=""]')?.textContent ?? '';
+    expect(assessment).toContain('low risk, medium confidence');
+    expect(assessment).toContain('touches payments or billing');
+    expect(assessment).toContain(`one rounding change ${HOSTILE}`);
+    expect(assessment).toContain('Should old invoices be recomputed?');
+    expect(card.querySelector('img')).toBeNull();
+    expect(card.textContent).not.toMatch(/schema_migration|confidence_below|risk_factor/);
+  });
+
+  const WENT_AHEAD = {
+    ...APPROVAL_ROW,
+    status: 'approved' as const,
+    decided_at: AT,
+    auto_decided: true,
+    reasons: [
+      {
+        code: 'low_risk_auto' as const,
+        confidence: 'high' as const,
+        risk_level: 'low' as const,
+        size: 'S' as const,
+        files: 2,
+      },
+    ],
+  };
+
+  it('says a plan went ahead without approval, with the plan and the ways to stop it', async () => {
+    const user = userEvent.setup();
+    start(
+      detail(
+        { approvals: [WENT_AHEAD], artifacts: [PLAN_REF] },
+        { state: 'active', current_stage: 'implementation' },
+      ),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+    );
+    const notice = await screen.findByTestId('plan-went-ahead');
+    expect(notice.querySelector('[data-plan-went-ahead]')?.textContent).toBe(
+      'Plan went ahead without approval: low risk, high confidence, 2 files.',
+    );
+    expect(notice.textContent).toContain('Risk classes and the first tasks’ extra checks');
+    expect(within(notice).getByText('See plan').closest('details')).not.toBeNull();
+    expect(within(notice).getByRole('button', { name: 'Pause' })).toBeTruthy();
+    await user.click(within(notice).getByRole('button', { name: 'Send back…' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    // Nothing is asked of the reader: it is not the needs-you callout.
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+  });
+
+  it('offers no way to stop it to a reader who may neither pause nor send back', async () => {
+    start({
+      ...detail(
+        { approvals: [WENT_AHEAD], artifacts: [PLAN_REF] },
+        { state: 'active', current_stage: 'implementation' },
+      ),
+      can_pause: false,
+      can_return: false,
+    });
+    const notice = await screen.findByTestId('plan-went-ahead');
+    expect(within(notice).queryByRole('button', { name: 'Pause' })).toBeNull();
+    expect(within(notice).queryByRole('button', { name: 'Send back…' })).toBeNull();
+  });
+
+  it('says nothing once the task has moved past Implementation, or for a person’s approval', async () => {
+    start(
+      detail(
+        { approvals: [WENT_AHEAD], artifacts: [PLAN_REF] },
+        { state: 'active', current_stage: 'code_review' },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByTestId('plan-went-ahead')).toBeNull();
+    cleanup();
+    start(
+      detail(
+        { approvals: [{ ...WENT_AHEAD, auto_decided: false }], artifacts: [PLAN_REF] },
+        { state: 'active', current_stage: 'implementation' },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByTestId('plan-went-ahead')).toBeNull();
+  });
+});
+
 describe('the ··· menu', () => {
   // S-25.23 (BACKLOG 1375): Pause asks for an optional why, which is the reason it records.
   it('pauses through a dialog with an optional why, and cancels through one that says what cancelling does', async () => {

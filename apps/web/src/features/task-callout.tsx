@@ -90,6 +90,7 @@ import { budgetPauseSentence } from './budget-pause-words.js';
 import { ReadyBlockedNotice, readyBlockedPipeline } from './ci-manual-not-run.js';
 import { CiWaitStop, GateWaitNotice, gateWaitHeld, openGateWait } from './gate-wait.js';
 import { type TaskPrimaryAction, taskPagePrimary } from './page-primary.js';
+import { PlanWentAheadNotice, planWentAhead } from './plan-went-ahead.js';
 import { QueueWaitNotice } from './queue-wait-notice.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
@@ -481,6 +482,19 @@ const CalloutSlot = ({
           projectKey={projectKey}
           canChangeLimits={detail.can_change_limits}
           mayDecide={detail.can_cancel}
+        />
+      );
+    }
+    // S-28.8: the plan went ahead without approval under the low-risk rule — what the rule saw,
+    // the plan, and the ways to stop it while it is implemented. Information, no action asked.
+    const wentAhead = planWentAhead(detail);
+    if (wentAhead !== null) {
+      return (
+        <PlanWentAheadNotice
+          detail={detail}
+          approval={wentAhead}
+          projectKey={projectKey}
+          onOpen={onOpen}
         />
       );
     }

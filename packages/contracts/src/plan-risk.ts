@@ -95,3 +95,17 @@ export const planApprovalRiskConfigSchema = z.strictObject({
   always_ask: z.array(riskFactorSchema).max(RISK_FACTORS.length).optional(),
 });
 export type PlanApprovalRiskConfig = z.infer<typeof planApprovalRiskConfigSchema>;
+
+/**
+ * Every key's value when the document is silent — M28 ruling 1's defaults, on the safe side, in one
+ * spelling the gate (`planApprovalRiskPolicyOf` in `@platform/domain`) and the settings screen both
+ * read: **off**; when switched on, only a plan the Architect calls low-risk with high confidence, of
+ * size M at most, goes ahead — and **every** factor asks, `other` included.
+ */
+export const PLAN_APPROVAL_RISK_DEFAULT = {
+  enabled: false,
+  max_risk: 'low',
+  min_confidence: 'high',
+  max_size: 'M',
+  always_ask: RISK_FACTORS,
+} as const;

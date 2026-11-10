@@ -190,6 +190,15 @@ export const EscalationLine = ({ task }: { readonly task: TaskListItem }): React
   );
 };
 
+/** The card's words for a plan the low-risk rule let go ahead (S-28.8). */
+export const PLAN_WENT_AHEAD_SHORT = 'Plan went ahead without approval';
+
+/** Whether the card says {@link PLAN_WENT_AHEAD_SHORT}: implementing a plan nobody had to approve. */
+export const planWentAheadOnCard = (task: TaskListItem): boolean =>
+  task.plan_went_ahead === true &&
+  task.state === 'active' &&
+  (task.current_stage ?? null) === 'implementation';
+
 /**
  * The short form's line, or nothing: a held job, a return or a structured stop (S-25.11), else —
  * for a task stopped for a person with none of those — why it waits ({@link EscalationLine}).
@@ -198,6 +207,15 @@ export const SetbackLine = ({ task }: { readonly task: TaskListItem }): ReactEle
   const text = cardSetback(task);
   if (text === null && task.state === 'needs_human') {
     return <EscalationLine task={task} />;
+  }
+  if (text === null && planWentAheadOnCard(task)) {
+    // S-28.8: nobody approved this plan — the project's low-risk rule let it go ahead. Muted: it
+    // asks nothing of the reader; the task page says what the rule saw and how to stop it.
+    return (
+      <span data-card-went-ahead="" className="text-xs text-fg-muted">
+        {PLAN_WENT_AHEAD_SHORT}
+      </span>
+    );
   }
   const held = ciHeldNow(task);
   // The fixing line asks nothing of the reader, so it is muted; a stop or a held job keeps the

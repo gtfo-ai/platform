@@ -322,6 +322,28 @@ describe('the approval row', () => {
     expect(await screen.findByText('Plan v2 · size L · 6 files')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Review plan' })).toBeTruthy();
   });
+
+  it('says why each approval waits, naming who found each risk (S-28.8)', async () => {
+    inbox = {
+      questions: [],
+      ci_held: [],
+      escalated: [],
+      approvals: [
+        {
+          ...approval(DUE),
+          reasons: [
+            { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
+            { code: 'confidence_below', confidence: 'medium', minimum: 'high' },
+          ],
+        },
+      ],
+    };
+    await renderInbox(fakeServer({}).fetchImpl);
+    const line = await screen.findByText(/^Waiting for your approval because:/);
+    expect(line.textContent).toBe(
+      'Waiting for your approval because: touches database migrations or stored data (found by the platform); confidence medium (the agent’s own assessment).',
+    );
+  });
 });
 
 /**

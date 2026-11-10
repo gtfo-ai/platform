@@ -284,7 +284,7 @@ describe('a chat approval shows what it approves (S-25.9)', () => {
     // carries the plan it shows.
     const message = slack.posted.find((posted) => posted.ts === button.messageTs);
     expect(message?.text).toContain(`*Plan v${plan.version}*`);
-    expect(message?.text).toContain('Asked because:');
+    expect(message?.text).toContain('Waiting for your approval because:');
     expect(message?.text).toContain(`/tasks/${taskId}`);
     expect(JSON.parse(button.value)).toEqual({
       a: pending.id,

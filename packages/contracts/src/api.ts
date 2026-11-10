@@ -2054,6 +2054,12 @@ export const taskListItemSchema = taskRecordSchema.extend({
   ),
   open_questions: z.int().nonnegative(),
   pending_approvals: z.int().nonnegative(),
+  /**
+   * S-28.8: the task's newest plan approval was decided by the platform under the project's
+   * low-risk rule (`approvals.auto_decided`) — the card's *Plan went ahead without approval* while
+   * the task implements it. Absent reads as `false`.
+   */
+  plan_went_ahead: z.boolean().optional(),
   loop_limits: z.record(slugSchema, z.int().nonnegative()).nullable(),
   /**
    * The current stage's open CI wait (backlog 1300) — the task read's `gate_wait`, the same
