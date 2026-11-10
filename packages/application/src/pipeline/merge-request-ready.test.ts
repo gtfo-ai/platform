@@ -565,12 +565,14 @@ describe('the mr_draft duty, an agent stage after Ready (backlog 486)', () => {
  * **The merge request goes back to draft when the run is admitted, not when the stage is entered**
  * (S-28.1, M28 ruling 6). AUT-6655's return to implementation drafted the merge request on the
  * stage's entry and then paused at the task cap: the merge request read *Draft* while nothing ran.
- * The handler decides on `run.offered` — written only once the stage executor's admission passed —
- * so a return that pauses at admission (no offer) leaves the merge request as it was. Canary: the
- * old trigger (`task.stage.entered` for an agent stage) enqueues `mr_draft` in the first case.
+ * The handler decides on `run.claimed` — appended only once the offer's admission **and** the
+ * claim's re-check passed (a refusal at the claim rolls the claim back) — so a return that pauses at
+ * admission leaves the merge request as it was. Canary: the old trigger (`task.stage.entered` for an
+ * agent stage) enqueues `mr_draft` in the first case.
  */
 describe('mr_draft waits for the admitted run (S-28.1, M28 ruling 6)', () => {
   const EVENT = '00000000-0000-4000-9000-0000000000e1';
+  const RUN = '00000000-0000-4000-8000-0000000000f1';
   const backAtImplementation = (): StoredTask =>
     ({
       task: {
@@ -589,11 +591,17 @@ describe('mr_draft waits for the admitted run (S-28.1, M28 ruling 6)', () => {
       mr: MR,
     }) as unknown as StoredTask;
 
-  const handle = async (event: Record<string, unknown>) => {
+  const handle = async (
+    event: Record<string, unknown>,
+    run: { readonly stage: string | null; readonly attempt: number } | null = null,
+  ) => {
     const enqueued: PipelineOutboundData[] = [];
     const callbacks: (() => Promise<void>)[] = [];
     const handler = mergeRequestReadyHandlers({
-      store: { tasks: { load: async () => backAtImplementation() } },
+      store: {
+        tasks: { load: async () => backAtImplementation() },
+        runs: { load: async () => (run === null ? null : { id: RUN, ...run }) },
+      },
       jobs: {
         enqueue: async (job: { data: PipelineOutboundData }) => {
           enqueued.push(job.data);
@@ -601,7 +609,8 @@ describe('mr_draft waits for the admitted run (S-28.1, M28 ruling 6)', () => {
       } as unknown as Jobs,
     } as never).find((candidate) => candidate.name === 'pipeline.merge-request.draft-state');
     if (handler === undefined) throw new Error('the draft-state handler is not registered');
-    expect(handler.eventTypes).toContain('run.offered');
+    expect(handler.eventTypes).toContain('run.claimed');
+    expect(handler.eventTypes).not.toContain('run.offered');
     await handler.handle({
       scope: { tx: {} },
       event: { event: { id: EVENT, ...event } as unknown as DomainEvent },
@@ -613,6 +622,19 @@ describe('mr_draft waits for the admitted run (S-28.1, M28 ruling 6)', () => {
     return enqueued.map((data) => data.duty);
   };
 
+  const claimed = {
+    type: 'run.claimed',
+    payload: {
+      project_id: PROJECT,
+      task_id: TASK,
+      run_id: RUN,
+      offer_id: '00000000-0000-4000-8000-0000000000f2',
+      claimant_kind: 'server',
+      worker_id: null,
+      lease_epoch: 1,
+    },
+  };
+
   it('enqueues nothing on the stage’s entry — a return that then pauses at admission drafts nothing', async () => {
     expect(
       await handle({
@@ -622,41 +644,13 @@ describe('mr_draft waits for the admitted run (S-28.1, M28 ruling 6)', () => {
     ).toEqual([]);
   });
 
-  it('enqueues mr_draft once the stage’s run is offered (admitted)', async () => {
-    expect(
-      await handle({
-        type: 'run.offered',
-        payload: {
-          project_id: PROJECT,
-          task_id: TASK,
-          run_id: '00000000-0000-4000-8000-0000000000f1',
-          offer_id: '00000000-0000-4000-8000-0000000000f2',
-          kind: 'stage',
-          stage: 'implementation',
-          attempt: 2,
-        },
-      }),
-    ).toEqual(['mr_draft']);
+  it('enqueues mr_draft once the stage’s run is claimed (admitted at the offer and the claim)', async () => {
+    expect(await handle(claimed, { stage: 'implementation', attempt: 2 })).toEqual(['mr_draft']);
   });
 
-  it('enqueues nothing for an ask’s offer, or for an offer of an attempt the task has left', async () => {
-    const offered = {
-      project_id: PROJECT,
-      task_id: TASK,
-      run_id: '00000000-0000-4000-8000-0000000000f1',
-      offer_id: '00000000-0000-4000-8000-0000000000f2',
-    };
-    expect(
-      await handle({
-        type: 'run.offered',
-        payload: { ...offered, kind: 'ask', stage: null, attempt: 1 },
-      }),
-    ).toEqual([]);
-    expect(
-      await handle({
-        type: 'run.offered',
-        payload: { ...offered, kind: 'stage', stage: 'implementation', attempt: 1 },
-      }),
-    ).toEqual([]);
+  it('enqueues nothing for an ask’s run, or for a run of an attempt the task has left', async () => {
+    expect(await handle(claimed, { stage: null, attempt: 1 })).toEqual([]);
+    expect(await handle(claimed, { stage: 'implementation', attempt: 1 })).toEqual([]);
+    expect(await handle(claimed, null)).toEqual([]);
   });
 });

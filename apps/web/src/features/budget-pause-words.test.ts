@@ -17,6 +17,7 @@ const AUT_6655: PausedBudgetFigures = {
   stage: 'implementation',
   spent_usd: 10.99,
   held_usd: 0,
+  held_runs: 0,
   reserve_usd: 40,
   cap_usd: 50,
   required_cap_usd: 50.99,
@@ -49,7 +50,7 @@ describe('budget pause words (S-28.1)', () => {
     const sentence = budgetPauseSentence(
       {
         paused_budget_scope: 'task',
-        paused_budget_figures: { ...AUT_6655, held_usd: 15, required_cap_usd: 65.99 },
+        paused_budget_figures: { ...AUT_6655, held_usd: 15, held_runs: 1, required_cap_usd: 65.99 },
         budget_cap_usd: 50,
       },
       false,
@@ -61,6 +62,68 @@ describe('budget pause words (S-28.1)', () => {
     expect(sentence).toContain(
       'A person who may change budgets can raise the cap to at least $65.99',
     );
+  });
+
+  it('says the count of runs nobody measured in the dialog too (BD-010 2026-11-10, decision 2)', () => {
+    expect(
+      raiseExplanation({ ...AUT_6655, held_usd: 30, held_runs: 2, required_cap_usd: 80.99 }),
+    ).toContain('Spent $10.99, and $30.00 is held for 2 runs nobody measured.');
+  });
+
+  it('reads the live cap after a raise that was not followed by a resume', () => {
+    expect(
+      budgetPauseSentence(
+        { paused_budget_scope: 'task', paused_budget_figures: AUT_6655, budget_cap_usd: 51 },
+        true,
+      ),
+    ).toBe(
+      'Paused before starting Implementation. Its cap is now $51.00, enough for the next run (at least $50.99). Resume it and it continues at Implementation; finished stages are not redone.',
+    );
+    // A raise that is still short says the shortfall against the live cap, not the recorded one.
+    expect(
+      budgetPauseSentence(
+        {
+          paused_budget_scope: 'task',
+          paused_budget_figures: { ...AUT_6655, required_cap_usd: 60 },
+          budget_cap_usd: 55,
+        },
+        true,
+      ),
+    ).toContain('which would exceed the cap by $5.00');
+  });
+
+  it('says "spent its cap" only when the spend reached the cap', () => {
+    expect(
+      budgetPauseSentence(
+        {
+          paused_budget_scope: 'task',
+          paused_budget_figures: { ...AUT_6655, spent_usd: 52, required_cap_usd: 92 },
+          budget_cap_usd: 50,
+        },
+        true,
+      ),
+    ).toContain('it has spent its cap: $52.00 of $50.00');
+  });
+
+  it('says what is committed when a claim-time refusal reserved nothing more', () => {
+    const sentence = budgetPauseSentence(
+      {
+        paused_budget_scope: 'organization',
+        paused_budget_figures: {
+          stage: 'implementation',
+          spent_usd: 90,
+          held_usd: 15,
+          held_runs: 0,
+          reserve_usd: 0,
+          cap_usd: 100,
+          required_cap_usd: 105,
+        },
+        budget_cap_usd: 50,
+      },
+      true,
+    );
+    expect(sentence).toContain('what is already committed exceeds it by $5.00');
+    expect(sentence).not.toContain('reserves up to $0.00');
   });
 
   it('says a project’s figures too, raised where that cap is set', () => {
@@ -84,7 +147,7 @@ describe('budget pause words (S-28.1)', () => {
   });
 
   /** M28 ruling 3: no surface says "spent its cap" when it has not — every scope, with and without figures. */
-  it.each(SCOPES)('never says “spent its cap” for a %s pause', (scope) => {
+  it.each(SCOPES)('never says “spent its cap” for a %s pause that has not spent it', (scope) => {
     for (const figures of [AUT_6655, null]) {
       for (const canRaise of [true, false]) {
         const sentence = budgetPauseSentence(
@@ -107,7 +170,7 @@ describe('budget pause words (S-28.1)', () => {
 
   it('explains the reserve as a ceiling, not spend (M28 ruling 2)', () => {
     expect(raiseExplanation(AUT_6655)).toBe(
-      'Spent $10.99. The next Implementation run reserves up to $40.00 — a ceiling, not spend: unused reserve is returned. The cap must be at least $50.99 for the task to continue.',
+      'Spent $10.99. The next Implementation run reserves up to $40.00 — a ceiling, not spend: unused reserve is returned. The cap must be at least $50.99 for the task to continue. A project that wants a smaller reserve lowers Implementation’s run budget in its configuration.',
     );
   });
 });

@@ -243,10 +243,10 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'run.started': 'unconsumed',
   // WP-274 (TD-031 decision 1): the offer and its claim are audit records of the run's stream. The
   // claimants learn of an open offer from the `run_offers` row (and, from WP-276, a `pg_notify`),
-  // never from this event. `run.offered` has one consumer since S-28.1 (M28 ruling 6): the merge
-  // request goes back to draft once a stage's run is admitted (`merge-request-ready.ts`, `mr_draft`).
-  'run.offered': 'handled',
-  'run.claimed': 'unconsumed',
+  // never from this event. `run.claimed` has one consumer since S-28.1 (M28 ruling 6): the merge
+  // request goes back to draft once a stage's run is admitted at the claim (`mr_draft`).
+  'run.offered': 'unconsumed',
+  'run.claimed': 'handled',
   // WP-276: the withdrawal's audit record; the run's own `run.finished` (`cancelled`) is what the
   // ledger and the screens read.
   'run.offer.withdrawn': 'unconsumed',
@@ -412,7 +412,7 @@ export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${s
     'task.human_return': null,
     'run.created': null,
     'run.started': null,
-    'run.claimed': null,
+    'run.offered': null,
     'run.offer.withdrawn': null,
     'run.offer.released': null,
     'workspace.provisioned': null,

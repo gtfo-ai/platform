@@ -654,6 +654,7 @@ export const taskBudgetFigures = (
     stage,
     spentUsd: stored.costActualUsd,
     heldUsd: held.heldUsd,
+    heldRuns: held.heldRuns,
     reserveUsd: runBudgetUsd(settings, stage),
     capUsd: settings.taskBudgetUsd,
   });

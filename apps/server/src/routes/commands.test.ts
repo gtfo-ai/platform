@@ -848,6 +848,7 @@ describe('what each refusal maps to', () => {
         stage: 'implementation',
         spent_usd: 10.99,
         held_usd: 0,
+        held_runs: 0,
         reserve_usd: 40,
         cap_usd: 50,
         required_cap_usd: 50.99,
@@ -1120,6 +1121,7 @@ describe('raising a task’s cap (WP-131)', () => {
       stage: 'implementation',
       spent_usd: 10.99,
       held_usd: 0,
+      held_runs: 0,
       reserve_usd: 40,
       cap_usd: 50,
       required_cap_usd: 50.99,
@@ -1133,6 +1135,7 @@ describe('raising a task’s cap (WP-131)', () => {
       { path: 'stage', message: 'implementation' },
       { path: 'spent_usd', message: '10.99' },
       { path: 'held_usd', message: '0' },
+      { path: 'held_runs', message: '0' },
       { path: 'reserve_usd', message: '40' },
       { path: 'cap_usd', message: '50' },
     ]);

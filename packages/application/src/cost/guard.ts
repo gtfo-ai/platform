@@ -135,6 +135,7 @@ export const blockingBudgetFigures = (blocker: BlockingBudget, stage: Slug): Pau
     stage,
     spentUsd: blocker.spentUsd,
     heldUsd: blocker.pendingUsd + blocker.heldUsd,
+    heldRuns: blocker.heldRuns,
     reserveUsd: blocker.reserveUsd,
     capUsd: blocker.limitUsd,
   });

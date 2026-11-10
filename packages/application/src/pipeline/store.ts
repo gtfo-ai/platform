@@ -1285,7 +1285,7 @@ export interface TaskRepository {
   stageAttemptRuns(tx: Transaction, taskId: Id, stage: Slug, attempt: number): Promise<number>;
   /**
    * Marks a still-open attempt as **entered again** — `entered_at` moved to now, `caused_by_event_id`
-   * written — for a resume that re-enters the attempt it paused on (S-28.1, M28 ruling 4), so the
+   * replaced only when one is given (a human's resume names none, and the entry's own cause is kept) — for a resume that re-enters the attempt it paused on (S-28.1, M28 ruling 4), so the
    * stranded-stage pass reads the resume as a fresh entry. Conditional on the row being open
    * (`running`, never exited); answers whether it wrote. A row is never re-opened here: an attempt
    * something closed is not resumed in place.

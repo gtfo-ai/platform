@@ -1979,8 +1979,8 @@ describe('the task budget holds a run nobody measured (WP-131, backlog 402)', ()
     // The retry entered attempt 2, and the pause refused its run before one existed.
     expect(paused.task.stageAttempts.refinement).toBe(2);
     expect(harness.specs).toHaveLength(1);
-    // M28 ruling 6's premise: a pause at admission writes no offer, so `mr_draft` (which waits for
-    // `run.offered`) has nothing to fire on.
+    // M28 ruling 6's premise: a pause at admission writes no offer and no claim, so `mr_draft`
+    // (which waits for `run.claimed`) has nothing to fire on.
     const offeredAttempts = (): unknown[] =>
       harness
         .events()
@@ -1998,6 +1998,7 @@ describe('the task budget holds a run nobody measured (WP-131, backlog 402)', ()
           stage: 'refinement',
           spent_usd: 0,
           held_usd: 15,
+          held_runs: 1,
           reserve_usd: 15,
           cap_usd: 20,
           required_cap_usd: 30,
@@ -2016,6 +2017,7 @@ describe('the task budget holds a run nobody measured (WP-131, backlog 402)', ()
       required_cap_usd: 30,
       spent_usd: 0,
       held_usd: 15,
+      held_runs: 1,
       reserve_usd: 15,
       cap_usd: 20,
     });
