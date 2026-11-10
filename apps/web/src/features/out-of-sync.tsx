@@ -68,6 +68,13 @@ export const ticketOutOfSyncSentence = (row: ProviderSync, provider: string): st
 export const mergeRequestStillDraftSentence = (provider: string | null | undefined): string =>
   `The merge request is still a draft on ${providerName(provider)}: the platform marked it ready, and it read back as a draft, so it cannot be merged as it is. Mark it ready there; the platform checks it again.`;
 
+/**
+ * The Ready callout's sentence (S-28.10): the merge request's real state, why it cannot be merged
+ * and what the platform is doing about it.
+ */
+export const readyStillDraftSentence = (provider: string | null | undefined): string =>
+  `The merge request is still a draft on ${providerName(provider)} — it cannot be merged yet. The platform marked it ready and it read back as a draft; it tries again, and if it is still a draft when those tries are spent the task comes to you. Mark it ready there and the task is ready to merge.`;
+
 export const OutOfSyncNotice = ({
   detail,
   commands,
@@ -75,7 +82,10 @@ export const OutOfSyncNotice = ({
   readonly detail: TaskDetailResponse;
   readonly commands: Pick<ReturnType<typeof useTaskCommands>, 'retryTicketSync'>;
 }): ReactElement | null => {
-  const rows = detail.provider_sync ?? [];
+  // At Ready the callout itself says the merge request's draft state (`./task-callout.tsx`).
+  const rows = (detail.provider_sync ?? []).filter(
+    (row) => !(row.subject === 'merge_request_draft' && detail.task.state === 'ready_for_merge'),
+  );
   if (rows.length === 0) {
     return null;
   }

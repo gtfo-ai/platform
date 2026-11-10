@@ -712,6 +712,21 @@ describe('mr_ready reads the merge request back (S-28.10)', () => {
     expect(transitions).toEqual(['Ready for Merge']);
   });
 
+  it('clears a draft notice once the merge request is merged or closed on the provider (review)', async () => {
+    for (const state of ['merged', 'closed'] as const) {
+      const { ready, outOfSync, recordOutOfSync, transitions } = await world({
+        state: 'ready_for_merge',
+        live: { draft: true, state },
+        lifecycleSlots: { ready_for_merge: 'Ready for Merge', claim: false },
+      });
+      await recordOutOfSync();
+      expect(await ready(), state).toBe('unchanged');
+      expect(await outOfSync(), state).toEqual([]);
+      // Not opened: the ticket is not moved to "ready" either.
+      expect(transitions).toEqual([]);
+    }
+  });
+
   it('moves the ticket for a merge request that already reads non-draft, and nothing when the slot is unmapped', async () => {
     const mapped = await world({
       state: 'ready_for_merge',

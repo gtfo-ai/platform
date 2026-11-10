@@ -64,6 +64,9 @@ import type { PipelineSagaOptions } from './saga.js';
 import type { StoredTask } from './store.js';
 import { releaseTicket } from './ticket-release.js';
 
+/** The `lifecycle_key` prefix of a person's **Retry** (S-28.10), which re-validates on fire. */
+export const RETRY_KEY_PREFIX = 'ticket_lifecycle_retry:';
+
 /** The handler that decides a lifecycle moment (TD-005 integrations band, beside the mapping). */
 export const TICKET_LIFECYCLE_HANDLER = 'pipeline.ticket.lifecycle';
 /** The handler that asks for a release on cancellation. */
@@ -220,6 +223,26 @@ export const runTicketLifecycle = async (
   const status = data.status;
   if (taskId === undefined || typeof status !== 'string' || status === '') {
     return;
+  }
+  if (typeof data.lifecycle_key === 'string' && data.lifecycle_key.startsWith(RETRY_KEY_PREFIX)) {
+    /**
+     * **A Retry re-validates on fire** (S-28.10, TD-004): it asks for the status the out-of-sync
+     * record named when the person pressed it. A later move that went through in between cleared
+     * the record (or wrote another target), and moving the ticket back to the old status would undo
+     * it — so the retry moves only while the record still names this status.
+     */
+    const still = await options.unitOfWork.transaction(async (scope) =>
+      (await options.store.tasks.providerSync(scope.tx, taskId)).some(
+        (row) => row.subject === 'ticket_status' && row.target === status,
+      ),
+    );
+    if (!still) {
+      (options.logger ?? silentLogger).info(
+        { task_id: taskId, status },
+        'a ticket-status retry fired after the ticket was back in sync (or wanted elsewhere); it moves nothing',
+      );
+      return;
+    }
   }
   await moveTicket(options, {
     taskId,

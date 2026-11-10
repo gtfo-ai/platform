@@ -88,7 +88,14 @@ import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { budgetPauseSentence } from './budget-pause-words.js';
 import { ReadyBlockedNotice, readyBlockedPipeline } from './ci-manual-not-run.js';
-import { CiWaitStop, GateWaitNotice, gateWaitHeld, openGateWait } from './gate-wait.js';
+import {
+  CiWaitStop,
+  GateWaitNotice,
+  gateWaitHeld,
+  openGateWait,
+  providerName,
+} from './gate-wait.js';
+import { readyStillDraftSentence } from './out-of-sync.js';
 import { type TaskPrimaryAction, taskPagePrimary } from './page-primary.js';
 import { QueueWaitNotice } from './queue-wait-notice.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
@@ -492,6 +499,30 @@ const CalloutSlot = ({
               projectKey={projectKey}
               nowMs={nowMs}
             />
+          </Flash>
+        </section>
+      );
+    }
+    // S-28.10 (TD-029's amendment C (3)): at Ready, the merge request's **real** draft state — the
+    // platform marked it ready and it read back as a draft, so it cannot be merged yet.
+    if (
+      task.state === 'ready_for_merge' &&
+      (detail.provider_sync ?? []).some((row) => row.subject === 'merge_request_draft')
+    ) {
+      return (
+        <section aria-label="What happens next" data-testid="ready-still-draft-notice">
+          <Flash tone="warning" title="The merge request is still a draft">
+            <div className="flex flex-col gap-2 pt-1">
+              <p data-ready-still-draft="">{readyStillDraftSentence(task.mr_ref?.provider)}</p>
+              {task.mr_ref === null || task.mr_ref === undefined ? null : (
+                <div>
+                  <ExternalLink
+                    url={task.mr_ref.url}
+                    label={`Mark it ready on ${providerName(task.mr_ref.provider)}`}
+                  />
+                </div>
+              )}
+            </div>
           </Flash>
         </section>
       );
