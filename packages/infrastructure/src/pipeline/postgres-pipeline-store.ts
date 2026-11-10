@@ -2432,8 +2432,9 @@ export const createPostgresPipelineStore = (
     insert: async (tx, stored) => {
       await sqlOf(tx).query(
         `insert into approvals (id, task_id, kind, status, requested_at, deadline_at, stage, attempt,
-                                subject_artifact_id, subject_detail, reasons)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)`,
+                                subject_artifact_id, subject_detail, reasons,
+                                decided_by_user_id, decided_at, reason, auto_decided)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15)`,
         [
           stored.approval.id,
           stored.approval.taskId,
@@ -2452,6 +2453,12 @@ export const createPostgresPipelineStore = (
           stored.reasons === undefined || stored.reasons === null
             ? null
             : JSON.stringify(approvalReasonsSchema.parse(stored.reasons)),
+          // S-28.8: an approval the low-risk rule decided is inserted decided (`autoApproveApproval`),
+          // so its decision is written here; a pending one writes the same nulls the defaults hold.
+          stored.approval.decidedByUserId,
+          stored.approval.decidedAt,
+          stored.approval.reason,
+          stored.autoDecided === true,
         ],
       );
     },
@@ -3115,7 +3122,7 @@ const toQuestion = (row: QuestionRow): Question => ({
 
 const APPROVAL_SELECT = `select a.id, a.task_id, a.kind, a.status, a.requested_at, a.deadline_at,
     a.decided_by_user_id, a.decided_at, a.reason, a.stage, a.attempt, a.reminders_sent, t.project_id,
-    a.subject_artifact_id, a.subject_detail, a.reasons
+    a.subject_artifact_id, a.subject_detail, a.reasons, a.auto_decided
   from approvals a join tasks t on t.id = a.task_id`;
 
 interface ApprovalRow extends Record<string, unknown> {
@@ -3135,6 +3142,7 @@ interface ApprovalRow extends Record<string, unknown> {
   subject_artifact_id: string | null;
   subject_detail: unknown;
   reasons: unknown;
+  auto_decided: boolean;
 }
 
 const toStoredApproval = (row: ApprovalRow): StoredApproval => ({
@@ -3161,6 +3169,7 @@ const toStoredApproval = (row: ApprovalRow): StoredApproval => ({
       ? null
       : budgetApprovalSubjectDetailSchema.parse(row.subject_detail),
   reasons: row.reasons === null ? null : approvalReasonsSchema.parse(row.reasons),
+  autoDecided: row.auto_decided,
 });
 
 /** Run statuses that hold a slot against `max_parallel_runs`, for a caller that needs the list. */

@@ -190,5 +190,7 @@ export const assembleApprovalViews = (
     reason: row.reason,
     subject: subjectOf(row),
     reasons: row.reasons === null ? null : approvalReasonsSchema.parse(row.reasons),
+    // S-28.8: the platform approved it under the project's low-risk rule; no person decided.
+    auto_decided: row.autoDecided,
   }));
 };

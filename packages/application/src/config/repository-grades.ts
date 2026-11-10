@@ -22,7 +22,10 @@
  *    would let that agent pass its own untested change; `[]` comes only from the project settings.
  *    Over a silent setting (the default, which waits on every unstarted manual test job) a list is
  *    not applied either, because a list replaces that rule rather than adding to it. Whatever the
- *    file tried to remove or raise is **reported**.
+ *    file tried to remove or raise is **reported**. `policies.plan_approval_risk` (S-28.8, the
+ *    M28 ruling) may only ask more: the file may switch the low-risk rule off but never on, lower
+ *    `max_risk` and `max_size`, raise `min_confidence`, and add to `always_ask`
+ *    (`tightenPlanApprovalRisk`).
  *  - **not applied** — dropped and **reported** in the reading's `not_applied`: the dial and every
  *    key that overrides one of its policies (`AUTONOMY_POLICY_OVERRIDE_KEYS`, Q78 — a test holds the
  *    two lists together), the other policies whose loosening turns a check off (the dependency
@@ -55,7 +58,11 @@ import {
   MAX_ROUTED_REVIEWERS,
 } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
-import { AUTONOMY_POLICY_OVERRIDE_KEYS, PLATFORM_DEFAULT_CONFIG } from '@platform/domain';
+import {
+  AUTONOMY_POLICY_OVERRIDE_KEYS,
+  PLATFORM_DEFAULT_CONFIG,
+  tightenPlanApprovalRisk,
+} from '@platform/domain';
 import { projectPromptValueNotApplied } from './project-prompts.js';
 import type { RepositoryConfigNotApplied } from './repository-config.js';
 
@@ -97,6 +104,7 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'policies.coverage_source': 'not_applied',
   'policies.drift_without_direction': 'not_applied',
   'policies.protected_paths': 'tighten_only',
+  'policies.plan_approval_risk': 'tighten_only',
   'policies.risk_classes': 'tighten_only',
   'policies.review_checklists': 'tighten_only',
   'policies.reviewers': 'tighten_only',
@@ -256,6 +264,21 @@ export const tightenRepositoryLayer = (
     const kept = base.filter((path) => !policies.protected_paths?.includes(path));
     next.protected_paths = unique([...base, ...policies.protected_paths]);
     if (kept.length > 0) notApplied.push(droppedNote('policies.protected_paths', kept));
+  }
+
+  if (policies.plan_approval_risk !== undefined) {
+    // S-28.8: merged against the settings' rule so the deep merge that follows can only ask more.
+    const { value, loosened } = tightenPlanApprovalRisk(
+      settings.plan_approval_risk,
+      policies.plan_approval_risk,
+    );
+    next.plan_approval_risk = value;
+    for (const key of loosened) {
+      notApplied.push({
+        key: `policies.plan_approval_risk.${key}`,
+        reason: `${LOOSENING_REASON}; a repository file may make the low-risk rule ask more, never let more plans go ahead without a person — the project settings' value is still in force`,
+      });
+    }
   }
 
   if (policies.reviewers !== undefined) {

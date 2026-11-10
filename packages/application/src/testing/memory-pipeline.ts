@@ -2609,6 +2609,7 @@ export const createMemoryPipelineStore = (
           subjectArtifactId: stored.subjectArtifactId ?? null,
           subjectDetail: stored.subjectDetail ?? null,
           reasons: stored.reasons ?? null,
+          autoDecided: stored.autoDecided === true,
         }),
       );
     },
@@ -2631,6 +2632,7 @@ export const createMemoryPipelineStore = (
           subjectArtifactId: current.subjectArtifactId ?? null,
           subjectDetail: current.subjectDetail ?? null,
           reasons: current.reasons ?? null,
+          autoDecided: current.autoDecided === true,
         }),
       );
     },

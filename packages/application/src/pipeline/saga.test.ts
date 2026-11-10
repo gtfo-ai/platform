@@ -6,7 +6,13 @@
  * PostgreSQL with the real fake-Claude runner; this tier is where the branches live, because a
  * branch is cheap to reach here and expensive to reach there.
  */
-import type { DomainEvent, Id, IsoDateTime, Slug } from '@platform/contracts';
+import type {
+  DomainEvent,
+  Id,
+  IsoDateTime,
+  PlanApprovalRiskConfig,
+  Slug,
+} from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import type { CompiledPipeline } from '@platform/domain';
 import {
@@ -1989,6 +1995,109 @@ describe('plan approval (product/04 S2, BD-006)', () => {
  * costing `c` gives this task an estimate of exactly `c`. That is what makes the threshold cases
  * below readable, and it is asserted once rather than assumed.
  */
+describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulings 1–5)', () => {
+  const ASSESSED = {
+    ...PLAN,
+    self_assessment: {
+      confidence: 'high',
+      risk_level: 'low',
+      risk_factors: [],
+      reasons: ['one file, the sum only'],
+      open_questions: [],
+    },
+  };
+  const withRule = (plan: object, rule: PlanApprovalRiskConfig = { enabled: true }) =>
+    harnessWith({
+      runs: { ...happyRuns(), architecture: completedRun(plan) },
+      settings: { config: { policies: { plan_approval_risk: rule } } },
+    });
+  const planApprovalOf = async (harness: PipelineHarness) =>
+    harness.memory.transaction(async (scope) =>
+      harness.store.approvals.forStageAttempt(scope.tx, {
+        taskId: taskOf(harness).task.id,
+        kind: 'plan',
+        stage: 'architecture' as Slug,
+        attempt: 1,
+      }),
+    );
+
+  it('lets a low-risk, sure plan go ahead, and records an approved row nobody decided', async () => {
+    const harness = withRule(ASSESSED);
+    await harness.publish([ticketMatched()]);
+
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(harness.specs.map((spec) => spec.stage)).toContain('implementation');
+    const stored = await planApprovalOf(harness);
+    const plan = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.latest(scope.tx, taskOf(harness).task.id, 'ImplementationPlan'),
+    );
+    expect(stored?.autoDecided).toBe(true);
+    expect(stored?.approval.status).toBe('approved');
+    expect(stored?.approval.decidedByUserId).toBeNull();
+    expect(stored?.subjectArtifactId).toBe(plan?.id);
+    expect(stored?.reasons).toEqual([
+      { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'M', files: 1 },
+    ]);
+    // The audit is the ordinary decided event, with no decider.
+    const decided = harness
+      .events()
+      .find((entry) => entry.type === 'task.approval.decided') as Extract<
+      DomainEvent,
+      { type: 'task.approval.decided' }
+    >;
+    expect(decided.payload).toMatchObject({ decision: 'approved', decided_by_user_id: null });
+  });
+
+  it('waits when the plan carries no self-assessment, and says so', async () => {
+    const harness = withRule(PLAN);
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+    const stored = await planApprovalOf(harness);
+    expect(stored?.autoDecided).toBe(false);
+    expect(stored?.approval.status).toBe('pending');
+    expect(stored?.reasons).toEqual([{ code: 'assessment_missing' }]);
+  });
+
+  it('waits for a migration the platform found, though the plan calls itself low-risk', async () => {
+    const harness = withRule({
+      ...ASSESSED,
+      files_to_change: [{ path: 'db/migrations/0002_totals.sql', change: 'add a column' }],
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+    expect((await planApprovalOf(harness))?.reasons).toEqual([
+      { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
+    ]);
+  });
+
+  it('waits on the agent’s own medium confidence and its open question', async () => {
+    const harness = withRule({
+      ...ASSESSED,
+      self_assessment: {
+        ...ASSESSED.self_assessment,
+        confidence: 'medium',
+        open_questions: ['Should the footer round to cents?'],
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect((await planApprovalOf(harness))?.reasons).toEqual([
+      { code: 'confidence_below', confidence: 'medium', minimum: 'high' },
+      { code: 'open_questions', count: 1 },
+    ]);
+  });
+
+  it('changes nothing while the rule is off: the same plan goes ahead with no approval row', async () => {
+    // The pre-S-28.8 gate on the harness's dial (above_size at L): an M plan is not asked about,
+    // and no row is written — the rule's own row is what tells the two apart (rule 10).
+    const harness = withRule(ASSESSED, { enabled: false });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(await planApprovalOf(harness)).toBeNull();
+    expect(harness.types()).not.toContain('task.approval.decided');
+  });
+});
+
 describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
   const THRESHOLD = AUTONOMY_PRESETS.supervised.budgetApprovalThresholdUsd ?? 0;
 

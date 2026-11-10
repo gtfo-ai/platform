@@ -179,6 +179,12 @@ policies:
     allowlist: ["npm:@scope/pkg"]  # "<ecosystem>:<name>" — proceeds whatever the policy says
   drift_without_direction: disabled
   protected_paths: ["tests/**", ".gitlab-ci.yml", ".agentic/**", ".claude/**", "CLAUDE.md"]
+  plan_approval_risk:            # S-28.8: let a low-risk plan go ahead without a person; off by default.
+    enabled: false               # when true it replaces the dial's above_size/always rule (risk classes and probation still ask)
+    max_risk: low                # low | medium — the agent's own risk level a plan may have
+    min_confidence: high         # high | medium — the agent's own confidence a plan needs
+    max_size: M                  # S | M | L | XL
+    always_ask: [schema_migration, auth_security, payments, public_api, infra_ci, data_deletion, many_files, unclear_requirements, new_dependency, other, protected_paths, split_proposed]   # default: all; a repository file may only add
   risk_classes:
     auth: { paths: ["**/auth/**", "**/session/**"], require: [plan_approval, reviewer:@security] }
     migrations: { paths: ["**/migrations/**"], require: [plan_approval] }

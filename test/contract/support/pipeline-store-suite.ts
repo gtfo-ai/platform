@@ -5572,6 +5572,64 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(decided?.approval.status).toBe('approved');
         expect(decided?.subjectArtifactId).toBe(planId);
         expect(decided?.reasons).toEqual(reasons);
+        // S-28.8: only the low-risk rule's own insert says `auto_decided`; a person's is `false`.
+        expect(decided?.autoDecided).toBe(false);
+      });
+
+      /**
+       * S-28.8 (migration 0114, M28 ruling 5): a plan the low-risk rule let go ahead is inserted
+       * **already approved** — its decision columns written by the insert, `auto_decided` true —
+       * and a later save does not clear the flag.
+       */
+      it('inserts an approval the platform decided itself, decided, and keeps it so (S-28.8)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const approvalId = nextId();
+        const reasons = [
+          {
+            code: 'low_risk_auto' as const,
+            confidence: 'high' as const,
+            risk_level: 'low' as const,
+            size: 'S' as const,
+            files: 2,
+          },
+        ];
+        await store.approvals.insert(tx, {
+          approval: {
+            id: approvalId,
+            taskId: stored.task.id,
+            projectId,
+            kind: 'plan',
+            status: 'approved',
+            requestedAt: '2026-06-01T09:30:00.000Z' as IsoDateTime,
+            deadlineAt: null,
+            decidedByUserId: null,
+            decidedAt: '2026-06-01T09:30:01.000Z' as IsoDateTime,
+            reason: null,
+            remindersSent: 0,
+            sequence: 2,
+          },
+          stage: 'architecture',
+          attempt: 1,
+          reasons,
+          autoDecided: true,
+        });
+        const loaded = await store.approvals.load(tx, approvalId);
+        expect(loaded?.autoDecided).toBe(true);
+        expect(loaded?.approval.status).toBe('approved');
+        expect(loaded?.approval.decidedByUserId).toBeNull();
+        expect(loaded?.approval.decidedAt).toBe('2026-06-01T09:30:01.000Z');
+        expect(loaded?.reasons).toEqual(reasons);
+        if (loaded === null) throw new Error('the approval was not stored');
+        await store.approvals.save(tx, { ...loaded, autoDecided: false });
+        expect((await store.approvals.load(tx, approvalId))?.autoDecided).toBe(true);
+        const found = await store.approvals.forStageAttempt(tx, {
+          taskId: stored.task.id,
+          kind: 'plan',
+          stage: 'architecture',
+          attempt: 1,
+        });
+        expect(found?.autoDecided).toBe(true);
       });
 
       /**

@@ -27,6 +27,14 @@ const SAMPLES: readonly ApprovalReason[] = [
   { code: 'size_at_or_above', size: 'L', threshold: 'M', source: 'dial' },
   { code: 'size_at_or_above', size: 'L', threshold: 'M', source: 'stage_override' },
   { code: 'estimate_above_threshold', estimate_usd: 12.5, threshold_usd: 10 },
+  { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
+  { code: 'risk_factor', factors: ['payments', 'other'], source: 'plan' },
+  { code: 'confidence_below', confidence: 'medium', minimum: 'high' },
+  { code: 'risk_level_above', risk_level: 'medium', maximum: 'low' },
+  { code: 'size_above', size: 'L', maximum: 'M' },
+  { code: 'open_questions', count: 2 },
+  { code: 'assessment_missing' },
+  { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'S', files: 2 },
 ];
 
 /** Plain words for a person in a channel: no decision ids, no spec names, no snake_case codes. */
@@ -43,6 +51,28 @@ describe('the reasons an approval was asked, in words', () => {
       expect(words.length, reason.code).toBeGreaterThan(20);
       expect(words, reason.code).not.toMatch(NOT_PLAIN);
     }
+  });
+
+  it('says who found a risk, and the numbers of the low-risk rule (S-28.8)', () => {
+    expect(
+      approvalReasonWords({
+        code: 'risk_factor',
+        factors: ['schema_migration'],
+        source: 'platform',
+      }),
+    ).toBe('The plan touches database migrations or stored data (found by the platform).');
+    expect(
+      approvalReasonWords({ code: 'confidence_below', confidence: 'medium', minimum: 'high' }),
+    ).toContain('confidence in the plan is medium');
+    expect(
+      approvalReasonWords({
+        code: 'low_risk_auto',
+        confidence: 'high',
+        risk_level: 'low',
+        size: 'S',
+        files: 2,
+      }),
+    ).toBe('The plan went ahead without approval: low risk, high confidence, size S, 2 files.');
   });
 
   it('says the numbers the reason carries', () => {

@@ -299,6 +299,76 @@ describe('the tighten-only keys', () => {
 });
 
 /** WP-91: `pipeline.wip` from the file may lower a limit and never raise it (Q101's shape). */
+describe('the low-risk plan rule a file may state (S-28.8)', () => {
+  it('is graded tighten-only', () => {
+    expect(REPOSITORY_KEY_GRADES['policies.plan_approval_risk']).toBe('tighten_only');
+  });
+
+  it('never switches the rule on, nor widens a threshold, and reports each key it kept', () => {
+    const loosened = tightenRepositoryLayer(
+      { policies: { plan_approval_risk: { enabled: false } } },
+      {
+        policies: {
+          plan_approval_risk: {
+            enabled: true,
+            max_risk: 'medium',
+            min_confidence: 'medium',
+            max_size: 'XL',
+            always_ask: ['other'],
+          },
+        },
+      },
+    );
+    const rule = loosened.values.policies?.plan_approval_risk;
+    expect(rule?.enabled).toBe(false);
+    expect(rule?.max_risk).toBe('low');
+    expect(rule?.min_confidence).toBe('high');
+    expect(rule?.max_size).toBe('M');
+    // The default asks for every factor, so the file's one-item list cannot shorten it.
+    expect(rule?.always_ask).toContain('schema_migration');
+    expect(loosened.notApplied.map((item) => item.key).sort()).toEqual([
+      'policies.plan_approval_risk.always_ask',
+      'policies.plan_approval_risk.enabled',
+      'policies.plan_approval_risk.max_risk',
+      'policies.plan_approval_risk.max_size',
+      'policies.plan_approval_risk.min_confidence',
+    ]);
+  });
+
+  it('applies a file that asks more: off, stricter thresholds and more factors', () => {
+    const settings = {
+      policies: {
+        plan_approval_risk: {
+          enabled: true,
+          max_risk: 'medium' as const,
+          min_confidence: 'medium' as const,
+          max_size: 'L' as const,
+          always_ask: ['payments' as const],
+        },
+      },
+    };
+    const stricter = tightenRepositoryLayer(settings, {
+      policies: {
+        plan_approval_risk: {
+          enabled: false,
+          max_risk: 'low',
+          min_confidence: 'high',
+          max_size: 'S',
+          always_ask: ['payments', 'schema_migration'],
+        },
+      },
+    });
+    expect(stricter.values.policies?.plan_approval_risk).toEqual({
+      enabled: false,
+      max_risk: 'low',
+      min_confidence: 'high',
+      max_size: 'S',
+      always_ask: ['schema_migration', 'payments'],
+    });
+    expect(stricter.notApplied).toEqual([]);
+  });
+});
+
 describe('the WIP limits a file may state', () => {
   it('applies a lower limit and keeps, and reports, a higher one', () => {
     const lowered = tightenRepositoryLayer(

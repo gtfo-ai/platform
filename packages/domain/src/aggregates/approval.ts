@@ -181,6 +181,52 @@ export const withdrawApproval = (approval: Approval, context: CommandContext): A
   };
 };
 
+/**
+ * **A plan the project's low-risk rule let go ahead** (S-28.8, M28 ruling 5): the approval still
+ * exists — so the task page, the audit and the stage attempt's lookup all see that this plan was
+ * decided, and by what — approved with **no decider**, and the store records it as
+ * `auto_decided`. Nobody's permission is asked: the rule a maintainer set is what decided, and it
+ * decided when the gate asked, so the approval is created and approved in one transaction and is
+ * never `pending` to anyone.
+ *
+ * Only a **plan** approval goes ahead this way; a budget or any other kind is a person's decision.
+ * The event is the ordinary `task.approval.decided` with `decided_by_user_id: null` and no reason —
+ * no new payload field, so an older build reading it during an additive rollback accepts it.
+ */
+export const autoApproveApproval = (
+  approval: Approval,
+  context: CommandContext,
+): ApprovalDecision => {
+  if (approval.kind !== 'plan') {
+    throw new InvariantViolationError(
+      'approval.auto_approve',
+      `only a plan approval goes ahead under the low-risk rule, this one is "${approval.kind}"`,
+    );
+  }
+  assertApprovalTransition(approval.status, 'approved');
+  const recorder = recorderFor(approval, context);
+  const decidedAt = recorder.occurredAt;
+  recorder.emit('task.approval.decided', {
+    project_id: approval.projectId,
+    task_id: approval.taskId,
+    approval_id: approval.id,
+    decision: 'approved',
+    decided_by_user_id: null,
+    reason: null,
+  });
+  return {
+    aggregate: {
+      ...approval,
+      status: 'approved',
+      decidedByUserId: null,
+      decidedAt,
+      reason: null,
+      sequence: recorder.sequence,
+    },
+    events: recorder.events,
+  };
+};
+
 export const toApprovalRecord = (approval: Approval): ApprovalRecord => ({
   id: approval.id,
   task_id: approval.taskId,

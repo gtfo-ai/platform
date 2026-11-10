@@ -28,6 +28,7 @@ export * from './events.js';
 export * from './knowledge.js';
 export * from './live-events.js';
 export * from './pipeline.js';
+export * from './plan-risk.js';
 export * from './records.js';
 export * from './run-spec.js';
 export * from './runlet.js';
