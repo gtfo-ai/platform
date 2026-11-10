@@ -210,7 +210,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
-  it('counts forty-four, which is the number the change states', () => {
+  it('counts forty-six, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -261,7 +261,9 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // its approval wait (`resumeIntoApprovalWait`) — a state change, so the versioned `save` and
     // not a narrow write; it rides the human command's `writeTask` and its ending.
     // 44 since S-28.1: the in-place resume of a paused attempt (`commands.ts`).
-    expect(total).toBe(44);
+    // **Plus two at S-28.5**: the reverse sync's cancel of a queued task and its amended brief
+    // (`ticket-status-recheck.ts`), in the duty's own task transaction under `retryOnTaskConflict`.
+    expect(total).toBe(46);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   }, 15_000);
 

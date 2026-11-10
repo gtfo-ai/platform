@@ -157,6 +157,8 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   'superseded-mr.ts': 1,
   // WP-177: the ticket claim, between the `stage.execute` job's transactions — outside any run.
   'ticket-claim.ts': 1,
+  // S-28.5: the reverse sync's merge-request read before a closed stop, in a job, outside any run.
+  'ticket-status-recheck.ts': 1,
   // WP-177: the `ticket_lifecycle` duty, one resolution, in a job.
   'ticket-lifecycle.ts': 1,
   // WP-25's two duties: the check before it creates the lint task, the post before it comments.

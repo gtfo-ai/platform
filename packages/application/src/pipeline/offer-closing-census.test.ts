@@ -116,6 +116,9 @@ const SAVE_SITES: ReadonlyMap<string, Closing> = new Map<string, Closing>([
   ['packages/application/src/pipeline/config-refusal.ts', CLOSES],
   // S-22.14 (backlog 744): a claim refused at admission pauses its task after closing its offer.
   ['packages/application/src/pipeline/claim-admission.ts', CLOSES],
+  // S-28.5: the reverse sync cancels a queued task after `closeStageOffer`, and escalates through
+  // `applyDecision`; its amend leaves a `needs_human` task, which has no live offer, where it is.
+  ['packages/application/src/pipeline/ticket-status-recheck.ts', CLOSES],
 ]);
 
 const SAVE = /\btasks\.save\s*\(/;
