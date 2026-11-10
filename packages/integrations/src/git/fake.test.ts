@@ -887,3 +887,39 @@ describe('FakeGitProvider merge-request listing (WP-110, divergence 21)', () => 
     });
   });
 });
+
+describe('FakeGitProvider rebase (divergence 40, TD-038 amendment A)', () => {
+  const open = async (port: ReturnType<typeof build>, branch: string) =>
+    port.openMergeRequest({
+      project: PROJECT,
+      branch,
+      target: 'main',
+      title: 'fix',
+      description: '',
+      draft: false,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+
+  it('can be stuck in progress, and can fail while a person’s push moved the head', async () => {
+    const port = build();
+    const stuck = await open(port, 'agentic/stuck');
+    port.setRebaseOutcome({ project: PROJECT, iid: stuck.ref.iid, outcome: 'stuck' });
+    await port.rebaseMergeRequest(stuck.ref);
+    expect(await port.getMergeRequestRebase(stuck.ref)).toEqual({
+      in_progress: true,
+      failed: false,
+    });
+    expect((await port.getMergeRequest(stuck.ref)).head_sha).toBe(stuck.head_sha);
+
+    const moved = await open(port, 'agentic/moved');
+    port.setRebaseOutcome({ project: PROJECT, iid: moved.ref.iid, outcome: 'failed_moved' });
+    await port.rebaseMergeRequest(moved.ref);
+    expect(await port.getMergeRequestRebase(moved.ref)).toEqual({
+      in_progress: false,
+      failed: true,
+    });
+    expect((await port.getMergeRequest(moved.ref)).head_sha).not.toBe(moved.head_sha);
+  });
+});

@@ -1601,7 +1601,9 @@ export const createMemoryPipelineStore = (
     settleRebase: async (_tx, taskId, headSha, settled) => {
       const key = `${taskId}#${headSha}#rebase`;
       const merge = taskMerges.get(key);
-      if (merge === undefined || merge.outcome !== 'rebased') return false;
+      if (merge === undefined || merge.outcome !== 'rebased' || merge.rebasedTo !== null) {
+        return false;
+      }
       taskMerges.set(key, {
         ...merge,
         outcome: settled.outcome,

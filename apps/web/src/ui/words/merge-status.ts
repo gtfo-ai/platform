@@ -42,6 +42,8 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
   rebase_unsupported:
     'the provider wants a rebase the platform cannot ask for — rebase and merge it yourself',
   rebase_refused: 'the provider refused to rebase it — rebase and merge it yourself, or Send back',
+  rebase_timed_out:
+    'the provider’s rebase did not finish within thirty minutes — rebase and merge it yourself, or Send back',
   rebase_no_change:
     'the provider wants a rebase again although its last rebase changed nothing — rebase and merge it yourself',
   rebase_changed:
@@ -86,6 +88,8 @@ const REBASE_WHY: Readonly<Record<string, string>> = {
   pipeline_failed: 'the pipeline on the rebased commit did not pass',
   cannot_push: 'the platform may not push to the source branch',
   not_enqueued: 'the provider could not queue the rebase',
+  rebase_timed_out: 'the provider’s rebase did not finish within thirty minutes',
+  head_moved: 'the branch moved while the provider rebased it — a person pushed their own commits',
   rebase_unknown:
     'the provider still showed an earlier rebase’s failure, so whether this rebase went through cannot be told',
   rebase_failed:

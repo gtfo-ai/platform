@@ -193,6 +193,9 @@ const enqueueFollowUp = async (
 /** After a review window, the duty looks again this much after the window's length. */
 export const PERSON_WORDS_FOLLOW_UP_MS = 15_000;
 
+/** How long a rebase may run from its request before a person decides (a stuck provider job). */
+export const REBASE_TIME_LIMIT_MS = 30 * 60_000;
+
 /** After a rebase is asked, the duty looks again once this much later (the recovery pass after). */
 export const REBASE_FOLLOW_UP_MS = 60_000;
 
@@ -413,7 +416,10 @@ export const runPlatformMerge = async (
     live.state === 'merged' &&
     headSha !== null &&
     live.head_sha === headSha &&
-    read.attempt === null &&
+    // No merge recorded for this head (a settled no-op rebase row on it is not a merge).
+    !read.merges.some(
+      (merge) => merge.headSha === headSha && !merge.outcome.startsWith('rebase'),
+    ) &&
     (job?.retries?.count ?? 0) > 0
   ) {
     // A retry after a transport failure, and the merge request is merged **at the reviewed head**:
@@ -745,24 +751,44 @@ const continueRebase = async (
   const taskId = stored.task.id;
   const context = { projectId: stored.task.projectId, taskId };
   const reads = gitReads(step.integrations);
-  const state = await reads.mergeRequestRebase(stored.mr, context);
-  if (state === null || state.in_progress) {
+  /** Settles the rebase as a person's to decide, with the port's word for why. */
+  const settleForPerson = async (
+    status: string,
+    wait: string,
+    rebasedTo: string | null,
+  ): Promise<PlatformMergeOutcome> => {
+    await options.unitOfWork.transaction(async (scope) =>
+      options.store.tasks.settleRebase(scope.tx, taskId, rebase.headSha, {
+        outcome: 'rebase_changed',
+        providerStatus: status,
+        rebasedTo,
+      }),
+    );
+    await step.decide(wait);
+    return 'rebase_changed';
+  };
+  /** Still running — or stuck: past {@link REBASE_TIME_LIMIT_MS} from the request a person decides. */
+  const stillRebasing = async (): Promise<PlatformMergeOutcome> => {
+    if (Date.parse(options.clock.now()) - Date.parse(rebase.attemptedAt) > REBASE_TIME_LIMIT_MS) {
+      return settleForPerson('rebase_timed_out', 'rebase_timed_out', null);
+    }
     await step.decide('rebase_in_progress');
     return 'waiting';
+  };
+  const state = await reads.mergeRequestRebase(stored.mr, context);
+  if (state === null || state.in_progress) {
+    return stillRebasing();
   }
-  if (state.failed && live.head_sha === rebase.headSha) {
+  if (state.failed) {
     if (rebase.providerStatus === 'stale_error') {
       // GitLab showed a failed rebase before this one was asked, and still does: whether this
       // rebase failed cannot be told from it, so a person decides rather than a conflict assumed.
-      await options.unitOfWork.transaction(async (scope) =>
-        options.store.tasks.settleRebase(scope.tx, taskId, rebase.headSha, {
-          outcome: 'rebase_changed',
-          providerStatus: 'rebase_unknown',
-          rebasedTo: null,
-        }),
-      );
-      await step.decide('rebase_changed');
-      return 'rebase_changed';
+      return settleForPerson('rebase_unknown', 'rebase_changed', null);
+    }
+    if (live.head_sha !== rebase.headSha) {
+      // GitLab's rebase failed **and** the head moved: a head the platform neither reviewed nor
+      // produced (a person's own push) — never judged as the rebase's (review of #158).
+      return settleForPerson('head_moved', 'head_moved', live.head_sha);
     }
     await options.unitOfWork.transaction(async (scope) =>
       options.store.tasks.settleRebase(scope.tx, taskId, rebase.headSha, {
@@ -779,13 +805,13 @@ const continueRebase = async (
     return 'waiting';
   }
   if (live.head_sha === rebase.headSha) {
-    if (live.merge_blocker?.reason === 'rebase') {
-      // Not run yet: the recovery pass asks again after the follow-up.
-      await step.decide('rebase_in_progress');
-      return 'waiting';
+    if (live.merge_blocker != null || live.mergeable !== true) {
+      // Not run yet — GitLab may briefly report the old head without its blocker right after the
+      // request — so nothing is settled until it reads mergeable.
+      return stillRebasing();
     }
-    // GitLab rebased nothing — the branch was already up to date — and no longer wants a rebase:
-    // the reviewed head stands. Settled on itself, so a later need_rebase is a person's.
+    // GitLab rebased nothing — the branch was already up to date — and reads mergeable: the
+    // reviewed head stands. Settled on itself, so a later need_rebase is a person's.
     await options.unitOfWork.transaction(async (scope) =>
       options.store.tasks.settleRebase(scope.tx, taskId, rebase.headSha, {
         outcome: 'rebased',
@@ -841,6 +867,12 @@ const continueRebase = async (
   }
   if (verdict.reading.kind !== 'passed') {
     return settle('pipeline_failed');
+  }
+  // "Still the head at every later read" (amendment A, decision 3): the head that was digested and
+  // whose pipeline passed must be the head now, or a person decides.
+  const headNow = await reads.mergeRequest(stored.mr, context);
+  if (headNow === null || headNow.state !== 'opened' || headNow.head_sha !== live.head_sha) {
+    return settleForPerson('head_moved', 'head_moved', headNow?.head_sha ?? null);
   }
   // The rebased head is the reviewed change (amendment A, decision 3): a narrow write of both heads,
   // compare-and-set on the head the rebase started from.

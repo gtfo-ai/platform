@@ -1833,7 +1833,8 @@ export const createPostgresPipelineStore = (
     settleRebase: async (tx, taskId, headSha, settled) => {
       const result = await sqlOf(tx).query(
         `update task_merges set outcome = $3, provider_status = $4, rebased_to = $5
-          where task_id = $1 and head_sha = $2 and kind = 'rebase' and outcome = 'rebased'`,
+          where task_id = $1 and head_sha = $2 and kind = 'rebase' and outcome = 'rebased'
+            and rebased_to is null`,
         [taskId, headSha, settled.outcome, settled.providerStatus, settled.rebasedTo],
       );
       return (result.rowCount ?? 0) > 0;

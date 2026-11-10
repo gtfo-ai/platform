@@ -233,6 +233,10 @@ export const changeDigest = (
       return null;
     }
     const patch = file.diff ?? null;
+    if (patch !== null && /^Binary files /m.test(patch)) {
+      // A binary change has no lines to compare.
+      return null;
+    }
     if (patch === null && !(file.renamedFile || file.deletedFile)) {
       return null;
     }
@@ -241,7 +245,11 @@ export const changeDigest = (
       // GitLab's `diff` carries hunks only (no `---`/`+++` file header lines), so every line that
       // opens with `+` or `-` is an added or a removed line; `@@` headers and context are dropped.
       .filter((line) => line.startsWith('+') || line.startsWith('-'));
-    if (lines.length === 0 && !(file.renamedFile || file.deletedFile)) {
+    // No added or removed line: only a deletion, or a **pure** rename (the patch empty), is a change
+    // the paths show; anything else — a binary edit, a mode change, a rename with a hidden edit — is
+    // not shown by the lines, so there is no digest.
+    const pureRename = file.renamedFile && (patch === null || patch.trim() === '');
+    if (lines.length === 0 && !(file.deletedFile || pureRename)) {
       return null;
     }
     parts.push(

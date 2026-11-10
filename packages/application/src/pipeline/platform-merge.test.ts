@@ -41,6 +41,7 @@ import {
   MAX_REBASES_PER_READY_ENTRY,
   type PlatformMergeOptions,
   platformMergeKey,
+  REBASE_TIME_LIMIT_MS,
   recoverLostMergeSignal,
   runPlatformMerge,
 } from './platform-merge.js';
@@ -74,6 +75,7 @@ interface Live {
   commits: number;
   mergeCommit: string | null;
   rebaseFailed: boolean;
+  rebaseStuck: boolean;
 }
 
 interface World {
@@ -105,7 +107,11 @@ interface World {
     | 'recounted'
     | 'noop'
     | 'conflict'
-    | 'refuse';
+    | 'refuse'
+    | 'stuck'
+    | 'failed_moved';
+  /** A person pushes while the rebased head's pipeline is read, before the acceptance. */
+  readonly pushDuringPipeline?: boolean;
   /** A person pushes while the diff is read, before the rebase is asked (review of #158). */
   readonly pushDuringDiff?: boolean;
   /** GitLab still shows an earlier rebase's `merge_error` before this one is asked. */
@@ -198,6 +204,7 @@ const setup = async (world: World = {}) => {
     commits: 2,
     mergeCommit: null,
     rebaseFailed: false,
+    rebaseStuck: false,
     ...world.live,
   };
   const merges: { expected: string; squash: boolean; remove: boolean }[] = [];
@@ -262,9 +269,13 @@ const setup = async (world: World = {}) => {
     getMergeRequestRebase: async () => ({
       in_progress: false,
       failed: live.rebaseFailed || world.staleRebaseError === true,
+      ...(live.rebaseStuck ? { in_progress: true, failed: false } : {}),
     }),
-    getPipelineStatus: async (_project: string, sha: string) =>
-      world.pipeline === null || world.pipeline === undefined
+    getPipelineStatus: async (_project: string, sha: string) => {
+      if (world.pushDuringPipeline === true) {
+        live.head = '6'.repeat(40);
+      }
+      return world.pipeline === null || world.pipeline === undefined
         ? null
         : {
             id: 'p-9',
@@ -274,7 +285,8 @@ const setup = async (world: World = {}) => {
             jobs: [],
             coverage_pct: null,
             finished_at: null,
-          },
+          };
+    },
     rebaseMergeRequest: async () => {
       rebases.push(MR.iid);
       if (world.rebaseAnswer === 'refuse') {
@@ -282,6 +294,16 @@ const setup = async (world: World = {}) => {
       }
       if (world.rebaseAnswer === 'conflict') {
         live.rebaseFailed = true;
+        return;
+      }
+      if (world.rebaseAnswer === 'stuck') {
+        live.rebaseStuck = true;
+        return;
+      }
+      if (world.rebaseAnswer === 'failed_moved') {
+        // GitLab's job failed while a person force-pushed their own rebase.
+        live.rebaseFailed = true;
+        live.head = '7'.repeat(40);
         return;
       }
       live.blocker = null;
@@ -377,7 +399,8 @@ const setup = async (world: World = {}) => {
     ids += 1;
     return `00000000-0000-4000-8000-${(0x1a0000000000 + ids).toString(16).padStart(12, '0')}` as Id;
   };
-  const clock = { now: () => NOW };
+  let clockMs = Date.parse(NOW);
+  const clock = { now: () => new Date(clockMs).toISOString() };
   const options = {
     unitOfWork: memory,
     store,
@@ -527,6 +550,9 @@ const setup = async (world: World = {}) => {
     (await memory.transaction(async (scope) => store.tasks.mergeDecisionOf(scope.tx, TASK)))
       ?.wait ?? null;
   return {
+    advance: (ms: number) => {
+      clockMs += ms;
+    },
     waitedFor,
     options,
     memory,
@@ -1006,6 +1032,63 @@ describe('need_rebase (TD-038 amendment A)', () => {
       }
     },
   );
+
+  it('accepts nothing when GitLab says the rebase failed and the head moved (a person’s own push), and merges nothing', async () => {
+    const w = await setup({
+      setting: 'platform',
+      live: rebaseOnly,
+      pipeline: 'success',
+      rebaseAnswer: 'failed_moved',
+    });
+    expect(await w.run()).toBe('rebase_asked');
+    expect(await w.run()).toBe('rebase_changed');
+    expect(await w.waitedFor()).toBe('head_moved');
+    expect((await w.attempts())[0]).toMatchObject({
+      outcome: 'rebase_changed',
+      providerStatus: 'head_moved',
+    });
+    const after = await reload(w);
+    expect(after?.readyHeadSha).toBe(HEAD);
+    expect(after?.task.currentStage).toBe('ready_for_merge');
+    expect(await w.run()).toBe('already_attempted');
+    expect(w.merges).toEqual([]);
+  });
+
+  it('accepts nothing when the head changed between the digest and the acceptance', async () => {
+    const w = await setup({
+      setting: 'platform',
+      live: rebaseOnly,
+      pipeline: 'success',
+      pushDuringPipeline: true,
+    });
+    expect(await w.run()).toBe('rebase_asked');
+    expect(await w.run()).toBe('rebase_changed');
+    expect(await w.waitedFor()).toBe('head_moved');
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+    expect(w.merges).toEqual([]);
+  });
+
+  it('a rebase still in progress after thirty minutes is a person’s, said plainly', async () => {
+    const w = await setup({ setting: 'platform', live: rebaseOnly, rebaseAnswer: 'stuck' });
+    expect(await w.run()).toBe('rebase_asked');
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('rebase_in_progress');
+    w.advance(REBASE_TIME_LIMIT_MS + 1);
+    expect(await w.run()).toBe('rebase_changed');
+    expect(await w.waitedFor()).toBe('rebase_timed_out');
+    expect(w.merges).toEqual([]);
+  });
+
+  it('settles a no-op rebase only once GitLab reads it mergeable', async () => {
+    const w = await setup({ setting: 'platform', live: rebaseOnly, rebaseAnswer: 'noop' });
+    expect(await w.run()).toBe('rebase_asked');
+    // Right after the call GitLab still reports the old head, not mergeable yet.
+    w.live.mergeable = null;
+    expect(await w.run()).toBe('waiting');
+    expect((await w.attempts())[0]?.rebasedTo).toBeNull();
+    w.live.mergeable = true;
+    expect(await w.run()).toBe('rebase_accepted');
+  });
 
   it('with the setting at person nothing rebases or merges', async () => {
     const w = await setup({ setting: 'person', live: rebaseOnly });

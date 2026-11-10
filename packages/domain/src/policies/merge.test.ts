@@ -221,6 +221,26 @@ describe('changeDigest (TD-038 amendment A)', () => {
     ).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('gives no digest for a rename whose patch is not empty but has no added or removed line, nor for any binary patch', () => {
+    expect(
+      changeDigest(
+        [
+          {
+            ...file('@@ -1 +1 @@\n context only'),
+            oldPath: 'a.ts',
+            newPath: 'b.ts',
+            renamedFile: true,
+          },
+        ],
+        false,
+      ),
+    ).toBeNull();
+    // A binary line beside real lines still gives none.
+    expect(
+      changeDigest([file(`${PATCH}\nBinary files a/x.bin and b/x.bin differ`)], false),
+    ).toBeNull();
+  });
+
   it('moves the digest with a mode change or a rename beside the same lines', () => {
     const base = changeDigest([file(PATCH)], false);
     expect(

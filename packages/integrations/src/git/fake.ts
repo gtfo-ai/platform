@@ -313,7 +313,9 @@
  *     `in_progress`. What it does is what `setRebaseOutcome` seeded: `clean` (the default — a new
  *     head, the same files and commit count, the seeded blocker cleared), `changed` (a new head and
  *     one more added line in the first file — a rebase that changed resolved lines) or `conflict`
- *     (the head stays, `failed: true`, GitLab's `merge_error`). It records every request (`rebases`).
+ *     (the head stays, `failed: true`, GitLab's `merge_error`), `stuck` (in progress for ever — a
+ *     provider job that never ends) or `failed_moved` (`failed: true` and the head moved: a person
+ *     pushed their own rebase while GitLab's ran). It records every request (`rebases`).
  *     `countMergeRequestCommits` answers the seeded `commitCount` (1 by default).
  */
 import {
@@ -512,8 +514,9 @@ interface StoredMergeRequest {
   /** Divergence 39 (S-28.15): what `setMergeOptions` seeded; absent is no squash, no removal. */
   merge_options?: { squash: boolean; remove_source_branch: boolean } | null;
   /** Divergence 40 (TD-038 amendment A): what the next rebase does, and whether the last failed. */
-  rebase_outcome?: 'clean' | 'changed' | 'conflict';
+  rebase_outcome?: 'clean' | 'changed' | 'conflict' | 'stuck' | 'failed_moved';
   rebase_failed?: boolean;
+  rebase_in_progress?: boolean;
   commit_count?: number;
   diff_stats: DiffStats | null;
   coverage_pct: number | null;
@@ -784,7 +787,7 @@ export interface FakeGitProvider extends GitProviderPort {
   setRebaseOutcome(input: {
     readonly project?: string;
     readonly iid: number;
-    readonly outcome: 'clean' | 'changed' | 'conflict';
+    readonly outcome: 'clean' | 'changed' | 'conflict' | 'stuck' | 'failed_moved';
     readonly commitCount?: number;
   }): void;
   /** Seeds the repository's merge settings as a merge request reads them (divergence 39). */
@@ -1797,6 +1800,15 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         mr.rebase_failed = true;
         return;
       }
+      if (outcome === 'stuck') {
+        mr.rebase_in_progress = true;
+        return;
+      }
+      if (outcome === 'failed_moved') {
+        mr.rebase_failed = true;
+        mr.head_sha = nextSha();
+        return;
+      }
       mr.rebase_failed = false;
       mr.head_sha = nextSha();
       mr.merge_blocker = null;
@@ -1822,7 +1834,10 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     getMergeRequestRebase: async (mrRef) => {
       core.enter('get_merge_request_rebase');
       const mr = requireMr('get_merge_request_rebase', mrRef);
-      return { in_progress: false, failed: mr.rebase_failed === true };
+      return {
+        in_progress: mr.rebase_in_progress === true,
+        failed: mr.rebase_in_progress !== true && mr.rebase_failed === true,
+      };
     },
 
     countMergeRequestCommits: async (mrRef) => {

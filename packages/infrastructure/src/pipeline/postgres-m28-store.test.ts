@@ -276,6 +276,7 @@ describe('task_merges and the merge decision (S-28.15, migration 0119)', () => {
       }),
     ).toBe(true);
     expect(settled.calls[0]?.text).toContain("kind = 'rebase' and outcome = 'rebased'");
+    expect(settled.calls[0]?.text).toContain('rebased_to is null');
     expect(
       await store().tasks.settleRebase(recording([], 0).tx, TASK, 'b'.repeat(40), {
         outcome: 'rebase_conflict',
