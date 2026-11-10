@@ -1771,6 +1771,38 @@
                 "bootstrap",
                 "run"
               ]
+            },
+            "budget_figures": {
+              "type": "object",
+              "properties": {
+                "stage": {
+                  "$ref": "#/$defs/Slug"
+                },
+                "spent_usd": {
+                  "$ref": "#/$defs/Usd"
+                },
+                "held_usd": {
+                  "$ref": "#/$defs/Usd"
+                },
+                "reserve_usd": {
+                  "$ref": "#/$defs/Usd"
+                },
+                "cap_usd": {
+                  "$ref": "#/$defs/Usd"
+                },
+                "required_cap_usd": {
+                  "$ref": "#/$defs/Usd"
+                }
+              },
+              "required": [
+                "stage",
+                "spent_usd",
+                "held_usd",
+                "reserve_usd",
+                "cap_usd",
+                "required_cap_usd"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

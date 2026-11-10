@@ -79,6 +79,7 @@ const TASK_ROW: TaskRecord = {
   budget_cap_usd: 5,
   paused_reason: null,
   paused_budget_scope: null,
+  paused_budget_figures: null,
   cost_estimated_usd: 0,
   estimate_usd: null,
   estimate_basis: null,
@@ -521,7 +522,7 @@ describe('one primary action per state', () => {
         { can_raise_budget: true },
         { state: 'paused', paused_reason: 'budget', paused_budget_scope: 'task' },
       ),
-      ["Raise this task's cap…"],
+      ['Raise the cap…'],
     ],
     [
       'a task its own cap paused, for a caller who may not',

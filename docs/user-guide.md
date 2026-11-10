@@ -920,7 +920,7 @@ would have nowhere to run.
   is doing now. On the right is **one button, chosen by what the task is waiting for**: *Give it back to the agent…*
   while you hold it (below), *Answer* when an agent asked a question (it takes you to the answer
   box), *Review plan* when a plan or a budget waits for a maintainer (it takes you to the approval in
-  the needs-you box, where the plan is shown), *Raise this task's cap…* when the
+  the needs-you box, where the plan is shown), *Raise the cap…* when the
   task's own cap paused it and you may raise budgets, *Resume* when the task is paused or waiting
   for a person — and none when nothing waits on you. When the needs-you box below says how the task
   stopped and that the next step is to retry the stage (the rounds used up, the same failure again,
@@ -929,7 +929,7 @@ would have nowhere to run.
   stops a run of it still going. Resume is never offered past an open question
   or a pending approval: answer or decide it instead. Everything else is in the **`···`**
   menu beside it: *Pause…*, *Resume*, *Work on it yourself…*, *Retry stage…*, *Return to stage…*, *Rework…*,
-  *Raise this task's cap…*, *Download JSON* and *Cancel task…*. A command with fields, or one you
+  *Raise the cap…*, *Download JSON* and *Cancel task…*. A command with fields, or one you
   cannot undo, opens a dialog with those fields. The menu leaves out what the platform would refuse
   for anybody — Pause, Work on it yourself, Return and Rework on a merged task, any stage command on a task
   that has entered no stage, a take-over of a finished task — and what would do nothing useful:
@@ -1110,8 +1110,9 @@ The Developer opens its merge request as a **draft**, and it stays one while the
 review, the business review and the rebase gate run: the platform marks it ready only when the task
 reaches **Ready for merge** (the product owner's decision of 2026-10-06). When the task leaves Ready
 for an agent stage again — your review comments sent it back, a conflict is being resolved, you
-returned it — the merge request goes back to draft until the task is Ready again; a gate re-check
-(the default branch moved) leaves it ready. So your project's CI has to run its tests on a **draft**
+returned it — the merge request goes back to draft until the task is Ready again, once that stage's
+run actually starts: a task that pauses for its budget before the run leaves the merge request as it
+was. A gate re-check (the default branch moved) leaves it ready. So your project's CI has to run its tests on a **draft**
 merge request from an `agentic/` branch. If its rules skip or hold jobs for a `Draft:` title, the CI
 check waits and the task page says what it waits for, from the first check: *"CI is waiting for
 someone to start the manual job codeception in GitLab. Start it there and the task
@@ -1703,10 +1704,20 @@ spend does when the next run is admitted, and the pause says how much is held ap
 spent.
 The hold ends when the process that ran it reports its cost, or when the budget's window rolls
 over; the per-task cap never rolls over, so a task paused on a hold waits for a maintainer to raise
-the cap. A task paused by **its own** cap shows **Raise this task's cap** on its page, to someone who
-may set budgets in its project: enter a figure above the cap shown, and the task's own cap is raised and the task resumes at the stage it
-stopped at. A cap is only ever raised, and raising it releases no hold — the held runs still count
-against the new cap. A task an organisation, project or feature budget paused is not offered it: that
+the cap. **A budget pause says its arithmetic.** A run is admitted only if what the task has spent,
+plus what it holds, plus the most the next run may spend (that stage's run budget — a **reserve**, a
+ceiling and never spend: what the run does not use is never charged) fits under the cap. So a task
+can pause well before it has spent its cap, and the page says which: *"Paused before starting
+Implementation: spent $10.99 of the $50.00 cap; the next run reserves up to $40.00, which would
+exceed the cap by $0.99. Raise the cap to at least $50.99 — the task then continues at
+Implementation; finished stages are not redone."* A task paused by **its own** cap shows **Raise the
+cap…** on its page, to someone who may set budgets in its project: the dialog says what was spent and
+what the next run reserves, and offers the minimum, rounded up to a whole dollar. A figure below
+that minimum is refused, with the minimum named in the dialog — a raise that would only pause the
+task again two seconds later is not taken. After the raise the task resumes at the stage it stopped
+at, **on the same attempt** when that attempt never ran anything, so the attempt number grows only
+when a run happened. A cap is only ever raised, and raising it releases no hold — the held runs still
+count against the new cap. A task an organisation, project or feature budget paused is not offered it: that
 cap is raised where it is set. A task's **Cost so far** adds only the measured runs, and says *Excludes N runs nobody
 measured* beneath it when there are any — as do the board card and the chat message when a task completes.
 
@@ -1720,7 +1731,8 @@ business review 10 (`stages.<stage>.budget_usd`). A run is admitted only if what
 and holds, plus that run's own cap, fits the task cap — so at those figures a task that spent 15 USD
 on architecture cannot start a 40 USD implementation run under the default 50 USD task cap, and
 pauses before it. The task cap has no configuration key in this build: raise it on the task, with
-**Raise this task's cap**, to at least what its remaining stages may spend. In `local` mode the
+**Raise the cap…**, to at least the minimum the pause names — and, to avoid the next pause, to what
+its remaining stages may spend. In `local` mode the
 dollars are list-price estimates (above), but they are what admission compares.
 
 ### Trial

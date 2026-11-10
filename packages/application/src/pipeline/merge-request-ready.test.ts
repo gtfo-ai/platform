@@ -6,10 +6,11 @@
  * an agent stage follows Ready. Through the real executor and the real memory store; the git double
  * records what it was asked.
  */
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { RepositoryFileSource } from '../config/repository-config.js';
+import type { HandlerContext } from '../events/handler.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -19,6 +20,7 @@ import type {
   GitProviderPort,
   MergeRequestUpdate,
 } from '../ports/integrations/git-provider.js';
+import type { Jobs } from '../ports/jobs.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import {
   createMemoryAuditLog,
@@ -29,6 +31,7 @@ import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import type { PipelineOutboundData } from './jobs.js';
 import {
+  mergeRequestReadyHandlers,
   runMergeRequestDraft,
   runMergeRequestPipeline,
   runMergeRequestReady,
@@ -525,5 +528,105 @@ describe('the mr_draft duty, an agent stage after Ready (backlog 486)', () => {
     expect(auditLog.entriesFor('mark_merge_request_draft').map((entry) => entry.status)).toEqual([
       'would_have',
     ]);
+  });
+});
+
+/**
+ * **The merge request goes back to draft when the run is admitted, not when the stage is entered**
+ * (S-28.1, M28 ruling 6). AUT-6655's return to implementation drafted the merge request on the
+ * stage's entry and then paused at the task cap: the merge request read *Draft* while nothing ran.
+ * The handler decides on `run.offered` — written only once the stage executor's admission passed —
+ * so a return that pauses at admission (no offer) leaves the merge request as it was. Canary: the
+ * old trigger (`task.stage.entered` for an agent stage) enqueues `mr_draft` in the first case.
+ */
+describe('mr_draft waits for the admitted run (S-28.1, M28 ruling 6)', () => {
+  const EVENT = '00000000-0000-4000-9000-0000000000e1';
+  const backAtImplementation = (): StoredTask =>
+    ({
+      task: {
+        id: TASK,
+        projectId: PROJECT,
+        template: 'feature',
+        mode: 'normal',
+        state: 'active',
+        currentStage: 'implementation',
+        // It has been at Ready before, and is on its second implementation attempt.
+        stageAttempts: { implementation: 2, code_review: 1, ready_for_merge: 1 },
+      },
+      template: FEATURE_TEMPLATE,
+      pipelineDial: null,
+      qaStage: false,
+      mr: MR,
+    }) as unknown as StoredTask;
+
+  const handle = async (event: Record<string, unknown>) => {
+    const enqueued: PipelineOutboundData[] = [];
+    const callbacks: (() => Promise<void>)[] = [];
+    const handler = mergeRequestReadyHandlers({
+      store: { tasks: { load: async () => backAtImplementation() } },
+      jobs: {
+        enqueue: async (job: { data: PipelineOutboundData }) => {
+          enqueued.push(job.data);
+        },
+      } as unknown as Jobs,
+    } as never).find((candidate) => candidate.name === 'pipeline.merge-request.draft-state');
+    if (handler === undefined) throw new Error('the draft-state handler is not registered');
+    expect(handler.eventTypes).toContain('run.offered');
+    await handler.handle({
+      scope: { tx: {} },
+      event: { event: { id: EVENT, ...event } as unknown as DomainEvent },
+      afterCommit: (callback: () => Promise<void>) => callbacks.push(callback),
+    } as unknown as HandlerContext);
+    for (const callback of callbacks) {
+      await callback();
+    }
+    return enqueued.map((data) => data.duty);
+  };
+
+  it('enqueues nothing on the stage’s entry — a return that then pauses at admission drafts nothing', async () => {
+    expect(
+      await handle({
+        type: 'task.stage.entered',
+        payload: { project_id: PROJECT, task_id: TASK, stage: 'implementation', attempt: 2 },
+      }),
+    ).toEqual([]);
+  });
+
+  it('enqueues mr_draft once the stage’s run is offered (admitted)', async () => {
+    expect(
+      await handle({
+        type: 'run.offered',
+        payload: {
+          project_id: PROJECT,
+          task_id: TASK,
+          run_id: '00000000-0000-4000-8000-0000000000f1',
+          offer_id: '00000000-0000-4000-8000-0000000000f2',
+          kind: 'stage',
+          stage: 'implementation',
+          attempt: 2,
+        },
+      }),
+    ).toEqual(['mr_draft']);
+  });
+
+  it('enqueues nothing for an ask’s offer, or for an offer of an attempt the task has left', async () => {
+    const offered = {
+      project_id: PROJECT,
+      task_id: TASK,
+      run_id: '00000000-0000-4000-8000-0000000000f1',
+      offer_id: '00000000-0000-4000-8000-0000000000f2',
+    };
+    expect(
+      await handle({
+        type: 'run.offered',
+        payload: { ...offered, kind: 'ask', stage: null, attempt: 1 },
+      }),
+    ).toEqual([]);
+    expect(
+      await handle({
+        type: 'run.offered',
+        payload: { ...offered, kind: 'stage', stage: 'implementation', attempt: 1 },
+      }),
+    ).toEqual([]);
   });
 });

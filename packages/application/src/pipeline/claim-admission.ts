@@ -26,9 +26,9 @@
  * is not this check's to refuse — its offer was admitted against the configuration it could read, and
  * the stage executor's next admission refuses it by name.
  */
-import type { Id, Slug } from '@platform/contracts';
+import type { Id, PausedBudgetFigures, Slug } from '@platform/contracts';
 import { type CommandContext, IllegalTransitionError, pauseTask } from '@platform/domain';
-import { type BudgetGuard, blockingBudgetDetail } from '../cost/guard.js';
+import { type BudgetGuard, blockingBudgetDetail, blockingBudgetFigures } from '../cost/guard.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
@@ -39,6 +39,7 @@ import {
   runBudgetUsd,
   taskBudgetDetail,
   taskBudgetExhausted,
+  taskBudgetFigures,
   withTaskCap,
 } from './stage-executor.js';
 import type { PipelineStore } from './store.js';
@@ -47,6 +48,8 @@ import type { PipelineStore } from './store.js';
 export interface ClaimRefusal {
   readonly reason: string;
   readonly budgetScope: 'task' | 'organization' | 'project';
+  /** What the re-check compared (S-28.1, M28 ruling 1), recorded on the pause. */
+  readonly budgetFigures: PausedBudgetFigures;
 }
 
 /** The claimed run, as the claim's transaction knows it. */
@@ -114,6 +117,7 @@ export const createClaimAdmission = (options: ClaimAdmissionOptions): ClaimAdmis
         return {
           reason: taskBudgetDetail(stored, capped, stage, held),
           budgetScope: 'task',
+          budgetFigures: taskBudgetFigures(stored, capped, stage, held),
         };
       }
       // Reserve 0: the run being claimed is live, so the pending term holds its reservation already.
@@ -127,6 +131,8 @@ export const createClaimAdmission = (options: ClaimAdmissionOptions): ClaimAdmis
       return {
         reason: blockingBudgetDetail(blocker),
         budgetScope: blocker.scope === 'org' ? 'organization' : 'project',
+        // Reserve 0 here: the claimed run's own reservation is in the held figure already.
+        budgetFigures: blockingBudgetFigures(blocker, stage),
       };
     },
 
@@ -138,7 +144,11 @@ export const createClaimAdmission = (options: ClaimAdmissionOptions): ClaimAdmis
       try {
         decision = pauseTask(
           stored.task,
-          { reason: 'budget', budgetScope: refusal.budgetScope },
+          {
+            reason: 'budget',
+            budgetScope: refusal.budgetScope,
+            budgetFigures: refusal.budgetFigures,
+          },
           context,
         );
       } catch (error) {

@@ -23,7 +23,7 @@
  *   for an open question (it moves focus into the callout's answer box), *Review plan* for a
  *   pending approval (it moves focus onto the callout's approval card, where the plan is shown
  *   open beside *Approve* and *Reject…* — S-25.1; there is no second, subject-less approve
- *   dialog), *Raise this task's cap…* for a task its own cap paused when the caller may raise it,
+ *   dialog), *Raise the cap…* for a task its own cap paused when the caller may raise it,
  *   *Start the job in GitLab* — a link to the held job's page (or its pipeline's) — while the CI
  *   check waits on a manual job (S-25.12), *Resume* for a paused or escalated task — or none.
  *   Two stops have no *Resume* here because the callout's own button is the page's primary: a
@@ -272,7 +272,7 @@ export const TaskHeader = ({
           onOpen('raise_budget');
         }}
       >
-        Raise this task's cap…
+        Raise the cap…
       </Button>
     ) : primary === 'start_job' && heldJobUrl !== null ? (
       // The held job's own page (or its pipeline's), through `safeHref` inside `ExternalLink`.
@@ -365,7 +365,7 @@ export const TaskHeader = ({
             onOpen('raise_budget');
           }}
         >
-          Raise this task's cap…
+          Raise the cap…
         </ActionMenuItem>
       ) : null}
       {/*

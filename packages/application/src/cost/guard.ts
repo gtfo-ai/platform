@@ -35,9 +35,16 @@
  * reservation it was admitted at. The rule, the measurement (two runs admitted against a cap that allows one,
  * three times out of three, with the handler delayed) and the residual are in `./pending.ts`.
  */
-import type { BudgetScope, BudgetWindow, Id, IsoDateTime } from '@platform/contracts';
+import type {
+  BudgetScope,
+  BudgetWindow,
+  Id,
+  IsoDateTime,
+  PausedBudgetFigures,
+  Slug,
+} from '@platform/contracts';
 import type { Transaction } from '../ports/transaction.js';
-import { type Commitment, capIsSpent, holdDetail } from './pending.js';
+import { budgetFiguresOf, type Commitment, capIsSpent, holdDetail } from './pending.js';
 import type { CostStore } from './ports.js';
 import { budgetWindowStart, resolveBudgetTimezone } from './window.js';
 
@@ -117,6 +124,20 @@ export const blockingBudgetDetail = (blocker: BlockingBudget): string =>
     : '') +
   (blocker.heldRuns > 0 ? `, plus ${holdDetail(blocker)}` : '') +
   `, and this run may spend ${blocker.reserveUsd} more`;
+
+/**
+ * A {@link BlockingBudget}'s arithmetic for the pause it causes (S-28.1, M28 ruling 1): the ledger's
+ * charge as the spend, the pending reservations and the hold together as what is held, the run's
+ * reserve and the row's limit — the same four numbers {@link blockingBudgetDetail} words.
+ */
+export const blockingBudgetFigures = (blocker: BlockingBudget, stage: Slug): PausedBudgetFigures =>
+  budgetFiguresOf({
+    stage,
+    spentUsd: blocker.spentUsd,
+    heldUsd: blocker.pendingUsd + blocker.heldUsd,
+    reserveUsd: blocker.reserveUsd,
+    capUsd: blocker.limitUsd,
+  });
 
 export interface BudgetGuardOptions {
   readonly store: CostStore;

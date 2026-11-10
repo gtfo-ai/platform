@@ -66,7 +66,14 @@
  * the stage completes, the run row and `run.finished` carry the reason and the cost, and the spend is
  * added to the task. Nothing pauses the task. The next run's admission still reads the task cap.
  */
-import type { ContextPackRecord, Effort, Id, IsoDateTime, Slug } from '@platform/contracts';
+import type {
+  ContextPackRecord,
+  Effort,
+  Id,
+  IsoDateTime,
+  PausedBudgetFigures,
+  Slug,
+} from '@platform/contracts';
 import type {
   CommandContext,
   PausedBudgetScope,
@@ -84,10 +91,18 @@ import {
   recordRunCreated,
 } from '@platform/domain';
 import { redactedPromptsWithheld } from '../config/repository-config.js';
-import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
+import {
+  type BudgetGuard,
+  blockingBudgetDetail,
+  blockingBudgetFigures,
+  noBudgetGuard,
+} from '../cost/guard.js';
 import type { LateCostRecorder } from '../cost/late.js';
 import {
+  budgetFiguresOf,
+  CAP_TOLERANCE_USD,
   type CapSpend,
+  capAdmissionFigures,
   capIsSpent,
   capSpendDetail,
   type Hold,
@@ -619,7 +634,29 @@ export const taskBudgetExhausted = (
   stage: Slug,
   held: Hold,
 ): boolean =>
-  stored.costActualUsd + held.heldUsd + runBudgetUsd(settings, stage) > settings.taskBudgetUsd;
+  // Within the cap column's precision of the cap counts as filling it (S-28.1): a person who sets
+  // the cap to the figure the pause named must see the run admitted, whatever the float sum says.
+  stored.costActualUsd + held.heldUsd + runBudgetUsd(settings, stage) >
+  settings.taskBudgetUsd + CAP_TOLERANCE_USD;
+
+/**
+ * The task cap's arithmetic for its pause (S-28.1, M28 ruling 1) — the four numbers
+ * {@link taskBudgetExhausted} compared and the cap that would have admitted the run. The figures the
+ * pause records, the task read serves and `POST /api/tasks/:id/budget` holds a raise to.
+ */
+export const taskBudgetFigures = (
+  stored: StoredTask,
+  settings: ProjectSettings,
+  stage: Slug,
+  held: Hold,
+): PausedBudgetFigures =>
+  budgetFiguresOf({
+    stage,
+    spentUsd: stored.costActualUsd,
+    heldUsd: held.heldUsd,
+    reserveUsd: runBudgetUsd(settings, stage),
+    capUsd: settings.taskBudgetUsd,
+  });
 
 /**
  * The settings with the task's **own** cap in place of the default, when a maintainer raised it —
@@ -768,10 +805,12 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     reason: string,
     /** Which cap refused the run — recorded on `task.paused` (WP-131 review round 2). */
     budgetScope: PausedBudgetScope,
+    /** What it compared (S-28.1, M28 ruling 1) — recorded beside the scope. */
+    budgetFigures: PausedBudgetFigures,
   ): Promise<Admission> => {
     const decision = pauseTask(
       stored.task,
-      { reason: 'budget', budgetScope },
+      { reason: 'budget', budgetScope, budgetFigures },
       options.context(stored.task.id),
     );
     await store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
@@ -830,7 +869,13 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       // The task's own cap when a maintainer raised it (WP-131 review round 1), else the default.
       const capped = withTaskCap(settings, await store.tasks.budgetCap(scope.tx, task.id));
       if (taskBudgetExhausted(stored, capped, job.stage, held)) {
-        return pause(scope, stored, taskBudgetDetail(stored, capped, job.stage, held), 'task');
+        return pause(
+          scope,
+          stored,
+          taskBudgetDetail(stored, capped, job.stage, held),
+          'task',
+          taskBudgetFigures(stored, capped, job.stage, held),
+        );
       }
 
       /**
@@ -854,6 +899,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           stored,
           blockingBudgetDetail(blocker),
           blocker.scope === 'org' ? 'organization' : 'project',
+          blockingBudgetFigures(blocker, job.stage),
         );
       }
 
@@ -891,6 +937,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             `this project’s shadow budget for the month since ${since} is spent: ` +
               capSpendDetail(admission, job.stage),
             'shadow',
+            capAdmissionFigures(admission, job.stage),
           );
         }
       }
@@ -930,6 +977,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
               `this project’s maintenance budget for the month since ${since} is spent: ` +
                 capSpendDetail(admission, job.stage),
               'maintenance',
+              capAdmissionFigures(admission, job.stage),
             );
           }
         }
@@ -968,6 +1016,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             `this history bootstrap’s budget is spent: ` +
               `${capSpendDetail({ ...cap, reserveUsd }, job.stage)}`,
             'bootstrap',
+            capAdmissionFigures({ ...cap, reserveUsd }, job.stage),
           );
         }
       }

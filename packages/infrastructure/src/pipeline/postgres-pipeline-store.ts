@@ -1491,6 +1491,30 @@ export const createPostgresPipelineStore = (
       return row === undefined ? 'absent' : row.open ? 'open' : 'closed';
     },
 
+    stageAttemptRuns: async (tx, taskId, stage, attempt) => {
+      // S-28.1 (M28 ruling 4): every run of the attempt, whatever its status, through its link.
+      const { rows } = await sqlOf(tx).query<{ count: number }>(
+        `select count(*)::int as count
+           from runs r
+           join task_stages s on s.id = r.task_stage_id
+          where s.task_id = $1 and s.stage = $2 and s.attempt = $3`,
+        [taskId, stage, attempt],
+      );
+      return Number(rows[0]?.count ?? 0);
+    },
+
+    reenterOpenStage: async (tx, entry) => {
+      // S-28.1: an open row only — a closed attempt is never re-opened by a resume in place.
+      const result = await sqlOf(tx).query(
+        `update task_stages
+            set entered_at = clock_timestamp(), caused_by_event_id = $4
+          where task_id = $1 and stage = $2 and attempt = $3
+            and state = 'running' and exited_at is null`,
+        [entry.taskId, entry.stage, entry.attempt, entry.causedByEventId],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
     stageAttemptEntry: async (tx, taskId, stage, attempt) => {
       const { rows } = await sqlOf(tx).query<{ open: boolean; entered_at: Date }>(
         `select (state = 'running' and exited_at is null) as open, entered_at from task_stages

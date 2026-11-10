@@ -31,6 +31,7 @@ import {
   recordMerge,
   requestApproval,
   resumeIntoApprovalWait,
+  resumePausedAttempt,
   returnEscalatedTask,
   returnToStage,
   startLibrarianCuration,
@@ -489,6 +490,60 @@ describe('pause, escalate, take over, hand back', () => {
     const { aggregate, events } = pauseTask(activeTask(), { reason: 'budget' }, context());
     expect(aggregate.state).toBe('paused');
     expect(events[0]?.payload).toMatchObject({ reason: 'budget' });
+  });
+
+  it('records a budget pause’s arithmetic, and none for a pause of another reason (S-28.1)', () => {
+    const figures = {
+      stage: 'implementation',
+      spent_usd: 10.99,
+      held_usd: 0,
+      reserve_usd: 40,
+      cap_usd: 50,
+      required_cap_usd: 50.99,
+    };
+    const budget = pauseTask(
+      activeTask(),
+      { reason: 'budget', budgetScope: 'task', budgetFigures: figures },
+      context(),
+    );
+    expect(budget.events[0]?.payload).toMatchObject({
+      reason: 'budget',
+      budget_scope: 'task',
+      budget_figures: figures,
+    });
+    const manual = pauseTask(activeTask(), { reason: 'manual', budgetFigures: figures }, context());
+    expect(manual.events[0]?.payload).not.toHaveProperty('budget_figures');
+  });
+
+  it('resumes the attempt a task paused on without opening a new one (S-28.1, M28 ruling 4)', () => {
+    const paused = pauseTask(
+      activeTask('implementation', { stageAttempts: { implementation: 4 } }),
+      { reason: 'budget' },
+      context(),
+    ).aggregate;
+    const { aggregate, events } = resumePausedAttempt(
+      paused,
+      { resumeReason: 'raised' },
+      context(),
+    );
+    expect(aggregate.state).toBe('active');
+    expect(aggregate.stageAttempts.implementation).toBe(4);
+    expect(types(events)).toEqual(['task.resumed', 'task.stage.entered']);
+    expect(events[1]?.payload).toMatchObject({ stage: 'implementation', attempt: 4 });
+    // The new-attempt path, for contrast: the same task entered through `enterStage` goes to 5.
+    expect(
+      enterStage(paused, { stage: 'implementation' }, context()).aggregate.stageAttempts,
+    ).toEqual({ implementation: 5 });
+  });
+
+  it('refuses to resume an attempt of a task that is not paused', () => {
+    expect(() => resumePausedAttempt(activeTask(), {}, context())).toThrow(InvariantViolationError);
+    const escalated = escalateTask(
+      activeTask(),
+      { reason: 'stuck', blockerBrief: 'look at it' },
+      context(),
+    ).aggregate;
+    expect(() => resumePausedAttempt(escalated, {}, context())).toThrow(InvariantViolationError);
   });
 
   it('escalates with a blocker brief', () => {

@@ -280,6 +280,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
         taskId={taskId}
         ticketKey={task.ticket.key}
         capUsd={task.budget_cap_usd}
+        budgetFigures={task.paused_budget_figures}
         takenOver={takenOver}
         merged={merged}
         form={form}

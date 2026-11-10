@@ -305,6 +305,30 @@ export const pausedBudgetScopeSchema = z.enum([
 export type PausedBudgetScope = z.infer<typeof pausedBudgetScopeSchema>;
 
 /**
+ * **The arithmetic of a budget pause** (S-28.1, M28 ruling 1): the figures the admission compared,
+ * so the page can say *"spent 10.99 of the 50.00 cap; the next run reserves up to 40.00, which would
+ * exceed the cap by 0.99"* instead of *"it has spent its cap"* when it has not.
+ *
+ * `required_cap_usd = spent_usd + held_usd + reserve_usd`, the smallest cap the admission would have
+ * passed (it admits a run that exactly fills the cap). `held_usd` is money **not** charged: the task
+ * cap's runs nobody measured, held at their reservations; for a `budgets` row or a feature cap it is
+ * also what live runs the ledger has not recorded have committed. `reserve_usd` is the run budget of
+ * `stage` that did not fit — a ceiling, never spend: what a run does not use is never charged. Every
+ * figure is the one the admission read; none is derived for the page.
+ */
+export const pausedBudgetFiguresSchema = z.strictObject({
+  /** The stage whose run was refused. */
+  stage: slugSchema,
+  spent_usd: usdSchema,
+  held_usd: usdSchema,
+  reserve_usd: usdSchema,
+  cap_usd: usdSchema,
+  required_cap_usd: usdSchema,
+});
+
+export type PausedBudgetFigures = z.infer<typeof pausedBudgetFiguresSchema>;
+
+/**
  * Cost and effort totals attached to `task.completed` / `task.cancelled`.
  *
  * `cost_usd` is the sum over the runs that **have** a figure; `is_estimate` says some of them were
@@ -965,6 +989,13 @@ export const taskRecordSchema = z.strictObject({
    * raised from the task page (`POST /api/tasks/:id/budget`).
    */
   paused_budget_scope: pausedBudgetScopeSchema.nullable(),
+  /**
+   * The pause's arithmetic (S-28.1, M28 ruling 1) — `task.paused`'s `budget_figures`, read off the
+   * same newest pause event as {@link paused_budget_scope}. `null` for a task that is not paused for
+   * its budget, for a pause appended before the figures were recorded, and for a cap whose figures
+   * the platform does not know (a run that stopped at its own per-run cap): never an invented figure.
+   */
+  paused_budget_figures: pausedBudgetFiguresSchema.nullable(),
   /**
    * The part of what the task has already spent that was **priced** rather than reported — a
    * **projection** over `cost_entries where is_estimate`, not a column (WP-47, PROGRESS backlog

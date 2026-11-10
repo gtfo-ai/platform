@@ -103,6 +103,7 @@ import {
   MAX_RUN_COMMANDS,
   MAX_TASK_PAUSE_REASON_CHARS,
   MAX_TASK_STOP_RECORDED_CHARS,
+  pausedBudgetFiguresSchema,
   pausedBudgetScopeSchema,
   promptsWithheldSchema,
   runSavedWorkSchema,
@@ -1234,7 +1235,11 @@ const pausedReasonsFor = async (
   const known = new Set(['budget', 'manual', 'taken_over']);
   return new Map(
     rows.flatMap((row) => {
-      const payload = row.payload as { readonly reason?: unknown; readonly budget_scope?: unknown };
+      const payload = row.payload as {
+        readonly reason?: unknown;
+        readonly budget_scope?: unknown;
+        readonly budget_figures?: unknown;
+      };
       if (typeof payload.reason !== 'string' || !known.has(payload.reason)) {
         return [];
       }
@@ -1246,6 +1251,9 @@ const pausedReasonsFor = async (
           {
             reason: payload.reason as NonNullable<TaskRecord['paused_reason']>,
             scope: payload.reason === 'budget' && scope.success ? scope.data : null,
+            // S-28.1 (M28 ruling 1): the pause's arithmetic, `null` for a pause recorded without it
+            // (or with a shape this release does not read) — never a figure derived here.
+            figures: payload.reason === 'budget' ? figuresOf(payload.budget_figures) : null,
           },
         ] as const,
       ];
@@ -1398,7 +1406,15 @@ const openAsksFor = async (
 interface PausedWhy {
   readonly reason: NonNullable<TaskRecord['paused_reason']>;
   readonly scope: TaskRecord['paused_budget_scope'];
+  /** The pause's arithmetic (S-28.1), when the pause recorded it. */
+  readonly figures: TaskRecord['paused_budget_figures'];
 }
+
+/** A recorded `budget_figures`, or `null` when absent or not in the published shape. */
+const figuresOf = (value: unknown): TaskRecord['paused_budget_figures'] => {
+  const parsed = pausedBudgetFiguresSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+};
 
 /**
  * How many of each task's runs ended with **nobody measuring them** — terminal, both cost columns
@@ -1749,6 +1765,7 @@ const toTaskRecord = (
   budget_cap_usd: row.budgetCapUsd === null ? DEFAULT_TASK_BUDGET_USD : usd(row.budgetCapUsd),
   paused_reason: row.state === 'paused' ? (paused?.reason ?? null) : null,
   paused_budget_scope: row.state === 'paused' ? (paused?.scope ?? null) : null,
+  paused_budget_figures: row.state === 'paused' ? (paused?.figures ?? null) : null,
   // WP-47, backlog **75**: **not** a column. `tasks.cost_estimated` was `not null default 0` from
   // migration 0004 and had no writer anywhere in the tree, so every task the product ever served
   // published `$0.00` of estimated spend — "nobody counted" rendered as "nothing was estimated".

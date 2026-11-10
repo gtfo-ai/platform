@@ -1252,6 +1252,30 @@ export interface TaskRepository {
     attempt: number,
   ): Promise<'open' | 'closed' | 'absent'>;
   /**
+   * How many `runs` rows the attempt's `task_stages` row has — any status, a withdrawn offer's
+   * cancelled run included (S-28.1, M28 ruling 4). `0` for an attempt with no row. A resume re-enters
+   * an attempt in place only when this is `0`: an attempt that had a run is a record of that run
+   * (`lastEnded`, the stranded-stage pass's "this entry already ran"), and re-entering it would make
+   * the next run's recovery read the old one's ending as its own.
+   */
+  stageAttemptRuns(tx: Transaction, taskId: Id, stage: Slug, attempt: number): Promise<number>;
+  /**
+   * Marks a still-open attempt as **entered again** — `entered_at` moved to now, `caused_by_event_id`
+   * written — for a resume that re-enters the attempt it paused on (S-28.1, M28 ruling 4), so the
+   * stranded-stage pass reads the resume as a fresh entry. Conditional on the row being open
+   * (`running`, never exited); answers whether it wrote. A row is never re-opened here: an attempt
+   * something closed is not resumed in place.
+   */
+  reenterOpenStage(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly causedByEventId: string | null;
+    },
+  ): Promise<boolean>;
+  /**
    * When `stage`'s attempt `attempt` was entered (`task_stages.entered_at`, the database's clock)
    * and whether it is still open — `null` when the attempt has no row (WP-136).
    *
