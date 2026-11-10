@@ -1747,7 +1747,8 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
         `?${WORKER_OFFERS_QUERY}`,
       );
       // S-28.6: and the list's `idle_reason`, which the page's state then carries.
-      expect(worker.state().idle_reason).toEqual(IDLE);
+      const local = await request(port, { path: '/api/local/state', headers: auth });
+      expect(workerLocalStateSchema.parse(JSON.parse(local.text)).idle_reason).toEqual(IDLE);
 
       // The scope: read, set to pick only through the core's PUT, read back.
       const read = await request(port, { path: '/api/local/claim-scope', headers: auth });
