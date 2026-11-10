@@ -53,6 +53,8 @@ interface World {
 
 let app: FastifyInstance;
 let world: World;
+/** The last error the route threw, so a 500 names its cause in the assertion. */
+let lastError: string | undefined;
 let clock: number;
 
 const pipelines: Record<string, Job[]> = {
@@ -140,14 +142,19 @@ const build = async (): Promise<void> => {
         'f'.repeat(40),
       ]
         .slice(0, Math.min(limit + 1, world.heads))
-        .map((headSha, index) => ({ taskId: `task-${String(index)}` as Id, headSha })),
+        .map((headSha, index) => ({
+          taskId: `00000000-0000-4000-8000-00000000f0${String(index).padStart(2, '0')}` as Id,
+          headSha,
+        })),
     logger: silentLogger,
     now: () => clock,
   });
   app = fastify();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  lastError = undefined;
   app.setErrorHandler(async (error, _request, reply) => {
+    lastError = error instanceof Error ? (error.stack ?? error.message) : String(error);
     const mapped = toApiError(error, 'test-request');
     return reply.status(mapped.statusCode).send(mapped.body);
   });
@@ -179,7 +186,7 @@ const get = () => app.inject({ method: 'GET', url: `/api/projects/${PROJECT}/ci/
 describe('GET /api/projects/:project_id/ci/manual-jobs (S-28.7)', () => {
   it('lists each manual job once with its stage, whether it blocks, a trigger and a deploy hint', async () => {
     const response = await get();
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode, lastError).toBe(200);
     const body = response.json();
     expect(body.heads_read).toBe(2);
     expect(body.heads_unread).toBe(0);

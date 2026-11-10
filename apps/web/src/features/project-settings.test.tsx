@@ -1322,11 +1322,12 @@ describe('the manual CI jobs card (S-28.7)', () => {
       }).element,
     );
     await card();
-    expect(
-      await screen.findByText(
-        /only the project settings may tell the platform to start a manual job/,
+    // The card says it once; the Rules & limits list of every key not applied says it again.
+    await waitFor(() =>
+      expect(document.querySelector('[data-manual-jobs-not-applied]')?.textContent).toContain(
+        'only the project settings may tell the platform to start a manual job',
       ),
-    ).toBeTruthy();
+    );
     expect(
       screen.getByText(/the repository’s settings file may only add Wait for a person/),
     ).toBeTruthy();
