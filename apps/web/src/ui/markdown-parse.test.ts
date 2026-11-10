@@ -128,8 +128,12 @@ describe('blocks', () => {
 
   it('falls back to paragraphs and fences above the size guard', () => {
     const big = `# heading **bold**\n\n${'x'.repeat(MAX_MARKDOWN_CHARS)}`;
-    const blocks = parseMarkdown(big);
-    expect(blocks[0]).toEqual(paragraph(text('# heading **bold**')));
+    const [first] = parseMarkdown(big);
+    // One paragraph of literal text: no heading, no strong — the old reading.
+    expect(first?.kind).toBe('paragraph');
+    expect(first?.kind === 'paragraph' && first.content).toEqual([
+      text(`# heading **bold**\n\n${'x'.repeat(MAX_MARKDOWN_CHARS)}`),
+    ]);
   });
 });
 

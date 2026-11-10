@@ -269,7 +269,12 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   // The registry link is in the Dependencies row's detail (S-23.9b's merge box).
   await page.locator('[data-check="dependencies"] summary').click();
   await expect(page.getByText('npm:left-pad', { exact: true })).toBeVisible();
-  expect(await page.locator('[data-link-refused]').count()).toBe(2);
+  // And, since S-28.9, a third: the open question's `[click me](javascript:…)` is a markdown link
+  // now, refused by `MarkdownLink` and shown as its literal source — a refusal, not a link.
+  expect(
+    await page.locator('[data-link-refused]').filter({ hasText: HOSTILE.markdownLink }).count(),
+  ).toBe(1);
+  expect(await page.locator('[data-link-refused]').count()).toBe(3);
 
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
   await expect(page.getByRole('heading', { name: 'DEMO-2' })).toBeVisible();

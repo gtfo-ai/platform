@@ -320,7 +320,9 @@ describe('whose ticket it is', () => {
     const details = held.querySelector<HTMLDetailsElement>('details[data-escalation-details]');
     expect(details?.open).toBe(false);
     expect(details?.querySelector('summary')?.textContent).toBe('Details');
-    expect(details?.querySelector('p.whitespace-pre-wrap')?.textContent).toBe(BRIEF);
+    // S-28.9: the brief is markdown, so its blank line is a paragraph break.
+    const paragraphs = [...(details?.querySelectorAll('p.whitespace-pre-wrap') ?? [])];
+    expect(paragraphs.map((p) => p.textContent).join('\n\n')).toBe(BRIEF);
     // The sentence is the first thing the box says.
     expect(held.firstElementChild?.hasAttribute('data-held-sentence')).toBe(true);
   });

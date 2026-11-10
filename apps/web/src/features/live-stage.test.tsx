@@ -290,8 +290,11 @@ describe('the live stage on the task page (backlogs 455 and 496)', () => {
     });
     render(app.element);
     const line = await screen.findByTestId('live-stage-progress');
-    expect(line.textContent).toBe(hostile);
-    expect(line.querySelector('img, a, strong')).toBeNull();
+    // S-28.9: the summary's markdown marks are elements; its HTML and its `javascript:` link are
+    // the characters they were.
+    expect(line.querySelector('strong')?.textContent).toBe('bold');
+    expect(line.textContent).toBe(hostile.replace('**bold**', 'bold'));
+    expect(line.querySelector('img, a')).toBeNull();
   });
 
   it('says no line has been reported yet, and shows nothing when no stage run is live', async () => {

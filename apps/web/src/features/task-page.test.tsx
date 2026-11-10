@@ -1198,13 +1198,14 @@ describe('the needs-you callout', () => {
     expect(callout.querySelector('[data-escalation-reason]')).toBeNull();
     expect(callout.querySelector('[data-stop-recorded]')).toBeNull();
     expect(callout.textContent).not.toContain('What the platform saw last');
-    // The brief, collapsed, as prose: its blank line kept, in a block that wraps it (pre-wrap).
+    // The brief, collapsed, as prose: since S-28.9 markdown, so its blank line is a paragraph
+    // break — one wrapping (pre-wrap) paragraph per side of it.
     const details = callout.querySelector<HTMLDetailsElement>('details[data-escalation-details]');
     expect(details).not.toBeNull();
     expect(details?.open).toBe(false);
     expect(details?.querySelector('summary')?.textContent).toBe('Details');
-    const prose = details?.querySelector('p.whitespace-pre-wrap');
-    expect(prose?.textContent).toBe(brief);
+    const paragraphs = [...(details?.querySelectorAll('p.whitespace-pre-wrap') ?? [])];
+    expect(paragraphs.map((p) => p.textContent).join('\n\n')).toBe(brief);
   });
 
   it('shows no Details disclosure when the brief is the one why', async () => {
