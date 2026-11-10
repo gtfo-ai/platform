@@ -1066,6 +1066,25 @@ calendar — so nothing that was waiting on the day of the upgrade expires at on
 has nowhere to store such a deadline, so one held for more than five working days on the day of the
 upgrade moves to needing a human on the first pass; the workpad keeps its branch and resume command.
 
+**Upgrading past the build that limits each person's tasks (S-28.6).** Two admission rules change
+at once, applied to the next task the platform starts (nothing already running is stopped):
+
+- **A person now has at most 3 owned tasks in flight by default** — their tasks that are active, sent
+  back, or waiting for an answer or an approval, across every project. Before, only the project's
+  limit (5 in the pipeline by default) bounded them, so a person who owns many tickets will see
+  some wait in *Queued* with *Waiting for a place: … owns 3 tasks in flight*. An unowned task is
+  bound by the project's limits only. The organisation sets the default **and** the highest number a
+  person may choose for themself with `pipeline.wip.max_tasks_per_owner` in the organisation's
+  policies (`PATCH /api/org`, `{"pipeline": {"wip": {"max_tasks_per_owner": 5}}}`); a project may set
+  a lower one in its own configuration; each person sets their own on the Workers screen's *Your
+  limit* (an administrator for anyone, `PUT /api/org/users/:id/task-limit`), up to the
+  organisation's value. With no organisation value a person may choose up to 200.
+- **Paused tasks and tasks at *Needs you* no longer hold a place in a project's pipeline**
+  (`max_tasks_in_pipeline`), so a project whose queue was held by stopped tasks starts queued ones
+  after the upgrade, at the next event the scheduler hears.
+
+Migration 0112 adds the nullable `users.max_tasks_in_flight`; it is additive.
+
 **Upgrading past the build that recovers lost reminders (WP-108).** A question or approval open on
 the day of the upgrade that was never reminded about — open before reminders existed, given its
 first deadline by the pass above, or whose reminder timer was lost — is reminded **once** on the

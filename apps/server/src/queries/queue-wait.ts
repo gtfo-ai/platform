@@ -118,7 +118,7 @@ const ownerLoadsFor = async (
   const loads = new Map<string, QueueOwnerLoad>();
   for (const userId of new Set(ownerOf.values())) {
     const [person] = await database
-      .select({ name: users.name, email: users.email, personal: users.maxTasksInFlight })
+      .select({ name: users.name, personal: users.maxTasksInFlight })
       .from(users)
       .where(eq(users.id, userId));
     if (person === undefined) continue;
@@ -135,7 +135,8 @@ const ownerLoadsFor = async (
       );
     loads.set(userId, {
       userId,
-      name: person.name.trim() === '' ? person.email : person.name,
+      // Shown to anyone who reads the project: a name, never an email address.
+      name: person.name.trim() === '' ? 'the owner' : person.name,
       count: held.length,
       limit: ownerLimitOf(limits, person.personal),
       holders: held.map((task) => ({

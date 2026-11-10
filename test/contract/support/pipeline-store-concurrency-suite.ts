@@ -513,6 +513,43 @@ export const runPipelineStoreConcurrencyContract = (
     });
 
     /**
+     * S-28.6: `queuedProjectsOfOwners` — where a place a person freed may start their task — names
+     * a project only for a **queued** task they own, in both stores.
+     */
+    it('names the projects where an owner has a queued task, and only those', async () => {
+      const own = async (stored: StoredTask) => {
+        const scope = await begin();
+        await store.tasks.insert(scope.tx, stored);
+        const current = await store.tasks.ownership(scope.tx, stored.task.id);
+        await store.tasks.saveOwner(scope.tx, stored.task.id, {
+          expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+          next: {
+            ownerUserId,
+            ownerSource: 'platform',
+            ownerChangedAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+            ticketAssignee: null,
+          },
+        });
+        await scope.commit();
+      };
+      const read = async (owners: readonly Id[]) => {
+        const scope = await begin();
+        try {
+          return await store.tasks.queuedProjectsOfOwners(scope.tx, owners);
+        } finally {
+          await scope.rollback();
+        }
+      };
+      const active = taskFixture();
+      await own(active);
+      expect(await read([ownerUserId])).not.toContain(projectId);
+      const queued = taskFixture();
+      await own({ ...queued, task: { ...queued.task, state: 'queued' } });
+      expect(await read([ownerUserId])).toContain(projectId);
+      expect(await read([])).toEqual([]);
+    });
+
+    /**
      * WP-184's duty lease (migration 0091): two performers of one task's duty group, each claiming
      * in a transaction of its own and committing it — the shape `withTaskDutyLease` uses.
      */
