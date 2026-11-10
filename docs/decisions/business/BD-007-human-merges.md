@@ -38,7 +38,11 @@ steps as possible."* This supersedes *"The platform never merges"* and the parki
   the ticket is not closed or taken by a person, and the project is not in shadow mode. It pins the reviewed commit, so
   a push in between refuses the merge. It never bypasses or changes a provider rule and never approves its own merge
   request.
-- **A person still merges** during probation and for a change that touches a risk class, whatever the setting.
+- **The plan decision is the human checkpoint** (the owner: *"the merge decision once approved or does not need the
+  approval because platform decided it is safe then platform merge"*). A task whose plan a person approved, or whose
+  plan needed no approval (approved by the platform as low-risk, or the project's policy continues without one), is
+  merged by the platform when the conditions above hold. Probation and risk classes do not hold the merge: they already
+  force a person's plan approval. The record of the merge names the plan decision it rests on.
 - **Nothing silent**: the task page says beforehand that the platform will merge and what it waits for; a refused or
   failed merge says what, why and what to do, and is left to a person (no retry loop); a merge by the platform is
   recorded as the platform's action and announced once.

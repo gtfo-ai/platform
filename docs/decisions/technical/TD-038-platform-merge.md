@@ -21,13 +21,14 @@ migration 0118) and resolves the platform's own threads. `tasks.ready_head_sha` 
    deploy; the wizard preselects `platform` when Autonomous is picked. **Why `person` by default:** a merge into a team's
    default branch is the most outward act the platform has, and product/18 makes every adoption feature opt-in and
    conservative; the owner turns it on in one save.
-2. **Who merges, per task** — `mergeByPersonReasons(input)` in `packages/domain`, pure, every reason in a fixed order (the
-   shape of `planApprovalReasons`): `setting_person`; `probation {completed, of}` (the dial's probation, as for plans);
-   `risk_class {classes}` (any class matched by the merge request's changed paths, `riskClassesForPaths`);
+2. **Who merges, per task — the plan decision is the human checkpoint** (the owner, 2026-11-10: *"the merge decision
+   once approved or does not need the approval because platform decided it is safe then platform merge"*).
+   `mergeByPersonReasons(input)` in `packages/domain`, pure, every reason in a fixed order: `setting_person`;
    `provider_cannot_merge` (capability `merge: false`); `shadow_mode`. Empty → the platform merges. **Probation and risk
-   classes always hold**, whatever the setting (TD-037: the low-risk rule never overrides probation). A person-approved
-   plan does **not** hold the merge: the plan gate decides direction before spend, and a person having looked is more
-   oversight, not less.
+   classes do not hold the merge**: they act where they belong, by forcing a person's plan approval (BD-006, BD-030,
+   TD-037). The merge rests on the task's **plan decision**, read from its latest `approvals` row for the plan:
+   `approved_by_person {user}`, `approved_by_platform` (TD-037's `auto_decided`), or `not_required` (the policy
+   auto-continued, or the template has no plan stage). A plan still waiting or rejected never reaches Ready.
 3. **The fresh check** — the `platform_merge` duty (`pipeline.outbound`, executor, idempotency key
    `platform_merge:<task>:<ready_head_sha>`) re-reads, outside any transaction, and merges only when every item holds:
    the task is at `ready_for_merge` and not paused; no human-return window is open and no person's item is younger than
@@ -48,19 +49,24 @@ migration 0118) and resolves the platform's own threads. `tasks.ready_head_sha` 
    done). The last try records `failed` and tells the people; the task stays at Ready (a person's stage), it is not
    escalated. Declared in `JOB_EXHAUSTION` as bound-and-tell. A new head (after a return and re-review) is a new key.
 6. **One path to `merged_gate`.** The duty never advances the task. It records `task_merges` (migration 0119,
-   additive: task, head, outcome `merged | refused | failed`, provider status word, merge commit, attempted_at) and
-   `task.merge.attempted` with the system actor; the executor's `integration_actions` row is the call's audit.
+   additive: task, head, outcome `merged | refused | failed`, provider status word, merge commit, attempted_at, and the
+   plan decision it rests on — `plan_decision`, `plan_approval_id`) and `task.merge.attempted` with the system actor and
+   the same plan decision; the executor's `integration_actions` row is the call's audit.
    `mr.merged` (webhook or poll) moves the task. **Lost signal:** the recovery pass's `ready_merge_check` row re-reads a
    task still at Ready with a `merged` row older than 10 min and records `mr.merged` through `recordNormalisedDelivery`
    (a duplicate is dropped there); after 3 such passes it escalates with a brief.
 7. **Nothing silent.** The task DTO's `merge` block: `by`, the reasons, the provider blocker, the last attempt. The page
-   says *Merging automatically when GitLab reports it mergeable — now: 2 unresolved threads*, *Waiting for a person to
-   merge: probation task 3 of 5*, *The platform's merge was refused: GitLab said the branch moved (409) — merge it
-   yourself or Send back*, and *Merged by the platform at 14:02, commit abc1234*. A merge is announced once to the task's
+   says *Merging automatically when GitLab reports it mergeable — now: 2 unresolved threads*, *A person merges: this
+   project's setting*, *The platform's merge was refused: GitLab said the branch moved (409) — merge it
+   yourself or Send back*, and *Merged by the platform at 14:02, commit abc1234 — plan approved by Jana Nováková* (or *approved by the platform
+   as low-risk*, *no plan approval required*). A merge is announced once to the task's
    people (the notify duty's idempotency).
 
 ## Rejected
-- Default `platform` — an outward write switched on by an upgrade. Coupling the merge to the plan-risk rule — see 2.
+- Default `platform` — an outward write switched on by an upgrade.
+- **Probation and risk classes holding the merge** (a person merges probation task *n* of *N*, and any task whose changed
+  paths match a risk class) — proposed in this record's first draft, **rejected by the owner** (decision 2's sentence):
+  both already force a person's plan approval, and a second human step at the merge is the step he wants gone.
 - Auto-merge (`auto_merge`) — the provider merges later, past the platform's head pin and fresh read.
 - The duty advancing the task — two paths into `merged_gate`, one for platform merges only.
 

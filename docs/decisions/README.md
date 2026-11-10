@@ -41,7 +41,7 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-004](business/BD-004-claude-only-provider-modes.md) | Claude only; provider modes `api` and `local`; no claude.ai login in the product | accepted |
 | [BD-005](business/BD-005-pipeline-stages.md) | Default pipeline stages, templates and review independence | accepted |
 | [BD-006](business/BD-006-human-checkpoints.md) | Human checkpoints: questions always, plan approval by size + probation (amended 2026-11-07: an approval never expires; bounded reminders; amended 2026-11-10: opt-in risk-gated plan approval, TD-037) | accepted |
-| [BD-007](business/BD-007-human-merges.md) | A human merges; human MR comments re-enter the pipeline (amended 2026-11-10: a project may let the platform merge when everything is true at that moment; probation and risk classes still wait for a person, TD-038) | accepted |
+| [BD-007](business/BD-007-human-merges.md) | A human merges; human MR comments re-enter the pipeline (amended 2026-11-10: a project may let the platform merge when everything is true at that moment; resting on the plan decision — a person's approval, the platform's low-risk approval or none required, TD-038) | accepted |
 | [BD-008](business/BD-008-bounded-loops-and-escalation.md) | Every loop is bounded; escalation to `Needs human` | accepted |
 | [BD-009](business/BD-009-single-tenant-instances.md) | One instance per organisation (tenant); many projects per instance | accepted |
 | [BD-010](business/BD-010-wip-limits-and-budgets.md) | WIP limits per project; budgets at org/project/task/run with pause-not-kill (amended 2026-11-10: a budget pause shows its arithmetic; a limit per owner; a stopped task frees its pipeline place) | accepted |

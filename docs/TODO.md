@@ -284,7 +284,7 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 
 ## Parking lot (not for v0.1; see product/14 roadmap)
 
-- ~~Auto-merge policy for `chore` once trust metrics exist (BD-007).~~ Settled 2026-11-10 by BD-007's amendment and TD-038 (every template, opt-in per project, probation and risk classes hold; slice S-28.15).
+- ~~Auto-merge policy for `chore` once trust metrics exist (BD-007).~~ Settled 2026-11-10 by BD-007's amendment and TD-038 (every template, opt-in per project, resting on the plan decision; slice S-28.15).
 - Shadow mode in parallel with live human tickets (v0.2).
 - Organisation-level shared knowledge across projects (product/05).
 - Cross-tenant control plane if hosting is ever offered (BD-009).
