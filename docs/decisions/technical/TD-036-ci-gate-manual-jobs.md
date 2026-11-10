@@ -149,3 +149,10 @@ nothing could say *start it*.
 **Rejected.** Playing every blocking manual job (a release or deploy job would run on every task); globs (a job name is an
 identity, decision 3). **Residual.** A played job spends the project's CI minutes on every attempt; that is the project's
 choice when it writes `run`.
+
+**As built (2026-11-10, S-28.7a/S-28.7b).** A trigger (bridge) job set to `run` is not played: the gate treats it as
+`wait` (a person starts it), and the *Manual CI jobs* form refuses it. `PUT …/config` does not refuse it, because it
+cannot without reading the project's pipelines (BACKLOG 1545), so decision 3's "refused at save" holds only in the form.
+Residuals: an agent can rename a job in its branch's CI file to a `run` name. That gives no new privilege, because the
+branch's automatic jobs already run as the same account. The CI wait's clock still counts from the gate's entry while a
+started job runs (BACKLOG 1544).

@@ -460,6 +460,10 @@ push (a person's unanswered request would vanish). **Residuals.** A person who w
 press Send back. Resolving a person's thread is a write in their conversation; shadow mode and the dial gate it as every
 executor write.
 
+**As built (2026-11-10, S-28.3).** The *not addressed* reply (*"Not addressed in this run — still open."*) is posted once
+per thread, and again only after a person writes in that thread. A `fixed` or `documented` reply when no new head has
+reached the merge request says *"Not pushed yet — still open"*, names no commit and resolves nothing.
+
 ## Amendment B (2026-11-10, M28, the owner's ruling; S-28.4/S-28.5) — the ticket's status bounds the task, both ways
 
 **Context.** AUT-6676 was moved to *Released* on 2026-10-14 and started on 2026-11-04 because intake reads the pick-up

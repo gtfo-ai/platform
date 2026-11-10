@@ -45,3 +45,14 @@ that is plainly low-risk — without letting the model talk its way past a check
 - `self_assessment` text is untrusted (BD-022): rendered as text, never in a prompt outside a data block.
 - An older build reading a plan with `self_assessment` must accept it: the artifact field is optional and the schema change
   ships before any prompt asks for it.
+
+## As built (2026-11-10, S-28.8a/S-28.8b)
+- The assessment's `confidence` is `high | medium | low`, not a number (`planConfidenceSchema`), and `max_size` ranges over
+  the plan sizes S–XL. The defaults are `max_risk: low`, `min_confidence: high`, `max_size: M` and every factor in
+  `always_ask`.
+- The rule only **waives** the dial's own asks (the size threshold and *every plan*). It never adds a wait: a plan the
+  dial would not have asked about goes ahead as before, whatever its assessment.
+- The recommended setup is ***Assess every plan***: the rule switched on, plus the dial's every-plan approval on the plan
+  stage of the feature and bug templates. One save in the project settings makes both changes.
+- A plan with no `files_to_change`, or with a glob or wildcard path, always waits, because the facts have nothing exact
+  to read.
