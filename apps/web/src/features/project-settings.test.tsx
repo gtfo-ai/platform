@@ -1031,6 +1031,7 @@ describe('the verification mode', () => {
  * whole settings document with the hash it read.
  */
 describe('the low-risk plan rule', () => {
+  const ON = { config: { version: 1, policies: { plan_approval_risk: { enabled: true } } } };
   const recording =
     (puts: { url: string; body: unknown }[], base: typeof fetch): typeof fetch =>
     async (input, init) => {
@@ -1050,8 +1051,18 @@ describe('the low-risk plan rule', () => {
     expect(toggle.checked).toBe(false);
     const text = document.body.textContent ?? '';
     expect(text).toContain('A one-file text fix the agent is sure of goes ahead.');
-    expect(text).toContain('Anything touching database migrations waits for you.');
+    expect(text).toContain('A plan touching database migrations still waits for you.');
+    expect(text).not.toContain('Anything touching database migrations waits for you.');
     expect(text).toContain('a plan that touches a sensitive area');
+    // The rule only waives asks, so the screen promises nothing it adds — in both states.
+    expect(screen.getByText('Never go ahead without approval when the plan touches')).toBeTruthy();
+    expect(text).not.toContain('Always wait for you when the plan touches');
+    expect(document.querySelector('[data-low-risk-summary]')?.textContent).toBe(
+      'Off (the default): plans wait for approval as How much agents do alone says.',
+    );
+    expect(document.querySelector('[data-low-risk-never-adds]')?.textContent).toBe(
+      'This never makes a plan wait that would not have waited without it.',
+    );
     // Every factor of the checklist is ticked by default, worded — never a key name.
     const migrations = screen.getByRole('checkbox', {
       name: 'Database migrations or stored data',
@@ -1072,9 +1083,11 @@ describe('the low-risk plan rule', () => {
         realtime: false,
       }).element,
     );
-    await user.click(
-      await screen.findByRole('checkbox', { name: 'Let low-risk plans go ahead without approval' }),
-    );
+    const toggle = (await screen.findByRole('checkbox', {
+      name: 'Let low-risk plans go ahead without approval',
+    })) as HTMLInputElement;
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+    await user.click(toggle);
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]?.body).toEqual({
       config: {
@@ -1104,11 +1117,11 @@ describe('the low-risk plan rule', () => {
         realtime: false,
       }).element,
     );
-    await user.click(
-      await screen.findByRole('checkbox', {
-        name: 'Protected files (tests, CI, agent configuration)',
-      }),
-    );
+    const factor = (await screen.findByRole('checkbox', {
+      name: 'Protected files (tests, CI, agent configuration)',
+    })) as HTMLInputElement;
+    await waitFor(() => expect(factor.disabled).toBe(false));
+    await user.click(factor);
     await waitFor(() => expect(puts).toHaveLength(1));
     const body = puts[0]?.body as
       | { config: { policies: { plan_approval_risk: { enabled: boolean; always_ask: string[] } } } }
@@ -1118,6 +1131,105 @@ describe('the low-risk plan rule', () => {
     expect(written?.always_ask).not.toContain('protected_paths');
     expect(written?.always_ask).toContain('schema_migration');
     expect(written?.always_ask).toHaveLength(11);
+  });
+
+  it('says what the rule means beside a size threshold, and offers Assess every plan', async () => {
+    // The fixture's dial is Supervised: above_size at L.
+    render(createApp({ fetchImpl: fetchFor({}, { config: ON }), realtime: false }).element);
+    await screen.findByRole('checkbox', { name: 'Let low-risk plans go ahead without approval' });
+    await waitFor(() =>
+      expect(document.querySelector('[data-low-risk-summary]')?.textContent).toBe(
+        'Now: plans of size L and larger are assessed; smaller plans go ahead without anyone being asked.',
+      ),
+    );
+    expect(document.querySelector('[data-low-risk-never-adds]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Assess every plan' })).toBeTruthy();
+    expect(document.querySelector('[data-low-risk-every]')?.textContent).toContain(
+      'leaves plans smaller than L unasked',
+    );
+  });
+
+  it('saves Assess every plan as one document: every plan asked, and the rule on', async () => {
+    const puts: { url: string; body: unknown }[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: recording(
+          puts,
+          fetchFor(
+            {},
+            {
+              config: {
+                config: {
+                  version: 1,
+                  policies: { probation_tasks: 2 },
+                  pipeline: { template_overrides: { feature: { enabled: true } } },
+                },
+              },
+            },
+          ),
+        ),
+        realtime: false,
+      }).element,
+    );
+    const assess = (await screen.findByRole('button', {
+      name: 'Assess every plan',
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(assess.disabled).toBe(false));
+    await user.click(assess);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]?.body).toEqual({
+      config: {
+        version: 1,
+        policies: { probation_tasks: 2, plan_approval_risk: { enabled: true } },
+        pipeline: {
+          template_overrides: {
+            feature: { enabled: true, stages: { architecture: { plan_approval: 'always' } } },
+            bug: { stages: { architecture: { plan_approval: 'always' } } },
+          },
+        },
+      },
+      base_hash: 'deadbeef',
+    });
+  });
+
+  it('says every plan is assessed once the policy asks for every plan and the rule is on', async () => {
+    const every = {
+      config: {
+        version: 1,
+        policies: { plan_approval_risk: { enabled: true } },
+        pipeline: {
+          template_overrides: {
+            feature: { stages: { architecture: { plan_approval: 'always' } } },
+            bug: { stages: { architecture: { plan_approval: 'always' } } },
+          },
+        },
+      },
+    };
+    render(createApp({ fetchImpl: fetchFor({}, { config: every }), realtime: false }).element);
+    await screen.findByRole('checkbox', { name: 'Let low-risk plans go ahead without approval' });
+    await waitFor(() =>
+      expect(document.querySelector('[data-low-risk-summary]')?.textContent).toBe(
+        'Every plan is assessed. Low-risk plans (within the limits below) go ahead; all others wait for your approval, and the task page says why.',
+      ),
+    );
+    expect(screen.queryByRole('button', { name: 'Assess every plan' })).toBeNull();
+  });
+
+  it('shows a maintainer the rule disabled, and says who may change it', async () => {
+    const maintainer: typeof fetch = async (input, init) =>
+      String(input).includes('/api/auth/get-session')
+        ? json({ ...SESSION, user: { ...SESSION.user, role: 'maintainer' } })
+        : fetchFor({}, { config: ON })(input, init);
+    render(createApp({ fetchImpl: maintainer, realtime: false }).element);
+    const toggle = (await screen.findByRole('checkbox', {
+      name: 'Let low-risk plans go ahead without approval',
+    })) as HTMLInputElement;
+    await waitFor(() => expect(toggle.disabled).toBe(true));
+    expect(screen.getByText('Changing this needs the administrator role.')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Assess every plan' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });
 

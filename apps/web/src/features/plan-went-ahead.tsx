@@ -64,9 +64,9 @@ export const PlanWentAheadNotice = ({
             {wentAheadLine(lowRiskAutoOf(approval.reasons))}
           </p>
           <p className="text-xs text-fg-muted">
-            This project lets a plan go ahead when the platform finds no risk in it and the agent
-            judges it low-risk and is sure of it. Risk classes and the first tasks’ extra checks
-            still wait for you.{' '}
+            This project lets a plan go ahead when the platform finds no risk in it and the agent’s
+            own assessment is inside this project’s limits. A plan that touches a sensitive area,
+            and the first tasks’ extra checks, still wait for you.{' '}
             {projectKey === null ? null : (
               <Link
                 to="/projects/$key/settings/$section"
