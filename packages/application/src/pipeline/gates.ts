@@ -170,6 +170,12 @@ export type GateResult =
       readonly detail: string;
       readonly ciWait?: CiWait;
       readonly ciRead?: CiGateRead;
+      /**
+       * S-28.7 (the M28 ruling): the `run` jobs the judgement found `manual` on the live head's
+       * latest pipeline — what the job that asked enqueues a `ci_play_manual` wake-up for, each
+       * job at most once per attempt (`ci-play.ts`). Absent when there is none.
+       */
+      readonly ciPlay?: CiPlayJobs;
     }
   /** The platform cannot evaluate this gate at all; the task escalates. */
   | { readonly kind: 'unsupported'; readonly detail: string };
@@ -240,6 +246,13 @@ export const rebaseAgainstCi = (
   }
   return { kind: 'agree' };
 };
+
+/** S-28.7: what a pending CI read asks the platform to start — see `GateResult`'s `ciPlay`. */
+export interface CiPlayJobs {
+  readonly headSha: string;
+  readonly pipelineId: string;
+  readonly jobs: readonly Pick<PipelineStatus['jobs'][number], 'id' | 'name'>[];
+}
 
 /**
  * How many times a gate may answer `pending` before the task is parked for a human — every gate,
@@ -737,6 +750,20 @@ export const pendingPipelineDetail = (
     : `pipeline ${status.id} is held at ${held}: nothing runs until somebody starts it on the provider`;
 };
 
+/**
+ * S-28.7: the sentence a wait adds when the platform is starting jobs the project set to `run` —
+ * names redacted, then bounded, as every job name the gate writes.
+ */
+export const startingDetail = (
+  toStart: readonly Pick<PipelineStatus['jobs'][number], 'name'>[],
+  redact: (text: string) => string,
+): string =>
+  `the platform is starting the manual ${toStart.length === 1 ? 'job' : 'jobs'} ${toStart
+    .map((job) => JSON.stringify(boundedJobName(job.name, redact)))
+    .join(
+      ', ',
+    )} the project set to run (pipeline.ci.manual_jobs), and waits for ${toStart.length === 1 ? 'its result' : 'their results'}`;
+
 /** The pass's detail when manual jobs were left: the platform's sentence, the names bounded. */
 const passedWithManualDetail = (
   status: Pick<PipelineStatus, 'id' | 'status'>,
@@ -754,7 +781,13 @@ const requiredFailureDetail = (
   status: Pick<PipelineStatus, 'id' | 'status'>,
   judged: Extract<CiPipelineJudgement, { kind: 'failed' }>,
   redact: (text: string) => string,
+  policy: ManualJobPolicy,
 ): string => {
+  // S-28.7: the key the requirement comes from — `manual_jobs` when any failed job is named there.
+  const requiredKeyOf = (jobs: readonly PipelineStatus['jobs'][number][]): string =>
+    jobs.some((job) => policy.modes?.has(job.name) === true)
+      ? 'pipeline.ci.manual_jobs'
+      : 'pipeline.ci.required_manual_jobs';
   const named = (jobs: readonly PipelineStatus['jobs'][number][]): string =>
     jobs.map((job) => boundedJobName(job.name, redact)).join(', ');
   const ran = judged.failing.filter((job) => !judged.skipped.includes(job));
@@ -769,7 +802,7 @@ const requiredFailureDetail = (
     ...(ran.length === 0
       ? []
       : [
-          `a manual job the project requires (pipeline.ci.required_manual_jobs) ran and did not succeed: ${named(ran)}`,
+          `a manual job the project requires (${requiredKeyOf(ran)}) ran and did not succeed: ${named(ran)}`,
         ]),
   ];
   return `pipeline ${status.id} is ${status.status}, but ${parts.join('; and ')}`;
@@ -817,7 +850,7 @@ export const ciVerdictOf = (
           .filter((job) => !judged.skipped.includes(job))
           .map((job) => ({ name: job.name, logRef: job.log_ref ?? null })),
         detail: judged.required
-          ? requiredFailureDetail(status, judged, redact)
+          ? requiredFailureDetail(status, judged, redact, policy)
           : status.status === 'manual'
             ? `pipeline ${status.id} is held at a manual job and a job that is not allowed to fail did not succeed: ${names}`
             : failed.length === 0
@@ -845,16 +878,17 @@ export const ciVerdictOf = (
 
 /**
  * The project's manual-job policy, read only when the pipeline's status lets it matter (`success`
- * under a list of names, `manual` always) — a running or red pipeline costs no settings read.
+ * under a list of names, `manual` always, and — S-28.7 — `pending`/`running`, whose `run` jobs the
+ * platform starts while the rest of the pipeline runs) — a red pipeline costs no settings read.
  */
 export const manualJobPolicyFor = async (
   options: Pick<CiGateOptions, 'settings'>,
   projectId: Id,
   status: Pick<PipelineStatus, 'status'>,
 ): Promise<ManualJobPolicy> =>
-  status.status === 'success' || status.status === 'manual'
-    ? manualJobPolicyOf(await options.settings.forProject(projectId))
-    : DEFAULT_MANUAL_JOB_POLICY;
+  status.status === 'failed' || status.status === 'canceled' || status.status === 'skipped'
+    ? DEFAULT_MANUAL_JOB_POLICY
+    : manualJobPolicyOf(await options.settings.forProject(projectId));
 
 export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
   const { integrations } = options;
@@ -1000,17 +1034,27 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
             if (verdict.kind === 'reading') {
               return judgeCiSettlement(options, bindings, stored, headSha, verdict.reading);
             }
-            const { heldAt } = verdict.judgement;
+            const { heldAt, toStart } = verdict.judgement;
             pendingRead = ciPipelineReadOf(status, {
               headSha,
               draft: live?.draft === true,
               redact,
               heldAt,
             });
-            return {
-              kind: 'pending',
-              detail: pendingPipelineDetail(status, live?.draft === true, redact, heldAt),
-            };
+            const detail = pendingPipelineDetail(status, live?.draft === true, redact, heldAt);
+            // S-28.7: the jobs the project set to `run` that are `manual` now — the job enqueues
+            // their start after this read; the sentence says the platform is starting them.
+            return toStart.length === 0
+              ? { kind: 'pending', detail }
+              : {
+                  kind: 'pending',
+                  detail: `${detail}; ${startingDetail(toStart, redact)}`,
+                  ciPlay: {
+                    headSha,
+                    pipelineId: status.id,
+                    jobs: toStart.map((job) => ({ id: job.id, name: job.name })),
+                  },
+                };
           };
           const result = await read();
           return result.kind === 'pending'

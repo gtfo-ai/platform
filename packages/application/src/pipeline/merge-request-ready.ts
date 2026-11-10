@@ -302,7 +302,9 @@ export const runMergeRequestPipeline = async (
    */
   if (status !== null) {
     const policy = manualJobPolicyOf(await options.settings.forProject(stored.task.projectId));
-    if (!manualJobsHolding(status, policy).holds) {
+    // S-28.7 (the M28 ruling): never because of a job the project set to `run` — the CI gate
+    // starts that one on this pipeline, so a fresh pipeline would only hold it a second time.
+    if (!manualJobsHolding(status, policy).heldForPerson) {
       return 'not_needed';
     }
   }

@@ -98,6 +98,7 @@ import {
   artifactBodyPath,
   ciGateEndingSchema,
   ciManualNotRunSchema,
+  ciManualStartedSchema,
   contextPackRecordSchema,
   MAX_INBOX_ESCALATED,
   MAX_RUN_COMMANDS,
@@ -2228,6 +2229,37 @@ export const ciManualNotRunOf = (
 };
 
 /**
+ * **The manual jobs the platform started on the latest CI attempt** (S-28.7): the newest `ci_gate`
+ * attempt, whatever its state, and its `task_stages.ci_manual_started`, parsed with the writer's
+ * strict schema; `null` when that attempt recorded none or the task never reached the gate. A stored
+ * value that does not parse is **refused** by name, as {@link ciManualNotRunOf} refuses one.
+ */
+export const ciManualStartedOf = (
+  stageRows: readonly Pick<StageRowSelect, 'taskId' | 'stage' | 'attempt' | 'ciManualStarted'>[],
+): TaskDetailResponse['ci_manual_started'] => {
+  const newest = stageRows
+    .filter((row) => row.stage === CI_GATE_STAGE)
+    .reduce<(typeof stageRows)[number] | null>(
+      (latest, row) => (latest === null || row.attempt > latest.attempt ? row : latest),
+      null,
+    );
+  if (newest === null || newest.ciManualStarted === null || newest.ciManualStarted === undefined) {
+    return null;
+  }
+  const parsed = ciManualStartedSchema.safeParse(newest.ciManualStarted);
+  if (!parsed.success) {
+    const paths = parsed.error.issues
+      .map((issue) => (issue.path.length === 0 ? '(root)' : issue.path.join('.')))
+      .join(', ');
+    throw new UnprojectableRowError(
+      `task ${newest.taskId}`,
+      `the manual jobs the platform started (\`task_stages.ci_manual_started\`, attempt ${newest.attempt}) do not parse at ${paths}`,
+    );
+  }
+  return parsed.data;
+};
+
+/**
  * What the reads that carry `waiting` (S-26.5) need from the composition: the core's current run
  * and egress digests, which a machine's claim compares with what it holds — `null` when this
  * process has no worker release, and then no machine is counted as able to claim, as none can.
@@ -2362,6 +2394,8 @@ export const findTaskDetail = async (
     last_gate_wait: lastGateWaitOf(task, stageRows),
     // S-27.2: the manual jobs the latest CI pass left unstarted.
     ci_manual_not_run: ciManualNotRunOf(stageRows),
+    // S-28.7: the manual jobs the platform started (or could not) on the latest CI attempt.
+    ci_manual_started: ciManualStartedOf(stageRows),
     queue_wait: queueWaits.get(task.id) ?? null,
     manual_pause: manualPause,
     // S-25.11: the returns and the stop, off the same rows.

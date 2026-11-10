@@ -453,6 +453,9 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     coverageArtifacts: true,
     // "Draft merge requests run the same pipelines as merge requests marked as ready."
     draftPipelines: true,
+    // S-28.7: "For a job in manual status, trigger an action to start the job" (jobs API, "Run a
+    // job"), available on every tier; whether this binding's account may is the job's own rule.
+    manualJobPlay: true,
     discussionResolution: true,
     credentialMinting: config.mint_credentials,
   };
@@ -1406,12 +1409,29 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
           // The job's own page ("List pipeline jobs" publishes `web_url`; backlog 1078): where a
           // person starts a held manual job. Absent on an older payload, which reads as none.
           web_url: job.web_url ?? null,
+          // S-28.7: a bridge starts a downstream pipeline; the platform never starts one.
+          ...(bridgeIds.has(job.id) ? { trigger: true } : {}),
         })),
         coverage_pct: full.coverage ?? null,
         finished_at: toIsoDateTimeOrNull(full.finished_at, 'get_pipeline_status'),
         // BACKLOG 1490: a list cut at `max_pages` says so, and the CI gate does not pass on it.
         ...(listed.truncated || bridges.truncated ? { jobs_truncated: true } : {}),
       };
+    },
+
+    /**
+     * S-28.7 — "Run a job", `POST /projects/:id/jobs/:job_id/play`. The port's job id is GitLab's
+     * numeric id; anything else is refused before a request is made. GitLab requires the account to
+     * be allowed to merge to the job's branch (and to deploy to a protected environment), and answers
+     * a `403` otherwise, which the transport maps to `forbidden`.
+     */
+    playJob: async (project, jobIdRef) => {
+      const jobId = Number(jobIdRef);
+      if (!/^[0-9]{1,20}$/.test(jobIdRef) || !Number.isSafeInteger(jobId) || jobId <= 0) {
+        throw invalidRequest('play_job', 'a GitLab job id is numeric');
+      }
+      const played = await client.playJob(project, jobId);
+      return { id: String(played.id), status: mapPipelineStatus(played.status, 'play_job') };
     },
 
     getJobLog: async (project, logRef, logOptions) => {

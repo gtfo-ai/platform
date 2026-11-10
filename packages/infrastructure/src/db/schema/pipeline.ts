@@ -321,6 +321,12 @@ export const taskStages = pgTable('task_stages', {
    */
   ciManualNotRun: jsonb('ci_manual_not_run').$type<unknown>(),
   /**
+   * The manual jobs the platform started, or could not start, on this attempt (S-28.7, migration
+   * 0113): `ciManualStartedSchema`'s array, written by `recordCiManualStarted` (the `ci_play_manual`
+   * duty) while the row is open; null when none. Typed `unknown` because every reader parses it.
+   */
+  ciManualStarted: jsonb('ci_manual_started').$type<unknown>(),
+  /**
    * The ticket's status when the human-return window first read it during this entry into a human
    * stage (WP-178 review, migration 0089, TD-029 decision 7's amendment (a)). Null on every other
    * row. Written once (`coalesce`) by `observeHumanStageStatus`.

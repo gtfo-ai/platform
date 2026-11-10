@@ -78,6 +78,7 @@ import {
   budgetApprovalSubjectDetailSchema,
   ciGateEndingSchema,
   ciManualNotRunSchema,
+  ciManualStartedSchema,
   contextPackRecordSchema,
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
@@ -1553,6 +1554,44 @@ export const createPostgresPipelineStore = (
         ],
       );
       return (rowCount ?? 0) > 0;
+    },
+
+    // S-28.7 (migration 0113): the column's one writer — the open row only, one entry per job id,
+    // the whole array parsed before it is written. The row is locked first, so two plays of one
+    // attempt recorded at once cannot lose each other's entry.
+    recordCiManualStarted: async (tx, entry, job) => {
+      const { rows } = await sqlOf(tx).query<{ ci_manual_started: unknown }>(
+        `select ci_manual_started from task_stages
+          where task_id = $1 and stage = $2 and attempt = $3
+            and state = 'running' and exited_at is null
+          for update`,
+        [entry.taskId, entry.stage, entry.attempt],
+      );
+      const row = rows[0];
+      if (row === undefined) return false;
+      const stored =
+        row.ci_manual_started === null ? [] : ciManualStartedSchema.parse(row.ci_manual_started);
+      const next = ciManualStartedSchema.parse([
+        ...stored.filter((each) => each.job_id !== job.job_id),
+        job,
+      ]);
+      const { rowCount } = await sqlOf(tx).query(
+        `update task_stages set ci_manual_started = $4::jsonb
+          where task_id = $1 and stage = $2 and attempt = $3
+            and state = 'running' and exited_at is null`,
+        [entry.taskId, entry.stage, entry.attempt, JSON.stringify(next)],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
+    ciManualStartedOf: async (tx, taskId, stage, attempt) => {
+      const { rows } = await sqlOf(tx).query<{ ci_manual_started: unknown }>(
+        `select ci_manual_started from task_stages
+          where task_id = $1 and stage = $2 and attempt = $3`,
+        [taskId, stage, attempt],
+      );
+      const value = rows[0]?.ci_manual_started ?? null;
+      return value === null ? null : ciManualStartedSchema.parse(value);
     },
 
     latestCiManualNotRun: async (tx, taskId, stage) => {

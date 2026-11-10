@@ -147,3 +147,59 @@ describe('ci_pending_read and ci_ending (backlog 1078)', () => {
     ).rejects.toThrow();
   });
 });
+
+describe('ci_manual_started (S-28.7, migration 0113)', () => {
+  const STARTED = {
+    job_id: '9071',
+    pipeline_id: '907',
+    name: 'build_composer',
+    url: null,
+    at: '2026-11-10T09:00:00.000Z',
+    outcome: 'started' as const,
+  };
+
+  it('locks the open row, replaces the job’s entry, and writes the parsed array', async () => {
+    const earlier = { ...STARTED, at: '2026-11-10T08:59:00.000Z' };
+    const other = { ...STARTED, job_id: '9074', name: 'codeception', outcome: 'refused' as const };
+    const { tx, calls } = recording([{ ci_manual_started: [earlier, other] }], 1);
+    expect(
+      await store().tasks.recordCiManualStarted(
+        tx,
+        { taskId: TASK, stage: 'ci_gate', attempt: 2 },
+        STARTED,
+      ),
+    ).toBe(true);
+    expect(calls[0]?.text).toContain('for update');
+    expect(calls[0]?.text).toContain("state = 'running' and exited_at is null");
+    expect(calls[1]?.text).toContain("state = 'running' and exited_at is null");
+    expect(calls[1]?.values).toEqual([TASK, 'ci_gate', 2, JSON.stringify([other, STARTED])]);
+  });
+
+  it('writes nothing when the attempt has no open row', async () => {
+    const { tx, calls } = recording([], 0);
+    expect(
+      await store().tasks.recordCiManualStarted(
+        tx,
+        { taskId: TASK, stage: 'ci_gate', attempt: 2 },
+        STARTED,
+      ),
+    ).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('refuses an entry outside its schema before it writes, and a stored value that does not parse', async () => {
+    const { tx, calls } = recording([{ ci_manual_started: null }], 1);
+    await expect(
+      store().tasks.recordCiManualStarted(
+        tx,
+        { taskId: TASK, stage: 'ci_gate', attempt: 2 },
+        { ...STARTED, job_id: 'build_composer' },
+      ),
+    ).rejects.toThrow();
+    expect(calls.filter((call) => call.text.includes('update'))).toEqual([]);
+    const corrupt = recording([{ ci_manual_started: [{ ...STARTED, extra: true }] }]);
+    await expect(store().tasks.ciManualStartedOf(corrupt.tx, TASK, 'ci_gate', 2)).rejects.toThrow();
+    const none = recording([{ ci_manual_started: null }]);
+    expect(await store().tasks.ciManualStartedOf(none.tx, TASK, 'ci_gate', 2)).toBeNull();
+  });
+});

@@ -21,8 +21,11 @@
  *    file is written by the agent whose merge request the CI gate judges, so a file that says `[]`
  *    would let that agent pass its own untested change; `[]` comes only from the project settings.
  *    Over a silent setting (the default, which waits on every unstarted manual test job) a list is
- *    not applied either, because a list replaces that rule rather than adding to it. Whatever the
- *    file tried to remove or raise is **reported**.
+ *    not applied either, because a list replaces that rule rather than adding to it; and
+ *    `pipeline.ci.manual_jobs` (S-28.7, the M28 ruling) may only add `wait` — `run` (the platform
+ *    starts the job, with the project's permissions) and `ignore` (the job stops being a check) come
+ *    only from the project settings, and a settings `run` is not turned into `wait` by the file.
+ *    Whatever the file tried to remove or raise is **reported**.
  *  - **not applied** — dropped and **reported** in the reading's `not_applied`: the dial and every
  *    key that overrides one of its policies (`AUTONOMY_POLICY_OVERRIDE_KEYS`, Q78 — a test holds the
  *    two lists together), the other policies whose loosening turns a check off (the dependency
@@ -198,6 +201,23 @@ export const withoutNotAppliedKeys = (
     removePath(copy, ['pipeline', 'ci', 'required_manual_jobs'], '');
     notApplied.push({ key: REQUIRED_MANUAL_JOBS_KEY, reason: REQUIRED_NONE_REASON });
   }
+  // S-28.7 (the M28 ruling): `manual_jobs` `run` and `ignore` come only from the project settings —
+  // playing a job runs CI with the project's permissions, and ignoring one drops a check — so the
+  // file keeps its `wait` entries and every other entry is dropped here and reported by name.
+  const modes = isObject(ci) ? ci.manual_jobs : undefined;
+  if (isObject(modes)) {
+    for (const [name, mode] of Object.entries(modes)) {
+      if (mode === 'wait') continue;
+      delete modes[name];
+      notApplied.push({
+        key: `${MANUAL_JOBS_KEY}.${name}`,
+        reason: mode === 'run' ? MANUAL_RUN_REASON : MANUAL_IGNORE_REASON,
+      });
+    }
+    if (Object.keys(modes).length === 0) {
+      removePath(copy, ['pipeline', 'ci', 'manual_jobs'], '');
+    }
+  }
   // WP-92: a prompt key whose value names no file the platform reads is dropped, not merged — so
   // it cannot shadow a settings value that does — and reported with the reason.
   for (const item of projectPromptValueNotApplied(copy as ConfigValues)) {
@@ -210,6 +230,13 @@ export const withoutNotAppliedKeys = (
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
 
 const REQUIRED_MANUAL_JOBS_KEY = 'pipeline.ci.required_manual_jobs';
+const MANUAL_JOBS_KEY = 'pipeline.ci.manual_jobs';
+
+/** Why a file's `manual_jobs` `run` is not applied (S-28.7). Platform text. */
+const MANUAL_RUN_REASON =
+  'only the project settings may tell the platform to start a manual job: starting one runs CI with the project’s permissions, and the repository file is written by the agent whose change the CI gate judges; a repository file may only add wait; set run on the project settings page';
+/** Why a file's `manual_jobs` `ignore` is not applied (S-28.7). Platform text. */
+const MANUAL_IGNORE_REASON = `${LOOSENING_REASON}; ignore takes a manual job out of the CI gate's checks, and a repository file may only add wait`;
 
 /** Why a file's `required_manual_jobs: []` is not applied (S-27.2). Platform text. */
 const REQUIRED_NONE_REASON = `${LOOSENING_REASON}; \`[]\` lets the CI gate pass a pipeline whose manual test jobs nobody started, and the repository file is written by the agent whose merge request the gate judges — only the project settings may say it`;
@@ -238,9 +265,13 @@ export const tightenRepositoryLayer = (
   const wip = tightenWip(project, repo, notApplied);
   const withWipOnly: ConfigValues =
     wip === undefined ? repo : { ...repo, pipeline: { ...repo.pipeline, wip } };
-  const withWip = tightenManualJobs(
+  const withWip = tightenManualJobModes(
     project,
-    tightenUnattended(project, tightenVerification(project, withWipOnly, notApplied), notApplied),
+    tightenManualJobs(
+      project,
+      tightenUnattended(project, tightenVerification(project, withWipOnly, notApplied), notApplied),
+      notApplied,
+    ),
     notApplied,
   );
   const policies = repo.policies;
@@ -380,6 +411,59 @@ const tightenManualJobs = (
     });
   }
   return withValue(merged.slice(0, MAX_REQUIRED_MANUAL_JOBS));
+};
+
+/**
+ * `pipeline.ci.manual_jobs` from the file against the settings (S-28.7). The file holds only `wait`
+ * entries by now (`withoutNotAppliedKeys`); a project setting for the same name wins where it is
+ * `run` — the platform still starts the job and still requires it, which `wait` would only take
+ * away — and is reported; over the settings' `ignore` the file's `wait` applies, because it adds a
+ * check. And a name the settings set `run` or `ignore` is never added to `required_manual_jobs` by
+ * the file (which would state the same name twice with two meanings): dropped and reported.
+ */
+const tightenManualJobModes = (
+  project: ConfigValues,
+  repo: ConfigValues,
+  notApplied: RepositoryConfigNotApplied[],
+): ConfigValues => {
+  const settings: Readonly<Record<string, string>> = project.pipeline?.ci?.manual_jobs ?? {};
+  const chosen = (name: string): string | undefined =>
+    Object.hasOwn(settings, name) ? settings[name] : undefined;
+  const ci = repo.pipeline?.ci;
+  if (ci === undefined) return repo;
+  let next = { ...ci };
+  if (ci.manual_jobs !== undefined) {
+    const kept: Record<string, 'run' | 'wait' | 'ignore'> = {};
+    for (const [name, mode] of Object.entries(ci.manual_jobs)) {
+      if (chosen(name) === 'run') {
+        notApplied.push({
+          key: `${MANUAL_JOBS_KEY}.${name}`,
+          reason: `${LOOSENING_REASON}; the project settings start this job (run), which is still in force`,
+        });
+        continue;
+      }
+      kept[name] = mode;
+    }
+    const { manual_jobs: _dropped, ...rest } = next;
+    next = Object.keys(kept).length === 0 ? rest : { ...rest, manual_jobs: kept };
+  }
+  const required = next.required_manual_jobs;
+  if (Array.isArray(required)) {
+    const clashing = required.filter((name) => {
+      const mode = chosen(name);
+      return mode === 'run' || mode === 'ignore';
+    });
+    if (clashing.length > 0) {
+      for (const name of clashing) {
+        notApplied.push({
+          key: REQUIRED_MANUAL_JOBS_KEY,
+          reason: `${JSON.stringify(name)} is set to ${chosen(name)} in the project settings (pipeline.ci.manual_jobs), which is still in force`,
+        });
+      }
+      next = { ...next, required_manual_jobs: required.filter((name) => !clashing.includes(name)) };
+    }
+  }
+  return { ...repo, pipeline: { ...repo.pipeline, ci: next } };
 };
 
 type WipKey = 'max_parallel_tasks' | 'max_tasks_in_pipeline';

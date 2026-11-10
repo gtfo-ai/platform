@@ -280,6 +280,15 @@
  *     `ci.pipeline.held`, as GitLab's `manual` Pipeline Hook does; a `pending`/`running` one is
  *     still reported `failed` (`terminalStatus`), which GitLab drops — **different**, and no test
  *     emits one.
+ * 37. **Kinder — a play is instant and never refused for permission** (S-28.7). `playJob` moves a
+ *     stored `manual` job to `pending` (and a held pipeline with no blocking manual job left to
+ *     `running`); GitLab may answer `403` to an account that may not merge to the job's branch, and
+ *     queues the job behind its runners. A test reaches the refusal with
+ *     `core.script.failWhile('play_job', …)`. It keeps **no trigger flag**: a job seeded here is
+ *     never a trigger job, where GitLab's adapter marks a bridge `trigger: true`. And its job ids
+ *     are `<pipeline>-<n>`, not digits, so the `ci_play_manual` duty — which keys a play by digits
+ *     only — refuses every one of its jobs: the duty is driven by stubs with numeric ids
+ *     (`ci-play.test.ts`), and this fake's play only by the shared contract suite.
  */
 import {
   type BranchPushProtection,
@@ -855,6 +864,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     codeowners: true,
     coverageArtifacts: true,
     draftPipelines: true,
+    manualJobPlay: true,
     discussionResolution: true,
     credentialMinting: true,
     ...options.capabilities,
@@ -1847,6 +1857,39 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         return job.log;
       }
       return job.log.slice(Math.max(0, job.log.length - tailBytes));
+    },
+
+    /**
+     * Divergence 37 (S-28.7): a play moves a stored `manual` job to `pending`, and a pipeline held
+     * at `manual` with no blocking manual job left to `running` — this fake runs no CI, so the job
+     * stays `pending` until a test installs an outcome with `setPipeline`.
+     */
+    playJob: async (project, jobId) => {
+      core.enter('play_job');
+      if (!capabilities.manualJobPlay) {
+        throw new IntegrationUnsupportedError(PROVIDER, 'starting a manual job');
+      }
+      requireProject('play_job', project);
+      const pipeline = pipelines.find(
+        (candidate) =>
+          candidate.project === project && candidate.jobs.some((each) => each.id === jobId),
+      );
+      const job = pipeline?.jobs.find((each) => each.id === jobId);
+      if (pipeline === undefined || job === undefined) {
+        throw notFound(PROVIDER, 'play_job', `job ${jobId}`);
+      }
+      if (job.status !== 'manual') {
+        throw invalidRequest(PROVIDER, 'play_job', `job ${jobId} is not manual`);
+      }
+      job.status = 'pending';
+      if (
+        pipeline.status === 'manual' &&
+        !pipeline.jobs.some((each) => each.status === 'manual' && !each.allow_failure)
+      ) {
+        pipeline.status = 'running';
+        pipeline.finished_at = null;
+      }
+      return { id: job.id, status: job.status };
     },
 
     repositorySettings: async (project) => {

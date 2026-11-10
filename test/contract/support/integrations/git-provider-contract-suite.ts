@@ -374,6 +374,11 @@ export interface GitProviderContractContext {
   };
   /** S-27.2 (TD-036 decision 6): the provider's delivery for {@link heldPipeline}'s status change. */
   emitPipelineHeld(): WebhookDelivery;
+  /**
+   * S-28.7: a job id this provider does not have, shaped as its ids are (GitLab's are numeric), so
+   * `playJob` answers `not_found` rather than refusing the id's shape.
+   */
+  readonly missingJobId: string;
   readonly projectId: Id;
   readonly integrationId: Id;
   cleanup(): Promise<void>;
@@ -1161,6 +1166,34 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         const trigger = pipeline?.jobs.find((job) => job.name === held.triggerJob);
         expect(trigger).toMatchObject({ status: 'manual', stage: 'test', allow_failure: false });
         expect(pipeline?.jobs_truncated ?? false).toBe(false);
+      });
+
+      /**
+       * S-28.7 (the M28 ruling): the platform starts a manual job the project set to `run`. A
+       * provider that can (`manualJobPlay`) starts {@link heldPipeline}'s held job and answers it
+       * queued or running, and refuses a job it does not have with `not_found`; one that cannot
+       * refuses every play with `unsupported_capability`.
+       */
+      it('starts a held manual job, and refuses one it does not have (S-28.7)', async () => {
+        const held = context.heldPipeline;
+        const pipeline = await port.getPipelineStatus(context.project, held.sha);
+        const release = pipeline?.jobs.find((job) => job.name === held.releaseJob);
+        expect(release?.status).toBe('manual');
+        const jobId = release?.id as string;
+        if (port.capabilities().manualJobPlay !== true) {
+          await expectIntegrationError(
+            () => port.playJob(context.project, jobId),
+            'unsupported_capability',
+          );
+          return;
+        }
+        const played = await port.playJob(context.project, jobId);
+        expect(played.id).toBe(jobId);
+        expect(['pending', 'running']).toContain(played.status);
+        await expectIntegrationError(
+          () => port.playJob(context.project, context.missingJobId),
+          'not_found',
+        );
       });
 
       it('returns null when no pipeline ran for a commit', async () => {

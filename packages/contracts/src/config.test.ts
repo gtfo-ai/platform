@@ -18,6 +18,7 @@ import {
   MAX_CI_TIMEOUT_MINUTES,
   MAX_CONTEXT_BUDGET_TOKENS,
   MAX_LIFECYCLE_RETURNED_STATUSES,
+  MAX_MANUAL_JOB_MODES,
   MAX_REQUIRED_MANUAL_JOB_CHARS,
   MAX_REQUIRED_MANUAL_JOBS,
   MAX_WIP_PARALLEL_TASKS,
@@ -575,6 +576,59 @@ describe('pipeline.ci.required_manual_jobs (S-27.2, TD-036 decision 3)', () => {
     expect(withCi({ required_manual_jobs: ['x'.repeat(255)] }).success).toBe(true);
     expect(withCi({ required_manual_jobs: ['x'.repeat(256)] }).success).toBe(false);
     expect(withCi({ required_manual_jobs: ['e2e', 'e2e'] }).success).toBe(false);
+  });
+});
+
+describe('pipeline.ci.manual_jobs (S-28.7, the M28 ruling)', () => {
+  const withCi = (ci: unknown) => agenticConfigSchema.safeParse({ version: 1, pipeline: { ci } });
+
+  it('maps exact job names to run, wait or ignore', () => {
+    expect(
+      withCi({
+        manual_jobs: { codeception: 'run', 'crawler-test': 'wait', 'deploy:tenants': 'ignore' },
+      }).success,
+    ).toBe(true);
+    for (const refused of ['start', 'RUN', '', true, null, 1]) {
+      expect(withCi({ manual_jobs: { codeception: refused } }).success, String(refused)).toBe(
+        false,
+      );
+    }
+    expect(withCi({ manual_jobs: { '': 'run' } }).success, 'an empty name').toBe(false);
+    expect(withCi({ manual_jobs: { ['x'.repeat(256)]: 'run' } }).success).toBe(false);
+  });
+
+  it('bounds the record at 50 jobs', () => {
+    expect(MAX_MANUAL_JOB_MODES).toBe(50);
+    const modes = (count: number) =>
+      Object.fromEntries(Array.from({ length: count }, (_, index) => [`job-${index}`, 'wait']));
+    expect(withCi({ manual_jobs: modes(50) }).success).toBe(true);
+    expect(withCi({ manual_jobs: modes(51) }).success).toBe(false);
+  });
+
+  it('refuses a name in required_manual_jobs that manual_jobs gives another mode than wait', () => {
+    expect(
+      withCi({ required_manual_jobs: ['codeception'], manual_jobs: { codeception: 'wait' } })
+        .success,
+      'the same meaning twice is not a conflict',
+    ).toBe(true);
+    for (const mode of ['run', 'ignore']) {
+      const parsed = withCi({
+        required_manual_jobs: ['codeception'],
+        manual_jobs: { codeception: mode },
+      });
+      expect(parsed.success, mode).toBe(false);
+      expect(parsed.error?.issues[0]?.path).toEqual([
+        'pipeline',
+        'ci',
+        'manual_jobs',
+        'codeception',
+      ]);
+      expect(parsed.error?.issues[0]?.message).toContain('name it in one place');
+    }
+    // `all` names no job, so a mode beside it is not a conflict: the mode wins for that name.
+    expect(withCi({ required_manual_jobs: 'all', manual_jobs: { deploy: 'ignore' } }).success).toBe(
+      true,
+    );
   });
 });
 

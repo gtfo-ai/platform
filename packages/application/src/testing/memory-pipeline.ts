@@ -31,6 +31,7 @@ import type {
   ArtifactType,
   CiGateEnding,
   CiManualNotRun,
+  CiManualStarted,
   ContextPackRecord,
   DomainEvent,
   EstimateBasis,
@@ -48,6 +49,7 @@ import type {
 import {
   ciGateEndingSchema,
   ciManualNotRunSchema,
+  ciManualStartedSchema,
   mergeRequestRefSchema,
   storedTicketClaimSchema,
   taskCoverageSchema,
@@ -165,6 +167,8 @@ interface StageRow {
   ciEnding?: CiGateEnding | null;
   /** `task_stages.ci_manual_not_run` (migration 0109, S-27.2): what a CI pass left unstarted. */
   ciManualNotRun?: CiManualNotRun | null;
+  /** `task_stages.ci_manual_started` (migration 0113, S-28.7): the manual jobs the platform started. */
+  ciManualStarted?: CiManualStarted | null;
   enteredAt: number;
   /**
    * The instant the row was entered, on {@link MemoryPipelineStoreOptions.now} — PostgreSQL's
@@ -1419,6 +1423,28 @@ export const createMemoryPipelineStore = (
       if (row === undefined) return false;
       row.ciManualNotRun = clone(ciManualNotRunSchema.parse(value));
       return true;
+    },
+    // S-28.7: the SQL store's statement — the open row of the attempt, one entry per job id.
+    recordCiManualStarted: async (_tx, entry, job) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === entry.taskId &&
+          candidate.stage === entry.stage &&
+          candidate.attempt === entry.attempt &&
+          candidate.state === 'running' &&
+          candidate.exitedAt === null,
+      );
+      if (row === undefined) return false;
+      const others = (row.ciManualStarted ?? []).filter((each) => each.job_id !== job.job_id);
+      row.ciManualStarted = clone(ciManualStartedSchema.parse([...others, job]));
+      return true;
+    },
+    ciManualStartedOf: async (_tx, taskId, stage, attempt) => {
+      const value =
+        stages.find(
+          (row) => row.taskId === taskId && row.stage === stage && row.attempt === attempt,
+        )?.ciManualStarted ?? null;
+      return value === null ? null : ciManualStartedSchema.parse(value);
     },
     latestCiManualNotRun: async (_tx, taskId, stage) => {
       const newest = stages

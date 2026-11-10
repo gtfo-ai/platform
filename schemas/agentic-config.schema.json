@@ -152,19 +152,10 @@
           "type": "object",
           "properties": {
             "required_manual_jobs": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "const": "all"
-                },
-                {
-                  "maxItems": 50,
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/$defs/anon_fb7dd855"
-                  }
-                }
-              ]
+              "$ref": "#/$defs/anon_5bfdbe23"
+            },
+            "manual_jobs": {
+              "$ref": "#/$defs/anon_b0561bd7"
             }
           },
           "additionalProperties": false
@@ -780,6 +771,21 @@
     "anon_4e205306": {
       "$ref": "#/$defs/AgentRole"
     },
+    "anon_5bfdbe23": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "all"
+        },
+        {
+          "maxItems": 50,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_fb7dd855"
+          }
+        }
+      ]
+    },
     "anon_743525f7": {
       "type": "string",
       "enum": [
@@ -858,6 +864,15 @@
       },
       "additionalProperties": false
     },
+    "anon_b0561bd7": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/anon_fb7dd855"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/anon_fcafd1b3"
+      }
+    },
     "anon_b684c526": {
       "type": "string",
       "enum": [
@@ -894,6 +909,14 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 255
+    },
+    "anon_fcafd1b3": {
+      "type": "string",
+      "enum": [
+        "run",
+        "wait",
+        "ignore"
+      ]
     }
   }
 }
