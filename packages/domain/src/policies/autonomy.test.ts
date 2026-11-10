@@ -8,6 +8,7 @@ import {
 } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { MIN_ESTIMATE_SAMPLES_FOR_APPROVAL } from '../cost/estimate.js';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   AUTONOMY_ORDER,
@@ -369,28 +370,69 @@ describe('planApprovalReasons (BD-006, BD-030, TD-035)', () => {
 });
 
 describe('requiresBudgetApproval (product/18)', () => {
+  /** An estimate resting on enough finished tasks to ask (S-28.16). */
+  const settled = (usd: number) => ({ usd, samples: MIN_ESTIMATE_SAMPLES_FOR_APPROVAL });
+
   it('routes an expensive task to a maintainer', () => {
-    expect(requiresBudgetApproval(AUTONOMY_PRESETS.supervised, 51)).toBe(true);
-    expect(requiresBudgetApproval(AUTONOMY_PRESETS.supervised, 50)).toBe(false);
-    expect(requiresBudgetApproval(AUTONOMY_PRESETS.assist, 21)).toBe(true);
+    expect(requiresBudgetApproval(AUTONOMY_PRESETS.supervised, settled(51))).toBe(true);
+    expect(requiresBudgetApproval(AUTONOMY_PRESETS.supervised, settled(50))).toBe(false);
+    expect(requiresBudgetApproval(AUTONOMY_PRESETS.assist, settled(21))).toBe(true);
   });
 
   it('is off when the level sets no threshold', () => {
-    expect(requiresBudgetApproval(AUTONOMY_PRESETS.autonomous, 10_000)).toBe(false);
+    expect(requiresBudgetApproval(AUTONOMY_PRESETS.autonomous, settled(10_000))).toBe(false);
   });
 
   it('names the crossing with both figures, and nothing at or below the threshold (TD-035)', () => {
-    expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, 51)).toEqual([
+    expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, settled(51))).toEqual([
       { code: 'estimate_above_threshold', estimate_usd: 51, threshold_usd: 50 },
     ]);
-    expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, 50)).toEqual([]);
-    expect(budgetApprovalReasons(AUTONOMY_PRESETS.autonomous, 10_000)).toEqual([]);
+    expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, settled(50))).toEqual([]);
+    expect(budgetApprovalReasons(AUTONOMY_PRESETS.autonomous, settled(10_000))).toEqual([]);
     for (const estimate of [0, 49.99, 50, 50.01, 1_000]) {
-      expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, estimate).length > 0).toBe(
-        requiresBudgetApproval(AUTONOMY_PRESETS.supervised, estimate),
+      expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, settled(estimate)).length > 0).toBe(
+        requiresBudgetApproval(AUTONOMY_PRESETS.supervised, settled(estimate)),
       );
     }
   });
+
+  /**
+   * S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): an estimate resting on fewer than three
+   * finished tasks asks nobody — the Autix case, $123.66 from one task over a $50 threshold — and
+   * one on three asks exactly as before. Both sides of the floor (standing rule 42).
+   */
+  it('asks nothing below three finished tasks, and asks from three', () => {
+    expect(MIN_ESTIMATE_SAMPLES_FOR_APPROVAL).toBe(3);
+    for (const samples of [null, 0, 1, 2]) {
+      expect(
+        budgetApprovalReasons(AUTONOMY_PRESETS.supervised, { usd: 123.66, samples }),
+        String(samples),
+      ).toEqual([]);
+    }
+    for (const samples of [3, 4, 40]) {
+      expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, { usd: 123.66, samples })).toEqual([
+        { code: 'estimate_above_threshold', estimate_usd: 123.66, threshold_usd: 50 },
+      ]);
+    }
+  });
+
+  it(
+    'asks exactly when the samples reach the floor and the estimate is above the threshold',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 0, max: 5 }),
+          fc.double({ min: 0, max: 200, noNaN: true }),
+          (samples, usd) => {
+            const asked =
+              budgetApprovalReasons(AUTONOMY_PRESETS.supervised, { usd, samples }).length > 0;
+            expect(asked).toBe(samples >= 3 && usd > 50);
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('materialising the dial (BD-027:14, WP-30)', () => {

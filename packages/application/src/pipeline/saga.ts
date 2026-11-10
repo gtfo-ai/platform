@@ -60,6 +60,7 @@ import {
   createApproval,
   createTask,
   escalateTask,
+  estimateRestsOnEnough,
   evaluateTaskAdmission,
   intakeSkipsAssignedTicket,
   intakeStatusDecision,
@@ -67,6 +68,7 @@ import {
   isRepeatOfPreviousRound,
   isRunnableTaskState,
   MERGED_GATE_STAGE,
+  MIN_ESTIMATE_SAMPLES_FOR_APPROVAL,
   markQuestionEscalated,
   opensWithPlatformCommentMarker,
   orderQueue,
@@ -80,6 +82,7 @@ import {
   requestApproval,
   returnLoopFor,
   riskClassesRequiringPlanApproval,
+  SIZE_COST_WEIGHTS,
   stageOf,
   toApprovalRecord,
 } from '@platform/domain';
@@ -1373,6 +1376,19 @@ export const spendIsStillAhead = (pipeline: CompiledPipeline, stage: Slug): bool
   return pipeline.stages.slice(index + 1).some((entry) => entry.produces === 'ImplementationNotes');
 };
 
+/** The refined size the estimate was made for and its weight, or nothing when the spec has none. */
+const refinedSizeOf = async (
+  options: PipelineSagaOptions,
+  context: HandlerContext,
+  taskId: Id,
+): Promise<{ readonly size?: Size; readonly size_weight?: number }> => {
+  const spec = await options.store.artifacts.latest(context.scope.tx, taskId, 'RefinedSpec');
+  const parsed = refinedSpecDataSchema.safeParse(spec?.data);
+  return parsed.success
+    ? { size: parsed.data.size, size_weight: SIZE_COST_WEIGHTS[parsed.data.size] }
+    : {};
+};
+
 /**
  * product/09: *"an optional per-project threshold routes expensive tasks to budget approval by a
  * maintainer before Implementation"* — WP-28, and the gate `requiresBudgetApproval` was written for
@@ -1399,6 +1415,12 @@ export const spendIsStillAhead = (pipeline: CompiledPipeline, stage: Slug): bool
  * maintainer is the worst possible first impression. The absence is made *visible* instead, on the
  * workpad (`renderWorkpad`) and on the task DTO (`estimate_basis`), and the per-task cap (BD-010,
  * default $50) is what bounds the spend meanwhile.
+ *
+ * **Nor when the estimate rests on too few finished tasks (S-28.16, M28 ruling B2).** Fewer than
+ * `MIN_ESTIMATE_SAMPLES_FOR_APPROVAL` (3) is the same case as no estimate: the figure is stored and
+ * shown as *rough*, and nothing is asked — `budgetApprovalReasons` holds the floor, so this gate has
+ * no second check. Approvals an earlier build asked below the floor are settled by the recovery row
+ * `recovery/budget-approval-settle.ts`.
  *
  * **Keyed on the task and the kind, not on the stage attempt.** The estimate is written once
  * (`costEstimateHandler`'s `estimateUsd !== null` guard), so a re-refinement produces the same
@@ -1450,8 +1472,29 @@ const budgetApprovalGate = async (
   // The one place the threshold is read, and the only guard: `budgetApprovalReasons` answers none
   // for a `null` threshold, so a second check for it here would be an inner layer the outer one
   // makes unreachable — untestable by construction (standing rule 22).
-  const [crossing] = budgetApprovalReasons(preset, estimateUsd);
+  const [crossing] = budgetApprovalReasons(preset, {
+    usd: estimateUsd,
+    samples: stored.estimateSamples,
+  });
   if (crossing === undefined) {
+    if (
+      !estimateRestsOnEnough(stored.estimateSamples) &&
+      preset.budgetApprovalThresholdUsd !== null &&
+      estimateUsd > preset.budgetApprovalThresholdUsd
+    ) {
+      // S-28.16 (M28 ruling B2): over the threshold, but on too few finished tasks to ask about —
+      // named, because this is the case somebody reading the old behaviour expected to be asked.
+      (options.logger ?? silentLogger).info(
+        {
+          task_id: stored.task.id,
+          estimate_usd: estimateUsd,
+          threshold_usd: preset.budgetApprovalThresholdUsd,
+          estimate_samples: stored.estimateSamples,
+          min_samples: MIN_ESTIMATE_SAMPLES_FOR_APPROVAL,
+        },
+        'budget approval: a rough estimate over the threshold, on too few finished tasks to ask about; the task cap bounds the spend',
+      );
+    }
     return false;
   }
   (options.logger ?? silentLogger).info(
@@ -1490,6 +1533,14 @@ const budgetApprovalGate = async (
       threshold_usd: crossing.threshold_usd,
       estimate_basis: stored.estimateBasis,
       estimate_samples: stored.estimateSamples,
+      // S-28.16 (TD-035's 2026-11-10 amendment, decision 2): what was spent and the cap in force
+      // when it asked, so the card says nothing is over budget and what approving does to the cap;
+      // and the size the estimate was made for, with its weight.
+      spent_usd: Math.max(0, stored.costActualUsd),
+      cap_usd:
+        (await options.store.tasks.budgetCap(context.scope.tx, stored.task.id)) ??
+        settings.taskBudgetUsd,
+      ...(await refinedSizeOf(options, context, stored.task.id)),
     },
     reasons: [crossing],
   });

@@ -102,7 +102,12 @@ import {
 } from './gate-wait.js';
 import { readyStillDraftSentence } from './out-of-sync.js';
 import { type TaskPrimaryAction, taskPagePrimary } from './page-primary.js';
-import { PlanWentAheadNotice, planWentAhead } from './plan-went-ahead.js';
+import {
+  BudgetNotRequiredNotice,
+  budgetNotRequired,
+  PlanWentAheadNotice,
+  planWentAhead,
+} from './plan-went-ahead.js';
 import { QueueWaitNotice } from './queue-wait-notice.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
@@ -406,8 +411,12 @@ const calloutTitle = (
         : `${questions} questions are waiting for your answer`;
     case 'approval': {
       const [approval] = approvals;
+      // S-28.16 (M28 ruling B2): a budget approval is about an estimate, so its title says so
+      // first — *"the budget approval"* beside a small spend read as the budget being over.
       return approvals.length === 1 && approval !== undefined
-        ? `The ${APPROVAL_KIND_LABEL[approval.kind].toLowerCase()} is waiting for you`
+        ? approval.kind === 'budget'
+          ? 'An estimate is waiting for your go-ahead — nothing is over budget'
+          : `The ${APPROVAL_KIND_LABEL[approval.kind].toLowerCase()} is waiting for you`
         : `${approvals.length} approvals are waiting for you`;
     }
     case 'ci_held':
@@ -548,6 +557,12 @@ const CalloutSlot = ({
         />
       );
     }
+    // S-28.16 (M28 ruling B2 (4)): the platform settled an earlier build's budget ask on too few
+    // finished tasks; the task goes on under its cap. Information, no action asked.
+    const notRequired = budgetNotRequired(detail);
+    if (notRequired !== null) {
+      return <BudgetNotRequiredNotice approval={notRequired} capUsd={task.budget_cap_usd} />;
+    }
     if (gateWait !== null) {
       // S-25.12: CI is still running — information, no action; nothing is asked of the reader.
       return (
@@ -675,6 +690,8 @@ const CalloutSlot = ({
                   projectKey={projectKey}
                   mayDecide={detail.can_decide_approval}
                   commands={commands}
+                  spentUsd={task.cost_actual_usd}
+                  capUsd={task.budget_cap_usd}
                 />
               ))}
               {commands.decide.isError ? (

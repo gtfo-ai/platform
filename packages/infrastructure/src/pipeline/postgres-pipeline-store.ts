@@ -2827,19 +2827,38 @@ export const createPostgresPipelineStore = (
     },
     save: async (tx, stored) => {
       const result = await sqlOf(tx).query(
+        // S-28.16: `auto_decided` may be set by a decision the platform made after the insert (a
+        // budget approval settled as no longer required), and is never cleared.
         `update approvals
-            set status = $2, decided_by_user_id = $3, decided_at = $4, reason = $5 where id = $1`,
+            set status = $2, decided_by_user_id = $3, decided_at = $4, reason = $5,
+                auto_decided = auto_decided or $6
+          where id = $1`,
         [
           stored.approval.id,
           stored.approval.status,
           stored.approval.decidedByUserId,
           stored.approval.decidedAt,
           stored.approval.reason,
+          stored.autoDecided === true,
         ],
       );
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`approval ${stored.approval.id} does not exist`);
       }
+    },
+    pendingBudgetBelowSamples: async (tx, query) => {
+      // S-28.16: the subject's own snapshot first, the task's figure for a pre-0103 row.
+      const { rows } = await sqlOf(tx).query<{ id: Id }>(
+        `select a.id
+           from approvals a
+           join tasks t on t.id = a.task_id
+          where a.kind = 'budget' and a.status = 'pending'
+            and coalesce((a.subject_detail ->> 'estimate_samples')::integer, t.estimate_samples) < $1
+          order by a.requested_at, a.id
+          limit $2`,
+        [query.belowSamples, query.limit],
+      );
+      return rows.map((row) => row.id);
     },
     recordReminder: async (tx, input) => {
       const result = await sqlOf(tx).query(

@@ -26,6 +26,7 @@ import { BUILTIN_STAGE_IDS, isBuiltinGateStageId } from '@platform/contracts';
 import { stageLabel } from '../ui/humanize.js';
 import { formatDateTime, formatMinutes } from '../ui/kit.js';
 import type { Status } from '../ui/status.js';
+import { roughEstimateLine } from './approval-text.js';
 
 /**
  * What the task's estimate rests on, as one sentence — the same four states the workpad prints.
@@ -36,6 +37,11 @@ import type { Status } from '../ui/status.js';
  * a project, and a blank field says neither (Q71 (b)).
  */
 export const estimateBasisText = (task: TaskRecord): string => {
+  // S-28.16 (M28 ruling B2): an estimate on too few finished tasks asks nobody, and says so.
+  const rough = roughEstimateLine(task);
+  if (rough !== null) {
+    return rough;
+  }
   const samples = task.estimate_samples ?? 0;
   const tasks = samples === 1 ? '1 finished task' : `${samples} finished tasks`;
   switch (task.estimate_basis) {

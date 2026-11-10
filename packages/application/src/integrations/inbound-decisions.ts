@@ -65,10 +65,16 @@ import { answerChannelSchema, MAX_COMMAND_TEXT_CHARS } from '@platform/contracts
 import {
   answerQuestion,
   type CommandContext,
+  DEFAULT_TASK_BUDGET_USD,
   decideApproval,
   IllegalTransitionError,
   PermissionDeniedError,
 } from '@platform/domain';
+import {
+  applyBudgetApprovalCap,
+  budgetApprovalCapChange,
+  capChangeAuditParams,
+} from '../pipeline/budget-approval.js';
 import {
   type ApprovalSubjectRefusal,
   ApprovalSubjectRefusedError,
@@ -198,6 +204,11 @@ export interface InboundDeciderRoles {
 export interface InboundDecisionApplierOptions {
   /** `artifacts` since S-25.9: the subject guard reads the task's latest plan. */
   readonly store: Pick<PipelineStore, 'approvals' | 'artifacts' | 'questions' | 'tasks'>;
+  /**
+   * The cap a task with no override has, which an approved estimate's raise is compared against
+   * (S-28.16, `pipeline/budget-approval.ts`). `DEFAULT_TASK_BUDGET_USD` when absent.
+   */
+  readonly defaultTaskCapUsd?: number;
   readonly roles: InboundDeciderRoles;
   /** WP-88: the audit row an accepted decision leaves. Required (rule 31). */
   readonly actions: InboundHumanActionLog;
@@ -308,15 +319,34 @@ export const createInboundDecisionApplier = (
     }
     try {
       const reason = text(payload.reason);
+      // S-28.16 (M28 ruling B2): the same raise the route makes, in the same order — read before
+      // the aggregate decides, written only after it and the subject check accepted.
+      const defaultCapUsd = options.defaultTaskCapUsd ?? DEFAULT_TASK_BUDGET_USD;
+      const capChange = await budgetApprovalCapChange(options.store.tasks, tx, {
+        stored,
+        decision,
+        defaultCapUsd,
+      });
       const decided = decideApproval(
         approval,
-        { decision, userId, role, ...(reason === null ? {} : { reason }) },
+        {
+          decision,
+          userId,
+          role,
+          ...(reason === null ? {} : { reason }),
+          ...(capChange === undefined ? {} : { capChange }),
+        },
         contextFor(approval.taskId, draft.actor),
       );
       // After the aggregate said the decision is legal, as the route asks it (S-25.9).
       if (approval.kind === 'plan' && decision === 'approved') {
         await assertApprovesItsSubject(options.store, tx, stored, draft.subjectArtifactId);
       }
+      await applyBudgetApprovalCap(options.store.tasks, tx, {
+        taskId: approval.taskId,
+        change: capChange,
+        defaultCapUsd,
+      });
       await options.store.approvals.save(tx, { ...stored, approval: decided.aggregate });
       await audit(tx, {
         type: draft.type,
@@ -326,6 +356,7 @@ export const createInboundDecisionApplier = (
         params: {
           approval_id: approvalId,
           decision: decision === 'approved' ? 'approve' : 'reject',
+          ...capChangeAuditParams(capChange),
         },
         channel: delivery.provider,
         delivery,

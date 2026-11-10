@@ -9,11 +9,13 @@ import { PolicyViolationError } from '../errors.js';
 import {
   assertRunMayStart,
   blockingBudget,
+  capAfterBudgetApproval,
   DEFAULT_STAGE_RUN_BUDGET_USD,
   DEFAULT_TASK_BUDGET_USD,
   estimateHistoryBootstrap,
   resolveRunCapUsd,
   shouldPauseTaskForBudget,
+  usdUpToCents,
 } from './budgets.js';
 
 const budget = (
@@ -151,5 +153,38 @@ describe('shouldPauseTaskForBudget', () => {
     expect(shouldPauseTaskForBudget(budget(TASK, 50, 50, 'task'))).toBe(true);
     expect(shouldPauseTaskForBudget(budget(TASK, 50, 10, 'task'))).toBe(false);
     expect(shouldPauseTaskForBudget(null)).toBe(false);
+  });
+});
+
+/** S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): the cap an approved estimate sets. */
+describe('capAfterBudgetApproval', () => {
+  const MAX = 999_999.999999;
+
+  it('raises the cap to the estimate rounded up to the cent — the Autix case, 50 → 123.66', () => {
+    expect(capAfterBudgetApproval({ estimateUsd: 123.66, capUsd: 50, maxCapUsd: MAX })).toBe(
+      123.66,
+    );
+    expect(capAfterBudgetApproval({ estimateUsd: 123.651, capUsd: 50, maxCapUsd: MAX })).toBe(
+      123.66,
+    );
+  });
+
+  it('changes nothing for an estimate at or within the cap, and never lowers it', () => {
+    expect(capAfterBudgetApproval({ estimateUsd: 50, capUsd: 50, maxCapUsd: MAX })).toBeNull();
+    expect(capAfterBudgetApproval({ estimateUsd: 30, capUsd: 50, maxCapUsd: MAX })).toBeNull();
+    expect(capAfterBudgetApproval({ estimateUsd: 123.66, capUsd: 200, maxCapUsd: MAX })).toBeNull();
+  });
+
+  it('never goes above the column’s ceiling', () => {
+    expect(capAfterBudgetApproval({ estimateUsd: 5_000_000, capUsd: 50, maxCapUsd: MAX })).toBe(
+      MAX,
+    );
+  });
+
+  it('rounds up to the cent without a float hair adding one', () => {
+    expect(usdUpToCents(123.66)).toBe(123.66);
+    expect(usdUpToCents(0.1 + 0.2)).toBe(0.3);
+    expect(usdUpToCents(0.301)).toBe(0.31);
+    expect(usdUpToCents(61.83 * 2)).toBe(123.66);
   });
 });

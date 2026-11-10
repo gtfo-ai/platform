@@ -37,11 +37,18 @@ import { useArtifactBody } from '../app/queries.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { APPROVAL_KIND_LABEL, stageLabel } from '../ui/humanize.js';
-import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd, Loading } from '../ui/kit.js';
+import { Badge, Button, Card, ErrorNotice, formatDateTime, Loading } from '../ui/kit.js';
 import { UntrustedInline, UntrustedProse } from '../ui/markdown.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { RISK_FACTOR_WORDS } from '../ui/words/plan-risk.js';
-import { approveConsequence, reasonCopy, rejectConsequence, rejectNext } from './approval-text.js';
+import {
+  approveConsequence,
+  budgetApprovalHeadline,
+  budgetApproveConsequence,
+  reasonCopy,
+  rejectConsequence,
+  rejectNext,
+} from './approval-text.js';
 
 type TaskCommands = ReturnType<typeof useTaskCommands>;
 type PlanSubject = Extract<NonNullable<ApprovalView['subject']>, { kind: 'plan' }>;
@@ -280,6 +287,8 @@ export const ApprovalCard = ({
   projectKey,
   mayDecide,
   commands,
+  spentUsd,
+  capUsd,
 }: {
   readonly approval: ApprovalView;
   readonly taskId: string;
@@ -287,6 +296,10 @@ export const ApprovalCard = ({
   readonly projectKey: string | null;
   readonly mayDecide: boolean;
   readonly commands: TaskCommands;
+  /** The task's spend so far (`cost_actual_usd`): a budget card opens with it (S-28.16). */
+  readonly spentUsd?: number;
+  /** The task's cap in force (`budget_cap_usd`): what approving a budget raises, or keeps. */
+  readonly capUsd?: number;
 }): ReactElement => {
   const [confirming, setConfirming] = useState(false);
   const pending = commands.decide.isPending;
@@ -297,6 +310,9 @@ export const ApprovalCard = ({
   const superseded = plan !== null && newest !== null && newest > plan.artifact_version;
   // A plan is approved only as the plan on screen: none recorded, or a newer one, is reject-only.
   const approvable = approval.kind !== 'plan' || (plan !== null && !superseded);
+  // S-28.16: the cap approving a budget raises or keeps — the task's live cap, else the ask's.
+  const budget = subject?.kind === 'budget' ? subject : null;
+  const capInForce = capUsd ?? budget?.cap_usd;
   return (
     <Card className="flex flex-col gap-3">
       <section
@@ -324,11 +340,10 @@ export const ApprovalCard = ({
               : 'What this approval is about was not recorded — it was asked before approvals recorded their subject.'}
           </p>
         ) : subject.kind === 'budget' ? (
+          // S-28.16 (M28 ruling B2): first what was spent — nothing is over budget — then the
+          // estimate, what it rests on and the threshold. The live spend, not the ask's snapshot.
           <p className="text-sm" data-approval-subject="budget">
-            {`Estimated ${formatUsd(subject.estimate_usd)} against this project’s threshold of ${formatUsd(subject.threshold_usd)}`}
-            {subject.estimate_samples === null
-              ? '.'
-              : `, from ${subject.estimate_samples} finished task${subject.estimate_samples === 1 ? '' : 's'}.`}
+            {budgetApprovalHeadline(subject, spentUsd ?? subject.spent_usd ?? 0)}
           </p>
         ) : (
           <>
@@ -345,7 +360,13 @@ export const ApprovalCard = ({
 
         <Section title="What happens next">
           <ul className="text-sm" data-approval-next="">
-            {approvable ? <li>{approveConsequence(approval.kind)}</li> : null}
+            {approvable ? (
+              <li data-approval-approve-next="">
+                {budget !== null && capInForce !== undefined
+                  ? budgetApproveConsequence(budget, capInForce)
+                  : approveConsequence(approval.kind)}
+              </li>
+            ) : null}
             <li>{rejectNext(approval.kind)}</li>
           </ul>
         </Section>

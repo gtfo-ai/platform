@@ -470,6 +470,13 @@ export const taskApprovalDecidedEvent = defineEvent('task.approval.decided', {
   decision: z.enum(['approved', 'rejected', 'expired']),
   decided_by_user_id: idSchema.nullish(),
   reason: z.string().nullish(),
+  /**
+   * S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): an approved **budget** whose estimate
+   * was above the task's cap raised that cap, in the decision's transaction — the cap before and
+   * after. Absent for every other decision.
+   */
+  cap_before_usd: usdSchema.optional(),
+  cap_after_usd: usdSchema.optional(),
 });
 
 export const taskEscalatedEvent = defineEvent('task.escalated', {

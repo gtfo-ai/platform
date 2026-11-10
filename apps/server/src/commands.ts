@@ -160,7 +160,10 @@ export interface TaskCommands {
     readonly reason?: string;
     /** TD-035: the plan the person was shown, required to approve a plan. */
     readonly subjectArtifactId?: string;
-  }): Promise<void>;
+  }): Promise<{
+    /** S-28.16: the task cap an approved estimate raised, for the audit row; `null` for none. */
+    readonly capChange: { readonly beforeUsd: number; readonly afterUsd: number } | null;
+  }>;
   retryRun(input: {
     readonly runId: string;
     readonly userId: string;

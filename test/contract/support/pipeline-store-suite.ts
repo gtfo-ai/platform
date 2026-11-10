@@ -6127,6 +6127,79 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           await store.approvals.latestOfKind(tx, { taskId: other.task.id, kind: 'budget' }),
         ).toBeNull();
       });
+
+      /**
+       * S-28.16 (M28 ruling B2 (4)): the settle row's read — pending **budget** approvals whose
+       * estimate rests on fewer than the floor — and `save` setting `auto_decided` for a decision the
+       * platform made after the insert. Filtered to this case's rows: the table is shared.
+       */
+      it('finds pending budget approvals below a sample floor, and save marks one platform-decided', async () => {
+        const approvalOf = (id: Id, taskId: Id, kind: 'plan' | 'budget') => ({
+          id,
+          taskId,
+          projectId,
+          kind,
+          status: 'pending' as const,
+          requestedAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          deadlineAt: null,
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          remindersSent: 0,
+          sequence: 1,
+        });
+        const detail = (samples: number | null) => ({
+          estimate_usd: 123.66,
+          threshold_usd: 50,
+          estimate_basis: 'project_history' as const,
+          estimate_samples: samples,
+        });
+        const ids: Record<string, Id> = {};
+        for (const [name, kind, samples] of [
+          ['one', 'budget', 1],
+          ['two', 'budget', 2],
+          ['three', 'budget', 3],
+          ['plan', 'plan', null],
+          ['unrecorded', 'budget', null],
+        ] as const) {
+          const owner = task();
+          await store.tasks.insert(tx, owner);
+          ids[name] = nextId();
+          await store.approvals.insert(tx, {
+            approval: approvalOf(ids[name] as Id, owner.task.id, kind),
+            stage: 'refinement',
+            attempt: 1,
+            ...(kind === 'budget' && samples !== null ? { subjectDetail: detail(samples) } : {}),
+          });
+        }
+        const mine = new Set(Object.values(ids));
+        const found = (
+          await store.approvals.pendingBudgetBelowSamples(tx, { belowSamples: 3, limit: 10_000 })
+        ).filter((id) => mine.has(id));
+        // Neither figure recorded (no subject, the task has no estimate): nothing says too few.
+        expect(found.sort()).toEqual([ids.one, ids.two].sort());
+
+        const one = await store.approvals.load(tx, ids.one as Id);
+        if (one === null) throw new Error('the approval was not stored');
+        await store.approvals.save(tx, {
+          ...one,
+          approval: {
+            ...one.approval,
+            status: 'approved',
+            decidedAt: '2026-06-01T10:00:00.000Z' as IsoDateTime,
+            reason: 'estimate_basis_too_thin: no longer required',
+          },
+          autoDecided: true,
+        });
+        const settled = await store.approvals.load(tx, ids.one as Id);
+        expect(settled?.autoDecided).toBe(true);
+        expect(settled?.approval.status).toBe('approved');
+        expect(
+          (
+            await store.approvals.pendingBudgetBelowSamples(tx, { belowSamples: 3, limit: 10_000 })
+          ).filter((id) => mine.has(id)),
+        ).toEqual([ids.two]);
+      });
     });
 
     /**

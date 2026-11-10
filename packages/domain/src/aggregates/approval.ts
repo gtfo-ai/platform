@@ -227,6 +227,74 @@ export const autoApproveApproval = (
   };
 };
 
+/**
+ * The code a budget approval the platform settled carries at the head of its decision reason
+ * (S-28.16, TD-035's 2026-11-10 amendment decision 3): `approvals.reason` is free text, so the code
+ * leads it and the numbers follow, and the screen words it from the subject's own figures.
+ */
+export const BUDGET_APPROVAL_NOT_REQUIRED_CODE = 'estimate_basis_too_thin';
+
+/** The decision reason: the code, the samples the estimate rested on and the floor. */
+export const budgetApprovalNotRequiredReason = (input: {
+  readonly samples: number;
+  readonly min: number;
+}): string =>
+  `${BUDGET_APPROVAL_NOT_REQUIRED_CODE}: no longer required — the estimate rests on ${input.samples} finished ${
+    input.samples === 1 ? 'task' : 'tasks'
+  }, and an estimate asks a person only from ${input.min}`;
+
+/**
+ * **A budget approval the platform settles as no longer required** (S-28.16, M28 ruling B2 (4)).
+ *
+ * An earlier build asked about estimates resting on one or two finished tasks; this one never asks
+ * about those (`budgetApprovalReasons`'s floor). The approvals already waiting are approved here
+ * with **no decider** — the store records them `auto_decided`, the shape S-28.8 gave a plan the
+ * low-risk rule let go ahead — and the reason {@link budgetApprovalNotRequiredReason} (its code first), and the
+ * ordinary `task.approval.decided` moves the task on. The cap is **not** touched: nobody approved
+ * the spend, so the task's cap still bounds it. Nobody's permission is asked: the rule decided.
+ */
+export const settleBudgetApprovalNotRequired = (
+  approval: Approval,
+  basis: { readonly samples: number; readonly min: number },
+  context: CommandContext,
+): ApprovalDecision => {
+  if (!(basis.samples < basis.min)) {
+    throw new InvariantViolationError(
+      'approval.settle_not_required',
+      `an estimate on ${basis.samples} finished tasks rests on enough to ask (the floor is ${basis.min})`,
+    );
+  }
+  const reason = budgetApprovalNotRequiredReason(basis);
+  if (approval.kind !== 'budget') {
+    throw new InvariantViolationError(
+      'approval.settle_not_required',
+      `only a budget approval is settled as no longer required, this one is "${approval.kind}"`,
+    );
+  }
+  assertApprovalTransition(approval.status, 'approved');
+  const recorder = recorderFor(approval, context);
+  const decidedAt = recorder.occurredAt;
+  recorder.emit('task.approval.decided', {
+    project_id: approval.projectId,
+    task_id: approval.taskId,
+    approval_id: approval.id,
+    decision: 'approved',
+    decided_by_user_id: null,
+    reason,
+  });
+  return {
+    aggregate: {
+      ...approval,
+      status: 'approved',
+      decidedByUserId: null,
+      decidedAt,
+      reason,
+      sequence: recorder.sequence,
+    },
+    events: recorder.events,
+  };
+};
+
 export const toApprovalRecord = (approval: Approval): ApprovalRecord => ({
   id: approval.id,
   task_id: approval.taskId,
@@ -239,11 +307,22 @@ export const toApprovalRecord = (approval: Approval): ApprovalRecord => ({
   reason: approval.reason,
 });
 
+/**
+ * The task cap an approved **budget** raised (S-28.16, BD-010's 2026-11-10 amendment, M28 ruling
+ * B2): the cap in force before and the one the approval set. Carried on `task.approval.decided`.
+ */
+export interface ApprovalCapChange {
+  readonly beforeUsd: number;
+  readonly afterUsd: number;
+}
+
 export interface DecideApprovalInput {
   readonly decision: 'approved' | 'rejected';
   readonly userId: Id;
   readonly role: UserRole;
   readonly reason?: string;
+  /** Only an approved budget raises a cap, and only upwards; anything else is refused. */
+  readonly capChange?: ApprovalCapChange;
 }
 
 /** A mapped maintainer decided. The permission required depends on the approval's kind. */
@@ -257,6 +336,16 @@ export const decideApproval = (
     kind: 'approval',
     status: approval.status,
   });
+  const cap = input.capChange;
+  if (
+    cap !== undefined &&
+    (approval.kind !== 'budget' || input.decision !== 'approved' || !(cap.afterUsd > cap.beforeUsd))
+  ) {
+    throw new InvariantViolationError(
+      'approval.cap_change',
+      `only an approved budget raises the task's cap, and only upwards (${approval.kind}, ${input.decision}, ${cap.beforeUsd} → ${cap.afterUsd})`,
+    );
+  }
   const recorder = recorderFor(approval, context);
   const decidedAt = recorder.occurredAt;
   recorder.emit('task.approval.decided', {
@@ -266,6 +355,7 @@ export const decideApproval = (
     decision: input.decision,
     decided_by_user_id: input.userId,
     reason: input.reason ?? null,
+    ...(cap === undefined ? {} : { cap_before_usd: cap.beforeUsd, cap_after_usd: cap.afterUsd }),
   });
   return {
     aggregate: {

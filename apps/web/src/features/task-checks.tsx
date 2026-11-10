@@ -434,7 +434,7 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
       value: task.estimate_usd === null ? 'none' : formatUsd(task.estimate_usd),
       status: estimateStatus(task),
       definition:
-        "Predicted at refinement from this project's finished tasks, before the work ran; above the project's threshold it waits for a budget approval.",
+        "Predicted at refinement from this project's finished tasks, before the work ran — an estimate, not money spent. When it rests on at least 3 finished tasks and is above the project's threshold, a maintainer is asked first; approving raises the task's cap to it.",
       basis: estimateBasisText(task),
       required: false,
     },

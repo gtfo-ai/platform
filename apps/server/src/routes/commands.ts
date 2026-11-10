@@ -986,9 +986,17 @@ export const registerCommandRoutes = async (
           channel: 'ui',
         },
         taskId,
+        // S-28.16 (M28 ruling B2): an approved estimate above the task's cap raised the cap; the
+        // row names both figures, so the audit says who raised it and from what.
+        auditResult: (result) => {
+          const change = result?.capChange ?? null;
+          return change === null
+            ? {}
+            : { cap_before_usd: change.beforeUsd, cap_after_usd: change.afterUsd };
+        },
         perform: async () => {
           const { userId } = actorOf(request);
-          await commands().decideApproval({
+          return commands().decideApproval({
             approvalId,
             decision: body.decision === 'approve' ? 'approved' : 'rejected',
             userId,

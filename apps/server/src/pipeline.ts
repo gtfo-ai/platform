@@ -76,6 +76,7 @@ import type {
 import {
   assertSettingsReadOutsideTransaction,
   type BindingLifecycle,
+  BUDGET_APPROVAL_SETTLE_COMPONENT,
   composeSecretRedactors,
   costHandlers,
   createBudgetGuard,
@@ -1854,6 +1855,22 @@ export const composePipeline = async (
        * when it shipped — is checked once, and a blocked one again; `recovery/ready-merge-check.ts`.
        */
       readyMergeChecks: { tasks: store.tasks },
+      /**
+       * S-28.16 (M28 ruling B2 (4)): a pending budget approval an earlier build asked on fewer
+       * than three finished tasks is settled through the Approval aggregate as no longer required,
+       * and its task goes on; `recovery/budget-approval-settle.ts`.
+       */
+      budgetApprovalSettle: {
+        approvals: store.approvals,
+        tasks: store.tasks,
+        context: (correlationId) => ({
+          ids,
+          actor: { kind: 'system', component: BUDGET_APPROVAL_SETTLE_COMPONENT },
+          clock: { now: nowIso },
+          correlationId,
+          causeEventId: null,
+        }),
+      },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,

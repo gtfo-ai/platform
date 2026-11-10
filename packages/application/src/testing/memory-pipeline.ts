@@ -2877,10 +2877,30 @@ export const createMemoryPipelineStore = (
           subjectArtifactId: current.subjectArtifactId ?? null,
           subjectDetail: current.subjectDetail ?? null,
           reasons: current.reasons ?? null,
-          autoDecided: current.autoDecided === true,
+          // S-28.16: set by a later platform decision, never cleared.
+          autoDecided: current.autoDecided === true || stored.autoDecided === true,
         }),
       );
     },
+    pendingBudgetBelowSamples: async (_tx, query) =>
+      [...approvals.values()]
+        .filter((stored) => {
+          if (stored.approval.kind !== 'budget' || stored.approval.status !== 'pending') {
+            return false;
+          }
+          const samples =
+            stored.subjectDetail?.estimate_samples ??
+            tasks.get(stored.approval.taskId)?.estimateSamples ??
+            null;
+          return samples !== null && samples < query.belowSamples;
+        })
+        .sort(
+          (a, b) =>
+            a.approval.requestedAt.localeCompare(b.approval.requestedAt) ||
+            a.approval.id.localeCompare(b.approval.id),
+        )
+        .slice(0, query.limit)
+        .map((stored) => stored.approval.id),
     /**
      * **Recorded only** — the stricter half of the adapter (rule 1): PostgreSQL also derives a
      * subject for a row written before migration 0103 (TD-035 decision 5), and this store holds no

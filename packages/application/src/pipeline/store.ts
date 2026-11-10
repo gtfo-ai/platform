@@ -3047,9 +3047,10 @@ export interface StoredApproval {
   readonly subjectDetail?: BudgetApprovalSubjectDetail | null;
   readonly reasons?: readonly ApprovalReason[] | null;
   /**
-   * `true` for a plan the project's low-risk rule let go ahead (S-28.8, migration 0113,
-   * `autoApproveApproval`): approved by the platform, no decider. Written once, by `insert`, like
-   * the reasons; absent is `false`.
+   * `true` for an approval the **platform** decided (migration 0113): a plan the project's low-risk
+   * rule let go ahead (S-28.8, `autoApproveApproval`, written by `insert`), or a budget approval
+   * settled as no longer required (S-28.16, `settleBudgetApprovalNotRequired`, written by `save`).
+   * Absent is `false`; once `true` it is never cleared — `save` may set it and never unsets it.
    */
   readonly autoDecided?: boolean;
 }
@@ -3070,8 +3071,22 @@ export interface ApprovalPlanSubject {
 export interface ApprovalRepository {
   insert(tx: Transaction, stored: StoredApproval): Promise<void>;
   load(tx: Transaction, approvalId: Id): Promise<StoredApproval | null>;
-  /** The decision's columns — never `reminders_sent`, which only {@link recordReminder} writes. */
+  /**
+   * The decision's columns — never `reminders_sent`, which only {@link recordReminder} writes, and
+   * never the subject or the reasons. `auto_decided` is set when the stored value says `true` and is
+   * never cleared (S-28.16: the platform's settle is a decision made after the insert).
+   */
   save(tx: Transaction, stored: StoredApproval): Promise<void>;
+  /**
+   * Pending **budget** approvals whose estimate rests on fewer than `belowSamples` finished tasks —
+   * `subject_detail.estimate_samples`, else the task's own `estimate_samples` for a row asked before
+   * the subject was recorded — oldest first, at most `limit` (S-28.16, M28 ruling B2 (4)). A row
+   * with neither figure is not answered: nothing says it rests on too few.
+   */
+  pendingBudgetBelowSamples(
+    tx: Transaction,
+    query: { readonly belowSamples: number; readonly limit: number },
+  ): Promise<readonly Id[]>;
   /**
    * One reminder went out (WP-84, BD-006's Q95 amendment): `reminders_sent + 1`, only while the
    * approval is still `pending` and the counter still reads `sent`. The question's narrow write,

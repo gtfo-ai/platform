@@ -612,7 +612,12 @@ describe('an approval waits until a person decides it (BD-006’s 2026-11-07 ame
         },
       },
     });
-    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 6 }]);
+    // Three finished tasks: an estimate asks only from three (S-28.16).
+    harness.cost?.seedHistory(PROJECT, [
+      { size: 'M', costUsd: 6 },
+      { size: 'M', costUsd: 6 },
+      { size: 'M', costUsd: 6 },
+    ]);
     moveTo(harness, FRIDAY_1600);
     await harness.publish([ticketMatched()]);
     const [requested] = eventsOf(harness, 'task.approval.requested');
@@ -1914,7 +1919,12 @@ describe('what an escalated wait tells a person to do, and that it works (backlo
         },
       },
     });
-    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 6 }]);
+    // Three finished tasks: an estimate asks only from three (S-28.16).
+    harness.cost?.seedHistory(PROJECT, [
+      { size: 'M', costUsd: 6 },
+      { size: 'M', costUsd: 6 },
+      { size: 'M', costUsd: 6 },
+    ]);
     moveTo(harness, FRIDAY_1600);
     await harness.publish([ticketMatched()]);
     const [requested] = eventsOf(harness, 'task.approval.requested');

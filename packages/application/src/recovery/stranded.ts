@@ -33,6 +33,7 @@
  * | an agent run's offer nobody claimed (WP-278) | — | the task's stage entry, held by an open offer for ever (a `workers_only` project with no worker, a `server_only` one with no runner) | **here** — `run_offer_timeout`, in `./offer-timeout.ts`: past its `expires_at` the offer is withdrawn, its run cancelled and the task escalated with *no claimant took this run* (an ask is refused), never re-offered |
  * | a live task created before S-26.1 whose ticket never changed (BACKLOG 1510) | — | its tracker assignee, never read: the held-ticket callout cannot say who holds the ticket | **here** — `owner_backfill`, in `./owner-backfill.ts`: the `owner_sync` duty per claimed attempt (`tasks.owner_backfill_attempts`, at most three, 15 min then 2 h apart), settled by a definitive read or the third failure, at most twenty a pass |
  * | a task waiting at Ready from before S-28.13, or one whose provider said "not mergeable now" (M28 ruling R3b) | — | the platform's own review threads stay open and the page says *ready to merge* while the provider refuses the merge | **here** — `ready_merge_check`, in `./ready-merge-check.ts`: the duty per claimed task, once with no record and again ten minutes after a claim that did not read "mergeable", at most twenty a pass |
+ * | a budget approval an earlier build asked on fewer than three finished tasks (S-28.16, M28 ruling B2) | — | a task parked for a person's go-ahead on a mean of one or two tasks, which this build never asks about | **here** — `budget_approval_settle`, in `./budget-approval-settle.ts`: settled through the Approval aggregate as no longer required (`auto_decided`, no decider), the task goes on; one-off because nothing below the floor is asked any more, at most twenty a pass |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
  * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
@@ -154,6 +155,11 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import {
+  BUDGET_APPROVAL_SETTLE_SITE,
+  type BudgetApprovalSettleRecoverySite,
+  recoverBudgetApprovalSettle,
+} from './budget-approval-settle.js';
 import { type DeadlineRecoverySite, recoverDeadlines } from './deadline.js';
 import type {
   DeferredDependencyRecoverySite,
@@ -506,6 +512,12 @@ export interface StrandedRecoveryOptions {
    * waited from before S-28.13 keeps the platform's own threads open"**.
    */
   readonly readyMergeChecks?: ReadyMergeCheckRecoverySite;
+  /**
+   * S-28.16 (M28 ruling B2 (4)): a pending budget approval an earlier build asked on fewer than
+   * three finished tasks is settled as no longer required (`./budget-approval-settle.ts`).
+   * **Absent is "such an approval keeps waiting for a person"**.
+   */
+  readonly budgetApprovalSettle?: BudgetApprovalSettleRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -1184,6 +1196,24 @@ export const runStrandedRecovery = async (
       found: checked.found,
       reEnqueued: checked.enqueued,
       ended: 0,
+    });
+  }
+
+  if (options.budgetApprovalSettle !== undefined) {
+    // An ending through the aggregate: each approval decided once, in a transaction of its own.
+    const settled = await recoverBudgetApprovalSettle(
+      {
+        unitOfWork: options.unitOfWork,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      options.budgetApprovalSettle,
+      { limit },
+    );
+    sites.push({
+      site: BUDGET_APPROVAL_SETTLE_SITE,
+      found: settled.found,
+      reEnqueued: 0,
+      ended: settled.settled,
     });
   }
 

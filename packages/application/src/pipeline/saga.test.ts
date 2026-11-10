@@ -21,11 +21,14 @@ import {
   DEFAULT_ITERATION_LIMITS,
   DEFAULT_WIP_LIMITS,
   FEATURE_TEMPLATE,
+  IllegalTransitionError,
   MAX_FEEDBACK_CHARS,
+  MIN_ESTIMATE_SAMPLES_FOR_APPROVAL,
   materialiseAutonomy,
   readDataBlocks,
   resolveWipLimits,
   SHIPPED_TEMPLATES,
+  settleBudgetApprovalNotRequired,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -2207,6 +2210,12 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8, TD-037)',
 
 describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
   const THRESHOLD = AUTONOMY_PRESETS.supervised.budgetApprovalThresholdUsd ?? 0;
+  /**
+   * S-28.16: three finished M tasks of this cost — the fewest an estimate asks on
+   * (`MIN_ESTIMATE_SAMPLES_FOR_APPROVAL`) — give the next M task an estimate of exactly `costUsd`.
+   */
+  const finished = (costUsd: number, count = MIN_ESTIMATE_SAMPLES_FOR_APPROVAL) =>
+    Array.from({ length: count }, () => ({ size: 'M' as const, costUsd }));
 
   const estimating = (
     history: readonly { size: 'S' | 'M' | 'L' | 'XL'; costUsd: number }[],
@@ -2238,13 +2247,13 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
       | undefined;
 
   it('stops the task before Implementation when the estimate is over the threshold', async () => {
-    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    const harness = estimating(finished(THRESHOLD + 10));
     await harness.publish([ticketMatched()]);
 
     const task = taskOf(harness);
     expect(task.estimateUsd).toBe(THRESHOLD + 10);
     expect(task.estimateBasis).toBe('project_history');
-    expect(task.estimateSamples).toBe(1);
+    expect(task.estimateSamples).toBe(3);
     expect(task.task.state).toBe('waiting_approval');
     expect(requestedApproval(harness)?.payload.approval.kind).toBe('budget');
     // product/09: *"before Implementation"*. Refinement ran and nothing after it did.
@@ -2254,7 +2263,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
   it('lets a task estimated at exactly the threshold through (standing rule 42)', async () => {
     // The other side of the boundary, one cent away from the case above: a gate that fired on
     // everything, or one that read `>=`, passes the first half alone.
-    const harness = estimating([{ size: 'M', costUsd: THRESHOLD }]);
+    const harness = estimating(finished(THRESHOLD));
     await harness.publish([ticketMatched()]);
 
     expect(taskOf(harness).estimateUsd).toBe(THRESHOLD);
@@ -2301,7 +2310,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
         },
       },
     });
-    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 6 }]);
+    harness.cost?.seedHistory(PROJECT, finished(6));
     await harness.publish([ticketMatched()]);
 
     expect(requestedApproval(harness)?.payload.approval.kind).toBe('budget');
@@ -2330,7 +2339,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
         },
       },
     });
-    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 10_000 }]);
+    harness.cost?.seedHistory(PROJECT, finished(10_000));
     await harness.publish([ticketMatched()]);
 
     expect(taskOf(harness).estimateUsd).toBe(10_000);
@@ -2345,7 +2354,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
       cost: true,
       settings: { config: { policies: { probation_tasks: 0 } } },
     });
-    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 10_000 }]);
+    harness.cost?.seedHistory(PROJECT, finished(10_000));
     await harness.publish([ticketMatched()]);
 
     expect(taskOf(harness).estimateUsd).toBe(10_000);
@@ -2354,7 +2363,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
   });
 
   it('carries on to Implementation when a maintainer approves the spend', async () => {
-    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    const harness = estimating(finished(THRESHOLD + 10));
     await harness.publish([ticketMatched()]);
     const requested = requestedApproval(harness);
 
@@ -2378,7 +2387,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
     // A rejected *budget* is not a rejected *plan*: there is no better plan to write, because the
     // estimate is written once and a second refinement round produces the same number. So the task
     // stops in the existing vocabulary — `needs_human` — instead of walking back into its own gate.
-    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    const harness = estimating(finished(THRESHOLD + 10));
     await harness.publish([ticketMatched()]);
     const requested = requestedApproval(harness);
 
@@ -2409,7 +2418,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
     // maintainer. The lookup is therefore `(task, kind)` and not `(task, kind, stage, attempt)` —
     // `enteredAttempt` increments on every re-entry, which is what makes the attempt-keyed form
     // (the plan gate's, correctly) the wrong key here.
-    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    const harness = estimating(finished(THRESHOLD + 10));
     await harness.publish([ticketMatched()]);
     const requested = requestedApproval(harness);
     await decideTaskApproval(harness.commands, {
@@ -2432,6 +2441,196 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
     expect(taskOf(harness).task.stageAttempts.refinement).toBe(2);
     expect(taskOf(harness).estimateUsd).toBe(firstEstimate);
     expect(harness.types().filter((type) => type === 'task.approval.requested')).toHaveLength(1);
+  });
+
+  /**
+   * **S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2)** — an estimate is not money spent.
+   *
+   * The Autix case: one finished task at $123.05 gave every new task an estimate above the $50
+   * threshold, and four tasks parked on a mean of one. Below three finished tasks nothing is asked;
+   * from three the gate asks as before. Approving an estimate above the task's cap raises the cap to
+   * it, so the approved task is not paused at the cap the card promised it could pass.
+   */
+  describe('an estimate is not money spent (S-28.16)', () => {
+    const MAINTAINER = '00000000-0000-4000-8000-0000000000c1';
+    const capOf = (harness: PipelineHarness) =>
+      harness.memory.transaction(async (scope) =>
+        harness.store.tasks.budgetCap(scope.tx, taskOf(harness).task.id),
+      );
+    const decidedPayloads = (harness: PipelineHarness) =>
+      harness
+        .events()
+        .filter((entry) => entry.type === 'task.approval.decided')
+        .map((entry) => entry.payload as Record<string, unknown>);
+
+    it.each([1, 2])(
+      'asks nobody about an estimate over the threshold from %i finished task(s), and the task goes on',
+      async (count) => {
+        const harness = estimating(finished(123.66, count));
+        await harness.publish([ticketMatched()]);
+
+        expect(taskOf(harness).estimateUsd).toBe(123.66);
+        expect(taskOf(harness).estimateSamples).toBe(count);
+        expect(harness.types()).not.toContain('task.approval.requested');
+        expect(taskOf(harness).task.state).toBe('ready_for_merge');
+        expect(harness.specs.map((spec) => spec.stage)).toContain('implementation');
+      },
+    );
+
+    it('asks from three finished tasks, with what was spent and the cap in the subject', async () => {
+      const harness = estimating(finished(123.66));
+      await harness.publish([ticketMatched()]);
+
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+      const requested = requestedApproval(harness);
+      const stored = await harness.memory.transaction(async (scope) =>
+        harness.store.approvals.load(scope.tx, requested?.payload.approval.id ?? ''),
+      );
+      expect(stored?.subjectDetail).toMatchObject({
+        estimate_usd: 123.66,
+        threshold_usd: THRESHOLD,
+        estimate_samples: 3,
+        spent_usd: taskOf(harness).costActualUsd,
+        cap_usd: 50,
+        size: 'M',
+        size_weight: 2,
+      });
+    });
+
+    it('raises the cap to the estimate on approval, once — a replay raises nothing twice', async () => {
+      const harness = estimating(finished(123.66));
+      await harness.publish([ticketMatched()]);
+      const approvalId = requestedApproval(harness)?.payload.approval.id ?? '';
+      expect(await capOf(harness)).toBeNull();
+
+      const result = await decideTaskApproval(harness.commands, {
+        approvalId,
+        decision: 'approved',
+        userId: MAINTAINER,
+        role: 'maintainer',
+      });
+      expect(result.capChange).toEqual({ beforeUsd: 50, afterUsd: 123.66 });
+      expect(await capOf(harness)).toBe(123.66);
+      expect(decidedPayloads(harness)).toEqual([
+        expect.objectContaining({
+          decision: 'approved',
+          cap_before_usd: 50,
+          cap_after_usd: 123.66,
+        }),
+      ]);
+
+      await expect(
+        decideTaskApproval(harness.commands, {
+          approvalId,
+          decision: 'approved',
+          userId: MAINTAINER,
+          role: 'maintainer',
+        }),
+      ).rejects.toBeInstanceOf(IllegalTransitionError);
+      expect(await capOf(harness)).toBe(123.66);
+      expect(decidedPayloads(harness)).toHaveLength(1);
+    });
+
+    it('lets the approved task run past $50 up to its new cap, without a budget pause (Autix)', async () => {
+      const harness = estimating(finished(123.66));
+      await harness.publish([ticketMatched()]);
+      const approvalId = requestedApproval(harness)?.payload.approval.id ?? '';
+      // The task has spent close to the old cap: the next stage's reserve no longer fits under $50.
+      await harness.memory.transaction(async (scope) =>
+        harness.store.tasks.addSpend(scope.tx, taskOf(harness).task.id, 49),
+      );
+
+      await decideTaskApproval(harness.commands, {
+        approvalId,
+        decision: 'approved',
+        userId: MAINTAINER,
+        role: 'maintainer',
+      });
+      await harness.drain();
+
+      expect(harness.types()).not.toContain('task.paused');
+      expect(taskOf(harness).task.state).toBe('ready_for_merge');
+      expect(taskOf(harness).costActualUsd).toBeGreaterThan(50);
+      expect(taskOf(harness).costActualUsd).toBeLessThanOrEqual(123.66);
+    });
+
+    it('changes no cap for an estimate within it — and that task does pause at its cap (the control)', async () => {
+      const shipped = materialiseAutonomy({
+        level: 'supervised',
+        at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+        appliedBy: null,
+      });
+      const harness = estimating(finished(30), {
+        settings: {
+          autonomy: {
+            ...shipped,
+            policies: { ...shipped.policies, budget_approval_threshold_usd: 5, probation: false },
+          },
+        },
+      });
+      await harness.publish([ticketMatched()]);
+      const approvalId = requestedApproval(harness)?.payload.approval.id ?? '';
+      await harness.memory.transaction(async (scope) =>
+        harness.store.tasks.addSpend(scope.tx, taskOf(harness).task.id, 49),
+      );
+
+      const result = await decideTaskApproval(harness.commands, {
+        approvalId,
+        decision: 'approved',
+        userId: MAINTAINER,
+        role: 'maintainer',
+      });
+      await harness.drain();
+
+      expect(result.capChange).toBeNull();
+      expect(await capOf(harness)).toBeNull();
+      expect(decidedPayloads(harness)[0]).not.toHaveProperty('cap_after_usd');
+      // Without the raise the same spend pauses the task at its $50 cap.
+      expect(harness.types()).toContain('task.paused');
+    });
+
+    it('changes no cap on a reject', async () => {
+      const harness = estimating(finished(123.66));
+      await harness.publish([ticketMatched()]);
+      const result = await decideTaskApproval(harness.commands, {
+        approvalId: requestedApproval(harness)?.payload.approval.id ?? '',
+        decision: 'rejected',
+        userId: MAINTAINER,
+        role: 'maintainer',
+      });
+      expect(result.capChange).toBeNull();
+      expect(await capOf(harness)).toBeNull();
+    });
+
+    it('moves a task on when the platform settles its budget approval as no longer required', async () => {
+      // The waiting approval an earlier build would have asked; the settle row's own decision
+      // (`recovery/budget-approval-settle.ts`) is applied here through the aggregate it uses.
+      const harness = estimating(finished(123.66));
+      await harness.publish([ticketMatched()]);
+      const approvalId = requestedApproval(harness)?.payload.approval.id ?? '';
+
+      await harness.memory.transaction(async (scope) => {
+        const stored = await harness.store.approvals.load(scope.tx, approvalId);
+        if (stored === null) throw new Error('no approval');
+        const settled = settleBudgetApprovalNotRequired(
+          stored.approval,
+          { samples: 1, min: MIN_ESTIMATE_SAMPLES_FOR_APPROVAL },
+          harness.commands.context(stored.approval.taskId),
+        );
+        await harness.store.approvals.save(scope.tx, {
+          ...stored,
+          approval: settled.aggregate,
+          autoDecided: true,
+        });
+        await scope.events.append(settled.events);
+      });
+      await harness.drain();
+
+      expect(taskOf(harness).task.state).toBe('ready_for_merge');
+      expect(harness.specs.map((spec) => spec.stage)).toContain('implementation');
+      expect(await capOf(harness)).toBeNull();
+      expect(harness.types().filter((type) => type === 'task.approval.requested')).toHaveLength(1);
+    });
   });
 
   /**

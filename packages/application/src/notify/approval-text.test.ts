@@ -15,6 +15,7 @@ import {
   planSummaryOf,
   taskPageUrl,
 } from './approval-text.js';
+import { APPROVAL_DETAIL } from './handlers.js';
 import { notificationDraft } from './render.js';
 
 /** One valid reason per code, every variant of `source` included. */
@@ -54,6 +55,24 @@ describe('the reasons an approval was asked, in words', () => {
       expect(words.length, reason.code).toBeGreaterThan(20);
       expect(words, reason.code).not.toMatch(NOT_PLAIN);
     }
+  });
+
+  /**
+   * S-28.16 (M28 ruling B2): the owner read the budget approval as *"the budget is over"* beside a
+   * spend of $0.45. The chat sentence says it is an estimate made before the spend, and that
+   * nothing is over budget.
+   */
+  it('words a budget approval as an estimate before the spend, never as money over budget', () => {
+    const words = approvalReasonWords({
+      code: 'estimate_above_threshold',
+      estimate_usd: 123.66,
+      threshold_usd: 50,
+    });
+    expect(words).toBe(
+      'The estimate made before the expensive stages, $123.66, is above this project’s threshold of $50.00 for asking first. Nothing is over budget.',
+    );
+    expect(APPROVAL_DETAIL.budget).toContain('Nothing is over budget');
+    expect(APPROVAL_DETAIL.budget).not.toMatch(/cost is over/);
   });
 
   it('says who found a risk, and the numbers of the low-risk rule (S-28.8)', () => {

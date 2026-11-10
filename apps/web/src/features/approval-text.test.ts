@@ -4,14 +4,20 @@
  * a code added to `approvalReasonSchema` and forgotten in `reasonCopy` fails here (rule 68).
  */
 import { type ApprovalReason, approvalReasonSchema } from '@platform/contracts';
+import { MIN_ESTIMATE_SAMPLES_FOR_APPROVAL } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
   approveConsequence,
+  budgetApprovalHeadline,
+  budgetApproveConsequence,
+  budgetNotRequiredLine,
+  ESTIMATE_SAMPLES_TO_ASK,
   lowRiskAutoOf,
   reasonCopy,
   reasonShort,
   rejectNext,
   reviewVerb,
+  roughEstimateLine,
   subjectLine,
   waitingLine,
   wentAheadLine,
@@ -139,7 +145,9 @@ describe('reasonCopy', () => {
   it('names both budget figures', () => {
     expect(
       reasonCopy({ code: 'estimate_above_threshold', estimate_usd: 61.5, threshold_usd: 50 }).why,
-    ).toBe('The estimate, $61.50, is above this project’s threshold of $50.00.');
+    ).toBe(
+      'The estimate made before the expensive stages, $61.50, is above this project’s threshold of $50.00 for asking first.',
+    );
   });
 });
 
@@ -188,6 +196,93 @@ describe('subjectLine', () => {
         estimate_basis: 'project_history',
         estimate_samples: 4,
       }),
-    ).toBe('Budget · estimate $61.50, over the $50.00 threshold');
+    ).toBe(
+      'Budget · estimated $61.50 before the spend, above the $50.00 threshold for asking first',
+    );
+  });
+});
+
+/**
+ * S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): the owner read *"Estimated $123.66
+ * against this project’s threshold of $50.00"* beside *"Cost so far $0.45"* as the budget being
+ * over. The card now opens with what was spent, says it is an estimate before the expensive stages
+ * and what it rests on, and says what approving does to the cap before the click.
+ */
+describe('the budget approval’s words (S-28.16)', () => {
+  const subject = {
+    kind: 'budget' as const,
+    estimate_usd: 123.66,
+    threshold_usd: 50,
+    estimate_basis: 'project_history' as const,
+    estimate_samples: 3,
+    size: 'L' as const,
+    size_weight: 4,
+  };
+
+  it('holds the floor to the domain’s one number', () => {
+    expect(ESTIMATE_SAMPLES_TO_ASK).toBe(MIN_ESTIMATE_SAMPLES_FOR_APPROVAL);
+  });
+
+  it('opens with nothing over budget and the spend, then the estimate, its basis and the threshold', () => {
+    expect(budgetApprovalHeadline(subject, 0.45)).toBe(
+      'Nothing is over budget: $0.45 spent so far. Before the expensive stages, this task is estimated at $123.66 (size L × 4, from 3 finished tasks), above this project’s threshold of $50.00 for asking a maintainer first.',
+    );
+    // A row asked before the size was recorded names what it has.
+    expect(
+      budgetApprovalHeadline(
+        {
+          kind: 'budget',
+          estimate_usd: 123.66,
+          threshold_usd: 50,
+          estimate_basis: 'project_history',
+          estimate_samples: 3,
+        },
+        0,
+      ),
+    ).toContain('estimated at $123.66 (from 3 finished tasks)');
+  });
+
+  it('says the cap approving sets: raised above the cap, kept within it', () => {
+    expect(budgetApproveConsequence(subject, 50)).toBe(
+      'Approve: the task goes on to Implementation. Approving raises this task’s cap from $50.00 to $123.66.',
+    );
+    expect(budgetApproveConsequence({ ...subject, estimate_usd: 123.651 }, 50)).toContain(
+      'to $123.66.',
+    );
+    expect(budgetApproveConsequence({ ...subject, estimate_usd: 40 }, 50)).toBe(
+      'Approve: the task goes on to Implementation within its cap; the cap stays $50.00.',
+    );
+    expect(approveConsequence('budget')).not.toContain('may spend what was estimated');
+  });
+
+  it('labels an estimate on fewer than three finished tasks rough, with the cap that applies', () => {
+    const task = { estimate_usd: 123.66, estimate_samples: 1, budget_cap_usd: 50 };
+    expect(roughEstimateLine(task)).toBe(
+      'Rough estimate $123.66, from 1 finished task — too few to ask you about; the $50.00 cap applies.',
+    );
+    expect(roughEstimateLine({ ...task, estimate_samples: 3 })).toBeNull();
+    expect(roughEstimateLine({ ...task, estimate_usd: null })).toBeNull();
+  });
+
+  it('says a settled approval was no longer required, with what the estimate rested on', () => {
+    expect(budgetNotRequiredLine({ ...subject, estimate_samples: 1 })).toBe(
+      'Budget approval no longer required: the estimate rested on 1 finished task.',
+    );
+    expect(budgetNotRequiredLine(null)).toContain('too few finished tasks');
+  });
+
+  it('never words an estimate as money over budget', () => {
+    const reason = {
+      code: 'estimate_above_threshold' as const,
+      estimate_usd: 123.66,
+      threshold_usd: 50,
+    };
+    for (const words of [
+      reasonCopy(reason).why,
+      reasonShort(reason),
+      subjectLine('budget', subject),
+    ]) {
+      expect(words).not.toMatch(/over (the )?budget|budget is over|over the \$/i);
+    }
   });
 });

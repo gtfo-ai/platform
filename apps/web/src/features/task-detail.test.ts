@@ -32,6 +32,7 @@ const taskWith = (estimate: {
     estimate_usd: estimate.usd,
     estimate_basis: estimate.basis,
     estimate_samples: estimate.samples,
+    budget_cap_usd: 50,
   }) as Parameters<typeof estimateBasisText>[0];
 
 describe('the estimate basis line', () => {
@@ -39,8 +40,21 @@ describe('the estimate basis line', () => {
     expect(estimateBasisText(taskWith({ usd: 12, basis: 'project_history', samples: 7 }))).toBe(
       'From 7 finished tasks in this project.',
     );
-    expect(estimateBasisText(taskWith({ usd: 12, basis: 'project_history', samples: 1 }))).toBe(
-      'From 1 finished task in this project.',
+    expect(estimateBasisText(taskWith({ usd: 12, basis: 'project_history', samples: 3 }))).toBe(
+      'From 3 finished tasks in this project.',
+    );
+  });
+
+  /**
+   * S-28.16 (M28 ruling B2): below three finished tasks the estimate asks nobody, and the line says
+   * so with the cap that bounds the spend — the Autix figure, one task, as the owner saw it.
+   */
+  it('labels an estimate on fewer than three finished tasks rough, with the cap that applies', () => {
+    expect(estimateBasisText(taskWith({ usd: 123.66, basis: 'project_history', samples: 1 }))).toBe(
+      'Rough estimate $123.66, from 1 finished task — too few to ask you about; the $50.00 cap applies.',
+    );
+    expect(estimateBasisText(taskWith({ usd: 30, basis: 'org_history', samples: 2 }))).toBe(
+      'Rough estimate $30.00, from 2 finished tasks — too few to ask you about; the $50.00 cap applies.',
     );
   });
 

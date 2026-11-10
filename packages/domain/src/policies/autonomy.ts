@@ -23,6 +23,7 @@ import type {
   Slug,
   TaskPipelineDial,
 } from '@platform/contracts';
+import { estimateRestsOnEnough } from '../cost/estimate.js';
 
 /** Bump when any preset below changes. Stored with the materialised policies. */
 export const AUTONOMY_PRESET_VERSION = 1;
@@ -315,6 +316,15 @@ export const planApprovalReasons = (input: PlanApprovalInput): readonly PlanAppr
 };
 
 /**
+ * The estimate the budget gate compares: the figure and how many finished tasks it rests on
+ * (`tasks.estimate_usd`, `tasks.estimate_samples`).
+ */
+export interface BudgetEstimate {
+  readonly usd: number;
+  readonly samples: number | null;
+}
+
+/**
  * Does the estimate need a budget approval first (product/18 "Cost estimate before spend")?
  *
  * **Consumed since WP-28**, by `budgetApprovalGate` in `packages/application/src/pipeline/saga.ts`,
@@ -322,16 +332,20 @@ export const planApprovalReasons = (input: PlanApprovalInput): readonly PlanAppr
  * materialiseAutonomy}, BD-027:14) rather than re-deriving it from the level.
  * {@link AUTONOMY_POLICY_READERS} records the reader.
  *
- * Two properties the caller depends on, both stated here because they are the difference between a
+ * Three properties the caller depends on, all stated here because they are the difference between a
  * gate and a trap. A `null` threshold is the dial saying *"no budget approval at this position"* —
- * Observe and Autonomous both do — and answers **false** rather than gating everything. And the
- * argument is a **number**: a task with no estimate has nothing to compare, and the caller must not
+ * Observe and Autonomous both do — and answers **false** rather than gating everything. The
+ * estimate is a **number**: a task with no estimate has nothing to compare, and the caller must not
  * pass a zero for it, because zero is below every threshold and would read as "cheap" (standing
- * rule 16). The comparison is strictly greater-than, so a task estimated at exactly the threshold
- * is *not* gated — the boundary is asserted from both sides in `autonomy.test.ts` (rule 42).
+ * rule 16). And since S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2) an estimate resting on
+ * fewer than `MIN_ESTIMATE_SAMPLES_FOR_APPROVAL` (`../cost/estimate.ts`) finished tasks asks **nothing**, whatever it
+ * says: a mean of one task parked four Autix tasks in front of a maintainer, and the per-task cap
+ * bounds the spend meanwhile. The comparison is strictly greater-than, so a task estimated at
+ * exactly the threshold is *not* gated — the boundary is asserted from both sides in
+ * `autonomy.test.ts` (rule 42).
  */
-export const requiresBudgetApproval = (preset: AutonomyPreset, estimateUsd: number): boolean =>
-  preset.budgetApprovalThresholdUsd !== null && estimateUsd > preset.budgetApprovalThresholdUsd;
+export const requiresBudgetApproval = (preset: AutonomyPreset, estimate: BudgetEstimate): boolean =>
+  budgetApprovalReasons(preset, estimate).length > 0;
 
 /** The budget gate's one reason (TD-035): the estimate and the threshold it is above. */
 export type BudgetApprovalReason = Extract<ApprovalReason, { code: 'estimate_above_threshold' }>;
@@ -339,15 +353,17 @@ export type BudgetApprovalReason = Extract<ApprovalReason, { code: 'estimate_abo
 /**
  * {@link requiresBudgetApproval}, answered as TD-035's reasons: the crossing with both figures, or
  * the empty list when there is none — so the gate stores the threshold it compared against from
- * the same expression that decided, rather than reading the preset a second time.
+ * the same expression that decided, rather than reading the preset a second time. The floor
+ * ({@link estimateRestsOnEnough}) is here rather than in the gate (TD-035's 2026-11-10 amendment,
+ * decision 1), so the gate needs no second check.
  */
 export const budgetApprovalReasons = (
   preset: AutonomyPreset,
-  estimateUsd: number,
+  estimate: BudgetEstimate,
 ): readonly BudgetApprovalReason[] => {
   const threshold = preset.budgetApprovalThresholdUsd;
-  return threshold !== null && estimateUsd > threshold
-    ? [{ code: 'estimate_above_threshold', estimate_usd: estimateUsd, threshold_usd: threshold }]
+  return threshold !== null && estimateRestsOnEnough(estimate.samples) && estimate.usd > threshold
+    ? [{ code: 'estimate_above_threshold', estimate_usd: estimate.usd, threshold_usd: threshold }]
     : [];
 };
 

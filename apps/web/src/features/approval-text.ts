@@ -91,7 +91,8 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
           };
     case 'estimate_above_threshold':
       return {
-        why: `The estimate, ${formatUsd(reason.estimate_usd)}, is above this project’s threshold of ${formatUsd(reason.threshold_usd)}.`,
+        // S-28.16 (M28 ruling B2): an estimate before the spend, never money spent.
+        why: `The estimate made before the expensive stages, ${formatUsd(reason.estimate_usd)}, is above this project’s threshold of ${formatUsd(reason.threshold_usd)} for asking first.`,
         stop: 'To be asked less, set How much agents do alone to a position with a higher threshold, or none.',
         section: 'policies',
         link: 'How much agents do alone',
@@ -197,7 +198,7 @@ export const reasonShort = (reason: ApprovalReason): string => {
     case 'size_at_or_above':
       return `size ${reason.size}, at or above ${reason.threshold}`;
     case 'estimate_above_threshold':
-      return `estimate ${formatUsd(reason.estimate_usd)}, above ${formatUsd(reason.threshold_usd)}`;
+      return `an estimate of ${formatUsd(reason.estimate_usd)} before the spend, above the ${formatUsd(reason.threshold_usd)} threshold for asking first`;
     case 'risk_factor':
       return `${listOf(reason.factors.map((factor) => RISK_FACTOR_WORDS[factor]))} (${RISK_SOURCE_WORDS[reason.source]})`;
     case 'confidence_below':
@@ -253,7 +254,8 @@ export const approveConsequence = (kind: ApprovalKind): string => {
     case 'plan':
       return 'Approve: Implementation starts on this plan.';
     case 'budget':
-      return 'Approve: the task goes on to Implementation and may spend what was estimated.';
+      // The card says what the cap becomes (`budgetApproveConsequence`); this is the kind's line.
+      return 'Approve: the task goes on to Implementation within its cap.';
     default:
       return 'Approve: the task goes on with what was asked.';
   }
@@ -292,7 +294,7 @@ export const subjectLine = (
         : 'Approval · what it is about was not recorded';
   }
   if (subject.kind === 'budget') {
-    return `Budget · estimate ${formatUsd(subject.estimate_usd)}, over the ${formatUsd(subject.threshold_usd)} threshold`;
+    return `Budget · estimated ${formatUsd(subject.estimate_usd)} before the spend, above the ${formatUsd(subject.threshold_usd)} threshold for asking first`;
   }
   const parts = [`Plan v${subject.artifact_version}`];
   if (plan?.size !== null && plan?.size !== undefined) {
@@ -303,3 +305,87 @@ export const subjectLine = (
   }
   return parts.join(' · ');
 };
+
+// ── The budget approval's own sentences (S-28.16, BD-010's 2026-11-10 amendment, M28 ruling B2) ──
+
+/**
+ * The fewest finished tasks an estimate rests on before it asks a maintainer — the domain's
+ * `MIN_ESTIMATE_SAMPLES_FOR_APPROVAL`, repeated here because the web bundle imports no domain code;
+ * `approval-text.test.ts` holds the two to one number.
+ */
+export const ESTIMATE_SAMPLES_TO_ASK = 3;
+
+type BudgetSubject = Extract<ApprovalSubject, { kind: 'budget' }>;
+
+/** "1 finished task" / "3 finished tasks". */
+export const finishedTasks = (samples: number): string =>
+  samples === 1 ? '1 finished task' : `${samples} finished tasks`;
+
+/** Up to the next cent, as the server rounds the cap an approval sets (`usdUpToCents`). */
+const upToCents = (usd: number): number => Math.ceil(Number((usd * 100).toFixed(6)) - 1e-9) / 100;
+
+/**
+ * **The card's first sentence: nothing is over budget** (M28 ruling B2 (3)). On Autix the card read
+ * *"Estimated $123.66 against this project's threshold of $50.00"* beside *"Cost so far $0.45"*, and
+ * the owner read it as the budget being over. So it opens with what was spent, then says this is an
+ * estimate made before the expensive stages, what it rests on, and the threshold it crossed.
+ */
+export const budgetApprovalHeadline = (subject: BudgetSubject, spentUsd: number): string => {
+  const restsOn = [
+    ...(subject.size === undefined
+      ? []
+      : [
+          subject.size_weight === undefined
+            ? `size ${subject.size}`
+            : `size ${subject.size} × ${subject.size_weight}`,
+        ]),
+    ...(subject.estimate_samples === null
+      ? []
+      : [`from ${finishedTasks(subject.estimate_samples)}`]),
+  ];
+  return (
+    `Nothing is over budget: ${formatUsd(spentUsd)} spent so far. ` +
+    `Before the expensive stages, this task is estimated at ${formatUsd(subject.estimate_usd)}` +
+    (restsOn.length === 0 ? '' : ` (${restsOn.join(', ')})`) +
+    `, above this project’s threshold of ${formatUsd(subject.threshold_usd)} for asking a maintainer first.`
+  );
+};
+
+/**
+ * What approving does to the task's cap, said **before** the click (M28 ruling B2 (2)): an estimate
+ * above the cap raises the cap to it (rounded up to the cent, as the server does); one within it
+ * leaves the cap where it is. Never lowers it.
+ */
+export const budgetApproveConsequence = (subject: BudgetSubject, capUsd: number): string => {
+  const raisedTo = upToCents(subject.estimate_usd);
+  return raisedTo > capUsd
+    ? `Approve: the task goes on to Implementation. Approving raises this task’s cap from ${formatUsd(capUsd)} to ${formatUsd(raisedTo)}.`
+    : `Approve: the task goes on to Implementation within its cap; the cap stays ${formatUsd(capUsd)}.`;
+};
+
+/**
+ * A budget approval the platform settled itself (M28 ruling B2 (4)): an earlier build asked about an
+ * estimate resting on too few finished tasks, and this one does not ask about those.
+ */
+export const budgetNotRequiredLine = (subject: BudgetSubject | null): string =>
+  subject === null || subject.estimate_samples === null
+    ? 'Budget approval no longer required: the estimate rested on too few finished tasks.'
+    : `Budget approval no longer required: the estimate rested on ${finishedTasks(subject.estimate_samples)}.`;
+
+/**
+ * **A rough estimate** (M28 ruling B2 (1)): one resting on fewer than
+ * {@link ESTIMATE_SAMPLES_TO_ASK} finished tasks asks nobody, and says so with the cap that bounds
+ * the spend instead — *"Rough estimate $123.66, from 1 finished task — too few to ask you about; the
+ * $50.00 cap applies."* `null` for an estimate that rests on enough, or for no estimate.
+ */
+export const roughEstimateLine = (task: {
+  readonly estimate_usd: number | null;
+  readonly estimate_samples: number | null;
+  readonly budget_cap_usd: number;
+}): string | null =>
+  task.estimate_usd === null ||
+  task.estimate_samples === null ||
+  task.estimate_samples === 0 ||
+  task.estimate_samples >= ESTIMATE_SAMPLES_TO_ASK
+    ? null
+    : `Rough estimate ${formatUsd(task.estimate_usd)}, from ${finishedTasks(task.estimate_samples)} — too few to ask you about; the ${formatUsd(task.budget_cap_usd)} cap applies.`;

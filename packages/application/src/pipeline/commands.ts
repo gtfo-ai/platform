@@ -25,6 +25,7 @@ import type {
   UserRole,
 } from '@platform/contracts';
 import type {
+  ApprovalCapChange,
   CommandContext,
   FeedbackScope,
   IterationLoop,
@@ -37,6 +38,7 @@ import {
   assertRunTransition,
   canTransitionTask,
   compilePipeline,
+  DEFAULT_TASK_BUDGET_USD,
   decideApproval,
   evaluateIteration,
   expireQuestion,
@@ -71,6 +73,7 @@ import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { approvalToResumeInto, pendingApproval } from './approval-wait.js';
+import { applyBudgetApprovalCap, budgetApprovalCapChange } from './budget-approval.js';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE, stoppedBeforeCliSpawn } from './cli-spawn.js';
 import {
   enqueueOutbound,
@@ -125,6 +128,12 @@ export interface TaskCommandDependencies {
    * storing itself.
    */
   readonly redactor: SecretRedactor;
+  /**
+   * The cap a task with no override of its own has — what an approved budget's raise is compared
+   * against (S-28.16) and what `raiseTaskBudgetCommand` compares a raise against (WP-131).
+   * `DEFAULT_TASK_BUDGET_USD` when absent.
+   */
+  readonly defaultTaskCapUsd?: number;
 }
 
 export class UnknownAggregateError extends Error {
@@ -328,12 +337,20 @@ export const decideTaskApproval = async (
     /** The plan the person approved, as shown to them (TD-035): `subject_artifact_id`. */
     readonly subjectArtifactId?: Id;
   },
-): Promise<void> => {
-  await deps.unitOfWork.transaction(async (scope) => {
+): Promise<{ readonly capChange: ApprovalCapChange | null }> =>
+  deps.unitOfWork.transaction(async (scope) => {
     const stored = await deps.store.approvals.load(scope.tx, input.approvalId);
     if (stored === null) {
       throw new UnknownAggregateError(`approval ${input.approvalId} does not exist`);
     }
+    // S-28.16 (M28 ruling B2): an approved estimate above the task's cap raises the cap — read
+    // here so the decision's event carries it, written below once the decision is accepted.
+    const defaultCapUsd = deps.defaultTaskCapUsd ?? DEFAULT_TASK_BUDGET_USD;
+    const capChange = await budgetApprovalCapChange(deps.store.tasks, scope.tx, {
+      stored,
+      decision: input.decision,
+      defaultCapUsd,
+    });
     const decision = decideApproval(
       stored.approval,
       {
@@ -343,16 +360,22 @@ export const decideTaskApproval = async (
         ...(input.reason === undefined
           ? {}
           : { reason: deps.redactor.redactText(input.reason).value }),
+        ...(capChange === undefined ? {} : { capChange }),
       },
       deps.context(stored.approval.taskId),
     );
     if (stored.approval.kind === 'plan' && input.decision === 'approved') {
       await assertApprovesItsSubject(deps.store, scope.tx, stored, input.subjectArtifactId);
     }
+    await applyBudgetApprovalCap(deps.store.tasks, scope.tx, {
+      taskId: stored.approval.taskId,
+      change: capChange,
+      defaultCapUsd,
+    });
     await deps.store.approvals.save(scope.tx, { ...stored, approval: decision.aggregate });
     await scope.events.append(decision.events);
+    return { capChange: capChange ?? null };
   });
-};
 
 // ── The human command surface (WP-15i) ───────────────────────────────────────
 

@@ -241,6 +241,7 @@ export * from './ports/transaction.js';
 export * from './ports/unit-of-work.js';
 export * from './ports/workspace.js';
 // The lost-wake-up recovery — PROGRESS backlog 101's table (WP-36)
+export * from './recovery/budget-approval-settle.js';
 export * from './recovery/deadline.js';
 export * from './recovery/deferred-dependency.js';
 export * from './recovery/discovery-record.js';

@@ -554,6 +554,16 @@ export const budgetApprovalSubjectDetailSchema = z.strictObject({
   threshold_usd: usdSchema,
   estimate_basis: estimateBasisSchema.nullable(),
   estimate_samples: z.int().nonnegative().nullable(),
+  /**
+   * S-28.16 (TD-035's 2026-11-10 amendment, M28 ruling B2): what the task had **spent** when the
+   * gate asked, and the task's **effective cap** then — so the card can say that nothing is over
+   * budget and what approving does to the cap. Absent on a row an earlier build wrote.
+   */
+  spent_usd: usdSchema.optional(),
+  cap_usd: usdSchema.optional(),
+  /** The refined size the estimate was made for, and its weight (`SIZE_COST_WEIGHTS`). */
+  size: sizeSchema.optional(),
+  size_weight: z.int().positive().optional(),
 });
 
 /**

@@ -1146,7 +1146,14 @@ asked — so you never approve blind:
 - **The plan itself, open**: its approach, its size, the files it changes and its risks, then **Read
   the whole plan** (open as well) with the alternatives, data and API changes, the test plan and the
   rest. It is *the* plan the approval was asked about — its version and stage attempt are named — not
-  whatever plan is newest. A budget approval shows the estimate and the threshold it crossed.
+  whatever plan is newest. A budget approval opens with what the task has spent so far — *nothing is over
+  budget* — then the estimate made before the expensive stages, what it rests on (the size and how many
+  finished tasks) and the threshold it crossed, and says before you click what approving does to the
+  task's cap: *Approving raises this task's cap from $50.00 to $123.66*, or *the cap stays $50.00* when the
+  estimate fits. An estimate is only put to you when it rests on at least **3** finished tasks; with fewer
+  the task's **Estimate** reads *Rough estimate …, from 1 finished task — too few to ask you about; the
+  $50.00 cap applies*, and nothing waits for you. Approvals an earlier version asked on fewer were settled
+  by the platform (*Budget approval no longer required*) and their tasks went on.
 - **Waiting for your approval because**: every reason the platform recorded — the project's first tasks get extra
   checks (*This project's first 5 tasks get extra checks, and 2 of them are done*), the plan touches a
   sensitive area (named), its size reached the threshold, **How much agents do alone** or a stage

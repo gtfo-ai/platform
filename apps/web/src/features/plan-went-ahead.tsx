@@ -18,9 +18,9 @@ import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Flash } from '../ui/flash.js';
-import { Button } from '../ui/kit.js';
+import { Button, formatUsd } from '../ui/kit.js';
 import { PlanBody } from './approval-card.js';
-import { lowRiskAutoOf, wentAheadLine } from './approval-text.js';
+import { budgetNotRequiredLine, lowRiskAutoOf, wentAheadLine } from './approval-text.js';
 import type { TaskDialog } from './task-dialogs.js';
 
 /** The stage a plan approval lets the task into, on every template that has one. */
@@ -114,3 +114,50 @@ export const PlanWentAheadNotice = ({
     </section>
   );
 };
+
+/** The stages a budget approval stands in front of: what it let the task into. */
+const BUDGETED_STAGES: ReadonlySet<string> = new Set([
+  'investigation',
+  'architecture',
+  IMPLEMENTATION,
+]);
+
+/**
+ * **A budget approval the platform settled as no longer required** (S-28.16, M28 ruling B2 (4)) —
+ * the newest budget approval, `auto_decided` and approved — while the task runs the stages it was
+ * waiting in front of; `null` otherwise. Information: nothing is asked of the reader.
+ */
+export const budgetNotRequired = (detail: TaskDetailResponse): ApprovalView | null => {
+  if (detail.task.state !== 'active' || !BUDGETED_STAGES.has(detail.task.current_stage ?? '')) {
+    return null;
+  }
+  const newest = detail.approvals
+    .filter((approval) => approval.kind === 'budget')
+    .reduce<ApprovalView | null>(
+      (latest, approval) =>
+        latest === null || approval.requested_at > latest.requested_at ? approval : latest,
+      null,
+    );
+  return newest?.auto_decided === true && newest.status === 'approved' ? newest : null;
+};
+
+export const BudgetNotRequiredNotice = ({
+  approval,
+  capUsd,
+}: {
+  readonly approval: ApprovalView;
+  readonly capUsd: number;
+}): ReactElement => (
+  <section aria-label="What happens next" data-testid="budget-not-required">
+    <Flash tone="info">
+      <div className="flex flex-col gap-1">
+        <p className="text-sm" data-budget-not-required="">
+          {budgetNotRequiredLine(approval.subject?.kind === 'budget' ? approval.subject : null)}
+        </p>
+        <p className="text-xs text-fg-muted">
+          {`An estimate asks a maintainer only when it rests on at least 3 finished tasks, so the platform let this task go on; its cap of ${formatUsd(capUsd)} still bounds what it spends.`}
+        </p>
+      </div>
+    </Flash>
+  </section>
+);

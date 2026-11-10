@@ -72,8 +72,9 @@ interface Decided {
 /** Platform text for each approval kind — the only words the `approval` class carries. */
 export const APPROVAL_DETAIL: Readonly<Record<ApprovalKind, string>> = {
   plan: 'The implementation plan needs a maintainer’s approval before the task goes on.',
+  // S-28.16 (M28 ruling B2): an estimate, not money spent — the old line read as "over budget".
   budget:
-    'The estimated cost is over this project’s threshold; a maintainer decides whether to spend it.',
+    'Nothing is over budget: this is an estimate made before the expensive stages, above this project’s threshold for asking first; a maintainer decides whether the task goes on.',
   knowledge: 'A knowledge-base change needs a maintainer’s approval.',
   rework: 'A rework needs a maintainer’s approval.',
 };

@@ -19,6 +19,27 @@ import { PolicyViolationError } from '../errors.js';
 /** product/09: task scope is "a total cap (default $50, per template)". */
 export const DEFAULT_TASK_BUDGET_USD = 50;
 
+/** Up to the next cent; a hair of float error never adds one (`123.66` stays `123.66`). */
+export const usdUpToCents = (usd: number): number =>
+  Math.ceil(Number((usd * 100).toFixed(6)) - 1e-9) / 100;
+
+/**
+ * **The task's cap once a maintainer approved its estimate** (S-28.16, BD-010's 2026-11-10
+ * amendment, M28 ruling B2): `max(the cap in force, the estimate rounded up to the cent)`, never
+ * above `maxCapUsd` (`numeric(12,6)`'s ceiling). An approval promised the spend it was asked about,
+ * and a cap below it would pause the approved task at the cap anyway — the Autix card said *"may
+ * spend what was estimated"* ($123.66) over a $50 cap that approving left untouched. It never lowers
+ * a cap; `null` means *no change*.
+ */
+export const capAfterBudgetApproval = (input: {
+  readonly estimateUsd: number;
+  readonly capUsd: number;
+  readonly maxCapUsd: number;
+}): number | null => {
+  const wanted = Math.min(usdUpToCents(input.estimateUsd), input.maxCapUsd);
+  return wanted > input.capUsd ? wanted : null;
+};
+
 /**
  * Per-run caps from product/04 § "Stage defaults", which BD-013 records. A stage not listed here
  * has no default cap; the effective configuration's `stages.<id>.budget_usd` always wins.

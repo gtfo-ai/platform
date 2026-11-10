@@ -964,6 +964,55 @@ describe('the needs-you callout', () => {
    * open, beside the buttons; the reasons in words, each with how to stop being asked and a link to
    * the setting; what each answer does next. *Approve* echoes the plan it showed (TD-035).
    */
+  /**
+   * S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): the Autix card — $123.66 estimated
+   * against a $50.00 threshold beside $0.45 spent — opens with nothing being over budget, and says
+   * before the click that approving raises the cap.
+   */
+  it('words a budget approval as an estimate, with the spend first and the cap approving sets', async () => {
+    start(
+      detail(
+        {
+          approvals: [
+            {
+              ...APPROVAL_ROW,
+              kind: 'budget',
+              subject: {
+                kind: 'budget',
+                estimate_usd: 123.66,
+                threshold_usd: 50,
+                estimate_basis: 'project_history',
+                estimate_samples: 3,
+                spent_usd: 0.45,
+                cap_usd: 50,
+                size: 'L',
+                size_weight: 4,
+              },
+              reasons: [
+                { code: 'estimate_above_threshold', estimate_usd: 123.66, threshold_usd: 50 },
+              ],
+            },
+          ],
+        },
+        { state: 'waiting_approval', cost_actual_usd: 0.45, budget_cap_usd: 50 },
+      ),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    expect(callout.textContent).toContain(
+      'An estimate is waiting for your go-ahead — nothing is over budget',
+    );
+    const card = within(callout).getByRole('region', { name: 'Budget approval' });
+    expect(card.querySelector('[data-approval-subject="budget"]')?.textContent).toBe(
+      'Nothing is over budget: $0.45 spent so far. Before the expensive stages, this task is estimated at $123.66 (size L × 4, from 3 finished tasks), above this project’s threshold of $50.00 for asking a maintainer first.',
+    );
+    expect(card.querySelector('[data-approval-approve-next]')?.textContent).toBe(
+      'Approve: the task goes on to Implementation. Approving raises this task’s cap from $50.00 to $123.66.',
+    );
+    expect(card.textContent).not.toContain('may spend what was estimated');
+  });
+
   it('shows the plan it approves, open, with why it was asked and what each answer does', async () => {
     const user = userEvent.setup();
     const { sent } = start(

@@ -34,6 +34,23 @@ import { roundUsd } from '../aggregates/budget.js';
  */
 export const SIZE_COST_WEIGHTS: Readonly<Record<Size, number>> = { S: 1, M: 2, L: 4, XL: 8 };
 
+/**
+ * **The fewest finished tasks an estimate may rest on before it asks a maintainer** (S-28.16,
+ * BD-010's 2026-11-10 amendment, M28 ruling B2).
+ *
+ * On Autix a project with **one** finished task ($123.05) gave every new task an estimate of
+ * $62–$247, so every one parked at the budget approval in front of its $50 threshold — four at
+ * once — on a mean of one. Below this floor the estimate is still made, stored and shown, labelled
+ * *rough*, and nothing is asked: the per-task cap bounds the spend, exactly as it does for a task
+ * with no estimate (`basis: 'unknown'`, Q71 (b)). Three is still a small mean; `estimateAccuracy`
+ * is where a later revision of this number is measured.
+ */
+export const MIN_ESTIMATE_SAMPLES_FOR_APPROVAL = 3;
+
+/** Does an estimate resting on `samples` finished tasks rest on enough to ask a person about? */
+export const estimateRestsOnEnough = (samples: number | null): boolean =>
+  samples !== null && samples >= MIN_ESTIMATE_SAMPLES_FOR_APPROVAL;
+
 /** One finished task, as the estimator reads it. */
 export interface TaskCostSample {
   readonly size: Size;

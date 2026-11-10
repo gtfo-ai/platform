@@ -7,7 +7,12 @@ import {
 } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { type Clock, fixedClock } from '../clock.js';
-import { ApprovalPendingError, IllegalTransitionError, PermissionDeniedError } from '../errors.js';
+import {
+  ApprovalPendingError,
+  IllegalTransitionError,
+  InvariantViolationError,
+  PermissionDeniedError,
+} from '../errors.js';
 import { type CommandContext, FIRST_STREAM_SEQ } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
 import { can } from '../permissions.js';
@@ -19,10 +24,12 @@ import {
   type Approval,
   assertNoPendingApproval,
   autoApproveApproval,
+  BUDGET_APPROVAL_NOT_REQUIRED_CODE,
   canTransitionApproval,
   createApproval,
   decideApproval,
   recordApprovalReminder,
+  settleBudgetApprovalNotRequired,
   toApprovalRecord,
   withdrawApproval,
 } from './approval.js';
@@ -315,5 +322,112 @@ describe('a cancelled task withdraws its pending approval (S-27.1, review of #11
       context(shared),
     ).aggregate;
     expect(() => withdrawApproval(decided, context(shared))).toThrow(IllegalTransitionError);
+  });
+});
+
+/**
+ * S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): an approved budget above the task's cap
+ * carries the cap it raised on its decision, and a budget approval asked on too few finished tasks
+ * is settled by the platform as no longer required.
+ */
+describe('the budget approval’s cap and its settle (S-28.16)', () => {
+  const maintainer = {
+    decision: 'approved' as const,
+    userId: USER_ID,
+    role: 'maintainer' as const,
+  };
+
+  it('carries the cap before and after on an approved budget’s decision', () => {
+    const shared = world();
+    const decided = decideApproval(
+      pending(shared, 'budget'),
+      { ...maintainer, capChange: { beforeUsd: 50, afterUsd: 123.66 } },
+      context(shared),
+    );
+    expect(decided.events[0]?.payload).toMatchObject({
+      decision: 'approved',
+      cap_before_usd: 50,
+      cap_after_usd: 123.66,
+    });
+  });
+
+  it('carries no cap fields on a decision that raised nothing', () => {
+    const shared = world();
+    const decided = decideApproval(pending(shared, 'budget'), maintainer, context(shared));
+    expect(decided.events[0]?.payload).not.toHaveProperty('cap_before_usd');
+    expect(decided.events[0]?.payload).not.toHaveProperty('cap_after_usd');
+  });
+
+  it('refuses a cap change on a plan, on a reject, and downwards', () => {
+    const shared = world();
+    const change = { beforeUsd: 50, afterUsd: 123.66 };
+    expect(() =>
+      decideApproval(
+        pending(shared, 'plan'),
+        { ...maintainer, capChange: change },
+        context(shared),
+      ),
+    ).toThrow(InvariantViolationError);
+    expect(() =>
+      decideApproval(
+        pending(shared, 'budget'),
+        { ...maintainer, decision: 'rejected', capChange: change },
+        context(shared),
+      ),
+    ).toThrow(InvariantViolationError);
+    expect(() =>
+      decideApproval(
+        pending(shared, 'budget'),
+        { ...maintainer, capChange: { beforeUsd: 80, afterUsd: 60 } },
+        context(shared),
+      ),
+    ).toThrow(InvariantViolationError);
+  });
+
+  it('settles a budget approval below the floor: approved, nobody decided, the code and the numbers', () => {
+    const shared = world();
+    const settled = settleBudgetApprovalNotRequired(
+      pending(shared, 'budget'),
+      { samples: 1, min: 3 },
+      context(shared),
+    );
+    expect(settled.aggregate.status).toBe('approved');
+    expect(settled.aggregate.decidedByUserId).toBeNull();
+    expect(settled.aggregate.reason?.startsWith(`${BUDGET_APPROVAL_NOT_REQUIRED_CODE}:`)).toBe(
+      true,
+    );
+    expect(settled.aggregate.reason).toContain('1 finished task');
+    expect(settled.events[0]?.payload).toMatchObject({
+      decision: 'approved',
+      decided_by_user_id: null,
+      reason: settled.aggregate.reason,
+    });
+    expect(settled.events[0]?.payload).not.toHaveProperty('cap_after_usd');
+  });
+
+  it('settles only a pending budget approval resting on too few tasks', () => {
+    const shared = world();
+    expect(() =>
+      settleBudgetApprovalNotRequired(
+        pending(shared, 'plan'),
+        { samples: 1, min: 3 },
+        context(shared),
+      ),
+    ).toThrow(InvariantViolationError);
+    expect(() =>
+      settleBudgetApprovalNotRequired(
+        pending(shared, 'budget'),
+        { samples: 3, min: 3 },
+        context(shared),
+      ),
+    ).toThrow(InvariantViolationError);
+    const decided = decideApproval(
+      pending(shared, 'budget'),
+      maintainer,
+      context(shared),
+    ).aggregate;
+    expect(() =>
+      settleBudgetApprovalNotRequired(decided, { samples: 1, min: 3 }, context(shared)),
+    ).toThrow(IllegalTransitionError);
   });
 });

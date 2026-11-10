@@ -179,6 +179,32 @@ const stagesRun = async (pipeline: PipelineE2E, taskId: string): Promise<readonl
   return rows.map((row) => row.stage);
 };
 
+/**
+ * A copy of a finished task's row under another ticket key (S-28.16): the estimator reads finished
+ * tasks' size and spend, so a copy is one more sample of the same figure. Every column is copied
+ * but the identity ones — the id is defaulted, the ticket id cleared (its unique index).
+ */
+const cloneFinishedTask = async (
+  pipeline: PipelineE2E,
+  from: string,
+  to: string,
+): Promise<void> => {
+  const columns = (
+    await pipeline.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+        where table_schema = current_schema() and table_name = 'tasks'
+          and is_generated = 'NEVER' and identity_generation is null
+          and column_name not in ('id', 'ticket_key', 'ticket_url', 'ticket_id')
+        order by ordinal_position`,
+    )
+  ).map((row) => `"${row.column_name}"`);
+  await pipeline.query(
+    `insert into tasks (${columns.join(', ')}, ticket_key, ticket_url)
+     select ${columns.join(', ')}, $2, $3 from tasks where ticket_key = $1`,
+    [from, to, `https://tickets.example.test/browse/${to}`],
+  );
+};
+
 const decide = async (
   client: Client,
   taskId: string,
@@ -249,6 +275,14 @@ describe('the budget-approval gate, end to end', () => {
     expect(finished.estimate_basis).toBe('unknown');
     expect(finished.estimate_samples).toBe(0);
 
+    // S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): an estimate asks a maintainer only
+    // when it rests on at least three finished tasks. The history task above really ran; two
+    // copies of its finished row stand in for two more runs of the same seven stages, so the
+    // estimate below rests on three — the same figure, three samples. This is the one place the
+    // history is inserted rather than run, and it copies a row the pipeline wrote (rule 82).
+    await cloneFinishedTask(pipeline, 'ACME-1', 'ACME-H2');
+    await cloneFinishedTask(pipeline, 'ACME-1', 'ACME-H3');
+
     // ── 2. Supervised: the estimate is under the threshold, so the budget gate does not fire ──
     const supervised = await client.json<{ level: string }>(dial, {
       method: 'PUT',
@@ -264,7 +298,7 @@ describe('the budget-approval gate, end to end', () => {
     const underThreshold = await settleTicket(pipeline, 'ACME-2', ['waiting_approval']);
     expect(Number(underThreshold.estimate_usd)).toBeCloseTo(HISTORY_TOTAL_USD, 6);
     expect(underThreshold.estimate_basis).toBe('project_history');
-    expect(underThreshold.estimate_samples).toBe(1);
+    expect(underThreshold.estimate_samples).toBe(3);
     expect((await approvalsOf(pipeline, underThreshold.id)).map((row) => row.kind)).toEqual([
       'plan',
     ]);
@@ -297,7 +331,7 @@ describe('the budget-approval gate, end to end', () => {
     // `Estimate: not yet — a task is estimated when refinement completes`, because the estimator
     // runs on the `artifact.created` the stage has not produced yet. Measured, every run: standing
     // rules 76 and 87 in one line.
-    const ESTIMATE_LINE = `Estimate: ${HISTORY_TOTAL_USD.toFixed(2)} USD (from 1 finished task in this project)`;
+    const ESTIMATE_LINE = `Estimate: ${HISTORY_TOTAL_USD.toFixed(2)} USD (from 3 finished tasks in this project)`;
     const WORKPAD_HEADER = '**ACME-3** — waiting_approval (refinement)';
     const WORKPAD_MARKER_LINE = /^agentic:task:[0-9a-f-]{36}$/;
     await pipeline.waitFor(
@@ -327,7 +361,7 @@ describe('the budget-approval gate, end to end', () => {
     expect(detail.status, JSON.stringify(detail.body)).toBe(200);
     expect(detail.body.task.estimate_usd).toBeCloseTo(HISTORY_TOTAL_USD, 6);
     expect(detail.body.task.estimate_basis).toBe('project_history');
-    expect(detail.body.task.estimate_samples).toBe(1);
+    expect(detail.body.task.estimate_samples).toBe(3);
     // One cheap run against a 27.00 estimate — a ratio a projection returning a constant
     // could not produce, which is why the fake charges the two tasks differently.
     expect(detail.body.task.cost_actual_usd).toBeCloseTo(LATER_STAGE_USD, 6);
@@ -335,13 +369,18 @@ describe('the budget-approval gate, end to end', () => {
     expect(detail.body.approvals.map((approval) => approval.kind)).toEqual(['budget']);
     // TD-035: the approval carries the figures it was asked about and the crossing as its reason.
     const threshold = AUTONOMY_PRESETS.assist.budgetApprovalThresholdUsd as number;
-    expect(detail.body.approvals[0]?.subject).toEqual({
+    expect(detail.body.approvals[0]?.subject).toMatchObject({
       kind: 'budget',
       estimate_usd: detail.body.task.estimate_usd,
       threshold_usd: threshold,
       estimate_basis: 'project_history',
-      estimate_samples: 1,
+      estimate_samples: 3,
+      // S-28.16: the spend and the cap when it asked, and the size the estimate was made for.
+      cap_usd: 50,
+      size: 'M',
+      size_weight: 2,
     });
+    expect(detail.body.approvals[0]?.subject).toHaveProperty('spent_usd');
     expect(detail.body.approvals[0]?.reasons).toEqual([
       {
         code: 'estimate_above_threshold',

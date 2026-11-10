@@ -108,8 +108,9 @@ export const approvalReasonWords = (reason: ApprovalReason): string => {
       return reason.source === 'stage_override'
         ? `The plan’s size is ${reason.size}, at or above the threshold of ${reason.threshold} this stage’s setting asks at.`
         : `The plan’s size is ${reason.size}, at or above the project’s threshold of ${reason.threshold}.`;
+    // S-28.16 (M28 ruling B2): an estimate before the spend, never money spent.
     case 'estimate_above_threshold':
-      return `The estimate, ${usd(reason.estimate_usd)}, is above this project’s threshold of ${usd(reason.threshold_usd)}.`;
+      return `The estimate made before the expensive stages, ${usd(reason.estimate_usd)}, is above this project’s threshold of ${usd(reason.threshold_usd)} for asking first. Nothing is over budget.`;
     // S-28.8: the project's low-risk rule. Who found a factor is said, because a platform finding
     // cannot be argued away and the agent's own is the agent's word.
     case 'risk_factor':
