@@ -847,7 +847,7 @@ export const createPostgresPipelineStore = (
       return (result.rowCount ?? 0) > 0;
     },
 
-    // S-28.5 (migration 0116): the one-off ticket-status sweep, bounded by its own first record.
+    // S-28.5 (migration 0115): the one-off ticket-status sweep, bounded by its own first record.
     ticketStatusSweepDue: async (tx, query) => {
       const { rows } = await sqlOf(tx).query<{ id: string; project_id: string }>(
         `select t.id, t.project_id from tasks t

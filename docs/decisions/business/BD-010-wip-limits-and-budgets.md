@@ -62,7 +62,7 @@ nothing running). The owner had already ruled that paused and `needs_human` task
 
 **Decision.**
 1. **`pipeline.wip.max_tasks_per_owner`**, default **3**. The organisation's value is a maximum; a project may tighten it,
-   never loosen it. A per-user override, **`users.max_tasks_in_flight`** (migration **0112**, additive), replaces it for
+   never loosen it. A per-user override, **`users.max_tasks_in_flight`** (migration **0114**, additive), replaces it for
    that person.
 2. **What counts for an owner:** the person's owned tasks in `active`, `returned`, `waiting_answers` and `waiting_approval`.
    `paused`, `needs_human` and `ready_for_merge` do not count.

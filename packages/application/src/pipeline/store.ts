@@ -770,7 +770,7 @@ export interface TaskRepository {
   settleOwnerBackfill(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
   /**
    * The live tasks the **one-off ticket-status sweep** has not re-read yet (S-28.5, M28 ruling 5,
-   * migration 0116, `recovery/ticket-status-sweep.ts`): live (not `done`, not `cancelled`), mode
+   * migration 0115, `recovery/ticket-status-sweep.ts`): live (not `done`, not `cancelled`), mode
    * `normal`, created before `olderThan` **and** before the sweep's own first record (the earliest
    * `ticket_status_sweeps.swept_at`, none yet being no bound), with no record — the most recently
    * touched first, then id, at most `limit`.
@@ -784,7 +784,7 @@ export interface TaskRepository {
    * that found the same task claim it once. Answers whether this call recorded it.
    */
   claimTicketStatusSweep(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
-  /** The status the task's last reverse-sync stop acted on (S-28.5 review, migration 0116), or `null`. */
+  /** The status the task's last reverse-sync stop acted on (S-28.5 review, migration 0115), or `null`. */
   ticketStatusStopOf(tx: Transaction, taskId: Id): Promise<string | null>;
   /** Records (upserts) the status a reverse-sync stop acted on, in the stop's transaction. */
   recordTicketStatusStop(

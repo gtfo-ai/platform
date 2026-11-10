@@ -84,7 +84,7 @@ describe('Drizzle schema', () => {
     // platform answered, resolved or read as not a change request (migration 0111, S-28.2, M28
     // ruling R2).
     // S-28.5: plus `ticket_status_sweeps`, the one-off ticket-status sweep's record, and
-    // `ticket_status_stops`, the status a reverse-sync stop acted on (migration 0116).
+    // `ticket_status_stops`, the status a reverse-sync stop acted on (migration 0115).
     expect(tables.length).toBe(86);
   });
 

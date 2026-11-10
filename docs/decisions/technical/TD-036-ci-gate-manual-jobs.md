@@ -143,7 +143,7 @@ nothing could say *start it*.
 4. **A played job is a required check** even when it has `allow_failure: true`: its failure fails the gate.
 5. **A 403** (the binding may not play jobs) falls back to `wait`, recorded and worded: *the platform could not start X;
    start it on GitLab or give the account Developer access*.
-6. **Recorded**: `task_stages.ci_manual_started` (migration **0113**, additive; one writer in the duty's settle), the jobs
+6. **Recorded**: `task_stages.ci_manual_started` (migration **0112**, additive; one writer in the duty's settle), the jobs
    played with pipeline, job id and time, shown beside decision 5's `ci_manual_not_run`.
 
 **Rejected.** Playing every blocking manual job (a release or deploy job would run on every task); globs (a job name is an

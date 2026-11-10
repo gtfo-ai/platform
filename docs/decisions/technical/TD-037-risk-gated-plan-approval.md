@@ -28,7 +28,7 @@ that is plainly low-risk — without letting the model talk its way past a check
    path). Any failing condition is added to the approval's reasons as new codes of TD-035's closed vocabulary (S-28.8
    names them), so a wait says exactly which condition held it.
 5. **An auto-approval is an approval.** It writes the `approvals` row with its subject (TD-035), status `approved`,
-   **`approvals.auto_decided = true`** (migration **0114**, additive) and the reasons it was waivable (the facts and the
+   **`approvals.auto_decided = true`** (migration **0113**, additive) and the reasons it was waivable (the facts and the
    assessment's figures), plus `task.approval.decided` with the system actor. The task page shows *Approved by the
    platform: low risk (0.9), 3 files, size S* and links the policy.
 6. **Untouched:** probation, risk classes and their `require: [plan_approval]`, shadow mode's skip (BD-006 WP-34), the

@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0116 — the one-off ticket-status sweep (S-28.5, M28 ruling 5, TD-029 amendment B decision 4).
+-- 0115 — the one-off ticket-status sweep (S-28.5, M28 ruling 5, TD-029 amendment B decision 4).
 --
 -- S-28.5's reverse sync stops a live task when a person finished or took its ticket, but only on a
 -- signal: a task whose ticket was finished before the deploy (AUT-6676, *Released* three weeks

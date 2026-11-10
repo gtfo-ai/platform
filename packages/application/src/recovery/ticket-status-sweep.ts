@@ -6,7 +6,7 @@
  * polled edit. A task whose ticket a person finished **before** S-28.5 was deployed — AUT-6676,
  * *Released* three weeks before it became a task — sends none, so it would wait for ever. This row
  * re-reads every live `normal` task's ticket **once**: it records the task in `ticket_status_sweeps`
- * (migration 0116, `insert … on conflict do nothing` — two passes that found the same task claim it
+ * (migration 0115, `insert … on conflict do nothing` — two passes that found the same task claim it
  * once) and only then enqueues the `ticket_status_recheck` duty with `ticket_status_sweep: true`,
  * which reads the ticket through `IntegrationActionExecutor` and applies the reverse sync's table —
  * so a status the platform wrote (a slot, `returned`, a `status_mapping` target) never stops a task,

@@ -795,7 +795,7 @@ export const expiredJobEscalations = pgTable('expired_job_escalations', {
 });
 
 /**
- * S-28.5's one-off ticket-status sweep (migration 0116, `recovery/ticket-status-sweep.ts`): one row
+ * S-28.5's one-off ticket-status sweep (migration 0115, `recovery/ticket-status-sweep.ts`): one row
  * per live task whose ticket the sweep re-read, written before the read is enqueued; the earliest
  * `swept_at` is the sweep's cutoff.
  */
@@ -807,7 +807,7 @@ export const ticketStatusSweeps = pgTable('ticket_status_sweeps', {
 });
 
 /**
- * The status a reverse-sync stop acted on (migration 0116, S-28.5 review): a later wake-up that is
+ * The status a reverse-sync stop acted on (migration 0115, S-28.5 review): a later wake-up that is
  * not a status change stops the task again only for a different status.
  */
 export const ticketStatusStops = pgTable('ticket_status_stops', {
