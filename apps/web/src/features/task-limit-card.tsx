@@ -91,7 +91,7 @@ const LimitForm = ({
           max={maximum}
           value={value}
           onChange={(event) => setValue(event.target.value)}
-          className="w-20 rounded-md border border-line px-2 py-1"
+          className="w-20 rounded-md border border-line-input px-2 py-1"
         />
       </label>
       {valid ? null : (
@@ -181,46 +181,48 @@ export const TaskLimitCard = ({ admin }: { readonly admin: boolean }): ReactElem
   if (mine.data === undefined) return null;
   const limit = mine.data;
   return (
-    <Card className="flex flex-col gap-2" data-task-limit="">
-      <h2 className="text-base font-semibold">Your limit</h2>
-      <p className="text-sm" data-task-limit-sentence="">
-        {myLimitSentence(limit)}
-      </p>
-      <p className="text-sm text-fg-muted">
-        {myLoadSentence(limit)}
-        {limit.holders.length === 0 ? null : ' Holding your places: '}
-        {limit.holders.map((holder, index) => (
-          <span key={holder.task_id}>
-            {index === 0 ? '' : ', '}
-            <Link
-              to="/tasks/$taskId"
-              params={{ taskId: holder.task_id }}
-              className="text-link underline"
-            >
-              <UntrustedText value={holder.ticket_key} />
-            </Link>
-          </span>
-        ))}
-      </p>
-      <p className="text-xs text-fg-muted">{limitSourceSentence(limit)}</p>
-      {editing ? (
-        <LimitForm
-          current={limit.limit}
-          maximum={limit.maximum}
-          onCancel={() => setEditing(false)}
-          onSave={async (next) => {
-            await commands.setTaskLimit.mutateAsync({ userId: null, max_tasks_in_flight: next });
-            setEditing(false);
-          }}
-        />
-      ) : (
-        <div>
-          <Button size="sm" onClick={() => setEditing(true)}>
-            Change
-          </Button>
-        </div>
-      )}
-      {admin && people.data !== undefined ? <PeopleLimits data={people.data} /> : null}
-    </Card>
+    <div data-task-limit="">
+      <Card className="flex flex-col gap-2">
+        <h2 className="text-base font-semibold">Your limit</h2>
+        <p className="text-sm" data-task-limit-sentence="">
+          {myLimitSentence(limit)}
+        </p>
+        <p className="text-sm text-fg-muted">
+          {myLoadSentence(limit)}
+          {limit.holders.length === 0 ? null : ' Holding your places: '}
+          {limit.holders.map((holder, index) => (
+            <span key={holder.task_id}>
+              {index === 0 ? '' : ', '}
+              <Link
+                to="/tasks/$taskId"
+                params={{ taskId: holder.task_id }}
+                className="text-link underline"
+              >
+                <UntrustedText value={holder.ticket_key} />
+              </Link>
+            </span>
+          ))}
+        </p>
+        <p className="text-xs text-fg-muted">{limitSourceSentence(limit)}</p>
+        {editing ? (
+          <LimitForm
+            current={limit.limit}
+            maximum={limit.maximum}
+            onCancel={() => setEditing(false)}
+            onSave={async (next) => {
+              await commands.setTaskLimit.mutateAsync({ userId: null, max_tasks_in_flight: next });
+              setEditing(false);
+            }}
+          />
+        ) : (
+          <div>
+            <Button size="sm" onClick={() => setEditing(true)}>
+              Change
+            </Button>
+          </div>
+        )}
+        {admin && people.data !== undefined ? <PeopleLimits data={people.data} /> : null}
+      </Card>
+    </div>
   );
 };

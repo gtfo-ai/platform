@@ -182,6 +182,7 @@ describe('the configuration export and the repository layer', () => {
     expect(reported.body.effective.pipeline?.wip).toEqual({
       max_parallel_tasks: 3,
       max_tasks_in_pipeline: 5,
+      max_tasks_per_owner: 3,
     });
     expect(reported.body.sources['pipeline.wip.max_parallel_tasks']).toBe('project');
     // The organisation's maximum, written by SQL on this build (WP-93 owns its surface): it

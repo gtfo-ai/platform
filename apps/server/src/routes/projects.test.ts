@@ -403,6 +403,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     expect(open.effective.pipeline?.wip).toEqual({
       max_parallel_tasks: 3,
       max_tasks_in_pipeline: 5,
+      max_tasks_per_owner: 3,
     });
     expect(open.sources['pipeline.wip.max_parallel_tasks']).toBe('project');
     expect(open.sources['pipeline.wip.max_tasks_in_pipeline']).toBe('default');
