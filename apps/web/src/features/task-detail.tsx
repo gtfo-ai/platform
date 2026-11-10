@@ -23,6 +23,7 @@ import type { TaskDetailResponse } from '@platform/contracts';
 import { Link, useSearch } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import {
+  useProjectConfig,
   useProjects,
   useTakeOverCommands,
   useTask,
@@ -34,6 +35,7 @@ import { useTopics } from '../realtime/provider.js';
 import { Flash } from '../ui/flash.js';
 import { ErrorNotice, Loading } from '../ui/kit.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
+import { chosenManualJobsOf } from './ci-manual-started.js';
 import { taskPagePrimary } from './page-primary.js';
 import { HandBackForm, TakenOverDetails, TakeOverAnswer } from './take-over.js';
 import { TaskActivity } from './task-activity.js';
@@ -86,6 +88,9 @@ const TaskTop = ({
   readonly breakdownWaiting: boolean;
 }): ReactElement => {
   const owner = useOwnerControl(detail);
+  // S-28.7: the manual jobs the project already chose for, which the CI wait does not offer again.
+  const projectConfig = useProjectConfig(detail.task.project_id);
+  const chosenJobs = chosenManualJobsOf(projectConfig.data?.effective);
   // S-25.15: the page's one primary, asked once — the header and the callout draw the same answer.
   const primary = taskPagePrimary(detail, {
     ownerOffers: owner.offers,
@@ -128,6 +133,7 @@ const TaskTop = ({
         onOpen={onOpen}
         nowMs={nowMs}
         owner={owner}
+        chosenJobs={chosenJobs}
         primary={primary}
       />
     </>

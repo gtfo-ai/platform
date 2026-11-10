@@ -1142,6 +1142,7 @@ describe('the manual CI jobs card (S-28.7)', () => {
     names_seen: ['build_composer', 'deploy:tenants:hetzner', 'nette-tester', 'phpstan'],
     heads_read: 3,
     heads_unread: 0,
+    can_save: true,
   };
 
   const card = async () => {
@@ -1219,7 +1220,7 @@ describe('the manual CI jobs card (S-28.7)', () => {
     await card();
     expect(
       screen.getByText(
-        /the platform keeps it a draft until the task is ready, so choose which held jobs it should start itself/,
+        /If this project’s CI holds jobs while the merge request is a draft, choose which of them/,
       ),
     ).toBeTruthy();
     await userEvent.type(
@@ -1232,6 +1233,72 @@ describe('the manual CI jobs card (S-28.7)', () => {
     // A seen name is not flagged.
     const seen = screen.getByRole('group', { name: /build_composer/ });
     expect(within(seen).queryByText(/never seen in a pipeline/)).toBeNull();
+  });
+
+  it('shows a job on the required list as Wait for a person, from the list', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            manualJobs: SEEN,
+            config: {
+              effective: {
+                version: 1,
+                pipeline: { ci: { required_manual_jobs: ['build_composer'] } },
+              },
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    const build = await screen.findByRole('group', { name: /build_composer/ });
+    await waitFor(() =>
+      expect(
+        (within(build).getByRole('radio', { name: /Wait for a person/ }) as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
+    expect(within(build).getByText(/\(from the required list\)/)).toBeTruthy();
+    // Under a list, a job not on it is not waited for — the sentence says so, not the test rule.
+    const optional = screen.getByRole('group', { name: /nette-tester/ });
+    expect(
+      within(optional).getByText('Not chosen: never started, and CI does not wait for it.'),
+    ).toBeTruthy();
+  });
+
+  it('warns before starting a job that looks like a deployment', async () => {
+    const deploy = {
+      ...SEEN,
+      jobs: [{ ...SEEN.jobs[0], name: 'deploy-staging', deploy_like: true }],
+      names_seen: ['deploy-staging'],
+    };
+    render(createApp({ fetchImpl: fetchFor({}, { manualJobs: deploy }), realtime: false }).element);
+    const row = await screen.findByRole('group', { name: /deploy-staging/ });
+    expect(within(row).queryByText(/This looks like a deployment/)).toBeNull();
+    await userEvent.click(within(row).getByRole('radio', { name: /Start it automatically/ }));
+    expect(
+      within(row).getByText(
+        'This looks like a deployment: choosing this runs it on every task’s pipeline.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('lets a maintainer read the card but not save it, and says who can', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor({}, { manualJobs: { ...SEEN, can_save: false } }),
+        realtime: false,
+      }).element,
+    );
+    const build = await screen.findByRole('group', { name: /build_composer/ });
+    await userEvent.click(within(build).getByRole('radio', { name: /Start it automatically/ }));
+    expect(
+      (screen.getByRole('button', { name: 'Save manual job choices' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(screen.getByText('Only a project admin can save these.')).toBeTruthy();
   });
 
   it('says what the repository file asked for and was not applied', async () => {

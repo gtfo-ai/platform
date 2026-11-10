@@ -407,6 +407,8 @@ interface TaskCalloutProps {
    * Left out (a callout drawn on its own), the same function answers it from these props.
    */
   readonly primary?: TaskPrimaryAction;
+  /** S-28.7: the manual job names the project already chose for (the CI wait's offer). */
+  readonly chosenJobs?: ReadonlySet<string>;
 }
 
 export const TaskCallout = (props: TaskCalloutProps): ReactElement => {
@@ -438,6 +440,7 @@ const CalloutSlot = ({
   onOpen,
   nowMs,
   primary: given,
+  chosenJobs,
 }: TaskCalloutProps): ReactElement | null => {
   const { task, stages } = detail;
   const primary =
@@ -501,6 +504,7 @@ const CalloutSlot = ({
               projectKey={projectKey}
               nowMs={nowMs}
               started={detail.ci_manual_started ?? null}
+              {...(chosenJobs === undefined ? {} : { chosen: chosenJobs })}
             />
           </Flash>
         </section>
@@ -606,6 +610,7 @@ const CalloutSlot = ({
               projectKey={projectKey}
               nowMs={nowMs}
               started={detail.ci_manual_started ?? null}
+              {...(chosenJobs === undefined ? {} : { chosen: chosenJobs })}
             />
           ) : null}
           {heldElsewhere ? (

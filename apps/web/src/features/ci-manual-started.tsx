@@ -90,3 +90,19 @@ export const StartNextTime = ({ projectKey }: { readonly projectKey: string }): 
     </Link>
   </p>
 );
+
+/**
+ * The job names a project already chose for — `pipeline.ci.manual_jobs` and a list in
+ * `required_manual_jobs` of its effective configuration — so the CI wait does not offer to choose
+ * again (*Have the platform start it next time* is for a job with no choice yet).
+ */
+export const chosenManualJobsOf = (effective: unknown): ReadonlySet<string> => {
+  const ci = (effective as { pipeline?: { ci?: Record<string, unknown> } } | undefined)?.pipeline
+    ?.ci;
+  const modes = ci?.manual_jobs;
+  const required = ci?.required_manual_jobs;
+  return new Set([
+    ...(typeof modes === 'object' && modes !== null ? Object.keys(modes) : []),
+    ...(Array.isArray(required) ? required.filter((name) => typeof name === 'string') : []),
+  ]);
+};

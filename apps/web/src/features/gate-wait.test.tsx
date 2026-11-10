@@ -372,7 +372,10 @@ describe('the jobs the platform started (S-28.7)', () => {
     expect(text('[data-ci-manual-started]')).toContain(HOSTILE);
   });
 
-  const routed = async (started: Parameters<typeof GateWaitNotice>[0]['started']) => {
+  const routed = async (
+    started: Parameters<typeof GateWaitNotice>[0]['started'],
+    chosen: ReadonlySet<string> = new Set(),
+  ) => {
     const root = createRootRoute({ component: () => <Outlet /> });
     const page = createRoute({
       getParentRoute: () => root,
@@ -384,6 +387,7 @@ describe('the jobs the platform started (S-28.7)', () => {
           projectKey="ACME"
           nowMs={NOW}
           started={started}
+          chosen={chosen}
         />
       ),
     });
@@ -408,6 +412,32 @@ describe('the jobs the platform started (S-28.7)', () => {
 
   it('does not offer it for a job the platform tried to start', async () => {
     await routed([entry('3', 'crawler-test', 'refused')]);
+    expect(screen.queryByRole('link', { name: 'Have the platform start it next time' })).toBeNull();
+  });
+});
+
+describe('the offer to choose (S-28.7 review)', () => {
+  it('is not made for a job the project already chose for', async () => {
+    const root = createRootRoute({ component: () => <Outlet /> });
+    const page = createRoute({
+      getParentRoute: () => root,
+      path: '/',
+      component: () => (
+        <GateWaitNotice
+          wait={held({ held_job: 'crawler-test' })}
+          provider="gitlab"
+          projectKey="ACME"
+          nowMs={NOW}
+          chosen={new Set(['crawler-test'])}
+        />
+      ),
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([page]),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    });
+    render(<RouterProvider router={router} />);
+    await screen.findByText(/CI is waiting for someone to start/);
     expect(screen.queryByRole('link', { name: 'Have the platform start it next time' })).toBeNull();
   });
 });

@@ -268,6 +268,20 @@ describe('GET /api/projects/:project_id/ci/manual-jobs (S-28.7)', () => {
     ).toBe(401);
   });
 
+  it('says whether the caller may save: an administrator may, a maintainer reads only', async () => {
+    expect((await get()).json().can_save).toBe(false);
+    world.role = 'admin';
+    expect((await get()).json().can_save).toBe(true);
+  });
+
+  it('does not keep a missing binding: a git host bound a moment later is read', async () => {
+    world.git = 'none';
+    expect((await get()).statusCode).toBe(409);
+    world.git = 'bound';
+    expect((await get()).statusCode).toBe(200);
+    expect(world.reads.length).toBeGreaterThan(0);
+  });
+
   it('answers 503 manual_jobs_unavailable on a process with no integrations', async () => {
     app = fastify();
     app.setValidatorCompiler(validatorCompiler);

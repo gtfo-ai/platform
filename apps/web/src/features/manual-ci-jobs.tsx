@@ -78,6 +78,30 @@ export const withManualJobModes = (document: Json, modes: Readonly<Record<string
   return { ...document, pipeline: { ...pipeline, ci: nextCi } };
 };
 
+/**
+ * What happens to a job with no choice, by the project's rule (`required_manual_jobs`, TD-036):
+ * on the list it waits; under a list or `[]` nothing else does; under `all` every blocking one
+ * does; by default a test job does.
+ */
+const unchosenSentence = (
+  required: unknown,
+  row: { readonly blocking: boolean | null },
+  fromList: boolean,
+): string => {
+  if (fromList) {
+    return 'On the project’s required list: never started, and CI waits until someone starts it.';
+  }
+  if (Array.isArray(required)) {
+    return 'Not chosen: never started, and CI does not wait for it.';
+  }
+  if (required === 'all') {
+    return row.blocking === false
+      ? 'Not chosen: never started; it is optional, so CI does not wait for it.'
+      : 'Not chosen: never started, and CI waits until someone starts it (the project requires every manual job).';
+  }
+  return 'Not chosen: never started; CI waits for it only if it is a test job.';
+};
+
 interface Row {
   readonly name: string;
   readonly stage: string | null;
@@ -114,6 +138,11 @@ export const ManualCiJobs = ({ projectId }: { readonly projectId: string }): Rea
         item.key.startsWith('pipeline.ci.manual_jobs'),
       )
     : [];
+  const required: unknown = config.isSuccess
+    ? config.data.effective.pipeline?.ci?.required_manual_jobs
+    : undefined;
+  const requiredNames = new Set(Array.isArray(required) ? required : []);
+  const canSave = seen.isSuccess && seen.data.can_save;
   const changed = draft !== null && JSON.stringify(draft) !== JSON.stringify(stored);
 
   const choose = (name: string, mode: Mode | null): void => {
@@ -151,11 +180,11 @@ export const ManualCiJobs = ({ projectId }: { readonly projectId: string }): Rea
       <p className="text-sm text-fg-muted" data-manual-jobs-intro="">
         Some CI jobs do not run until someone starts them. Choose, per job, whether the platform
         starts it itself, waits for a person to start it, or neither runs nor waits for it. A job
-        you do not choose for is never started: CI waits for it only when it is a test job.
+        you do not choose for is never started; whether CI waits for it is said beside it.
       </p>
       <p className="text-xs text-fg-muted" data-manual-jobs-draft-note="">
-        This project’s CI holds jobs while the merge request is a draft; the platform keeps it a
-        draft until the task is ready, so choose which held jobs it should start itself.
+        If this project’s CI holds jobs while the merge request is a draft, choose which of them the
+        platform should start itself: it keeps the merge request a draft until the task is ready.
       </p>
       {config.isPending || seen.isPending ? <Loading label="Reading recent pipelines…" /> : null}
       {config.isError ? (
@@ -175,6 +204,9 @@ export const ManualCiJobs = ({ projectId }: { readonly projectId: string }): Rea
       ) : null}
       {rows.map((row, index) => {
         const mode = Object.hasOwn(modes, row.name) ? modes[row.name] : undefined;
+        // A name on the required list means wait, though it has no choice here yet (TD-036).
+        const fromList = mode === undefined && requiredNames.has(row.name);
+        const shown = mode ?? (fromList ? 'wait' : undefined);
         const neverSeen = seen.isSuccess && !namesSeen.has(row.name);
         return (
           <fieldset
@@ -204,31 +236,37 @@ export const ManualCiJobs = ({ projectId }: { readonly projectId: string }): Rea
             </legend>
             {MODES.map((choice) => {
               const refused = choice === 'run' && row.trigger;
+              const deployWarning = choice === 'run' && mode === 'run' && row.deployLike;
               return (
                 <label key={choice} className="flex items-start gap-2 text-sm">
                   <input
                     type="radio"
                     name={`manual-job-${String(index)}`}
                     value={choice}
-                    checked={mode === choice}
+                    checked={shown === choice}
                     disabled={refused}
                     onChange={() => choose(row.name, choice)}
                   />
                   <span>
                     {MANUAL_JOB_MODE_LABEL[choice]}
+                    {choice === 'wait' && fromList ? ' (from the required list)' : ''}
                     <span className="block text-xs text-fg-muted">
                       {refused
                         ? 'This is a trigger job: trigger jobs can’t be started by the platform — a person starts them. Choose Wait for a person or Don’t run, don’t wait.'
                         : MANUAL_JOB_MODE_HINT[choice]}
                     </span>
+                    {deployWarning ? (
+                      <span className="block text-xs text-danger" data-manual-job-deploy-warning="">
+                        This looks like a deployment: choosing this runs it on every task’s
+                        pipeline.
+                      </span>
+                    ) : null}
                   </span>
                 </label>
               );
             })}
             {mode === undefined ? (
-              <p className="text-xs text-fg-muted">
-                Not chosen: never started; CI waits for it only if it is a test job.
-              </p>
+              <p className="text-xs text-fg-muted">{unchosenSentence(required, row, fromList)}</p>
             ) : (
               <div>
                 <Button onClick={() => choose(row.name, null)}>Clear the choice</Button>
@@ -269,10 +307,19 @@ export const ManualCiJobs = ({ projectId }: { readonly projectId: string }): Rea
         Only these settings can tell the platform to start a job or to not count one; the
         repository’s settings file may only add Wait for a person.
       </p>
-      <div>
-        <Button tone="primary" disabled={!changed || commands.writeConfig.isPending} onClick={save}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          tone="primary"
+          disabled={!changed || !canSave || commands.writeConfig.isPending}
+          onClick={save}
+        >
           Save manual job choices
         </Button>
+        {seen.isSuccess && !canSave ? (
+          <span className="text-xs text-fg-muted" data-manual-jobs-cannot-save="">
+            Only a project admin can save these.
+          </span>
+        ) : null}
       </div>
       {commands.writeConfig.isError ? (
         <ErrorNotice
