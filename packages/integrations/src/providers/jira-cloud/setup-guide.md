@@ -120,12 +120,25 @@ request to be replayed a week later.
 Either a **label** (the default, `agentic`) or a **status**. The webhook announces a ticket when it
 carries the rule's label or enters its status.
 
+**A label is not readiness** (since S-28.4). A ticket is started only from a status work starts
+from: the binding's `lifecycle.start_from` list (with `pickup_status` beside it), or — when the list
+is absent — every status of Jira's **To Do** status category. A status in `lifecycle.closed` (absent:
+the **Done** category) means a person finished the ticket: it is never started, and a task waiting for
+its first agent run stops when its ticket moves there (`on_ticket_closed: ignore` turns that off). The
+project's *Ticket lifecycle* form sets all three with checkboxes; the platform reads each issue's
+`status.statusCategory` to apply the defaults, so no status name is assumed. A label webhook for a
+ticket in any other status is not announced, and intake checks every match again after reading the
+ticket.
+
 **Polling** (`poll_enabled: true`, WP-87) asks Jira for the same rule every `poll_interval_seconds`,
 as JQL over the tickets updated since the last poll:
 
 ```
-labels = "agentic" AND updated >= "-15m" ORDER BY updated ASC
+labels = "agentic" AND statusCategory = "To Do" AND updated >= "-15m" ORDER BY updated ASC
 ```
+
+— or `AND status in ("To Do", "Ready")` when the binding names a `start_from` list. A status rule is
+asked as it is: its one status is always a starting status.
 
 The window is relative on purpose: an absolute JQL date is interpreted in the *site's* time zone,
 which would silently skip tickets on a site that is not in UTC. It always overlaps the previous

@@ -28,6 +28,7 @@ import type {
   EffectiveConfig,
   EpicSplitSettings,
   IterationLimits,
+  TicketStatusPolicy,
   WipBound,
   WipLimits,
 } from '@platform/domain';
@@ -110,6 +111,18 @@ export interface ProjectSettings {
    * exactly as before M10: no claim, no intake skip, `status_mapping` applied.
    */
   readonly ticketLifecycle: BindingLifecycle | null;
+  /**
+   * **Which ticket statuses start work and which mean a person finished it** (M28 ruling 1,
+   * S-28.4): the task-management binding's status policy (`bindingStatusPolicyOf`), which — unlike
+   * {@link ProjectSettings.ticketLifecycle} — has defaults for a binding with no block. Read by
+   * intake, the manual start and the claim.
+   *
+   * Absent or `null` means **no status is judged**: the project has no single readable
+   * task-management binding (there is then no tracker whose status could be read), or the reader is
+   * a harness that predates the policy. The production settings port answers it for every project
+   * with one binding (`apps/server/src/pipeline.ts`).
+   */
+  readonly ticketStatusPolicy?: TicketStatusPolicy | null;
   /**
    * The organisation's `commands` — the maximum every run's baseline is intersected with before
    * the project narrows it (BD-025 §2, PROGRESS backlog 146, WP-63). Absent is *"the organisation

@@ -204,6 +204,7 @@ describe('POST /api/projects/:project_id/tasks (WP-122)', () => {
     ['task_exists', '409 ticket_has_task'],
     ['ticket_not_found', '404 ticket_not_found'],
     ['outside_binding_scope', '409 ticket_outside_binding_scope'],
+    ['ticket_not_startable', '409 ticket_status_not_startable'],
     ['ticket_unreadable', '502 ticket_unreadable'],
   ] as const)(
     'answers the %s refusal as %s, records nothing and gives the key back',
@@ -235,6 +236,7 @@ describe('POST /api/projects/:project_id/tasks (WP-122)', () => {
       'outside_binding_scope',
       'task_exists',
       'ticket_not_found',
+      'ticket_not_startable',
       'ticket_unreadable',
     ]);
   });

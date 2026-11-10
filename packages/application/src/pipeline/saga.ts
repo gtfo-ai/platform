@@ -59,6 +59,7 @@ import {
   escalateTask,
   evaluateTaskAdmission,
   intakeSkipsAssignedTicket,
+  intakeStatusDecision,
   interpret,
   isRepeatOfPreviousRound,
   isRunnableTaskState,
@@ -474,6 +475,32 @@ export const runIntakeCheck = async (
   );
   const ticketSnapshot = ticketRead?.snapshot ?? null;
   /**
+   * **A ticket is started only from a startable status** (M28 ruling 3 (c), S-28.4). A pick-up
+   * label says the ticket is meant for the platform, not that it is ready: on the dogfood
+   * installation a ticket a person had delivered and released weeks earlier still carried the
+   * label and became a task. So intake — the one door every match passes, a webhook's, a poll's,
+   * the reconciler's and a manual start's — judges the status it just read against the binding's
+   * policy (`start_from`/`closed`, or the tracker's To Do and Done categories) and records
+   * `ticket.intake.skipped` with `status_not_startable` and the status rather than creating a task.
+   * A ticket that could not be read is taken, as before; so is one whose provider reported no
+   * category when no list decides (`intakeStatusDecision`).
+   */
+  const statusPolicy = settings.ticketStatusPolicy ?? null;
+  if (ticketRead !== null && statusPolicy !== null) {
+    const decision = intakeStatusDecision(
+      ticketRead.status,
+      ticketRead.statusCategory,
+      statusPolicy,
+    );
+    if (decision.kind === 'skip') {
+      await recordIntakeSkip(options, projectId, ticket, causeEventId, {
+        reason: 'status_not_startable',
+        status: ticketRead.status,
+      });
+      return;
+    }
+  }
+  /**
    * **A ticket somebody else holds is not taken** (WP-177, BD-031 ruling 5, TD-029 decision 5).
    *
    * On a claiming binding, a ticket assigned to somebody who is neither nobody nor the binding's
@@ -493,7 +520,7 @@ export const runIntakeCheck = async (
       assignee: ticketRead?.assignee ?? null,
     })
   ) {
-    await recordIntakeSkip(options, projectId, ticket, causeEventId);
+    await recordIntakeSkip(options, projectId, ticket, causeEventId, { reason: 'assigned' });
     return;
   }
   /**
@@ -780,10 +807,17 @@ const recordIntakeSkip = async (
   projectId: Id,
   ticket: TicketRef,
   causeEventId: Id,
+  skip:
+    | { readonly reason: 'assigned' }
+    | { readonly reason: 'status_not_startable'; readonly status: string },
 ): Promise<void> => {
   (options.logger ?? silentLogger).info(
-    { project_id: projectId, ticket_key: ticket.key },
-    'the ticket is assigned to somebody else and the binding does not take assigned tickets, so no task was created',
+    skip.reason === 'assigned'
+      ? { project_id: projectId, ticket_key: ticket.key }
+      : { project_id: projectId, ticket_key: ticket.key, status: skip.status },
+    skip.reason === 'assigned'
+      ? 'the ticket is assigned to somebody else and the binding does not take assigned tickets, so no task was created'
+      : 'the ticket’s status is not one work is started from, so no task was created',
   );
   const eventId = options.ids.next();
   await appendOnProjectWithRetry(
@@ -800,7 +834,12 @@ const recordIntakeSkip = async (
         actor: PIPELINE_ACTOR,
         occurred_at: options.clock.now(),
         type: 'ticket.intake.skipped',
-        payload: { project_id: projectId, ticket: { ...ticket }, reason: 'assigned' },
+        payload: {
+          project_id: projectId,
+          ticket: { ...ticket },
+          reason: skip.reason,
+          ...(skip.reason === 'status_not_startable' ? { status: skip.status } : {}),
+        },
       }) as DomainEvent;
       await scope.events.append([event]);
     },

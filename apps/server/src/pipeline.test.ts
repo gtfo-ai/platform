@@ -215,6 +215,50 @@ describe('the project settings port', () => {
   });
 
   /**
+   * S-28.4 (M28 ruling 1): the status policy reaches the pipeline for **every** single
+   * task-management binding — the category defaults beside `pickup_status` when there is no block —
+   * and is `null` (no status judged) for no binding, two, or a block that fails its schema.
+   */
+  it('reads the binding’s status policy into ticketStatusPolicy, defaults included', async () => {
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+    const portOver = (bindingRows: unknown[]) =>
+      createProjectSettingsPort({
+        query: vi.fn(async (text: string) =>
+          text.includes('from bindings')
+            ? { rows: bindingRows, rowCount: bindingRows.length }
+            : { rows: [{ config: {} }], rowCount: 1 },
+        ),
+      } as never);
+    const binding = (bindingConfig: unknown) => ({
+      provider: 'fake-task-management',
+      integration_config: {},
+      binding_config: bindingConfig,
+    });
+
+    const unblocked = await portOver([binding({ pickup_status: 'To pick up' })]).forProject(
+      project,
+    );
+    expect(unblocked.ticketLifecycle).toBeNull();
+    expect(unblocked.ticketStatusPolicy).toMatchObject({
+      pickUpFrom: 'To pick up',
+      startFrom: null,
+      closed: null,
+      onTicketClosed: 'stop',
+    });
+    const listed = await portOver([
+      binding({ lifecycle: { start_from: ['Ready'], closed: ['Released'] } }),
+    ]).forProject(project);
+    expect(listed.ticketStatusPolicy).toMatchObject({
+      startFrom: ['Ready'],
+      closed: ['Released'],
+    });
+    expect((await portOver([]).forProject(project)).ticketStatusPolicy).toBeNull();
+    expect(
+      (await portOver([binding({}), binding({})]).forProject(project)).ticketStatusPolicy,
+    ).toBeNull();
+  });
+
+  /**
    * WP-91 criterion 4 (backlog 224): `pipeline.wip` is read by the settings port into the limits
    * admission uses — the project's value, BD-010's where it states none, and never above the
    * organisation's maximum; a maximum that does not parse is refused rather than read as none.

@@ -162,6 +162,7 @@ const DERIVED: readonly Derived[] = [
       'ticket_has_task',
       'ticket_not_found',
       'ticket_outside_binding_scope',
+      'ticket_status_not_startable',
       'ticket_unreadable',
     ],
     source: 'apps/server/src/routes/task-start.ts',

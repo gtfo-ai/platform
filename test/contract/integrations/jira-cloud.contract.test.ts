@@ -593,6 +593,72 @@ describe('jira-cloud — reaching the provider', () => {
       );
     });
 
+    /**
+     * S-28.4 (M28 ruling 3 (a)): a label poll asks only for tickets in a startable status — the
+     * tracker's To Do category by default, the binding's `start_from` (with `pickup_status`) when
+     * it names one — so a released ticket that still carries the label is never read as a match.
+     */
+    it('polls a label only in the To Do category by default (S-28.4)', async () => {
+      const polling = createJiraBinding({ config: { poll_enabled: true } });
+      const plan = polling.adapter.pollPlan();
+      expect(plan?.rule).toEqual({
+        kind: 'label',
+        label: JIRA_PICKUP_LABEL,
+        startable: { kind: 'todo_category' },
+      });
+      const matches = await polling.port.matchTickets(
+        plan?.rule as NonNullable<typeof plan>['rule'],
+        { since: '2026-09-02T11:50:00.000Z' },
+      );
+      expect(polling.replay.requests[0]?.query.jql).toBe(
+        'labels = "agentic" AND statusCategory = "To Do" AND updated >= "-15m" ORDER BY updated ASC',
+      );
+      // ACME-1 is "To pick up", of the To Do category in the project's statuses document.
+      expect(matches.map((match) => match.ref.key)).toEqual(['ACME-1']);
+    });
+
+    it('polls a label only in the start_from statuses, pickup_status beside them (S-28.4)', async () => {
+      const polling = createJiraBinding({
+        config: { poll_enabled: true, lifecycle: { start_from: ['Doing', 'Done'] } },
+      });
+      const rule = polling.adapter.pollPlan()?.rule;
+      expect(rule).toEqual({
+        kind: 'label',
+        label: JIRA_PICKUP_LABEL,
+        startable: { kind: 'statuses', statuses: ['Doing', 'Done'] },
+      });
+      const matches = await polling.port.matchTickets(rule as NonNullable<typeof rule>);
+      expect(polling.replay.requests[0]?.query.jql).toBe(
+        'labels = "agentic" AND status in ("Doing", "Done") ORDER BY updated ASC',
+      );
+      // ACME-1 carries the label but sits in "To pick up", which the list leaves out.
+      expect(matches).toEqual([]);
+    });
+
+    it('keeps a status pick-up rule as it is: its one status is always startable (S-28.4)', () => {
+      const polling = createJiraBinding({
+        config: { poll_enabled: true, pickup_status: 'To pick up' },
+      });
+      expect(polling.adapter.pollPlan()?.rule).toEqual({ kind: 'status', status: 'To pick up' });
+    });
+
+    it('reads the status category Jira sends with a ticket, and none when it sends none (S-28.4)', async () => {
+      // The stored fixture's status carries no `statusCategory` (as the published example's does not).
+      expect((await binding.port.readTicket(JIRA_TICKET)).status_category ?? null).toBeNull();
+      // The documented `StatusDetails.statusCategory`, patched in (adapted; the corpus's own values).
+      const stored = binding.replay.peekIssue('ACME-1') as { fields: Record<string, unknown> };
+      stored.fields.status = {
+        id: '10020',
+        name: 'Released',
+        statusCategory: { id: 3, key: 'done', name: 'Done' },
+      };
+      const released = await binding.port.readTicket(JIRA_TICKET);
+      expect(released.status).toBe('Released');
+      expect(released.status_category).toBe('done');
+      stored.fields.status = { name: 'Elsewhere', statusCategory: { key: 'in-review' } };
+      expect((await binding.port.readTicket(JIRA_TICKET)).status_category).toBe('unknown');
+    });
+
     it('drops the keys a 400 names as missing and asks once more (WP-110 review round 1)', async () => {
       const matches = await binding.port.matchTickets({
         kind: 'keys',

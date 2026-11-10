@@ -254,6 +254,10 @@ export const ticketClaimedEvent = defineEvent('ticket.claimed', {
 export const ticketClaimRefusalSchema = z.enum([
   'ticket_assigned_elsewhere',
   'ticket_claim_failed',
+  // M28 ruling 3 (d), S-28.4: the claim's pre-read found the ticket moved while the task waited —
+  // to a status work is not started from, or to one that means a person finished it.
+  'ticket_not_startable',
+  'ticket_closed_in_tracker',
 ]);
 
 /**
@@ -288,15 +292,27 @@ export const ticketReleasedEvent = defineEvent('ticket.released', {
 });
 
 /**
- * Intake read a matched ticket and created **no** task (`runIntakeCheck`, WP-177): on a claiming
- * binding the ticket is assigned to somebody other than the binding's own account and
- * `take_assigned_tickets` is not set. Project-scoped, because there is no task. An audit record;
- * nothing consumes it.
+ * Why intake created no task for a matched ticket: `assigned` (WP-177) — on a claiming binding the
+ * ticket is assigned to somebody other than the binding's own account and `take_assigned_tickets`
+ * is not set; `status_not_startable` (M28 ruling 3, S-28.4) — the ticket's status is not one the
+ * binding starts work from (`start_from`, or the tracker's To Do category), or it is one that means
+ * a person finished it (`closed`, or the Done category).
+ */
+export const ticketIntakeSkipReasonSchema = z.enum(['assigned', 'status_not_startable']);
+export type TicketIntakeSkipReason = z.infer<typeof ticketIntakeSkipReasonSchema>;
+
+/**
+ * Intake read a matched ticket and created **no** task (`runIntakeCheck`) — see
+ * {@link ticketIntakeSkipReasonSchema}. Project-scoped, because there is no task. An audit record;
+ * nothing consumes it. `status` is the tracker's status name the skip read (redacted provider text,
+ * at most 255 characters; S-28.4), present for `status_not_startable` so the screen can say
+ * "its status is Released" rather than a reason key.
  */
 export const ticketIntakeSkippedEvent = defineEvent('ticket.intake.skipped', {
   ...projectScoped,
   ticket: ticketRefSchema,
-  reason: z.enum(['assigned']),
+  reason: ticketIntakeSkipReasonSchema,
+  status: nonEmptyStringSchema.max(255).optional(),
 });
 
 // ── Task lifecycle ───────────────────────────────────────────────────────────

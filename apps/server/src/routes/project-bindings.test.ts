@@ -334,6 +334,23 @@ describe('PUT /api/projects/:id/bindings checks the lifecycle block first (WP-18
     expect(actions).toEqual([]);
   });
 
+  it('checks the status policy’s start_from and closed names too (S-28.4)', async () => {
+    const saved = await putBindings({
+      ...MAPPED,
+      lifecycle: { ...MAPPED.lifecycle, start_from: ['ready for the agent'], closed: ['Finished'] },
+    });
+    expect(saved.statusCode).toBe(200);
+    const response = await putBindings({
+      ...MAPPED,
+      lifecycle: { ...MAPPED.lifecycle, start_from: ['Someday'], closed: ['Shipped'] },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.details).toEqual([
+      { path: 'lifecycle.start_from[0]', message: expect.stringContaining('"Someday"') },
+      { path: 'lifecycle.closed[0]', message: expect.stringContaining('"Shipped"') },
+    ]);
+  });
+
   it('checks pickup_status too, since it is the pick_up_from slot', async () => {
     const response = await putBindings({ ...MAPPED, pickup_status: 'Up next' });
     expect(response.statusCode).toBe(422);

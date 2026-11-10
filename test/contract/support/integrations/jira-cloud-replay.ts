@@ -68,6 +68,12 @@
  *     `fields` answers no `fields` member at all but keeps the envelope's `key` and `self`, where
  *     the documentation says *"Returns only issue IDs"*. No adapter call searches without naming
  *     its fields, so nothing reads the difference.
+ * 16. **Composed — `AND status in (…)` and `AND statusCategory = "To Do"` filter a search**
+ *     (S-28.4, M28 ruling 3 (a)): the two status constraints a pick-up poll appends. An issue's
+ *     category is its own `fields.status.statusCategory.name` when stored, else the category
+ *     `project-statuses-acme.json` gives its status name — the stored issues carry none, as the
+ *     published `getIssue` example's status carries none. Names compare case-insensitively, as
+ *     Jira's JQL compares status names; the category is compared by its name ("To Do").
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -220,6 +226,9 @@ const JQL_IDS = /^\(?id in \(([0-9]+(?:, [0-9]+)*)\)/;
 const JQL_KEY_LITERAL = /"((?:[^"\\]|\\.)*)"/g;
 const JQL_KEY_EXCLUSION = /AND key != "([^"]+)"/;
 const JQL_WINDOW = /AND updated >= "-(\d+)m"/;
+/** Divergence 16 (S-28.4): the pick-up poll's two status constraints. */
+const JQL_STATUS_IN = / AND status in \(((?:"(?:[^"\\]|\\.)*"(?:, )?)+)\)/;
+const JQL_STATUS_CATEGORY = / AND statusCategory = "([^"]+)"/;
 
 /**
  * Divergence 15 (PROGRESS backlog 540): the issue as Jira answers it for a `fields` request.
@@ -258,6 +267,24 @@ export const projectIssueFields = (
     ? envelope
     : { ...envelope, fields: Object.fromEntries(kept) };
 };
+
+/**
+ * Divergence 16: a status name's category name, from the project's one statuses document (the
+ * union over issue types; the first spelling wins), lower-cased.
+ */
+const STATUS_CATEGORY_NAMES: ReadonlyMap<string, string> = new Map(
+  (
+    bodyOf('project-statuses-acme.json') as unknown as {
+      statuses?: { name?: string; statusCategory?: { name?: string } }[];
+    }[]
+  )
+    .flatMap((issueType) => issueType.statuses ?? [])
+    .filter((status) => status.name !== undefined && status.statusCategory?.name !== undefined)
+    .map(
+      (status) => [String(status.name).toLowerCase(), String(status.statusCategory?.name)] as const,
+    )
+    .reverse(),
+);
 
 export const createJiraReplay = (options: { readonly now?: string } = {}): JiraReplay => {
   const nowMs = Date.parse(options.now ?? JIRA_REPLAY_NOW);
@@ -360,6 +387,25 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     const excluded = JQL_KEY_EXCLUSION.exec(jql)?.[1] ?? null;
     const windowMinutes = Number(JQL_WINDOW.exec(jql)?.[1] ?? '0');
     const cutoff = windowMinutes === 0 ? null : nowMs - windowMinutes * 60_000;
+    // Divergence 16: the status constraints, when the search carries them.
+    const statusIn = JQL_STATUS_IN.exec(jql);
+    const statusesAsked =
+      statusIn === null
+        ? null
+        : [...(statusIn[1] ?? '').matchAll(JQL_KEY_LITERAL)].map((literal) =>
+            (literal[1] ?? '').replace(/\\"/g, '"').replace(/\\\\/g, '\\').toLowerCase(),
+          );
+    const categoryAsked = JQL_STATUS_CATEGORY.exec(jql)?.[1]?.toLowerCase() ?? null;
+    const statusOf = (fields: Record<string, unknown>) =>
+      (fields.status ?? {}) as { name?: string; statusCategory?: { name?: string } };
+    const categoryNameOf = (fields: Record<string, unknown>): string => {
+      const status = statusOf(fields);
+      return (
+        status.statusCategory?.name ??
+        STATUS_CATEGORY_NAMES.get((status.name ?? '').toLowerCase()) ??
+        ''
+      ).toLowerCase();
+    };
 
     // `ORDER BY updated ASC` — the only order the adapter asks for — honoured, stably by insertion.
     const updatedOf = (issue: Record<string, unknown>): number =>
@@ -373,6 +419,15 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
           return false;
         }
         if (cutoff !== null && Date.parse(String(fields.updated ?? '')) < cutoff) {
+          return false;
+        }
+        if (
+          statusesAsked !== null &&
+          !statusesAsked.includes((statusOf(fields).name ?? '').toLowerCase())
+        ) {
+          return false;
+        }
+        if (categoryAsked !== null && categoryNameOf(fields) !== categoryAsked) {
           return false;
         }
         if (named !== null) {

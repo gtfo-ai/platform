@@ -84,6 +84,17 @@ describe('escalationShort', () => {
     }
   });
 
+  it('says why a ticket that moved while its task waited stopped it (S-28.4)', () => {
+    expect(
+      escalationShort(subject({ reason: 'ticket_closed_in_tracker' }), { stage: true }),
+    ).toEqual({ kind: 'worded', parts: ['The ticket was finished in the tracker'] });
+    expect(escalationShort(subject({ reason: 'ticket_not_startable' }), { stage: false })).toEqual({
+      kind: 'worded',
+      parts: ['The ticket moved to a status work doesn’t start from'],
+    });
+    expect(stageOutcomeWordSentence('ticket_closed_in_tracker')).toContain('Cancel the task');
+  });
+
   it('says Needs a person for a sentence, a key nobody words and no reason — with the stage when asked', () => {
     for (const reason of ['stage "refinement" rejected the task', 'escalated', 'failed', null]) {
       expect(escalationShort(subject({ reason }), { stage: true })).toEqual({

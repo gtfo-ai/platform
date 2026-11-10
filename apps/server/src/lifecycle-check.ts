@@ -46,7 +46,12 @@
  */
 import type { Logger, ProjectBinding } from '@platform/application';
 import { bindingLifecycleOf } from '@platform/application';
-import type { Id, JsonObject, TicketLifecycle } from '@platform/contracts';
+import {
+  type Id,
+  type JsonObject,
+  lifecycleStatusKey,
+  type TicketLifecycle,
+} from '@platform/contracts';
 import { type LifecycleIssue, validateLifecycle } from '@platform/domain';
 import { secrets as secretAdapters } from '@platform/infrastructure';
 import { accountOnlyFieldsOf } from '@platform/integrations';
@@ -105,6 +110,28 @@ const namedStatuses = (
     return name === undefined ? [] : [{ path: `lifecycle.${slot}`, name }];
   }),
   ...(slots.returned ?? []).map((name, index) => ({ path: `lifecycle.returned[${index}]`, name })),
+  ...policyStatuses(slots),
+];
+
+/**
+ * The status policy's names (M28 ruling 1, S-28.4): `start_from` and `closed`. Not slots — they are
+ * never written and no distinctness rule of the slots applies to them — but a name the tracker does
+ * not list would silently start nothing (or close nothing), so they are held to the same
+ * membership check.
+ */
+const policyStatuses = (
+  slots: TicketLifecycle,
+): readonly { readonly path: string; readonly name: string; readonly words: string }[] => [
+  ...(slots.start_from ?? []).map((name, index) => ({
+    path: `lifecycle.start_from[${index}]`,
+    name,
+    words: 'statuses work starts from',
+  })),
+  ...(slots.closed ?? []).map((name, index) => ({
+    path: `lifecycle.closed[${index}]`,
+    name,
+    words: 'statuses that mean a ticket is finished',
+  })),
 ];
 
 /** The binding key of an `unknown_status` issue. */
@@ -207,11 +234,21 @@ export const checkProposedLifecycles = async (
       (issue): issue is Extract<LifecycleIssue, { code: 'unknown_status' }> =>
         issue.code === 'unknown_status',
     );
-    if (unknown.length > 0) {
-      const details = unknown.map((issue) => ({
-        path: pathOf(issue),
-        message: `the ${slotWords(issue)} slot names "${issue.name}", which "${account.name}" does not list among its statuses`,
-      }));
+    const listed = new Set(answer.items.map((status) => lifecycleStatusKey(status.name)));
+    const unknownPolicy = policyStatuses(slots).filter(
+      (entry) => !listed.has(lifecycleStatusKey(entry.name)),
+    );
+    if (unknown.length > 0 || unknownPolicy.length > 0) {
+      const details = [
+        ...unknown.map((issue) => ({
+          path: pathOf(issue),
+          message: `the ${slotWords(issue)} slot names "${issue.name}", which "${account.name}" does not list among its statuses`,
+        })),
+        ...unknownPolicy.map((entry) => ({
+          path: entry.path,
+          message: `the ${entry.words} name "${entry.name}", which "${account.name}" does not list among its statuses`,
+        })),
+      ];
       throw new HttpError(
         422,
         'lifecycle_status_unknown',

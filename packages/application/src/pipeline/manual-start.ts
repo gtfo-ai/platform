@@ -43,6 +43,8 @@
  * - `outside_binding_scope` — the ticket is outside the binding's declared scope (Jira's
  *   `project_keys`), asked of the provider after the read (`409`, naming the scope). The pre-review
  *   round's addition: a scope is not the pick-up rule, so it is not bypassed.
+ * - `ticket_not_startable` — the ticket's status is not one the binding starts work from, or means
+ *   a person finished it (M28 ruling 3 (c), S-28.4) (`409`, naming the status).
  * - `ticket_unreadable` — the provider failed for any other reason. A mutation fails closed
  *   (standing rule 20): nothing is recorded, and the provider's words stay in the log, never in the
  *   answer.
@@ -70,6 +72,7 @@
  */
 import type { Id, IsoDateTime, JsonObject, TicketRef } from '@platform/contracts';
 import { ticketMatchedEvent } from '@platform/contracts';
+import { intakeStatusDecision, type TicketStatusPolicy } from '@platform/domain';
 import { markTransactions, TransactionOpenError } from '../events/open-transaction.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { Ticket, TicketRefInput } from '../ports/integrations/task-management.js';
@@ -85,6 +88,19 @@ import {
 import { appendOnProjectWithRetry } from './project-stream.js';
 import { type ProjectSettingsPort, picksUpNewTickets } from './settings.js';
 import type { PipelineStore } from './store.js';
+import { boundStatusName } from './ticket-snapshot.js';
+
+/** The statuses work starts from, in words (S-28.4): the list, or the tracker's To Do category. */
+const startFromWords = (policy: TicketStatusPolicy): string => {
+  const named = [
+    ...(policy.pickUpFrom === null ? [] : [policy.pickUpFrom]),
+    ...(policy.startFrom ?? []),
+  ];
+  const listed = named.map((name) => `"${name}"`).join(', ');
+  return policy.startFrom === null
+    ? `every status of the tracker's To Do category${listed.length === 0 ? '' : `, and ${listed}`}`
+    : listed;
+};
 
 /** `ticket.matched.rule` for a ticket a person started by hand. */
 export const MANUAL_START_RULE = 'manual';
@@ -98,6 +114,7 @@ export type ManualStartRefusal =
   | 'task_exists'
   | 'ticket_not_found'
   | 'outside_binding_scope'
+  | 'ticket_not_startable'
   | 'ticket_unreadable';
 
 /** A manual start the platform refused; nothing was recorded. */
@@ -302,6 +319,31 @@ export const startTicketManually = async (
       'outside_binding_scope',
       `ticket ${ticketKey} is outside the projects this project's task-management integration reads (${scope.scope.join(', ')}); start it from the project bound to it`,
     );
+  }
+
+  /**
+   * **The status policy is not the pick-up rule, and is not bypassed** (M28 ruling 3 (c), S-28.4).
+   * A person who starts a released ticket by hand would otherwise get a task intake then skips
+   * without a word; so the start refuses first, naming the status and the rule, and records
+   * nothing. There is no override: the way to start such a ticket is to move it to a status work
+   * starts from (or to add that status to the binding's `start_from`).
+   */
+  const statusPolicy = settings.ticketStatusPolicy ?? null;
+  if (statusPolicy !== null) {
+    const decision = intakeStatusDecision(
+      ticket.status,
+      ticket.status_category ?? null,
+      statusPolicy,
+    );
+    if (decision.kind === 'skip') {
+      const status = boundStatusName(binding.redactor.redactText(ticket.status).value);
+      throw new ManualStartRefusedError(
+        'ticket_not_startable',
+        decision.disposition === 'closed'
+          ? `ticket ${ticketKey} is in "${status}", a status that means it is finished, so the platform does not start it; move it back to a status work starts from first`
+          : `ticket ${ticketKey} is in "${status}", which is not a status this project starts work from (${startFromWords(statusPolicy)}); move it to one of those first, or add "${status}" to the statuses work starts from in the tracker settings`,
+      );
+    }
   }
 
   const payload = matchedPayload(projectId, ticket, (value) => binding.redactor.redactJson(value));

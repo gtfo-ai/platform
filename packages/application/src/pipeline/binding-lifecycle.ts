@@ -15,6 +15,7 @@
  * same answer from the same port outside a transaction, so every reader sees one reading.
  */
 import { type TicketLifecycle, ticketLifecycleSchema } from '@platform/contracts';
+import { type TicketStatusPolicy, ticketStatusPolicyOf } from '@platform/domain';
 
 /** A binding's lifecycle, as the pipeline reads it. */
 export interface BindingLifecycle {
@@ -64,4 +65,30 @@ export const bindingLifecycleOf = (config: unknown): BindingLifecycleReading => 
       slots: parsed.data,
     },
   };
+};
+
+/**
+ * **The binding's status policy** (M28 ruling 1, S-28.4) — which statuses start work and which mean
+ * a person finished the ticket, read off the same merged configuration. Unlike the slots it applies
+ * to **every** task-management binding: a binding with no `lifecycle` block gets the tracker-category
+ * defaults (To Do starts, Done is finished) beside its `pickup_status`. `null` only for a block that
+ * fails its schema, which the loader refuses on every call anyway.
+ */
+export const bindingStatusPolicyOf = (config: unknown): TicketStatusPolicy | null => {
+  const reading = bindingLifecycleOf(config);
+  if (reading.kind === 'invalid') {
+    return null;
+  }
+  if (reading.kind === 'lifecycle') {
+    return ticketStatusPolicyOf(reading.lifecycle.pickUpFrom, reading.lifecycle.slots);
+  }
+  const record =
+    config !== null && typeof config === 'object' && !Array.isArray(config)
+      ? (config as Readonly<Record<string, unknown>>)
+      : {};
+  const pickup = record.pickup_status;
+  return ticketStatusPolicyOf(
+    typeof pickup === 'string' && pickup.trim().length > 0 ? pickup : null,
+    null,
+  );
 };

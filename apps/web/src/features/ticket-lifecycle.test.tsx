@@ -19,7 +19,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { ReadinessNotices } from './readiness-notices.js';
-import { lifecycleDraftOf, lifecycleOverlayOf, slotOfDetailPath } from './ticket-lifecycle.js';
+import {
+  lifecycleDraftOf,
+  lifecycleOverlayOf,
+  slotOfDetailPath,
+  statusPolicyPreview,
+} from './ticket-lifecycle.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 const TRACKER = '00000000-0000-4000-8000-0000000000b2';
@@ -708,7 +713,111 @@ describe('Assign the owner in the tracker (S-26.8a, product/06’s M26 amendment
   });
 });
 
+describe('which statuses start work and which are finished (S-28.4, M28 rulings 1 and 6)', () => {
+  const policyGroup = (card: HTMLElement, name: string): HTMLElement =>
+    within(card).getByRole('group', { name });
+  const START = 'Start work only from these statuses';
+  const FINISHED = 'A ticket in these statuses is finished';
+
+  it('pre-ticks the tracker’s To Do and Done categories and previews what starts, waits and stops', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const ticked = (group: string) =>
+      (within(policyGroup(card, group)).getAllByRole('checkbox') as HTMLInputElement[])
+        .filter((box) => box.checked)
+        .map((box) => box.value);
+    expect(ticked(START)).toEqual(['Sent back']);
+    expect(ticked(FINISHED)).toEqual(['Finished']);
+    const preview = card.querySelector('[data-lifecycle="policy-preview"]');
+    expect(preview?.textContent).toBe(
+      'With these settings, tickets in Sent back start. Doing, Waiting for review, Testing wait. Finished are never started and stop a task.',
+    );
+    // Untouched, the defaults are saved as nothing: the categories stay the rule.
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    const lifecycle = trackerConfigOf(state.puts[0]).lifecycle as Record<string, unknown>;
+    expect('start_from' in lifecycle || 'closed' in lifecycle).toBe(false);
+  });
+
+  it('saves a changed list, unticks a status from the other list, and the stop switch off as ignore', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const user = userEvent.setup();
+    await user.click(
+      within(policyGroup(card, START)).getByRole('checkbox', { name: 'Doing (in progress)' }),
+    );
+    await user.click(
+      within(policyGroup(card, START)).getByRole('checkbox', { name: 'Finished (done)' }),
+    );
+    expect(
+      (
+        within(policyGroup(card, FINISHED)).getByRole('checkbox', {
+          name: 'Finished (done)',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    await user.click(
+      within(card).getByRole('checkbox', {
+        name: 'Stop a task when a person moves its ticket to a finished status',
+      }),
+    );
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(trackerConfigOf(state.puts[0])).toEqual({
+      lifecycle: {
+        claim: true,
+        take_assigned_tickets: false,
+        // In the tracker's order, as the checkbox list keeps it.
+        start_from: ['Doing', 'Sent back', 'Finished'],
+        closed: [],
+        on_ticket_closed: 'ignore',
+      },
+    });
+  });
+
+  it('refuses to save a setting that starts nothing, and says so', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const user = userEvent.setup();
+    await user.click(
+      within(policyGroup(card, START)).getByRole('checkbox', { name: 'Sent back (to do)' }),
+    );
+    expect(card.querySelector('[data-lifecycle="policy-preview"]')?.textContent).toContain(
+      'no ticket starts',
+    );
+    expect(
+      (within(card).getByRole('button', { name: 'Save the ticket lifecycle' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+});
+
 describe('the lifecycle helpers', () => {
+  it('reads a stored status policy, and previews pick up from as starting work (S-28.4)', () => {
+    const { draft, dropped } = lifecycleDraftOf(
+      {
+        pickup_status: 'Testing',
+        lifecycle: { start_from: ['doing'], closed: ['Gone'], on_ticket_closed: 'ignore' },
+      },
+      STATUSES,
+    );
+    expect(draft.startFrom).toEqual(['Doing']);
+    expect(draft.closed).toEqual([]);
+    expect(draft.stopOnClosed).toBe(false);
+    expect(dropped).toEqual([{ slot: 'closed', name: 'Gone' }]);
+    expect(statusPolicyPreview(draft, STATUSES)).toEqual({
+      start: ['Doing', 'Testing'],
+      wait: ['Waiting for review', 'Sent back', 'Finished'],
+      finished: [],
+    });
+    expect(slotOfDetailPath('lifecycle.start_from[2]')).toBe('start_from');
+    expect(slotOfDetailPath('lifecycle.closed[0]')).toBe('closed');
+  });
+
   it('matches stored names case-insensitively onto the loaded spelling', () => {
     const { draft, dropped } = lifecycleDraftOf(
       { pickup_status: ' sent back ', lifecycle: { in_progress: 'DOING', returned: ['testing'] } },

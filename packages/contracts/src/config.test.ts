@@ -17,6 +17,7 @@ import {
   MAX_ACKNOWLEDGEMENT_WORDS,
   MAX_CI_TIMEOUT_MINUTES,
   MAX_CONTEXT_BUDGET_TOKENS,
+  MAX_LIFECYCLE_POLICY_STATUSES,
   MAX_LIFECYCLE_RETURNED_STATUSES,
   MAX_REQUIRED_MANUAL_JOB_CHARS,
   MAX_REQUIRED_MANUAL_JOBS,
@@ -702,6 +703,32 @@ describe('ticketLifecycleSchema', () => {
     expect(
       agenticConfigSchema.safeParse({ version: 1, lifecycle: { qa: 'Testing' } }).success,
     ).toBe(false);
+  });
+
+  it('carries the status policy: start_from, closed and on_ticket_closed (M28 ruling 1)', () => {
+    const block = {
+      start_from: ['To Do', 'Ready'],
+      closed: ['Released', 'Done'],
+      on_ticket_closed: 'ignore',
+    };
+    expect(ticketLifecycleSchema.parse(block)).toEqual(block);
+    expect(ticketLifecycleSchema.safeParse({ on_ticket_closed: 'cancel' }).success).toBe(false);
+    // An empty start_from would start nothing; absent is the To Do category.
+    expect(ticketLifecycleSchema.safeParse({ start_from: [] }).success).toBe(false);
+    expect(ticketLifecycleSchema.safeParse({ closed: [] }).success).toBe(true);
+    const names = (count: number) => Array.from({ length: count }, (_, index) => `S${index}`);
+    expect(
+      ticketLifecycleSchema.safeParse({ start_from: names(MAX_LIFECYCLE_POLICY_STATUSES) }).success,
+    ).toBe(true);
+    expect(
+      ticketLifecycleSchema.safeParse({ closed: names(MAX_LIFECYCLE_POLICY_STATUSES + 1) }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a status named twice in a list, or in both start_from and closed', () => {
+    expect(issues({ start_from: ['Ready', ' ready'] })).toEqual(['start_from.1']);
+    expect(issues({ closed: ['Done', 'DONE'] })).toEqual(['closed.1']);
+    expect(issues({ start_from: ['Ready'], closed: ['ready'] })).toEqual(['closed.0']);
   });
 });
 

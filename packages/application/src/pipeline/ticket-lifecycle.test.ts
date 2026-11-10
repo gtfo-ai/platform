@@ -14,9 +14,10 @@ import type {
   Id,
   Slug,
   StoredTicketClaim,
+  TicketStatusCategory,
 } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
-import { resolveIterationLimits } from '@platform/domain';
+import { resolveIterationLimits, ticketStatusPolicyOf } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
@@ -72,6 +73,16 @@ interface TrackerOptions {
   readonly takenBeforeTheClaimBy?: string;
   /** The port declares `assignOthers` and answers `assignTo` — the owner write-back (S-26.3). */
   readonly assignsOthers?: boolean;
+  /** The status's tracker category the read reports (S-28.4); absent reports none. */
+  readonly statusCategory?: TicketStatusCategory;
+  /**
+   * A person moves the ticket just before the first claim reads it — on the claim's first
+   * `selfIdentity`, which intake never asks for an unassigned ticket (S-28.4: closed while queued).
+   */
+  readonly movedBeforeTheClaimTo?: {
+    readonly status: string;
+    readonly category: TicketStatusCategory;
+  };
 }
 
 /** One ticket's assignee, status and comments, and every lifecycle call made on it, in order. */
@@ -79,6 +90,7 @@ const tracker = (options: TrackerOptions = {}) => {
   const state = {
     assignee: options.assignee ?? null,
     status: options.status ?? 'Ready for the agent',
+    statusCategory: (options.statusCategory ?? null) as TicketStatusCategory | null,
     comments: [] as { readonly markerId: string | null; readonly body: string }[],
   };
   const calls: string[] = [];
@@ -97,6 +109,7 @@ const tracker = (options: TrackerOptions = {}) => {
         title: 'Show the totals in the invoice footer',
         description: 'The footer sums the visible rows rather than all of them.',
         status: state.status,
+        ...(state.statusCategory === null ? {} : { status_category: state.statusCategory }),
         priority: null,
         labels: [],
         comments: [],
@@ -112,6 +125,10 @@ const tracker = (options: TrackerOptions = {}) => {
     selfIdentity: async () => {
       if (options.takenBeforeTheClaimBy !== undefined && !calls.includes('selfIdentity')) {
         state.assignee = options.takenBeforeTheClaimBy;
+      }
+      if (options.movedBeforeTheClaimTo !== undefined && !calls.includes('selfIdentity')) {
+        state.status = options.movedBeforeTheClaimTo.status;
+        state.statusCategory = options.movedBeforeTheClaimTo.category;
       }
       calls.push('selfIdentity');
       return identity(SELF_ID);
@@ -1003,6 +1020,133 @@ describe('the intake skip (TD-029 decision 5)', () => {
     expect(harness.store.snapshot()).toHaveLength(1);
     expect(ticket.calls).not.toContain('assignToSelf');
     expect(ticket.state.assignee).toBe('jane');
+  });
+});
+
+// ── S-28.4: a ticket is started only from a startable status ───────────────
+
+describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 (c), (d))', () => {
+  /** The defaults: To Do starts, Done is finished; `pickup_status` beside them. */
+  const withPolicy = (
+    ticket: ReturnType<typeof tracker>,
+    slots: BindingLifecycle['slots'] = { in_progress: 'Doing' },
+  ) =>
+    harnessFor(ticket, lifecycle(slots), {
+      settings: { ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', slots) },
+    });
+
+  it('creates no task for a released ticket that still carries the label, and records why', async () => {
+    const ticket = tracker({ status: 'Released', statusCategory: 'done' });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+
+    expect(harness.store.snapshot()).toEqual([]);
+    const skipped = eventsOf(harness, 'ticket.intake.skipped');
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]?.payload).toMatchObject({
+      project_id: PROJECT,
+      reason: 'status_not_startable',
+      status: 'Released',
+    });
+    // Nothing was written to the tracker: no claim, no assign.
+    expect(ticket.lifecycleCalls()).toEqual([]);
+  });
+
+  it('creates no task for a ticket a person is working on (an In Progress status)', async () => {
+    const ticket = tracker({ status: 'Ready for Merge', statusCategory: 'in_progress' });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+    expect(harness.store.snapshot()).toEqual([]);
+    expect(eventsOf(harness, 'ticket.intake.skipped')[0]?.payload).toMatchObject({
+      reason: 'status_not_startable',
+      status: 'Ready for Merge',
+    });
+  });
+
+  it('creates a task for a To Do ticket, and for one in pickup_status whatever its category', async () => {
+    const todo = tracker({ status: 'To Do', statusCategory: 'todo' });
+    const first = withPolicy(todo);
+    await first.publish([ticketMatched()]);
+    expect(first.store.snapshot()).toHaveLength(1);
+    expect(eventsOf(first, 'ticket.intake.skipped')).toHaveLength(0);
+
+    const pickup = tracker({ status: 'Ready for the agent', statusCategory: 'in_progress' });
+    const second = withPolicy(pickup);
+    await second.publish([ticketMatched()]);
+    expect(second.store.snapshot()).toHaveLength(1);
+  });
+
+  it('takes a ticket it could not read, as before', async () => {
+    const ticket = tracker({ status: 'Released', statusCategory: 'done', nullReads: 1 });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+    expect(harness.store.snapshot()).toHaveLength(1);
+    expect(eventsOf(harness, 'ticket.intake.skipped')).toHaveLength(0);
+  });
+
+  it('a start_from list decides: a To Do status outside it waits', async () => {
+    const slots = { in_progress: 'Doing', start_from: ['Ready'] };
+    const ticket = tracker({ status: 'Idea', statusCategory: 'todo' });
+    const harness = withPolicy(ticket, slots);
+    await harness.publish([ticketMatched()]);
+    expect(harness.store.snapshot()).toEqual([]);
+    expect(eventsOf(harness, 'ticket.intake.skipped')[0]?.payload).toMatchObject({
+      reason: 'status_not_startable',
+      status: 'Idea',
+    });
+  });
+
+  it('the claim refuses a ticket released while its task waited: needs_human, the status named, no assign, no run', async () => {
+    const ticket = tracker({
+      status: 'To Do',
+      statusCategory: 'todo',
+      movedBeforeTheClaimTo: { status: 'Released', category: 'done' },
+    });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+
+    const stored = taskOf(harness);
+    expect(stored.task.state).toBe('needs_human');
+    const escalated = eventsOf(harness, 'task.escalated')[0]?.payload as {
+      reason: string;
+      blocker_brief: string;
+    };
+    expect(escalated.reason).toBe('ticket_closed_in_tracker');
+    expect(escalated.blocker_brief).toContain('"Released"');
+    expect(eventsOf(harness, 'ticket.claim.refused')[0]?.payload).toMatchObject({
+      reason: 'ticket_closed_in_tracker',
+    });
+    expect(ticket.calls).not.toContain('assignToSelf');
+    expect(runsCreated(harness)).toBe(0);
+    // A status refusal is not somebody else's ticket: no comment on it.
+    expect(ticket.state.comments).toEqual([]);
+  });
+
+  it('the claim refuses a first claim of a ticket a person took meanwhile (ticket_not_startable)', async () => {
+    const ticket = tracker({
+      status: 'To Do',
+      statusCategory: 'todo',
+      movedBeforeTheClaimTo: { status: 'Review In Progress', category: 'in_progress' },
+    });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(
+      (eventsOf(harness, 'task.escalated')[0]?.payload as { reason: string } | undefined)?.reason,
+    ).toBe('ticket_not_startable');
+    expect(runsCreated(harness)).toBe(0);
+  });
+
+  it('the claim meets the platform’s own in_progress status and proceeds', async () => {
+    const ticket = tracker({
+      status: 'To Do',
+      statusCategory: 'todo',
+      movedBeforeTheClaimTo: { status: 'Doing', category: 'in_progress' },
+    });
+    const harness = withPolicy(ticket);
+    await harness.publish([ticketMatched()]);
+    expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
+    expect(runsCreated(harness)).toBeGreaterThan(0);
   });
 });
 

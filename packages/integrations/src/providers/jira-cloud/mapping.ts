@@ -28,14 +28,20 @@
  *    go through `adfToMarkdown` — untrusted text throughout (BD-022).
  */
 
-import type {
-  ExternalIdentity,
-  Ticket,
-  TicketComment,
-  TicketLink,
-  TicketMatch,
+import {
+  type ExternalIdentity,
+  normaliseStatusCategory,
+  type Ticket,
+  type TicketComment,
+  type TicketLink,
+  type TicketMatch,
 } from '@platform/application';
-import { isoDateTimeSchema, nonEmptyStringSchema, type TicketRef } from '@platform/contracts';
+import {
+  isoDateTimeSchema,
+  nonEmptyStringSchema,
+  type TicketRef,
+  type TicketStatusCategory,
+} from '@platform/contracts';
 import * as z from 'zod';
 import { adfMarkerId, adfToMarkdown } from './adf.js';
 
@@ -143,11 +149,20 @@ export const jiraIssueLinkSchema = z.object({
   outwardIssue: jiraLinkedIssueSchema.optional(),
 });
 
+/**
+ * An issue's `status` as `IssueBean.fields` carries it: a `StatusDetails`, whose `statusCategory`
+ * (`{key, …}`) is read since S-28.4 so intake can judge a ticket's status by its category (M28
+ * ruling 3). The vendor types the key as a bare string; it is normalised by the port.
+ */
+const jiraIssueStatusSchema = jiraNamedSchema.extend({
+  statusCategory: z.object({ key: z.string().nullish() }).nullish(),
+});
+
 export const jiraIssueFieldsSchema = z.object({
   summary: z.string().nullish(),
   description: z.unknown().optional(),
   issuetype: jiraNamedSchema.nullish(),
-  status: jiraNamedSchema.nullish(),
+  status: jiraIssueStatusSchema.nullish(),
   priority: jiraNamedSchema.nullish(),
   labels: z.array(z.string()).nullish(),
   updated: jiraDateTimeSchema.nullish(),
@@ -379,14 +394,31 @@ export interface TicketMappingInput {
   readonly siblings: readonly { key: string; title: string; state: string }[];
 }
 
+/**
+ * The status's category as the port normalises it, or `null` when the issue carried no
+ * `statusCategory` key at all — "Jira did not say", which intake treats differently from a key the
+ * platform does not recognise (`unknown`, never startable).
+ */
+export const statusCategoryOf = (
+  status: { readonly statusCategory?: { readonly key?: string | null } | null } | null | undefined,
+): TicketStatusCategory | null => {
+  const key = status?.statusCategory?.key;
+  return key === undefined || key === null || key === ''
+    ? null
+    : normaliseStatusCategory(key).category;
+};
+
 export const toTicket = (input: TicketMappingInput): Ticket => {
   const { issue, siteUrl } = input;
+  const statusCategory = statusCategoryOf(issue.fields.status);
   return {
     ref: issueRef(issue, siteUrl),
     issue_type: issue.fields.issuetype?.name ?? 'Task',
     title: issue.fields.summary ?? '',
     description: adfToMarkdown(issue.fields.description),
     status: issue.fields.status?.name ?? 'Unknown',
+    // S-28.4: the category Jira sent with the status; absent when it sent none (not `unknown`).
+    ...(statusCategory === null ? {} : { status_category: statusCategory }),
     priority: issue.fields.priority?.name ?? null,
     labels: [...(issue.fields.labels ?? [])],
     comments: input.comments.map((comment) =>

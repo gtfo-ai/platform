@@ -46,6 +46,8 @@ export const ESCALATION_SHORT_WORDS: Readonly<Partial<Record<TaskStageOutcomeWor
   dead_lettered: 'An event about it couldn’t be processed',
   repository_config_invalid: 'The repository’s settings file doesn’t parse',
   ticket_claim_failed: 'The platform couldn’t take the ticket',
+  ticket_not_startable: 'The ticket moved to a status work doesn’t start from',
+  ticket_closed_in_tracker: 'The ticket was finished in the tracker',
   settings_config_invalid: 'The project’s stored settings don’t parse',
   context_budget_above_ceiling: 'The context budget is above this release’s ceiling',
 };

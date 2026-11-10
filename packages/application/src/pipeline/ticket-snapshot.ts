@@ -98,8 +98,9 @@ import type {
   IsoDateTime,
   TicketSnapshot,
   TicketSnapshotComment,
+  TicketStatusCategory,
 } from '@platform/contracts';
-import { ticketSnapshotSchema } from '@platform/contracts';
+import { MAX_LIFECYCLE_STATUS_NAME_CHARS, ticketSnapshotSchema } from '@platform/contracts';
 import { isPlatformWord } from '@platform/domain';
 import { TransactionOpenError } from '../events/open-transaction.js';
 import type { InboundIdentityDirectory } from '../integrations/inbound.js';
@@ -331,6 +332,12 @@ export interface TicketSnapshotRequest {
  * nothing. It is not redacted, bounded or persisted because nothing here keeps it: the one thing that
  * survives the read is a platform user id an operator mapped.
  */
+/** A status name as the platform stores it: at most `MAX_LIFECYCLE_STATUS_NAME_CHARS`, never empty. */
+export const boundStatusName = (name: string): string => {
+  const bounded = name.slice(0, MAX_LIFECYCLE_STATUS_NAME_CHARS);
+  return bounded.length === 0 ? '?' : bounded;
+};
+
 export interface TicketRead {
   readonly snapshot: TicketSnapshot;
   readonly reporter: ExternalIdentity | null;
@@ -347,6 +354,14 @@ export interface TicketRead {
    * (`ticket_assignee.display_name`, bounded there by `ticketAssigneeOf`).
    */
   readonly assigneeDisplayName: string | null;
+  /**
+   * The ticket's status name **through the binding's redactor**, bounded at
+   * `MAX_LIFECYCLE_STATUS_NAME_CHARS` (S-28.4) — what intake's status check compares and what
+   * `ticket.intake.skipped` records. Compared case-insensitively, as the slots compare.
+   */
+  readonly status: string;
+  /** The status's category as the provider reported it, `null` when it reported none (S-28.4). */
+  readonly statusCategory: TicketStatusCategory | null;
 }
 
 /**
@@ -448,6 +463,8 @@ export const readTicketForTask = async (
         assigneeName === null || assigneeName.length === 0
           ? null
           : resolved.taskManagement.redactor.redactText(assigneeName).value,
+      status: boundStatusName(resolved.taskManagement.redactor.redactText(ticket.status).value),
+      statusCategory: ticket.status_category ?? null,
     };
   } catch (error) {
     /**

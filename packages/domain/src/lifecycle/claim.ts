@@ -25,6 +25,7 @@
 import {
   type ExternalIdentity,
   LIFECYCLE_SINGLE_SLOTS,
+  LIFECYCLE_STATUS_POLICY_KEYS,
   type StoredTicketClaim,
   type TicketLifecycle,
 } from '@platform/contracts';
@@ -43,10 +44,22 @@ export const lifecycleMapsAnySlot = (block: TicketLifecycle | null | undefined):
 /**
  * Whether the binding claims — TD-029 decision 1: `claim` defaults to **true when a `lifecycle`
  * block is present**, and a binding with no block never claims (BD-031 ruling 2: nothing mapped
- * behaves exactly as before).
+ * behaves exactly as before). A block that holds **only** the status policy (`start_from`, `closed`,
+ * `on_ticket_closed` — M28 ruling 1, S-28.4) is read as no block here: choosing which statuses start
+ * work is not asking the platform to assign tickets. An explicit `claim: true` beside them claims.
  */
-export const lifecycleClaims = (block: TicketLifecycle | null | undefined): boolean =>
-  block !== null && block !== undefined && block.claim !== false;
+export const lifecycleClaims = (block: TicketLifecycle | null | undefined): boolean => {
+  if (block === null || block === undefined || block.claim === false) {
+    return false;
+  }
+  const stated = Object.entries(block)
+    .filter(([, value]) => value !== undefined)
+    .map(([key]) => key);
+  return (
+    stated.length === 0 ||
+    stated.some((key) => !(LIFECYCLE_STATUS_POLICY_KEYS as readonly string[]).includes(key))
+  );
+};
 
 /** Two identities name one account: same provider, same provider-side id. */
 export const sameAccount = (a: ExternalIdentity, b: ExternalIdentity): boolean =>
