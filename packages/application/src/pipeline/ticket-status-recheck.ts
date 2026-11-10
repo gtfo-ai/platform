@@ -195,7 +195,9 @@ export const runTicketStatusRecheck = async (
   }
   const settings = await options.settings.forProject(loaded.task.projectId);
   const base = settings.ticketStatusPolicy ?? null;
-  if (base === null) {
+  // A configuration that cannot be read hides `status_mapping`, so the platform's own mapped
+  // statuses could read as a person's move: stop nothing until it parses (WP-106's rule).
+  if (base === null || settings.configRefusal !== undefined) {
     return;
   }
   // The platform's own statuses: the slots, `returned`, and — no slot mapped — `status_mapping`.
