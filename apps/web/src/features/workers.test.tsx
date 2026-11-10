@@ -834,3 +834,115 @@ describe('the page’s pure helpers', () => {
     expect(formatCodeAge(301)).toBe('5 min 1 s');
   });
 });
+
+describe('why a ready machine runs nothing — one sentence per cause (S-28.6)', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', '/workers');
+  });
+
+  const PROJECT = '00000000-0000-4000-8000-0000000028a1';
+  const OTHER_USER = '00000000-0000-4000-8000-0000000028b1';
+  const at = (n: number) => `00000000-0000-4000-8000-0000000028c${n}`;
+  const CASES: readonly {
+    readonly name: string;
+    readonly over: Partial<WorkerSummary>;
+    readonly kind: string;
+    readonly text: RegExp;
+    readonly link: string | null;
+  }[] = [
+    {
+      name: 'busy-box',
+      over: {
+        concurrency: 2,
+        idle_reason: { kind: 'slots_busy', running: 2, concurrency: 2 },
+      },
+      kind: 'slots_busy',
+      text: /^All 2 of its places are busy/,
+      link: null,
+    },
+    {
+      name: 'full-box',
+      over: {
+        idle_reason: {
+          kind: 'project_limit',
+          project_id: PROJECT,
+          project_key: 'AUT',
+          limit_kind: 'max_tasks_in_pipeline',
+          count: 5,
+          limit: 5,
+          queued: 4,
+          organisation_bound: false,
+        },
+      },
+      kind: 'project_limit',
+      text: /^Project AUT is full: 5 of 5 places in its pipeline are taken \(the project’s limit, not a person’s\), and 4 tasks it would take are queued\./,
+      link: '/projects/AUT',
+    },
+    {
+      name: 'mine-box',
+      over: { idle_reason: { kind: 'policy_skips', skipped: 3, claim_policy: 'mine' } },
+      kind: 'policy_skips',
+      text: /^It takes only your tasks, and 3 waiting runs belong to others\. Change what it takes below\.$/,
+      link: null,
+    },
+    {
+      name: 'theirs-box',
+      over: {
+        user: { id: OTHER_USER, email: 'vojta@example.invalid', name: 'Vojtěch' },
+        idle_reason: { kind: 'policy_skips', skipped: 1, claim_policy: 'mine_and_unassigned' },
+      },
+      kind: 'policy_skips',
+      text: /^It takes only Vojtěch’s tasks and unassigned ones, and 1 waiting run belongs to others\. Only its owner can change what it takes\.$/,
+      link: null,
+    },
+    {
+      name: 'quiet-box',
+      over: { idle_reason: { kind: 'nothing_queued' } },
+      kind: 'nothing_queued',
+      text: /^Nothing is queued or waiting for this machine in the projects it serves\.$/,
+      link: null,
+    },
+  ];
+
+  it('says exactly one sentence for each cause, with its numbers and its next step', async () => {
+    const items = CASES.map((one, index) =>
+      worker({
+        id: at(index),
+        name: one.name,
+        last_seen_at: new Date().toISOString(),
+        ...one.over,
+      }),
+    );
+    const { fetchImpl } = fetchFor('missing', items);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await screen.findByText('quiet-box');
+    for (const [index, one] of CASES.entries()) {
+      const row = container.querySelector(`[data-worker="${at(index)}"]`) as HTMLElement;
+      const lines = row.querySelectorAll('[data-idle-reason]');
+      expect(lines, one.name).toHaveLength(1);
+      const line = lines[0] as HTMLElement;
+      expect(line.getAttribute('data-idle-reason')).toBe(one.kind);
+      expect(line.textContent).toMatch(one.text);
+      const link = within(line).queryByRole('link');
+      expect(link?.getAttribute('href') ?? null).toBe(one.link);
+    }
+  });
+
+  it('says nothing while a blocker stands — the blocker’s words win — or the server said nothing', async () => {
+    const items = [
+      worker({
+        id: at(1),
+        name: 'held-box',
+        manually_paused_at: '2026-11-04T12:05:00.000Z',
+        claim_blockers: ['paused'],
+        can_claim: false,
+        idle_reason: { kind: 'nothing_queued' },
+      }),
+      worker({ id: at(2), name: 'silent-box', idle_reason: null }),
+    ];
+    const { fetchImpl } = fetchFor('missing', items);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await screen.findByText('silent-box');
+    expect(container.querySelectorAll('[data-idle-reason]')).toHaveLength(0);
+  });
+});

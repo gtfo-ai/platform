@@ -1100,3 +1100,75 @@ describe('the connection’s icon (S-22.19, R-L6)', () => {
     ).toEqual(['handshaking', 'logging_in']);
   });
 });
+
+describe('why nothing (more) runs here — the core’s one sentence (S-28.6)', () => {
+  const PROJECT = '00000000-0000-4000-8000-0000000028a1';
+  const CASES: readonly [
+    NonNullable<WorkerLocalState['idle_reason']>,
+    RegExp,
+    { readonly link?: string; readonly button?: string },
+  ][] = [
+    [{ kind: 'slots_busy', running: 2, concurrency: 2 }, /^All 2 of its places are busy/, {}],
+    [
+      {
+        kind: 'project_limit',
+        project_id: PROJECT,
+        project_key: 'AUT',
+        limit_kind: 'max_tasks_in_pipeline',
+        count: 5,
+        limit: 5,
+        queued: 4,
+        organisation_bound: false,
+      },
+      /^Project AUT is full: 5 of 5 places in its pipeline are taken/,
+      { link: 'https://core.example.test/projects/AUT' },
+    ],
+    [
+      { kind: 'policy_skips', skipped: 3, claim_policy: 'mine' },
+      /^It takes only your tasks, and 3 waiting runs belong to others\./,
+      { button: 'Change what it takes' },
+    ],
+    [
+      { kind: 'nothing_queued' },
+      /^Nothing is queued or waiting for this machine in the projects it serves\.$/,
+      {},
+    ],
+  ];
+
+  it.each(CASES)(
+    'says %o in exactly one sentence, with its next step',
+    async (reason, text, next) => {
+      const { container } = renderPage(fakeClient(state({ runs: [], idle_reason: reason })));
+      await screen.findByText('Runs on this machine');
+      const lines = container.querySelectorAll('[data-idle-reason]');
+      expect(lines).toHaveLength(1);
+      const line = lines[0] as HTMLElement;
+      expect(line.getAttribute('data-idle-reason')).toBe(reason.kind);
+      expect(line.querySelector('span')?.textContent ?? line.textContent).toMatch(text);
+      expect(line.querySelector('a')?.getAttribute('href') ?? undefined).toBe(next.link);
+      expect(line.querySelector('button')?.textContent ?? undefined).toBe(next.button);
+      // The idle sentence replaces "Nothing runs here right now." rather than adding to it.
+      expect(container.textContent).not.toContain('Nothing runs here right now.');
+    },
+  );
+
+  it('says nothing while a blocker stands, and the old line when the core said nothing', async () => {
+    const blocked = renderPage(
+      fakeClient(
+        state({
+          runs: [],
+          manually_paused_at: '2026-11-05T10:04:00.000Z',
+          claim_blockers: ['paused'],
+          idle_reason: { kind: 'nothing_queued' },
+        }),
+      ),
+    );
+    await screen.findByText('Runs on this machine');
+    expect(blocked.container.querySelectorAll('[data-idle-reason]')).toHaveLength(0);
+    cleanup();
+    const silent = renderPage(fakeClient(state({ runs: [], idle_reason: null })));
+    await screen.findByText('Runs on this machine');
+    expect(silent.container.querySelectorAll('[data-idle-reason]')).toHaveLength(0);
+    expect(silent.container.textContent).toContain('Nothing runs here right now.');
+  });
+});

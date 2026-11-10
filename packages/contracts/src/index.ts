@@ -35,6 +35,7 @@ export * from './schemas.js';
 export * from './transcript.js';
 export * from './worker.js';
 export * from './worker-claim-blockers.js';
+export * from './worker-idle-reason.js';
 export * from './worker-local.js';
 export * from './workers.js';
 

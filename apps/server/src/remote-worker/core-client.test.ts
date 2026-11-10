@@ -3,10 +3,7 @@
  * message names the bare verb — `offers: …` — never the query. Its `GET claim-scope` (backlog 1456)
  * asks `?fields=unassigned_has_taker` only when told to.
  */
-import {
-  WORKER_CLAIM_SCOPE_TAKERS_QUERY,
-  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
-} from '@platform/contracts';
+import { WORKER_CLAIM_SCOPE_TAKERS_QUERY, WORKER_OFFERS_QUERY } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { CoreCallError, type CoreFetch, createCoreClient } from './core-client.js';
 
@@ -22,9 +19,7 @@ describe('GET offers asks for held_elsewhere, and says a refusal by its verb (S-
     };
     const client = createCoreClient({ baseUrl: 'https://core.example.test/', fetch });
     const refusal = await client.offers('wkr_fake').catch((error: unknown) => error);
-    expect(urls).toEqual([
-      `https://core.example.test/api/worker/v1/offers?${WORKER_OFFERS_HELD_ELSEWHERE_QUERY}`,
-    ]);
+    expect(urls).toEqual([`https://core.example.test/api/worker/v1/offers?${WORKER_OFFERS_QUERY}`]);
     expect(refusal).toBeInstanceOf(CoreCallError);
     expect((refusal as CoreCallError).code).toBe('something_new');
     expect((refusal as CoreCallError).message).toBe('offers: not now');

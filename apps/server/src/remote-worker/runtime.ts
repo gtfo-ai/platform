@@ -88,6 +88,7 @@ import {
   WORKER_LOCAL_LOG_TAIL,
   WORKER_PROTOCOL_VERSION,
   type WorkerClaimPolicy,
+  type WorkerIdleReason,
   type WorkerLocalClaimScope,
   type WorkerLocalCoreFailure,
   type WorkerLocalErrorReportingTestResponse,
@@ -531,6 +532,11 @@ export const startRemoteWorker = async (
   let claimPolicy: WorkerClaimPolicy | null = null;
   /** The open offers the policy leaves for others, as the core last counted them (S-26.4). */
   let policySkippedOffers: number | null = null;
+  /**
+   * Why this machine runs nothing (more), as the core last said it on the offers list (S-28.6, the
+   * M28 ruling A) — the page polls the list, so it is as fresh as the page needs it.
+   */
+  let idleReason: WorkerIdleReason | null = null;
   let slotFreed: (() => void) | null = null;
   const drainMarker = path.join(config.stateDir, DRAIN_MARKER_FILE);
 
@@ -1184,6 +1190,8 @@ export const startRemoteWorker = async (
       if (answer.policy_skipped_offers !== undefined) {
         policySkippedOffers = answer.policy_skipped_offers;
       }
+      // S-28.6: absent is a core before the field — unknown, so nothing is said.
+      idleReason = answer.idle_reason ?? null;
       return workerLocalOffersSchema.parse(redactKeysAndValues(pageRedactor(), answer));
     } catch (error) {
       throw asLocalError(error, 'list the offers');
@@ -1601,6 +1609,7 @@ export const startRemoteWorker = async (
       }),
       claim_policy: claimPolicy,
       policy_skipped_offers: policySkippedOffers,
+      idle_reason: idleReason,
       // What the reporter sends to now, not what was stored: a client that failed to build is *Off*.
       error_reporting: ((dsn: string | null) => ({
         source: dsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',

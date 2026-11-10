@@ -767,6 +767,27 @@ owner's other machines then count — through the same `unassignedTakersOf`. The
 read lists to the reader (their own; every one for an administrator), else `404`; without it the answer
 is S-26.5's, unchanged; any other query key is `400`.
 
+**Why a ready machine runs nothing (more)** (S-28.6, the M28 ruling A on BD-010). Every `GET
+/api/workers` item carries `idle_reason` — one cause with its numbers, `null` while a claim blocker stands
+(the blocker's words win), while the machine is about to take something (an open offer its automatic
+claim would take, or a queued task it would take that the limits admit) or for a revoked one. The kinds,
+in the precedence `workerIdleReasonOf` (`packages/domain/src/policies/worker-idle.ts`) decides them:
+`slots_busy` `{running, concurrency}`; `owner_limit` `{owner, count, limit, queued, holders}` (the
+per-person limit, S-28.6 part B); `project_limit` `{project_id, project_key, limit_kind, count, limit,
+queued, organisation_bound}` — a project it serves is full under `max_parallel_tasks` or
+`max_tasks_in_pipeline` and tasks its claim policy would take are queued there (the project with the most
+such tasks); `policy_skips` `{skipped, claim_policy}` — its policy (`mine`, `mine_and_unassigned`) leaves
+waiting runs for others; `nothing_queued`. The facts are the claim's and the scheduler's own questions
+asked again, never stored (`apps/server/src/queries/worker-idle.ts`): `takeableOffersSql` and
+`policySkippedOffersSql` for the offers, the projects `eligible_projects` counts with their live task
+states (and how many of each its policy would take, `workerPolicyTakesTaskSql`), and the limits through
+the scheduler's settings port, as `queue_wait` reads them. On the worker protocol it is
+`GET offers?fields=held_elsewhere,idle_reason` (`WORKER_OFFERS_QUERY`), protocol ≥ 4 — an **opt-in** for
+the reasons `held_elsewhere` is; the worker keeps the answer from its 10 s offers poll and its local
+state carries it as `idle_reason`. The Workers screen's row, the local page's *Runs on this machine* and
+the Agents screen (when every worker that would take a run by itself says why it does not) say it in
+one sentence with its next step (`apps/web/src/ui/words/worker-idle.ts`).
+
 **Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8). The task record (`GET /api/tasks/:id`'s
 `task` and every item of `GET /api/projects/:id/tasks`) and every `GET /api/org/agents` item carry
 `waiting` — `{reason, user, last_seen_at, assignee_name, blockers}` for the run's **open** offer (the task's: its

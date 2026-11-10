@@ -36,7 +36,7 @@ import type { PlatformToolContext, RunProgressRecorder } from '@platform/applica
 import {
   type RunPackage,
   runPackageSchema,
-  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
+  WORKER_OFFERS_QUERY,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
   WORKER_REMOTE_LEASE_RENEW_MS,
@@ -339,6 +339,8 @@ const fakeCore = (options: {
    * the routes do; absent is a core before the field, which ignores the query.
    */
   readonly unassignedHasTaker?: Readonly<Record<string, boolean>>;
+  /** `GET offers?fields=…,idle_reason`'s `idle_reason` (S-28.6); absent, never sent. */
+  readonly idleReason?: unknown;
   /** The handshake's answer by number (from 1); absent is the worker's settings (WP-294 (6)). */
   readonly handshake?: (n: number) => { readonly status: number; readonly body: unknown } | null;
   /** `device/token`'s answer by poll number (from 1); absent is `authorization_pending`. */
@@ -529,8 +531,17 @@ const fakeCore = (options: {
             : {}),
         });
       }
-      case 'offers':
-        return answer(200, { offers: options.offers ?? [] });
+      case 'offers': {
+        const asksIdle = (new URL(url).searchParams.get('fields') ?? '')
+          .split(',')
+          .includes('idle_reason');
+        return answer(200, {
+          offers: options.offers ?? [],
+          ...(asksIdle && options.idleReason !== undefined
+            ? { idle_reason: options.idleReason }
+            : {}),
+        });
+      }
       case 'offers/:id/claim': {
         workerOfferClaimRequestSchema.parse(parsed);
         const next = takes.shift() ?? 'refused';
@@ -1666,10 +1677,21 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       automatic: false,
     };
     const PROJECT = { id: PROJECT_ID, key: 'ACME', name: 'Acme storefront' };
+    const IDLE = {
+      kind: 'project_limit',
+      project_id: PROJECT_ID,
+      project_key: 'ACME',
+      limit_kind: 'max_tasks_in_pipeline',
+      count: 5,
+      limit: 5,
+      queued: 4,
+      organisation_bound: false,
+    } as const;
     const core = fakeCore({
       offers: [OFFER],
       takes: ['refused', runPackage()],
       scopeProjects: [PROJECT],
+      idleReason: IDLE,
     });
     const { worker } = await start({ stateDir, core });
     try {
@@ -1722,8 +1744,10 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       );
       // S-26.7: the worker asks for each entry's `held_elsewhere` by name.
       expect(core.captured.find((call) => call.verb === 'offers')?.search).toBe(
-        `?${WORKER_OFFERS_HELD_ELSEWHERE_QUERY}`,
+        `?${WORKER_OFFERS_QUERY}`,
       );
+      // S-28.6: and the list's `idle_reason`, which the page's state then carries.
+      expect(worker.state().idle_reason).toEqual(IDLE);
 
       // The scope: read, set to pick only through the core's PUT, read back.
       const read = await request(port, { path: '/api/local/claim-scope', headers: auth });

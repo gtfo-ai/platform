@@ -161,6 +161,7 @@ import {
   listShadowBatches,
 } from './queries/shadow-queries.js';
 import { findOrganisationTimezone, readStatsSources } from './queries/stats-queries.js';
+import { createWorkerIdleReader, type WorkerIdleReader } from './queries/worker-idle.js';
 import { createPostgresWorkerStore, type WorkerStore } from './queries/worker-queries.js';
 import { roleCapabilities } from './role.js';
 import { registerAskRoutes } from './routes/asks.js';
@@ -200,7 +201,7 @@ import {
   registerWorkerProtocolRoutes,
 } from './routes/worker/protocol.js';
 import { registerWorkerDeviceRoutes } from './routes/worker-device.js';
-import { registerWorkerRoutes } from './routes/workers.js';
+import { idleReasonOfWorker, registerWorkerRoutes } from './routes/workers.js';
 import type { ShadowCommands } from './shadow.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
@@ -319,6 +320,12 @@ export interface BuildAppOptions {
   readonly workers?: WorkerStore;
   /** The clock the worker routes read (device-code expiry, a code's age). Absent: the wall clock. */
   readonly workersNow?: () => Date;
+  /**
+   * Why a ready machine runs nothing (more) — `idle_reason` on the Workers screen and on `GET
+   * offers?fields=idle_reason` (S-28.6). Absent: the PostgreSQL read over `database`; a test hands
+   * its own, or `null` for none (every row then answers `idle_reason: null`).
+   */
+  readonly workerIdle?: WorkerIdleReader | null;
   /**
    * The worker protocol's commands (WP-281), the broadcast its held requests wake on, and what the
    * core advertises. Absent (or `remoteRuns: null`): the routes are still registered — the protocol
@@ -740,11 +747,18 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       trustedClientIpHeader: config.trustedClientIpHeader,
       ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
+    // S-28.6: why a ready machine runs nothing (more) — the claim's and the scheduler's own counts,
+    // the limits through the scheduler's settings port (`wipLimits`, as `queue_wait` reads them).
+    const workerIdle =
+      options.workerIdle !== undefined
+        ? options.workerIdle
+        : createWorkerIdleReader(options.database, wipLimits);
     await registerWorkerRoutes(app, {
       store: workerStore,
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
       coreDigests: coreRunDigests,
+      idle: workerIdle,
       ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
     await registerWorkerProtocolRoutes(app, {
@@ -778,6 +792,18 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
           ? options.workerProtocol.unassignedTakers
           : async (workerId, projectIds) =>
               unassignedTakersOf(options.database, projectIds, { workerId }),
+      // S-28.6: the Workers screen's `idle_reason` for the asking worker, on `GET offers`.
+      idleReason:
+        workerIdle === null
+          ? null
+          : async (workerId) =>
+              idleReasonOfWorker(
+                workerStore,
+                workerIdle,
+                workerId,
+                coreRunDigests(),
+                options.workersNow?.() ?? new Date(),
+              ),
       broadcast: options.workerProtocol?.broadcast ?? null,
       release: workerRelease,
       ...(options.workerProtocol?.unresolved === undefined

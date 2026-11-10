@@ -50,6 +50,7 @@ import {
   WORKER_API_PREFIX,
   WORKER_CLAIM_SCOPE_TAKERS_QUERY,
   WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
+  WORKER_OFFERS_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_VERSION,
   workerApprovalResponseSchema,
@@ -82,6 +83,10 @@ import { loadServerConfig } from '../../../apps/server/src/config.js';
 import { createLogger } from '../../../apps/server/src/logging.js';
 import { createMetrics } from '../../../apps/server/src/metrics.js';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
+import type {
+  IdleCandidate,
+  WorkerIdleReader,
+} from '../../../apps/server/src/queries/worker-idle.js';
 import {
   createMemoryWorkerStore,
   type MemoryWorkerStore,
@@ -242,6 +247,8 @@ const world = async (
       workerId: Id,
       projectIds: readonly Id[],
     ) => Promise<ReadonlyMap<string, boolean>>;
+    /** Why a ready machine runs nothing (S-28.6); absent, `null` — none composed. */
+    readonly workerIdle?: WorkerIdleReader;
   } = {},
 ): Promise<World> => {
   const store = createMemoryWorkerStore();
@@ -494,6 +501,7 @@ const world = async (
     readiness: async () => ({ status: 'ok', checks: {} }),
     isShuttingDown: () => false,
     workers: store,
+    workerIdle: options.workerIdle ?? null,
     // The harness's clock is the database's here: `runs.ended_at`, which a run token's fifteen
     // minutes after the end are counted from, is stamped by it.
     workersNow: () => new Date(harness.clock.epochMs),
@@ -2414,6 +2422,59 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
       owner: null,
       held_elsewhere: true,
     });
+  });
+
+  it('sends idle_reason only to a protocol-4 worker that asks, the Workers screen’s answer for that worker (S-28.6)', async () => {
+    const asked: IdleCandidate[][] = [];
+    const w = await world({
+      workerIdle: async (candidates) => {
+        asked.push([...candidates]);
+        return new Map(
+          candidates.map((candidate) => [
+            candidate.workerId,
+            { kind: 'policy_skips', skipped: 2, claim_policy: 'mine' } as const,
+          ]),
+        );
+      },
+    });
+    const list = async (path: string, headers = bearer(w.alice.credential)) => {
+      const response = await w.app.inject({ method: 'GET', url: path, headers });
+      expect(response.statusCode).toBe(200);
+      return response.json();
+    };
+    // A worker built before the field never asks: never sent, never computed.
+    const strictBefore = workerOffersResponseSchema.omit({ idle_reason: true });
+    expect(strictBefore.safeParse(await list(url(WORKER_PATHS.offers))).success).toBe(true);
+    expect(
+      strictBefore.safeParse(
+        await list(`${url(WORKER_PATHS.offers)}?${WORKER_OFFERS_HELD_ELSEWHERE_QUERY}`),
+      ).success,
+    ).toBe(true);
+    expect(asked).toEqual([]);
+    // Nor at protocol 3, asked or not.
+    const v3 = await list(`${url(WORKER_PATHS.offers)}?${WORKER_OFFERS_QUERY}`, {
+      authorization: `Bearer ${w.alice.credential}`,
+      'x-worker-protocol': '3',
+    });
+    expect(v3).not.toHaveProperty('idle_reason');
+    expect(asked).toEqual([]);
+    // Asked, as this build's worker asks: for the asking worker alone.
+    const answer = workerOffersResponseSchema.parse(
+      await list(`${url(WORKER_PATHS.offers)}?${WORKER_OFFERS_QUERY}`),
+    );
+    expect(answer.idle_reason).toEqual({ kind: 'policy_skips', skipped: 2, claim_policy: 'mine' });
+    expect(asked.at(-1)?.map((candidate) => candidate.workerId)).toEqual([w.alice.workerId]);
+  });
+
+  it('a core composed without the read sends no idle_reason even when asked — unknown (S-28.6)', async () => {
+    const w = await world();
+    const response = await w.app.inject({
+      method: 'GET',
+      url: `${url(WORKER_PATHS.offers)}?${WORKER_OFFERS_QUERY}`,
+      headers: bearer(w.alice.credential),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).not.toHaveProperty('idle_reason');
   });
 
   it('refuses a pick of another person’s task by its as_of, naming the owner — and offer_not_claimable at protocol 3', async () => {

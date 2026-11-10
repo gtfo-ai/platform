@@ -42,6 +42,12 @@
  *   `409 task_taken_by_another` when its owner changed after the body's `as_of`, else `409
  *   task_owned_by_another`, both naming the owner — and `offer_not_claimable` to a version-3 worker.
  *
+ * ## `GET offers?fields=idle_reason` (S-28.6, the M28 ruling A)
+ *
+ * The local page polls the offers every 10 s, so the answer to *why does nothing run here* rides on
+ * that read: the Workers screen's own `idle_reason` for the asking worker, composed by the root
+ * (`idleReasonOfWorker` in `routes/workers.ts`). An opt-in, as `held_elsewhere` is; protocol ≥ 4.
+ *
  * ## `GET claim-scope?fields=unassigned_has_taker` (BACKLOG 1456)
  *
  * The M26 UX spec § 1's consequence line — "Unassigned tasks in Autix have nowhere to run." — needs,
@@ -68,12 +74,14 @@ import {
   runPackageSchema,
   WORKER_CLAIM_SCOPE_TAKERS_QUERY,
   WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
+  WORKER_OFFERS_IDLE_REASON_FIELD,
   WORKER_OFFERS_LIST_MAX,
   WORKER_PATHS,
   WORKER_PROTOCOL_CLAIM_POLICY,
   WORKER_PROTOCOL_CLAIM_SCOPE,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
+  type WorkerIdleReason,
   type WorkerUpgradeRequiredBody,
   workerClaimScopeRequestSchema,
   workerClaimScopeResponseSchema,
@@ -130,6 +138,11 @@ export interface WorkerPickVerbOptions {
   readonly unassignedTakers?:
     | ((workerId: Id, projectIds: readonly Id[]) => Promise<ReadonlyMap<string, boolean>>)
     | null;
+  /**
+   * Why the worker runs nothing (more) although nothing blocks it (S-28.6, the M28 ruling A) — the
+   * Workers screen's own `idle_reason` for this worker. `null`/absent: `idle_reason` is never sent.
+   */
+  readonly idleReason?: ((workerId: Id) => Promise<WorkerIdleReason | null>) | null;
 }
 
 const runParamsSchema = z.strictObject({ id: z.uuid() });
@@ -158,6 +171,13 @@ const HELD_ELSEWHERE_FIELD = new URLSearchParams(WORKER_OFFERS_HELD_ELSEWHERE_QU
  */
 const asksHeldElsewhere = (request: FastifyRequest): boolean =>
   asksField(request, HELD_ELSEWHERE_FIELD);
+
+/**
+ * Whether the request asked for `idle_reason` (S-28.6) — an opt-in, as `held_elsewhere` is: a worker
+ * built before the field never asks, so its strict parse never meets it.
+ */
+const asksIdleReason = (request: FastifyRequest): boolean =>
+  asksField(request, WORKER_OFFERS_IDLE_REASON_FIELD);
 
 /** The `fields` value a worker sends to be told `unassigned_has_taker` (BACKLOG 1456). */
 const TAKERS_FIELD = new URLSearchParams(WORKER_CLAIM_SCOPE_TAKERS_QUERY).get('fields');
@@ -339,7 +359,7 @@ export const registerWorkerPickVerbs = (
       schema: {
         summary: 'The open offers this worker could take now, in its projects (WP-293, S-26.4)',
         description:
-          'Worker credential, protocol ≥ 3. At most 50 open offers, oldest first, that a pick would admit for this worker now — the claim’s own eligibility text, against the image digests the worker last reported, **narrowed by its project list** (S-26.4; a pick of an offer outside it is still admitted) — each with whether its claim scope and policy take it automatically (`automatic`). Protocol ≥ 4: each entry’s `owner` (the task’s, `null` for nobody) and `mine` (a task its user owns, or an ask they asked), and the list’s `as_of` and `policy_skipped_offers`; with `?fields=held_elsewhere` (S-26.7) each entry adds `held_elsewhere` — its task’s tracker assignee is a person the platform cannot match to a member, so a pick claims it without assigning — an opt-in, so a worker built before the field is never sent it. The ticket key and the title come from the redacted ticket snapshot and are untrusted text; an ask carries its task and stage, never the question’s text. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
+          'Worker credential, protocol ≥ 3. At most 50 open offers, oldest first, that a pick would admit for this worker now — the claim’s own eligibility text, against the image digests the worker last reported, **narrowed by its project list** (S-26.4; a pick of an offer outside it is still admitted) — each with whether its claim scope and policy take it automatically (`automatic`). Protocol ≥ 4: each entry’s `owner` (the task’s, `null` for nobody) and `mine` (a task its user owns, or an ask they asked), and the list’s `as_of` and `policy_skipped_offers`; with `?fields=held_elsewhere` (S-26.7) each entry adds `held_elsewhere` — its task’s tracker assignee is a person the platform cannot match to a member, so a pick claims it without assigning — an opt-in, so a worker built before the field is never sent it. With `fields=idle_reason` (S-28.6), protocol ≥ 4: `idle_reason` — why this worker runs nothing (more) although nothing blocks it, the Workers screen’s own answer (`null` while a blocker stands or it is about to take something) — an opt-in on the same terms. The ticket key and the title come from the redacted ticket snapshot and are untrusted text; an ask carries its task and stage, never the question’s text. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
         tags: ['worker'],
         response: {
           200: workerOffersResponseSchema,
@@ -374,6 +394,9 @@ export const registerWorkerPickVerbs = (
             egress: release.digests.platform_egress,
           })
         : null;
+      // S-28.6: an opt-in, at protocol 4 — asked only when the worker named it and a reader exists.
+      const idleOf = v4 && asksIdleReason(request) ? (options.idleReason ?? null) : null;
+      const idle = idleOf === null ? undefined : await idleOf(workerId);
       const displays =
         options.displays === null || offers.length === 0
           ? new Map<string, RunDisplay>()
@@ -404,6 +427,7 @@ export const registerWorkerPickVerbs = (
           };
         }),
         ...(v4 ? { as_of: asOf, policy_skipped_offers: skipped } : {}),
+        ...(idle === undefined ? {} : { idle_reason: idle }),
       };
     },
   );

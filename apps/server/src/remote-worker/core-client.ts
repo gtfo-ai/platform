@@ -34,7 +34,7 @@ import {
   runPackageSchema,
   WORKER_API_PREFIX,
   WORKER_CLAIM_SCOPE_TAKERS_QUERY,
-  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
+  WORKER_OFFERS_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
@@ -499,8 +499,9 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         {
           method: 'GET',
           verb: WORKER_PATHS.offers,
-          // S-26.7: each entry's `held_elsewhere`, by name — a core before it ignores the query.
-          query: WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
+          // S-26.7: each entry's `held_elsewhere`, and S-28.6: the list's `idle_reason`, by name —
+          // a core before either ignores the query.
+          query: WORKER_OFFERS_QUERY,
           bearer: credential,
           body: null,
           runScoped: false,

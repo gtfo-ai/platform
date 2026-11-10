@@ -30,7 +30,7 @@ import {
   workerSeat,
 } from '../viz/fleet/fleet.test-fixture.js';
 import { FLEET_LIVE_UPDATE_MS } from '../viz/fleet/use-fleet.js';
-import { endStop, queueWaitOf } from './agents.js';
+import { endStop, idleQueueNoteOf, queueWaitOf } from './agents.js';
 import { FLEET_VIEW_STORAGE_KEY } from './agents-view.js';
 
 /** A string that would be an element if anything here rendered markup (BD-022). */
@@ -737,6 +737,26 @@ describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
     expect(endStop('jan-mbp: updating now…')).toBe('');
     expect(endStop('jan-mbp: not connected to the platform')).toBe('.');
     expect(endStop(null)).toBe('.');
+  });
+
+  it('says why the machines that could take the queue do not, only when every one of them says why (S-28.6)', () => {
+    const [jan] = WORKERS.items;
+    if (jan === undefined) throw new Error('fixture');
+    const skipping = {
+      ...jan,
+      idle_reason: { kind: 'policy_skips' as const, skipped: 2, claim_policy: 'mine' as const },
+    };
+    // The reader's own machine says "your"; somebody else's by its person's name.
+    expect(idleQueueNoteOf(true, [skipping], jan.user.id)).toBe(
+      'jan-mbp: It takes only your tasks, and 2 waiting runs belong to others.',
+    );
+    expect(idleQueueNoteOf(true, [skipping], null)).toMatch(/^jan-mbp: It takes only .+’s tasks/);
+    // One machine with nothing to explain is about to take a run: nothing is said.
+    const ready = { ...jan, id: `${jan.id.slice(0, -1)}9`, name: 'ready-box', idle_reason: null };
+    expect(idleQueueNoteOf(true, [skipping, ready], jan.user.id)).toBeNull();
+    // Nor where the server runs agent work, nor before the workers are known.
+    expect(idleQueueNoteOf(false, [skipping], jan.user.id)).toBeNull();
+    expect(idleQueueNoteOf(true, null, jan.user.id)).toBeNull();
   });
 
   it('waits for a worker, with the way to add one, when no worker is registered', async () => {

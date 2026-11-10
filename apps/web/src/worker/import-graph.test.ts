@@ -40,6 +40,7 @@ const WORKER_WORDS = [
   'ui/words/stages.ts', // a run's stage
   'ui/words/terminal-reasons.ts', // the guard's vocabulary of how a run ended
   'ui/words/worker-blockers.ts', // why this worker takes no work (S-22.19)
+  'ui/words/worker-idle.ts', // why a ready worker runs nothing (more) (S-28.6)
 ];
 
 const STATIC_IMPORT =

@@ -74,6 +74,7 @@ import {
   CONNECTION_WORDS,
   CONTROL_HINTS,
   claimBlockerOf,
+  coreIdleUrl,
   coreRunUrl,
   deskOf,
   elapsedWords,
@@ -81,6 +82,7 @@ import {
   freeDesksOf,
   holdLineOf,
   hostOf,
+  idleWordsOf,
   logLineWords,
   platformWizardUrl,
   restartNoticeOf,
@@ -293,6 +295,38 @@ const RunCard = ({
   );
 };
 
+/**
+ * **Why nothing (more) runs here** (S-28.6, the M28 ruling A): the core's one sentence, with its
+ * next step — the board or the Workers screen on the platform, or *What this machine takes* below.
+ * Nothing while a blocker stands (the status line says that) or the core said nothing.
+ */
+const IdleLine = ({
+  state,
+  pickRef,
+}: {
+  readonly state: WorkerLocalState;
+  readonly pickRef: { readonly current: HTMLDivElement | null };
+}): ReactElement | null => {
+  const words = idleWordsOf(state);
+  if (words === null) return null;
+  const url = coreIdleUrl(state.core_url, words.next);
+  return (
+    <p className="text-sm text-fg-muted" data-idle-reason={state.idle_reason?.kind}>
+      <UntrustedText value={words.text} />{' '}
+      {words.next === null ? null : url !== null ? (
+        <ExternalLink url={url} label={words.next.label} className="text-link underline" />
+      ) : (
+        <Button
+          size="sm"
+          onClick={() => pickRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })}
+        >
+          {words.next.label}
+        </Button>
+      )}
+    </p>
+  );
+};
+
 export interface WorkerAppProps {
   /** `null` when the page has no token (opened without the printed address). */
   readonly client: LocalClient | null;
@@ -314,6 +348,8 @@ export const WorkerApp = ({
   const [busy, setBusy] = useState(false);
   /** The error shown is a failed read: the next good read clears it (a worker that restarted). */
   const readFailed = useRef(false);
+  /** *What this machine takes* — where an idle sentence's *Change what it takes* goes (S-28.6). */
+  const pickRef = useRef<HTMLDivElement | null>(null);
   /** The last state read, and whether the Claude step says the worker restarted (BACKLOG 1053). */
   const last = useRef<WorkerLocalState | null>(null);
   const [restarted, setRestarted] = useState(false);
@@ -577,8 +613,11 @@ export const WorkerApp = ({
 
       <section aria-label="Runs" className="flex flex-col gap-3">
         <h2 className="text-base font-semibold text-fg">Runs on this machine</h2>
+        <IdleLine state={state} pickRef={pickRef} />
         {state.runs.length === 0 ? (
-          <p className="text-sm text-fg-muted">Nothing runs here right now.</p>
+          idleWordsOf(state) === null ? (
+            <p className="text-sm text-fg-muted">Nothing runs here right now.</p>
+          ) : null
         ) : (
           state.runs.map((run) => (
             <RunCard
@@ -598,14 +637,16 @@ export const WorkerApp = ({
         </p>
       </section>
 
-      <PickWork
-        client={client}
-        takeBlocked={takeBlockedOf(state, at)}
-        emptyWords={emptyOffersWords(state)}
-        onTaken={() => void refresh()}
-        onScope={setScope}
-        statePolicy={state.claim_policy ?? null}
-      />
+      <div ref={pickRef} data-pick-anchor="">
+        <PickWork
+          client={client}
+          takeBlocked={takeBlockedOf(state, at)}
+          emptyWords={emptyOffersWords(state)}
+          onTaken={() => void refresh()}
+          onScope={setScope}
+          statePolicy={state.claim_policy ?? null}
+        />
+      </div>
       <section aria-label="This machine" className="flex flex-col gap-2" data-machine="">
         <h2 className="text-base font-semibold text-fg">This machine</h2>
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">

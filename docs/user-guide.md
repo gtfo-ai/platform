@@ -2071,7 +2071,17 @@ run.* for each project where neither the platform server nor any other machine �
 takes unassigned tasks by itself, as the machine's own page does; the screen asks once you press
 **Change**, so before that, when the platform did not answer, and on somebody else's machine it says
 nothing. A muted *Skipped 3 runs this machine doesn't take* counts the waiting runs its choice leaves
-for others. **Details**
+for others. **A ready machine that runs nothing says why** (S-28.6), in one sentence under its
+state, with the numbers: *All 2 of its places are busy: it takes the next run when one of them ends.*;
+*Project AUT is full: 5 of 5 places in its pipeline are taken (the project's limit, not a person's),
+and 4 tasks it would take are queued.* with **Open the board** (a project's two limits are its
+*Parallel tasks* card under *Rules & limits*: how many of its tasks move at once, and how many are in
+its pipeline at all — waiting ones included; a place in the pipeline frees when a task is done or
+cancelled); *It takes only your tasks, and 3 waiting runs belong to others.* (change it in the card
+below); or *Nothing is queued or waiting for this machine in the projects it serves.* A machine that
+cannot take work says its reason instead, and one that is about to start something says nothing. The
+machine's own page says the same sentence under *Runs on this machine*, and **Agents** says it above
+the map when runs are waiting and every machine that would take one says why it does not. **Details**
 holds when it was registered and last seen, its worker version and the image digests it
 reported. The header counts *2 ready · 1 can't take work · 1 revoked*. The page refreshes by itself
 every 15 seconds while it is open. **Revoke** opens a dialog that says what it does before anything

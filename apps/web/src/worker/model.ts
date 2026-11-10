@@ -39,6 +39,7 @@ import { usagePauseWords } from '../ui/usage-pause.js';
 import { ROLE_LABEL } from '../ui/words/roles.js';
 import { stageLabel } from '../ui/words/stages.js';
 import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/words/worker-blockers.js';
+import { type IdleWords, workerIdleWords } from '../ui/words/worker-idle.js';
 
 /**
  * The worker's own state, in a person's words. `blocked` (S-22.19) is a connected worker that is
@@ -597,6 +598,28 @@ export const logLineWords = (line: string): string => {
     // Not JSON: shown as it is.
   }
   return line;
+};
+
+/**
+ * **Why nothing (more) runs here**, in words (S-28.6, the M28 ruling A): the core's `idle_reason`
+ * from the offers list, said only while the worker is connected and nothing it knows blocks it —
+ * a blocker's own words win, in the status line. The reader is always the machine's person.
+ */
+export const idleWordsOf = (state: WorkerLocalState): IdleWords | null => {
+  const reason = state.idle_reason ?? null;
+  if (reason === null || state.connection !== 'connected' || state.claim_blockers.length > 0) {
+    return null;
+  }
+  return workerIdleWords(reason, { self: true, ownerName: '' });
+};
+
+/** Where an idle sentence's next step goes on the platform: a board by key, or the Workers screen. */
+export const coreIdleUrl = (coreUrl: string | null, next: IdleWords['next']): string | null => {
+  if (next === null || next.kind === 'policy') return null;
+  const base = (coreUrl ?? '').replace(/\/+$/, '');
+  return next.kind === 'board'
+    ? `${base}/projects/${encodeURIComponent(next.projectKey)}`
+    : `${base}/workers`;
 };
 
 /** The core's page for a run — steer and take-over live there (amendment §4). */

@@ -15,8 +15,10 @@ export {
   policySkippedOffersSql,
   projectListTakesSql,
   serverEligibleSql,
+  takeableOffersSql,
   workerEligibleSql,
   workerPolicyTakesSql,
+  workerPolicyTakesTaskSql,
   workerScopeTakesSql,
 } from './postgres-run-offers.js';
 export * from './postgres-ticket-poll.js';

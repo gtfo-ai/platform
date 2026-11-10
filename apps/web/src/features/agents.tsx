@@ -33,11 +33,11 @@ import { ListUnorderedIcon } from '@primer/octicons-react/ListUnorderedIcon';
 import { WorkflowIcon } from '@primer/octicons-react/WorkflowIcon';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { lazy, type ReactElement, Suspense, useCallback, useState } from 'react';
-import { useProjects } from '../app/queries.js';
+import { useProjects, useSession } from '../app/queries.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { Flash } from '../ui/flash.js';
-import { leadingClaimBlocker, wordInSentence } from '../ui/humanize.js';
+import { leadingClaimBlocker, wordInSentence, workerIdleWords } from '../ui/humanize.js';
 import { ErrorNotice } from '../ui/kit.js';
 import type { NavItem } from '../ui/nav-item.js';
 import { PageHeader } from '../ui/page-header.js';
@@ -141,6 +141,42 @@ export const queueWaitOf = (
   };
 };
 
+/**
+ * **Why the waiting runs stay waiting although machines could take work** (S-28.6, the M28 ruling
+ * A): on a platform where nothing on the server runs agent work, when every worker that would take
+ * a run by itself says why it runs nothing more (`idle_reason`) — the first by name, in its words
+ * (the reader's own machine as *you*). `null` when one of them has nothing to explain (it is about
+ * to take a run), or the queue does not wait on workers.
+ */
+export const idleQueueNoteOf = (
+  need: boolean | 'pending' | null,
+  workers: readonly WorkerSummary[] | null,
+  readerId: string | null,
+): string | null => {
+  if (need !== true || workers === null) return null;
+  const ready = workers
+    .filter(
+      (worker) => worker.state === 'active' && workerReadinessOf(worker).takes === 'automatically',
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const [first] = ready;
+  if (first === undefined || ready.some((worker) => (worker.idle_reason ?? null) === null)) {
+    return null;
+  }
+  const words = workerIdleWords(first.idle_reason as NonNullable<WorkerSummary['idle_reason']>, {
+    self: readerId !== null && first.user.id === readerId,
+    ownerName: sanitiseUntrusted(first.user.name ?? first.user.email),
+  });
+  const more = ready.length - 1;
+  return `${sanitiseUntrusted(first.name)}: ${words.text}${
+    more === 0
+      ? ''
+      : more === 1
+        ? ' 1 more worker says why too.'
+        : ` ${more} more workers say why too.`
+  }`;
+};
+
 /** A sentence's full stop — none after a reason that already ends in "…" (*updating now…*). */
 export const endStop = (reason: string | null): string => (reason?.endsWith('…') ? '' : '.');
 
@@ -213,6 +249,13 @@ export const AgentsScreen = (): ReactElement => {
   const projects = useProjects();
   const need = useWorkerNeed(setupProjectOf(projects.data?.items ?? [])?.id ?? null);
   const { wait, reason } = queueWaitOf(need, workers.isSuccess ? workers.data.items : null);
+  const session = useSession();
+  // S-28.6: the queue waits and the machines that could take it each say why they do not.
+  const idleNote = idleQueueNoteOf(
+    need,
+    workers.isSuccess ? workers.data.items : null,
+    session.data?.user.id ?? null,
+  );
   const wide = useWideViewport();
   const [openId, setOpenId] = useState<string | null>(null);
   const [last, setLast] = useState<FleetRun | null>(null);
@@ -275,6 +318,17 @@ export const AgentsScreen = (): ReactElement => {
             }${endStop(reason)} `}
             <Link to="/workers" className="text-link underline">
               See why
+            </Link>
+          </p>
+        </Flash>
+      ) : null}
+
+      {wait === 'seat' && idleNote !== null && !nothing && fleet.queue.length > 0 ? (
+        <Flash tone="warning" live="status">
+          <p data-idle-queue="">
+            {`${fleet.queue.length === 1 ? '1 run is' : `${fleet.queue.length} runs are`} waiting, and no worker takes more: ${idleNote} `}
+            <Link to="/workers" className="text-link underline">
+              See your workers
             </Link>
           </p>
         </Flash>

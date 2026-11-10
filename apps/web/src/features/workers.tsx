@@ -31,6 +31,12 @@
  * *Change* — never on the page's load — and cached per (project, machine). Until it answers, on an
  * error, and on a read-only card the line is unknown and says nothing.
  *
+ * **A ready machine that runs nothing says why** (S-28.6, the M28 ruling A): under the state, one
+ * sentence from the server's `idle_reason` (`WorkerIdleLine`, words in `ui/words/worker-idle.ts`) —
+ * its places are busy, a project it serves is full (with *Open the board*), its policy leaves the
+ * waiting runs for others, or nothing waits for it — said to the owner as *you* and to anybody else
+ * by name. Nothing while a blocker stands: the state's own words win.
+ *
  * **It refreshes by itself**: no event announces a heartbeat, a handshake or a new worker, so the
  * list is asked again every {@link WORKERS_REFRESH_MS} while the page is open (and in the
  * foreground), and the `org` topic's events that carry a `worker_id` refresh it at once.
@@ -88,6 +94,7 @@ import {
   leadingClaimBlocker,
   UPDATING_WORDS,
   WORKER_CLAIM_BLOCKER_WORDS,
+  workerIdleWords,
 } from '../ui/humanize.js';
 import {
   Button,
@@ -360,6 +367,54 @@ const WorkerPolicy = ({
   );
 };
 
+/**
+ * **Why a ready machine runs nothing (more)** (S-28.6, the M28 ruling A): the server's
+ * `idle_reason` as one sentence with its next step — a full project's board, or the control below
+ * that changes it. Said to the machine's person as *you*, to anybody else with the person's name.
+ * Nothing while a blocker stands (the row's state says that) or the server said nothing.
+ */
+export const WorkerIdleLine = ({
+  worker,
+  readerId,
+}: {
+  readonly worker: WorkerSummary;
+  readonly readerId: string | null;
+}): ReactElement | null => {
+  const reason = worker.idle_reason ?? null;
+  // A blocker's words win (the server sends `null` then too; this holds it on a stale answer).
+  if (
+    reason === null ||
+    worker.state !== 'active' ||
+    workerReadinessOf(worker).takes !== 'automatically'
+  ) {
+    return null;
+  }
+  const words = workerIdleWords(reason, {
+    self: readerId !== null && worker.user.id === readerId,
+    ownerName: worker.user.name ?? worker.user.email,
+  });
+  const next = words.next;
+  return (
+    <p className="text-sm text-fg-muted" data-idle-reason={reason.kind}>
+      <UntrustedText value={words.text} />
+      {next === null ? null : next.kind === 'board' ? (
+        <>
+          {' '}
+          <Link
+            to="/projects/$key"
+            params={{ key: next.projectKey }}
+            className="text-link underline"
+          >
+            {next.label}
+          </Link>
+        </>
+      ) : (
+        <span>{` ${next.label} below.`}</span>
+      )}
+    </p>
+  );
+};
+
 /** Every blocker the server named, each with what to do about it, in the vocabulary's order. */
 const WhyList = ({ worker }: { readonly worker: WorkerSummary }): ReactElement => {
   const blockers = workerReadinessOf(worker).claim_blockers;
@@ -455,6 +510,7 @@ const WorkerRow = ({
               </>
             )}
           </span>
+          <WorkerIdleLine worker={worker} readerId={readerId} />
           {active ? (
             <WorkerPolicy
               worker={worker}

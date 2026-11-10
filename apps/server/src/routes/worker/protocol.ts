@@ -232,6 +232,11 @@ export interface WorkerProtocolRoutesOptions {
    * (BACKLOG 1456) — `GET claim-scope?fields=unassigned_has_taker`. `null`/absent: never sent.
    */
   readonly unassignedTakers?: WorkerPickVerbOptions['unassignedTakers'];
+  /**
+   * Why the asking worker runs nothing (more) — `GET offers?fields=…,idle_reason` (S-28.6).
+   * `null`/absent: never sent.
+   */
+  readonly idleReason?: WorkerPickVerbOptions['idleReason'];
   /** `APP_BASE_URL`, for the owner verbs' `426` (`compose_url`). @default `http://localhost` */
   readonly baseUrl?: string;
   readonly release: () => WorkerRelease | null;
@@ -1128,6 +1133,7 @@ export const registerWorkerProtocolRoutes = async (
     unresolved,
     displays: options.offerDisplays ?? null,
     unassignedTakers: options.unassignedTakers ?? null,
+    idleReason: options.idleReason ?? null,
     watch: presenceOf,
     deliverClaimed,
     now,

@@ -31,6 +31,7 @@ import {
   workerOffersResponseSchema,
 } from './worker.js';
 import { WORKER_CLAIM_BLOCKERS, workerClaimBlockerSchema } from './worker-claim-blockers.js';
+import { workerIdleReasonSchema } from './worker-idle-reason.js';
 
 /** The local verbs' prefix on the worker's UI listener. */
 export const WORKER_LOCAL_API_PREFIX = '/api/local';
@@ -299,6 +300,12 @@ export const workerLocalStateSchema = z.strictObject({
    * machine that takes only its owner's tasks is idle by choice. Always sent, optional as above.
    */
   policy_skipped_offers: policySkippedOffersSchema.optional(),
+  /**
+   * Why this machine runs nothing (more) although nothing blocks it, as its core last said it (the
+   * offers list, asked with `fields=idle_reason` — S-28.6, the M28 ruling A); `null` before the core
+   * said it, or when it said nothing stands in the way. Always sent, optional as above.
+   */
+  idle_reason: workerIdleReasonSchema.nullable().optional(),
   /** The *Error reporting* setting (WP-295). */
   error_reporting: workerLocalErrorReportingSchema,
   /**

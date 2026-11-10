@@ -410,11 +410,54 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
       { ...STATE, error_reporting: { source: 'page', host: null } },
     ],
     ['a state with no error-reporting block', (({ error_reporting: _e, ...rest }) => rest)(STATE)],
+    // S-28.6: why a ready machine runs nothing, kind by kind.
+    ['an unknown idle reason', { ...STATE, idle_reason: { kind: 'sleeping' } }],
+    [
+      'an idle reason with an unknown key',
+      { ...STATE, idle_reason: { kind: 'nothing_queued', why: 'x' } },
+    ],
+    [
+      'a policy skip of nothing',
+      { ...STATE, idle_reason: { kind: 'policy_skips', skipped: 0, claim_policy: 'mine' } },
+    ],
+    [
+      'a policy skip by a policy that skips nothing',
+      { ...STATE, idle_reason: { kind: 'policy_skips', skipped: 2, claim_policy: 'everything' } },
+    ],
   ];
 
   it('accepts what the schema accepts', () => {
     expect(workerLocalStateSchema.safeParse(STATE).success).toBe(true);
     expect(readState(STATE)).toEqual(STATE);
+    // S-28.6: every idle reason kind, through both.
+    for (const idle_reason of [
+      null,
+      { kind: 'slots_busy', running: 2, concurrency: 2 },
+      {
+        kind: 'owner_limit',
+        owner: { user_id: RUN.task_id, name: 'Jan' },
+        count: 3,
+        limit: 3,
+        queued: 2,
+        holders: [{ task_id: RUN.task_id, ticket_key: 'ACME-1' }],
+      },
+      {
+        kind: 'project_limit',
+        project_id: RUN.project_id,
+        project_key: 'ACME',
+        limit_kind: 'max_tasks_in_pipeline',
+        count: 5,
+        limit: 5,
+        queued: 4,
+        organisation_bound: false,
+      },
+      { kind: 'policy_skips', skipped: 3, claim_policy: 'mine_and_unassigned' },
+      { kind: 'nothing_queued' },
+    ]) {
+      const value = { ...STATE, idle_reason };
+      expect(workerLocalStateSchema.safeParse(value).success).toBe(true);
+      expect(readState(value)).toEqual(value);
+    }
     // Every kind the page may meet, through both.
     for (const entry of [progress({}), steer({}), progress({ percent_complete: null })]) {
       expect(transcriptEventSchema.safeParse(entry).success).toBe(true);

@@ -13,6 +13,7 @@ import {
   type UserRole,
   WORKER_API_PREFIX,
   WORKER_USER_CODE_ALPHABET,
+  type WorkerIdleReason,
   workerCredentialSchema,
   workerDeviceResponseSchema,
   workerDeviceTokenResponseSchema,
@@ -26,6 +27,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TrustProxySetting } from '../client-address.js';
 import { toApiError } from '../errors.js';
+import type { IdleCandidate, WorkerIdleReader } from '../queries/worker-idle.js';
 import { createMemoryWorkerStore, type MemoryWorkerStore } from '../queries/worker-store-memory.js';
 import { authenticateWorkerCredential } from '../workers/secrets.js';
 import { registerWorkerDeviceRoutes } from './worker-device.js';
@@ -52,6 +54,7 @@ const build = async (
     trustProxy?: TrustProxySetting;
     header?: string | null;
     coreDigests?: () => { run: string; egress: string } | null;
+    idle?: WorkerIdleReader;
   } = {},
 ): Promise<{ app: FastifyInstance; store: MemoryWorkerStore; world: World }> => {
   const store = createMemoryWorkerStore();
@@ -101,6 +104,7 @@ const build = async (
     projectRole: async () => null,
     now,
     ...(options.coreDigests === undefined ? {} : { coreDigests: options.coreDigests }),
+    ...(options.idle === undefined ? {} : { idle: options.idle }),
   });
   app = instance;
   return { app: instance, store, world };
@@ -563,6 +567,77 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     // A worker row a build before migration 0108 wrote (no policy, every project): everything.
     store.clearClaimPolicy(alice.workerId);
     expect(await blockers()).toEqual([]);
+  });
+
+  it('says why a ready machine runs nothing — the reader’s answer, asked for active rows with their blockers (S-28.6)', async () => {
+    const RUN_IMAGE = `sha256:${'a'.repeat(64)}`;
+    const EGRESS_IMAGE = `sha256:${'b'.repeat(64)}`;
+    const digests = { run: RUN_IMAGE, egress: EGRESS_IMAGE };
+    const asked: IdleCandidate[][] = [];
+    const told: { digests: unknown }[] = [];
+    let answer: WorkerIdleReason | null = {
+      kind: 'project_limit',
+      project_id: PROJECT,
+      project_key: 'ACME',
+      limit_kind: 'max_tasks_in_pipeline',
+      count: 5,
+      limit: 5,
+      queued: 4,
+      organisation_bound: false,
+    };
+    const idle: WorkerIdleReader = async (candidates, coreDigests) => {
+      asked.push([...candidates]);
+      told.push({ digests: coreDigests });
+      return new Map(candidates.map((candidate) => [candidate.workerId, answer]));
+    };
+    const { app: instance, store, world } = await build({ coreDigests: () => digests, idle });
+    const alice = await register(instance, world, ALICE);
+    store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
+    await store.recordContact({
+      workerId: alice.workerId,
+      protocolVersion: 3,
+      imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
+    });
+    const read = async () => {
+      world.actor = { userId: ALICE, role: 'member' };
+      return (await instance.inject({ method: 'GET', url: '/api/workers' })).json().items[0] as {
+        idle_reason: WorkerIdleReason | null;
+      };
+    };
+    expect((await read()).idle_reason).toEqual(answer);
+    expect(asked.at(-1)).toEqual([
+      {
+        workerId: alice.workerId,
+        blocked: false,
+        running: 0,
+        concurrency: 1,
+        claimPolicy: 'mine_and_unassigned',
+      },
+    ]);
+    expect(told.at(-1)?.digests).toEqual(digests);
+    // A blocker is told to the reader, which answers `null` for it — the blocker's words win.
+    await store.setManualPause({
+      workerId: alice.workerId,
+      paused: true,
+      via: 'worker_ui',
+      now: new Date(world.clock),
+    });
+    answer = null;
+    expect((await read()).idle_reason).toBeNull();
+    expect(asked.at(-1)?.[0]?.blocked).toBe(true);
+    // A revoked machine is never asked, and says nothing.
+    answer = { kind: 'nothing_queued' };
+    await instance.inject({ method: 'DELETE', url: `/api/workers/${alice.workerId}` });
+    expect((await read()).idle_reason).toBeNull();
+    expect(asked.at(-1)).toEqual([]);
+  });
+
+  it('says nothing about idleness when no reader is composed (S-28.6)', async () => {
+    const { app: instance, world } = await build();
+    await register(instance, world, ALICE);
+    world.actor = { userId: ALICE, role: 'member' };
+    const [item] = (await instance.inject({ method: 'GET', url: '/api/workers' })).json().items;
+    expect(item.idle_reason).toBeNull();
   });
 
   describe('what a machine takes: PUT /api/workers/:id/claim-policy (S-26.4)', () => {

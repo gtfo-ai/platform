@@ -271,6 +271,44 @@ export const policySkippedOffersSql = (p: {
      and not ${workerPolicyTakesSql(p.worker)})`;
 
 /**
+ * **Open offers a worker's automatic claim would take now** (S-28.6, the M28 ruling A's
+ * `idle_reason`): {@link policySkippedOffersSql}'s statement with the policy asked the other way —
+ * eligibility, scope **and** policy, the claim's own three conjuncts. The same aliasing rule holds:
+ * no parameter may name an alias the fragments bind.
+ */
+export const takeableOffersSql = (p: {
+  readonly worker: string;
+  readonly held: string;
+  readonly run: string;
+  readonly egress: string;
+}): string => `(
+  select count(*)::int
+    from run_offers o
+    join runs r on r.id = o.run_id
+   where o.state = 'open'
+     and r.status = any(${ACTIVE_STATUS_ARRAY})
+     and ${workerEligibleSql({ now: 'now()', worker: p.worker, held: p.held, run: p.run, egress: p.egress })}
+     and ${workerScopeTakesSql(p.worker)}
+     and ${workerPolicyTakesSql(p.worker)})`;
+
+/**
+ * **The claim policy of the `workers` row `w` takes the task `task`** (S-28.6) — the task-level
+ * reading of {@link workerPolicyTakesSql} for a **queued** task, which has no offer yet:
+ * `everything` true; `mine` its owner is the worker's user; `mine_and_unassigned` that, or no owner
+ * and not held elsewhere (the one {@link taskHeldElsewhereSql}); `pick_only` false.
+ */
+export const workerPolicyTakesTaskSql = (
+  w: string,
+  task: string,
+): string => `(case ${effectiveClaimPolicySql(w)}
+       when 'everything' then true
+       when 'mine' then coalesce(${task}.owner_user_id = ${w}.user_id, false)
+       when 'mine_and_unassigned'
+         then (coalesce(${task}.owner_user_id = ${w}.user_id, false)
+               or (${task}.owner_user_id is null and not ${taskHeldElsewhereSql(task)}))
+       else false end)`;
+
+/**
  * **The server claimant's eligibility for offer `o` at `now`** (WP-278, TD-031 decision 8):
  * `server_from` reached — a `null` `server_from` is *never* (`workers_only`) — or an offer written
  * before WP-278, which has neither `*_from` and is the server's at once. The claim's own conjunct

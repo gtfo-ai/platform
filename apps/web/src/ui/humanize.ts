@@ -69,6 +69,12 @@ export {
   UPDATER_FIX,
   WORKER_CLAIM_BLOCKER_WORDS,
 } from './words/worker-blockers.js';
+export {
+  type IdleNext,
+  type IdleReader,
+  type IdleWords,
+  workerIdleWords,
+} from './words/worker-idle.js';
 
 export const TASK_STATE_LABEL: Readonly<Record<TaskState, string>> = {
   queued: 'Queued',

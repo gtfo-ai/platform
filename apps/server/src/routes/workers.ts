@@ -52,6 +52,8 @@ import {
   type IsoDateTime,
   imageDigestSchema,
   revokeWorkerResponseSchema,
+  type WorkerClaimBlocker,
+  type WorkerIdleReason,
   type WorkerSummary,
   workerClaimPolicyRequestSchema,
   workerClaimPolicyResponseSchema,
@@ -79,6 +81,7 @@ import * as z from 'zod';
 import type { Actor } from '../auth/rbac.js';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
+import type { WorkerIdleReader } from '../queries/worker-idle.js';
 import {
   WORKER_CONNECTED_SECONDS,
   type WorkerListRow,
@@ -97,6 +100,11 @@ export interface WorkerRoutesOptions {
    * `null`: nothing is said about a worker's images but that it holds none.
    */
   readonly coreDigests?: () => RunImageDigests | null;
+  /**
+   * Why each ready machine runs nothing (more) — `idle_reason` (S-28.6, the M28 ruling A). Absent
+   * or `null`: every row answers `idle_reason: null` (nothing is said rather than guessed).
+   */
+  readonly idle?: WorkerIdleReader | null;
 }
 
 const iso = (value: Date): IsoDateTime => value.toISOString() as IsoDateTime;
@@ -136,19 +144,29 @@ export const toWireWorker = (
   row: WorkerListRow,
   coreDigests: RunImageDigests | null = null,
   now: Date = new Date(),
+  idleReason: WorkerIdleReason | null = null,
 ): WorkerSummary => {
-  const blockers = coreClaimBlockersOf(claimFactsOf(row, coreDigests, now));
+  const blockers = claimBlockersOfRow(row, coreDigests, now);
   return {
     ...toWireWorkerRow(row),
     claim_blockers: blockers,
     can_claim: blockers.length === 0,
     last_claimed_at: isoOrNull(row.claimFacts?.lastClaimedAt ?? null),
+    // A revoked machine is not idle; a blocked one's blocker speaks (the reader answers `null`).
+    idle_reason: row.revokedAt !== null || row.state === 'revoked' ? null : idleReason,
   };
 };
 
+/** A listed row's blockers (S-22.19) — what `toWireWorker` publishes and the idle read is told. */
+const claimBlockersOfRow = (
+  row: WorkerListRow,
+  coreDigests: RunImageDigests | null,
+  now: Date,
+): WorkerClaimBlocker[] => coreClaimBlockersOf(claimFactsOf(row, coreDigests, now));
+
 const toWireWorkerRow = (
   row: WorkerListRow,
-): Omit<WorkerSummary, 'claim_blockers' | 'can_claim' | 'last_claimed_at'> => ({
+): Omit<WorkerSummary, 'claim_blockers' | 'can_claim' | 'last_claimed_at' | 'idle_reason'> => ({
   id: row.id,
   name: row.name,
   user: { id: row.userId, email: row.userEmail, name: row.userName },
@@ -185,6 +203,40 @@ const toWireWorkerRow = (
           reported_at: iso(row.lastUpdate.reportedAt),
         }),
 });
+
+/**
+ * **One worker's `idle_reason`** (S-28.6) — the Workers screen's own answer for the machine a
+ * worker credential names, for `GET offers?fields=idle_reason`: its row read as the list reads it
+ * (its user's workers, the core's digests), its blockers decided by the same function, then the
+ * reader. `null` for a worker the list does not name or a revoked one.
+ */
+export const idleReasonOfWorker = async (
+  store: WorkerStore,
+  idle: WorkerIdleReader,
+  workerId: string,
+  coreDigests: RunImageDigests | null,
+  now: Date,
+): Promise<WorkerIdleReason | null> => {
+  const subject = await store.findCredentialSubject(workerId);
+  if (subject === null) return null;
+  const row = (await store.listWorkers(subject.userId, coreDigests)).find(
+    (listed) => listed.id === workerId,
+  );
+  if (row === undefined || row.revokedAt !== null || row.state === 'revoked') return null;
+  const answer = await idle(
+    [
+      {
+        workerId,
+        blocked: claimBlockersOfRow(row, coreDigests, now).length > 0,
+        running: row.running.length,
+        concurrency: row.concurrency,
+        claimPolicy: row.claimPolicy,
+      },
+    ],
+    coreDigests,
+  );
+  return answer.get(workerId) ?? null;
+};
 
 const deviceCodeNotFound = (): HttpError =>
   new HttpError(
@@ -318,7 +370,7 @@ export const registerWorkerRoutes = async (
       schema: {
         summary: 'Registered workers: your own, or every one for an administrator',
         description:
-          'Machine, user, created and last seen, protocol, image digests, state, `claim_policy` (what the machine takes by itself, S-26.4: the stored policy, or what a worker connected before it reads as) and `policy_skipped_offers` (open offers its eligibility and scope admit now and its policy leaves for others; `null` while this core cannot name its images), paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in. **Why it takes no work** (S-22.19): `claim_blockers` — the claim’s own predicates minus the per-offer ones, in the vocabulary’s order (`revoked`, `owner_disabled`, `offline`, `protocol_outdated`, `platform_images_unresolved` while this core cannot name its own digests and so answers every claim 503, `paused`, `draining`, `usage_limited`, `images_missing`, `images_outdated` against this core’s current run and egress digests, `no_eligible_project`, `pick_only`) — `can_claim` (an automatic claim would be admitted) when it is empty, and `last_claimed_at`.',
+          'Machine, user, created and last seen, protocol, image digests, state, `claim_policy` (what the machine takes by itself, S-26.4: the stored policy, or what a worker connected before it reads as) and `policy_skipped_offers` (open offers its eligibility and scope admit now and its policy leaves for others; `null` while this core cannot name its images), paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in. **Why it takes no work** (S-22.19): `claim_blockers` — the claim’s own predicates minus the per-offer ones, in the vocabulary’s order (`revoked`, `owner_disabled`, `offline`, `protocol_outdated`, `platform_images_unresolved` while this core cannot name its own digests and so answers every claim 503, `paused`, `draining`, `usage_limited`, `images_missing`, `images_outdated` against this core’s current run and egress digests, `no_eligible_project`, `pick_only`) — `can_claim` (an automatic claim would be admitted) when it is empty, and `last_claimed_at`. **Why a ready machine runs nothing (more)** (S-28.6): `idle_reason` — one cause with its numbers, `null` while a blocker stands or while it is about to take something: `slots_busy`, `owner_limit`, `project_limit` (a project it serves is full and tasks it would take are queued), `policy_skips` (its claim policy leaves waiting runs for others) or `nothing_queued`.',
         tags: ['workers'],
         response: { 200: workersResponseSchema },
       },
@@ -329,8 +381,24 @@ export const registerWorkerRoutes = async (
       const digests = options.coreDigests?.() ?? null;
       const rows = await options.store.listWorkers(all ? null : actor.userId, digests);
       const at = now();
+      // S-28.6: why each ready machine runs nothing (more), for the active rows only.
+      const idle =
+        options.idle === undefined || options.idle === null
+          ? new Map<string, WorkerIdleReason | null>()
+          : await options.idle(
+              rows
+                .filter((row) => row.revokedAt === null && row.state !== 'revoked')
+                .map((row) => ({
+                  workerId: row.id,
+                  blocked: claimBlockersOfRow(row, digests, at).length > 0,
+                  running: row.running.length,
+                  concurrency: row.concurrency,
+                  claimPolicy: row.claimPolicy,
+                })),
+              digests,
+            );
       return {
-        items: rows.map((row) => toWireWorker(row, digests, at)),
+        items: rows.map((row) => toWireWorker(row, digests, at, idle.get(row.id) ?? null)),
         scope: all ? 'all' : 'own',
         timezone: await options.store.organisationTimezone(),
       };

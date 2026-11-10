@@ -241,6 +241,50 @@ export const RUN: Spec = object({
   transcript: { t: 'array', of: TRANSCRIPT_ENTRY, max: 40 },
 });
 
+const kind = (value: string): Spec => ({ t: 'literal', value });
+const positive: Spec = { t: 'int', min: 1 };
+
+/** Why a ready machine runs nothing (more) — `workerIdleReasonSchema` (S-28.6), kind by kind. */
+export const IDLE_REASON: Spec = {
+  t: 'union',
+  tag: 'kind',
+  options: [
+    object({
+      kind: kind('slots_busy'),
+      running: count,
+      concurrency: { t: 'int', min: 1, max: 64 },
+    }),
+    object({
+      kind: kind('owner_limit'),
+      owner: object({ user_id: uuid, name: str({ min: 1, max: 320 }) }),
+      count,
+      limit: { t: 'int', min: 1, max: 200 },
+      queued: positive,
+      holders: {
+        t: 'array',
+        of: object({ task_id: uuid, ticket_key: str({ min: 1, max: 256 }) }),
+        max: 5,
+      },
+    }),
+    object({
+      kind: kind('project_limit'),
+      project_id: uuid,
+      project_key: str({ min: 1, max: 64 }),
+      limit_kind: { t: 'enum', values: ['max_parallel_tasks', 'max_tasks_in_pipeline'] },
+      count,
+      limit: positive,
+      queued: positive,
+      organisation_bound: { t: 'boolean' },
+    }),
+    object({
+      kind: kind('policy_skips'),
+      skipped: positive,
+      claim_policy: { t: 'enum', values: ['mine', 'mine_and_unassigned'] },
+    }),
+    object({ kind: kind('nothing_queued') }),
+  ],
+};
+
 export const STATE: Spec = object({
   worker_id: nullable(uuid),
   worker_name: nullable(str({ max: 200 })),
@@ -300,6 +344,7 @@ export const STATE: Spec = object({
   },
   claim_policy: nullish({ t: 'enum', values: CLAIM_POLICIES }),
   policy_skipped_offers: nullish(count),
+  idle_reason: nullish(IDLE_REASON),
   error_reporting: object({
     source: nullable({ t: 'enum', values: SOURCES }),
     host: nullable(str({ max: 253 })),
@@ -360,6 +405,8 @@ export const OFFERS: Spec = object({
   offers: { t: 'array', of: OFFER, max: 50 },
   as_of: { t: 'optional', of: datetime },
   policy_skipped_offers: nullish(count),
+  // S-28.6: asked for by name; absent from a core that predates the field.
+  idle_reason: nullish(IDLE_REASON),
 });
 
 /** `POST /api/local/offers/:id/take` — `workerLocalTakeResponseSchema` (WP-293). */

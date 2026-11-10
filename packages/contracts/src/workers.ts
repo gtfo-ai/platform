@@ -26,6 +26,7 @@ import {
   workerUserCodeSchema,
 } from './worker.js';
 import { workerClaimBlockersSchema } from './worker-claim-blockers.js';
+import { workerIdleReasonSchema } from './worker-idle-reason.js';
 
 /** What a person typed: normalised by the server (case, spaces, hyphen), so only bounded here. */
 export const typedUserCodeSchema = z.string().min(1).max(32);
@@ -168,6 +169,13 @@ export const workerSummarySchema = z.strictObject({
   can_claim: z.boolean(),
   /** When it last claimed a run (`run_offers.claimed_at`), or `null` — its first run is a milestone. */
   last_claimed_at: isoDateTimeSchema.nullable(),
+  /**
+   * **Why it runs nothing (more)** although nothing blocks it (S-28.6, the M28 ruling A): one cause,
+   * with its numbers — `null` while a blocker stands (its words win) or while it is about to take
+   * something. Optional on the wire for the reason `claim_policy` is (the SPA's fixtures predate it);
+   * this build's server always sends it.
+   */
+  idle_reason: workerIdleReasonSchema.nullable().optional(),
 });
 export type WorkerSummary = z.infer<typeof workerSummarySchema>;
 

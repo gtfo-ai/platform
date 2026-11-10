@@ -70,6 +70,7 @@ import {
   secretInEnvironment,
   workspaceSpecSchema,
 } from './run-spec.js';
+import { workerIdleReasonSchema } from './worker-idle-reason.js';
 
 // ── Versions ─────────────────────────────────────────────────────────────────
 
@@ -868,6 +869,15 @@ export type WorkerOffer = z.infer<typeof workerOfferSchema>;
  */
 export const WORKER_OFFERS_HELD_ELSEWHERE_QUERY = 'fields=held_elsewhere';
 
+/** The `fields` member a worker names to be sent `idle_reason` on `GET offers` (S-28.6). */
+export const WORKER_OFFERS_IDLE_REASON_FIELD = 'idle_reason';
+
+/**
+ * The query this build's worker sends with `GET offers`: `held_elsewhere` (S-26.7) and
+ * `idle_reason` (S-28.6), each an opt-in a core reads by name and an older core ignores.
+ */
+export const WORKER_OFFERS_QUERY = `${WORKER_OFFERS_HELD_ELSEWHERE_QUERY},${WORKER_OFFERS_IDLE_REASON_FIELD}`;
+
 /** `GET offers` → at most {@link WORKER_OFFERS_LIST_MAX}, oldest first. */
 export const workerOffersResponseSchema = z.strictObject({
   offers: z.array(workerOfferSchema).max(WORKER_OFFERS_LIST_MAX),
@@ -878,6 +888,13 @@ export const workerOffersResponseSchema = z.strictObject({
   as_of: isoDateTimeSchema.optional(),
   /** Open offers its policy leaves for others (S-26.4). **Absent** below protocol 4. */
   policy_skipped_offers: policySkippedOffersSchema.optional(),
+  /**
+   * Why this worker runs nothing (more) although nothing blocks it (S-28.6, the M28 ruling A), or
+   * `null` — sent only when the worker asks for it by name (`fields=idle_reason`, in
+   * {@link WORKER_OFFERS_QUERY}), so a worker built before the field is never sent it, and an older
+   * core sends no field: **absent is unknown**.
+   */
+  idle_reason: workerIdleReasonSchema.nullable().optional(),
 });
 export type WorkerOffersResponse = z.infer<typeof workerOffersResponseSchema>;
 
