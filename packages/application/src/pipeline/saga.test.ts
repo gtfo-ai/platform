@@ -2394,7 +2394,8 @@ describe('the CI gate', () => {
       };
       const harness = harnessWith({
         git: {
-          capabilities: () => ({ manualJobPlay: true }),
+          // Only the flag the play asks; the double declares no other capability.
+          capabilities: (() => ({ manualJobPlay: true })) as never,
           getPipelineStatus: async () => ({
             id: '907',
             head_sha: 'b'.repeat(40),
