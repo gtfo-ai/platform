@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
-import { IntegrationError } from '../ports/integrations/common.js';
+import { IntegrationError, IntegrationUnsupportedError } from '../ports/integrations/common.js';
 import type { Discussion, GitProviderPort } from '../ports/integrations/git-provider.js';
 import type {
   TaskManagementPort,
@@ -182,6 +182,8 @@ const world = async (
     readonly failAfterFirstReply?: boolean;
     /** When the artifacts' runs were created. @default NOW */
     readonly runCreatedAt?: IsoDateTime;
+    /** The provider cannot resolve a discussion (S-28.3): `resolveDiscussion` is unsupported. */
+    readonly resolveUnsupported?: boolean;
     readonly discussions?: readonly Discussion[];
     readonly comments?: readonly TicketComment[];
     readonly artifacts?: readonly { id: Id; type: string; run: Id; data: unknown }[];
@@ -288,6 +290,9 @@ const world = async (
       return structuredClone(answer);
     },
     resolveDiscussion: async (_ref: unknown, discussionId: string) => {
+      if (options.resolveUnsupported === true) {
+        throw new IntegrationUnsupportedError('fake-git', 'resolve_discussion');
+      }
       const target = discussions.find((discussion) => discussion.id === discussionId);
       if (target === undefined) {
         throw new IntegrationError('not_found', 'fake-git', `discussion ${discussionId}`);
@@ -788,6 +793,8 @@ describe('(3) the replies', () => {
       ['mr_note', 'person-general', 'answered'],
       ['mr_thread', 'finding-thread', 'answered'],
       ['mr_thread', 'person-diff', 'answered'],
+      // S-28.3 (M28 ruling R3): the person's thread the fixed reply answered is resolved too.
+      ['mr_thread', 'person-diff', 'resolved'],
       ['ticket_comment', '10042', 'answered'],
     ]);
     const person = first.find((row) => row.threadId === 'person-diff');
@@ -1036,7 +1043,8 @@ describe('(5) a shadow task', () => {
     expect(w.auditLog.entriesFor('create_discussion')).toHaveLength(4);
     expect(w.auditLog.entriesFor('reply_to_discussion')).toHaveLength(1);
     expect(w.auditLog.entriesFor('add_comment')).toHaveLength(1);
-    expect(w.auditLog.entriesFor('resolve_discussion')).toHaveLength(1);
+    // The finding thread's resolve and, since S-28.3, the person's thread the fixed reply answered.
+    expect(w.auditLog.entriesFor('resolve_discussion')).toHaveLength(2);
     // M28 ruling R2: nothing was answered on the provider, so nothing is handled.
     expect(await ledgerOf(w)).toEqual([]);
   });
@@ -1147,5 +1155,136 @@ describe('WP-184: the pre-plan step and the outbound duty take turns under the t
       ),
     ).rejects.toBeInstanceOf(TaskDutyLeaseBusyError);
     expect(w.recorded.created).toEqual([]);
+  });
+});
+
+// ── S-28.3 (M28 ruling R3): resolve what was fixed; no thread left silent ────────
+
+describe('(R3) resolving a person’s thread after the Developer’s reply', () => {
+  const personThread = (id: string): Discussion => ({
+    id,
+    resolvable: true,
+    resolved: false,
+    notes: [note(PERSON, `Please change ${id}.`, 'src/totals.ts')],
+  });
+  const kinds = [
+    { thread_id: 'p-fixed', kind: 'fixed', reply: 'Changed.' },
+    { thread_id: 'p-documented', kind: 'documented', reply: 'Documented in the README.' },
+    { thread_id: 'p-not-changed', kind: 'not_changed', reply: 'Kept on purpose.' },
+    {
+      thread_id: 'p-needs-person',
+      kind: 'needs_person',
+      reply: 'Set the variable.',
+      person: 'The maintainer',
+    },
+    { thread_id: 'p-mixed', kind: 'fixed', reply: 'Code changed.' },
+    { thread_id: 'p-mixed', kind: 'needs_person', reply: 'Rotate the key.', person: 'Ops' },
+  ];
+  const ids = ['p-fixed', 'p-documented', 'p-not-changed', 'p-needs-person', 'p-mixed'];
+
+  /**
+   * Canary: without `resolvePersonThread` in `runConversationReplies`, `resolved` is empty. A
+   * `fixed` or `documented` reply resolves; `not_changed`, `needs_person` and a mixed note do not.
+   */
+  it('resolves a thread every entry of which is fixed or documented, and leaves the rest open', async () => {
+    const w = await world({
+      discussions: ids.map(personThread),
+      artifacts: [notesArtifact(kinds)],
+    });
+    await w.replies();
+    expect(w.recorded.resolved).toEqual(['p-fixed', 'p-documented']);
+    for (const id of ['p-not-changed', 'p-needs-person', 'p-mixed']) {
+      expect(w.discussions.find((discussion) => discussion.id === id)?.resolved, id).toBe(false);
+    }
+    expect(w.auditLog.entriesFor('resolve_discussion').map((entry) => entry.status)).toEqual([
+      'ok',
+      'ok',
+    ]);
+  });
+
+  it('names the commit in a fixed or documented reply, and in no other', async () => {
+    const w = await world({
+      discussions: ids.map(personThread),
+      artifacts: [notesArtifact(kinds)],
+    });
+    await w.replies();
+    const byThread = (id: string) =>
+      w.recorded.replied
+        .filter((entry) => entry.discussionId === id)
+        .map((entry) => entry.markdown);
+    expect(byThread('p-fixed')[0]).toContain(`Addressed in \`${HEAD.slice(0, 8)}\`.`);
+    expect(byThread('p-documented')[0]).toContain('Addressed in');
+    expect(byThread('p-not-changed')[0]).not.toContain('Addressed in');
+    expect(byThread('p-needs-person')[0]).not.toContain('Addressed in');
+  });
+
+  it('resolves nothing twice when the job is replayed', async () => {
+    const w = await world({
+      discussions: ids.map(personThread),
+      artifacts: [notesArtifact(kinds)],
+    });
+    await w.replies();
+    await w.replies();
+    expect(w.recorded.resolved).toEqual(['p-fixed', 'p-documented']);
+  });
+
+  it('records would_have in shadow mode and resolves nothing', async () => {
+    const w = await world({
+      mode: 'shadow',
+      discussions: ids.map(personThread),
+      artifacts: [notesArtifact(kinds)],
+    });
+    await w.replies();
+    expect(w.recorded.resolved).toEqual([]);
+    expect(w.auditLog.entriesFor('resolve_discussion').map((entry) => entry.status)).toEqual([
+      'would_have',
+      'would_have',
+    ]);
+  });
+
+  it('skips a provider that cannot resolve a discussion: the reply is posted, the thread stays open', async () => {
+    const w = await world({
+      resolveUnsupported: true,
+      discussions: [personThread('p-fixed')],
+      artifacts: [notesArtifact([kinds[0]])],
+    });
+    await w.replies();
+    expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['p-fixed']);
+    expect(w.recorded.resolved).toEqual([]);
+    expect(
+      (await ledgerOf(w)).map((row) => row.kind),
+      'answered, never resolved',
+    ).toEqual(['answered']);
+  });
+
+  /** A person who wrote in the thread after the run began asked something the run never read. */
+  it('does not resolve a fixed thread a person wrote in after the run was created', async () => {
+    const thread: Discussion = {
+      ...personThread('p-fixed'),
+      notes: [
+        note(PERSON, 'Please change p-fixed.', 'src/totals.ts'),
+        { ...note(PERSON, 'And the footer too.'), created_at: '2026-06-01T09:30:00.000Z' },
+      ],
+    };
+    const w = await world({ discussions: [thread], artifacts: [notesArtifact([kinds[0]])] });
+    await w.replies();
+    expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['p-fixed']);
+    expect(w.recorded.resolved).toEqual([]);
+  });
+
+  /** No thread is left silent: a person's open thread the run did not answer is told so, once. */
+  it('tells a person’s open thread the run did not answer that it is still open, once', async () => {
+    const w = await world({
+      discussions: [personThread('p-fixed'), personThread('p-silent')],
+      artifacts: [notesArtifact([kinds[0]])],
+    });
+    await w.replies();
+    await w.replies();
+    const silent = w.recorded.replied.filter((entry) => entry.discussionId === 'p-silent');
+    expect(silent).toHaveLength(1);
+    expect(silent[0]?.markdown).toContain('Not addressed in this run — still open.');
+    expect(silent[0]?.markdown.startsWith('<!-- agentic:reply:')).toBe(true);
+    expect(w.recorded.resolved).toEqual(['p-fixed']);
+    expect(w.discussions.find((discussion) => discussion.id === 'p-silent')?.resolved).toBe(false);
   });
 });

@@ -23,10 +23,15 @@
  *    `ImplementationNotes.thread_replies`: each target is checked against a **fresh**
  *    `listDiscussions` (and the ticket's comments), an unknown one is dropped and logged, and each
  *    reply is posted with `agentic:reply:<task>.<run>.<n>`. A reply to a ticket comment is a ticket
- *    comment with the same marker.
+ *    comment with the same marker. **Since S-28.3 (M28 ruling R3)** a `fixed` or `documented`
+ *    reply names the commit (*Addressed in `<sha>`*), a person's unresolved resolvable thread every
+ *    entry of which is `fixed`/`documented` is then **resolved** (`not_changed` and `needs_person`
+ *    leave it open), and a person's open thread the run did not answer gets *"Not addressed in this
+ *    run — still open."*, so no thread is left silent.
  *  - **`review_threads_resolve`** — after a `code_review` completes with `resolved_threads`: only a
  *    named thread whose **first** note opens with this task's `review-finding` marker is resolved;
- *    a person's thread never is.
+ *    a person's thread never is **by the Reviewer** — the Developer's `fixed`/`documented` reply
+ *    resolves it (`conversation_replies`, R3).
  *
  * **The stage job performs them too** (WP-184, `owed-duties.ts`): the next agent stage's
  * `stage.execute` job runs the duties its latest completed agent run owes before it plans, because
@@ -76,7 +81,7 @@ import { implementationNotesDataSchema, reviewVerdictDataSchema } from '@platfor
 import { isPlatformMergeRequestNote, opensWithPlatformCommentMarker } from '@platform/domain';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
-import { IntegrationError } from '../ports/integrations/common.js';
+import { IntegrationError, IntegrationUnsupportedError } from '../ports/integrations/common.js';
 import type { Discussion } from '../ports/integrations/git-provider.js';
 import {
   MAX_LIST_COMMENTS_LIMIT,
@@ -94,12 +99,16 @@ import {
 } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from './jobs.js';
 import {
+  conversationOpenIdempotencyKeyFor,
+  conversationOpenNoteMarker,
   conversationReplyIdempotencyKeyFor,
   conversationReplyMarkerId,
   conversationReplyNoteMarker,
+  conversationResolveIdempotencyKeyFor,
   findingKeysOf,
   renderConversationReply,
   renderFindingWith,
+  renderNotAddressedReply,
   renderReviewSummary,
   reviewFindingIdempotencyKeyFor,
   reviewFindingMarkerFor,
@@ -565,9 +574,26 @@ export const runConversationReplies = async (
   const redactor = integrations.git?.redactor ?? integrations.taskManagement?.redactor ?? null;
 
   let asked = 0;
+  let resolvedThreads = 0;
   /** M28 ruling R2: what this duty answered, recorded once the replies are on the provider. */
   const answered: ConversationHandledInput[] = [];
   const handledAt = new Date(options.clock?.now() ?? Date.now()).toISOString();
+  /**
+   * M28 ruling R3: a person's thread is resolved after this run's replies only when **every**
+   * entry naming it is `fixed` or `documented` — a mixed note's `needs_person` keeps it open.
+   */
+  const kindsByThread = new Map<string, Set<string>>();
+  for (const entry of replies) {
+    kindsByThread.set(
+      entry.thread_id,
+      (kindsByThread.get(entry.thread_id) ?? new Set()).add(entry.kind),
+    );
+  }
+  const settledByRun = (threadId: string): boolean =>
+    [...(kindsByThread.get(threadId) ?? [])].every(
+      (kind) => kind === 'fixed' || kind === 'documented',
+    );
+  const resolving = new Set<string>();
   for (const [index, entry] of replies.entries()) {
     const markerId = conversationReplyMarkerId(stored.task.id, runId, index);
     const idempotencyKey = conversationReplyIdempotencyKeyFor(stored.task.id, runId, index);
@@ -577,6 +603,8 @@ export const runConversationReplies = async (
         kind: entry.kind,
         reply: entry.reply,
         person: entry.person ?? null,
+        // M28 ruling R3: name the commit — the merge request's head the platform last recorded.
+        addressedIn: stored.mr.head_sha ?? null,
       });
     if (known.has(entry.thread_id)) {
       const discussion = discussions.find((candidate) => candidate.id === entry.thread_id);
@@ -586,20 +614,35 @@ export const runConversationReplies = async (
         lastNoteId: handledUpTo(discussion, subject.runCreatedAt),
       });
       const marker = conversationReplyNoteMarker(stored.task.id, runId, index);
-      if (replyIsOnTheMergeRequest(discussions, marker, self)) {
-        logger.debug(
-          { task_id: stored.task.id, reply: index },
-          'reply already on the merge request',
+      if (!replyIsOnTheMergeRequest(discussions, marker, self)) {
+        await reviewWrites(integrations).reply(
+          { ref: stored.mr, discussionId: entry.thread_id, markdown: body(marker), idempotencyKey },
+          writeContext,
         );
-        if (handled !== null) answered.push(handled);
-        continue;
+        asked += 1;
       }
-      await reviewWrites(integrations).reply(
-        { ref: stored.mr, discussionId: entry.thread_id, markdown: body(marker), idempotencyKey },
-        writeContext,
-      );
       if (handled !== null) answered.push(handled);
-      asked += 1;
+      if (
+        discussion !== undefined &&
+        isPersonThread(discussion) &&
+        discussion.resolvable &&
+        !discussion.resolved &&
+        settledByRun(discussion.id) &&
+        !personWroteAfter(discussion, subject.runCreatedAt) &&
+        !resolving.has(discussion.id)
+      ) {
+        resolving.add(discussion.id);
+        const resolvedNow = await resolvePersonThread(integrations, {
+          stored,
+          discussionId: discussion.id,
+          idempotencyKey: conversationResolveIdempotencyKeyFor(stored.task.id, runId, index),
+          logger,
+        });
+        if (resolvedNow && handled !== null) {
+          answered.push({ ...handled, source: 'mr_thread', kind: 'resolved' });
+          resolvedThreads += 1;
+        }
+      }
       continue;
     }
     if (comments.some((comment) => comment.id === entry.thread_id)) {
@@ -627,11 +670,169 @@ export const runConversationReplies = async (
       'reply dropped: its thread is neither a discussion on the merge request nor a comment on the ticket',
     );
   }
+  const unanswered = await sayStillOpen(options, integrations, {
+    stored,
+    runId,
+    discussions,
+    self,
+    answeredThreads: new Set(replies.map((entry) => entry.thread_id)),
+    logger,
+  });
   const recorded = await recordHandled(options, answered);
   logger.info(
-    { task_id: stored.task.id, run_id: runId, replies: replies.length, asked, recorded },
+    {
+      task_id: stored.task.id,
+      run_id: runId,
+      replies: replies.length,
+      asked,
+      resolved: resolvedThreads,
+      still_open: unanswered,
+      recorded,
+    },
     'conversation replies posted',
   );
+};
+
+/** The position of the newest person's note in a discussion, or -1 when it holds none. */
+const lastPersonNoteIndex = (discussion: Discussion): number =>
+  discussion.notes.findLastIndex((note) => !note.system && !isPlatformMergeRequestNote(note.body));
+
+/**
+ * Whether a person wrote in the discussion after the run was created (or when that is unknown) —
+ * then the thread holds a request this run never read, and R3 does not resolve it.
+ */
+const personWroteAfter = (discussion: Discussion, before: string | null): boolean => {
+  const bound = before === null ? Number.NaN : Date.parse(before);
+  return discussion.notes.some((note) => {
+    if (note.system || isPlatformMergeRequestNote(note.body)) return false;
+    const at = Date.parse(note.created_at);
+    return Number.isNaN(bound) || Number.isNaN(at) || at > bound;
+  });
+};
+
+/** A person's thread: its first note is a person's — not a system note, not the platform's. */
+const isPersonThread = (discussion: Discussion): boolean => {
+  const first = discussion.notes[0];
+  return first !== undefined && !first.system && !isPlatformMergeRequestNote(first.body);
+};
+
+/**
+ * **Resolve what was fixed** (S-28.3, M28 ruling R3, which reverses TD-029 decision 10's *"a
+ * person's thread is never resolved"*): after the Developer's `fixed` or `documented` reply on a
+ * person's unresolved resolvable thread, the platform resolves it — through the executor, under
+ * `conversation_resolve:<task>:<run>:<n>`, so a replay replays and shadow mode records
+ * `would_have`. A provider that cannot resolve a discussion, or refuses this one, is logged and
+ * skipped: the reply is posted and the thread stays open, which is where a person finds it.
+ * Answers whether the thread was resolved on the provider (never in shadow mode).
+ */
+const resolvePersonThread = async (
+  integrations: Awaited<ReturnType<typeof integrationsForProject>>,
+  input: {
+    readonly stored: DutySubject['stored'];
+    readonly discussionId: string;
+    readonly idempotencyKey: string;
+    readonly logger: Logger;
+  },
+): Promise<boolean> => {
+  const { stored } = input;
+  try {
+    const answer = await reviewWrites(integrations).resolve(
+      { ref: stored.mr, discussionId: input.discussionId, idempotencyKey: input.idempotencyKey },
+      { projectId: stored.task.projectId, taskId: stored.task.id, mode: stored.task.mode },
+    );
+    return stored.task.mode === 'normal' && answer !== null;
+  } catch (error) {
+    if (
+      error instanceof IntegrationUnsupportedError ||
+      (error instanceof IntegrationError &&
+        (error.code === 'unsupported_capability' || error.code === 'invalid_request'))
+    ) {
+      input.logger.info(
+        {
+          task_id: stored.task.id,
+          thread_id: loggable(input.discussionId, integrations.git?.redactor ?? null),
+          reason: error.name,
+        },
+        'the provider did not resolve a thread the Developer fixed; the reply is posted and the thread stays open',
+      );
+      return false;
+    }
+    throw error;
+  }
+};
+
+/**
+ * **No thread is left silent** (S-28.3, M28 ruling R3): every person's unresolved resolvable thread
+ * this run did not answer, whose newest person note the handled ledger does not cover, gets the
+ * platform's *"Not addressed in this run — still open."* — keyed by the discussion
+ * (`conversation_open:<task>:<run>:<discussion>`), found again by its marker before a retry posts,
+ * and left unresolved. It is not recorded as answered: it is still open business. A discussion id
+ * outside the ledger's shape is skipped (its marker would not be one). Answers how many it posted.
+ */
+const sayStillOpen = async (
+  options: ReviewConversationOptions,
+  integrations: Awaited<ReturnType<typeof integrationsForProject>>,
+  input: {
+    readonly stored: DutySubject['stored'];
+    readonly runId: string;
+    readonly discussions: readonly Discussion[];
+    readonly self: ExternalIdentity | null;
+    readonly answeredThreads: ReadonlySet<string>;
+    readonly logger: Logger;
+  },
+): Promise<number> => {
+  if (integrations.git === null) {
+    return 0;
+  }
+  const { stored } = input;
+  const ledger = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.conversationHandled(scope.tx, stored.task.id),
+  );
+  let posted = 0;
+  for (const discussion of input.discussions) {
+    const last = lastPersonNoteIndex(discussion);
+    if (
+      !isPersonThread(discussion) ||
+      !discussion.resolvable ||
+      discussion.resolved ||
+      input.answeredThreads.has(discussion.id) ||
+      last < 0 ||
+      !CONVERSATION_HANDLED_ID.test(discussion.id) ||
+      ledger.some(
+        (row) =>
+          row.threadId === discussion.id &&
+          row.lastNoteId !== null &&
+          discussion.notes.findIndex((note) => note.id === row.lastNoteId) >= last,
+      )
+    ) {
+      continue;
+    }
+    const marker = conversationOpenNoteMarker(stored.task.id, input.runId, discussion.id);
+    if (replyIsOnTheMergeRequest(input.discussions, marker, input.self)) {
+      continue;
+    }
+    await reviewWrites(integrations).reply(
+      {
+        ref: stored.mr,
+        discussionId: discussion.id,
+        markdown: renderNotAddressedReply(marker),
+        idempotencyKey: conversationOpenIdempotencyKeyFor(
+          stored.task.id,
+          input.runId,
+          discussion.id,
+        ),
+      },
+      { projectId: stored.task.projectId, taskId: stored.task.id, mode: stored.task.mode },
+    );
+    posted += 1;
+  }
+  if (posted > 0) {
+    input.logger.info(
+      { task_id: stored.task.id, run_id: input.runId, posted },
+      'a person’s open thread this run did not answer was told it is still open',
+    );
+  }
+  return posted;
 };
 
 // ── review_threads_resolve ──────────────────────────────────────────────────

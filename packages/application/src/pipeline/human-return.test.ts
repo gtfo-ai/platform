@@ -1518,9 +1518,12 @@ describe('the review conversation through the pipeline (WP-179)', () => {
       'review_findings_post',
       'review_threads_resolve',
     ]);
-    // The reply's target is on neither the merge request nor the ticket, so nothing was posted,
-    // and the resolution found no finding thread of its own to resolve.
-    expect(harness.audit.entriesFor('reply_to_discussion')).toEqual([]);
+    // The reply's target is on neither the merge request nor the ticket, so no answer was posted,
+    // and the resolution found no finding thread of its own to resolve. The person's thread the
+    // run did not answer is told it is still open, once (S-28.3, M28 ruling R3), and left open.
+    expect(
+      harness.audit.entriesFor('reply_to_discussion').filter((entry) => entry.status === 'ok'),
+    ).toHaveLength(1);
     expect(harness.audit.entriesFor('resolve_discussion')).toEqual([]);
   });
 });

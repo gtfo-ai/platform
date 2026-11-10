@@ -670,7 +670,10 @@ const expectReviewConversation = async (
   // …and both are on the merge request before the fix run starts (WP-184).
   expect(stepAt(log, 'thread', 'review-finding', 1)).toBeLessThan(runAt(log, 'implementation', 2));
   const reReview = runAt(log, 'code_review', 2);
-  const resolves = log.flatMap((step, index) => (step.kind === 'resolve' ? [{ step, index }] : []));
+  const findingIds = new Set(findingThreads.map((thread) => thread.id));
+  const resolves = log.flatMap((step, index) =>
+    step.kind === 'resolve' && findingIds.has(step.detail) ? [{ step, index }] : [],
+  );
   expect(resolves).toHaveLength(2);
   for (const { step, index } of resolves) {
     expect(index).toBeGreaterThan(reReview);
@@ -699,10 +702,11 @@ const expectReviewConversation = async (
     (discussion) => discussion.notes[0]?.author.external_id === QA_PERSON,
   );
   expect(persons).toHaveLength(expected.personNotes);
-  // The person's general thread can be resolved (M28 R1's returning shape) and stays open: only a
-  // person resolves it in this build.
+  // The person's general thread can be resolved (M28 R1's returning shape), and the Developer's
+  // fixed reply resolved it after the reply landed (S-28.3, M28 ruling R3).
   for (const note of persons) {
-    expect([note.resolvable, note.resolved]).toEqual([true, false]);
+    expect([note.resolvable, note.resolved]).toEqual([true, true]);
+    expect(stepAt(log, 'resolve', note.id)).toBeGreaterThan(stepAt(log, 'reply', note.id));
   }
   const generalReplies = opensWith(REPLY_MARKER);
   expect(generalReplies).toHaveLength(expected.personNotes);
@@ -715,7 +719,9 @@ const expectReviewConversation = async (
     expect(stepAt(log, 'reply', person.id)).toBeGreaterThan(runAt(log, 'implementation', 3));
   }
   const gitActions = pipeline.git.core.calls.map((call) => call.action);
-  expect(gitActions.filter((action) => action === 'resolve_discussion')).toHaveLength(2);
+  expect(gitActions.filter((action) => action === 'resolve_discussion')).toHaveLength(
+    2 + expected.personNotes,
+  );
   expect(gitActions.filter((action) => action === 'reply_to_discussion')).toHaveLength(
     2 + expected.personNotes,
   );

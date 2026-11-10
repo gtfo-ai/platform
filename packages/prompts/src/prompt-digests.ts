@@ -65,6 +65,7 @@ export const ROLE_PROMPT_DIGESTS = {
     '5': '2f1ca8473ddbb2b0bc8c2ce2aca2ac71cb0f31c4f6ec393ab8d5b167ab143cf6',
     '6': 'f0ccc9eb927e6188296724f18e3a5826f33d08eb7af456c168376b2b4b783a2a',
     '7': 'd8e459f931a01139ae9da3f3e33501bae439b7bd1eba3b1759a3d05c0bd1b364',
+    '8': '6c264f28fa98a3db4b9843cb40b7cab2072698b09029f3e4deee78308f15aff9',
   },
   acceptance_tester: {
     '1': 'd6d761759c67667e2c091a6fd8207bab0877cea17687d641135f065554541f20',
