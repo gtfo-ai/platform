@@ -24,3 +24,23 @@ Keeps accountability with the team; turns the MR into the natural feedback chann
 ## Consequences
 - Git provider integration must deliver MR comment and merge events (webhooks) — research/03 verifies GitLab supports this.
 - A human comment loop counts toward iteration limits separately (default 3 human rounds before `Needs human`, to avoid an endless polite ping-pong).
+
+## Amendment (2026-11-10, the product owner's ruling; design in TD-038; slice S-28.15) — the platform may merge
+
+The owner: *"ready to merge even agentic can merge, not only person — in the agentic workflow we want as least human
+steps as possible."* This supersedes *"The platform never merges"* and the parking-lot *"auto-merge … maybe later"*.
+
+- **A per-project setting decides who merges**: a person (the default, today's behaviour) or the platform. It is set in
+  the project settings by a maintainer; a repository file may only choose *person*.
+- **The platform merges only when everything is true, read at the moment of merging**: the task is at Ready (QA passed
+  where the project has QA), every review stage approved, CI passed on the very commit that was reviewed, the git
+  provider says the merge request can be merged under its own rules (pipeline, conflicts, draft, threads, approvals),
+  the ticket is not closed or taken by a person, and the project is not in shadow mode. It pins the reviewed commit, so
+  a push in between refuses the merge. It never bypasses or changes a provider rule and never approves its own merge
+  request.
+- **A person still merges** during probation and for a change that touches a risk class, whatever the setting.
+- **Nothing silent**: the task page says beforehand that the platform will merge and what it waits for; a refused or
+  failed merge says what, why and what to do, and is left to a person (no retry loop); a merge by the platform is
+  recorded as the platform's action and announced once.
+- Unchanged: human merge-request comments re-enter the pipeline as amended by BD-031; a merge (by anyone) moves the task
+  to the merged gate the same way.

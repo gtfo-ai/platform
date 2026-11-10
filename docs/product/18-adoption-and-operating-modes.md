@@ -17,6 +17,8 @@ One per-project setting with four presets. A preset sets the granular policies; 
 
 Readiness (product/17) caps the *suggested* level: level 0 readiness suggests at most Assist; the maintainer can override, visibly.
 
+*Amended 2026-11-10 (BD-007, TD-038).* **Who merges is not set by the dial.** No preset changes it, so moving the dial (or an upgrade) never lets the platform merge by itself; the wizard preselects *the platform merges* when Autonomous is picked, and the maintainer confirms it. Whatever the level, probation and risk classes keep a person's merge.
+
 ## Opt-in features
 
 | Feature | What it does | Value it shows | Default | Configuration |
@@ -32,6 +34,7 @@ Readiness (product/17) caps the *suggested* level: level 0 readiness suggests at
 | **Human time accounting** | Records human minutes per task from events (review start → merge, question asked → answered, approvals) and shows total cost of delivery = tokens + people | Honest ROI | on (derived from events; no tracking of individuals beyond what tools already record) | Settings: show per-user breakdown off/on (default off) |
 | **Digest and quiet hours** | Slack notifications batched into a daily digest outside configured hours; urgent classes (escalation, budget 100%) still immediate; an organisation-wide budget notifies the organisation's own chat account's channel (WP-65) — the flagged one when there are several — and a threshold crossed inside the organisation's quiet hours waits for the organisation's digest while an exhausted budget does not (WP-93) | The bot stays welcome | quiet hours off; digest on at 09:00 org time | Wizard: channel, quiet hours, urgent classes |
 | **Ask the task** | A Q&A thread on a task ("why did you choose X?") answered from the task's audit trail and artifacts, in the UI and in the ticket thread | Trust through explanation; cheaper than reading transcripts (since WP-74 an ask skips the mirror fetch and the clone, but still costs a container, a network, an egress sidecar and three helper containers — the cost in seconds is unmeasured) | on | Settings: model (default Sonnet 5), per-question budget |
+| **The platform merges** (*Who merges*, BD-007's 2026-11-10 amendment, TD-038) | At Ready the platform merges the merge request itself when every check holds at that moment: the reviews approved, CI passed on the reviewed commit, the git provider says it can be merged under its own rules, the ticket is still the platform's; it pins the reviewed commit and uses the repository's own merge settings. Probation tasks and changes in a risk class still wait for a person | Removes the last human step of a routine task, the owner's *as few human steps as possible* | off (*a person merges*) — the most outward act the platform has, so it is chosen, never inherited from an upgrade; the wizard preselects it with Autonomous | Settings → Pipeline, *Who merges*: **A person** — *"A person merges the merge request when it is ready; the platform tells you it is waiting."* · **The platform** — *"The platform merges it once the reviews approved it, CI passed on that commit and GitLab says it can be merged; probation tasks and risk-classed changes still wait for a person."* A repository file may only choose *a person* |
 
 ## Pipeline additions (details in product/04; BD-030)
 
