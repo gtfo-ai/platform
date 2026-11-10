@@ -95,12 +95,13 @@ const sites = (): Site[] => {
 
 describe('every task-management port call is inside one executor call (WP-212)', () => {
   // WP-249: slowest of 10 green CI runs 2370 ms (median 2138 ms); 2× it, 15 s floor.
-  it('calls the port members from the pipeline’s ticket wrappers alone, sixteen times', () => {
+  it('calls the port members from the pipeline’s ticket wrappers alone, seventeen times', () => {
     const counts: Record<string, number> = {};
     for (const site of sites()) {
       counts[site.file] = (counts[site.file] ?? 0) + 1;
     }
-    expect(counts).toEqual({ 'packages/application/src/pipeline/integrations.ts': 16 });
+    // 17 since S-28.10: `ticketReads.transitions` (the out-of-sync record's offered statuses).
+    expect(counts).toEqual({ 'packages/application/src/pipeline/integrations.ts': 17 });
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2203 ms (median 1957 ms); 2× it, 15 s floor.

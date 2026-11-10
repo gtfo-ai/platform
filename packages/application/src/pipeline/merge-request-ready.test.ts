@@ -334,6 +334,10 @@ const world = async (
     auditLog,
     mirrorReads,
     transitions,
+    /** A person (or `mr_draft`) put the merge request back to draft on the provider. */
+    redraft: () => {
+      draftNow = true;
+    },
     outOfSync: async () =>
       memory.transaction(async (scope) => store.tasks.providerSync(scope.tx, TASK)),
     recordOutOfSync: async () =>
@@ -539,11 +543,13 @@ describe('the mr_ready duty, at ready_for_merge (backlog 486)', () => {
   });
 
   it('marks it once per entry: a redelivered wake-up replays, a later entry marks again', async () => {
-    const { ready, updates } = await world({ state: 'ready_for_merge' });
+    const { ready, updates, redraft } = await world({ state: 'ready_for_merge' });
     await ready();
     await ready();
     expect(updates).toEqual([READY]);
-    // A second entry into Ready (after a return) is a new cause, so a new mark.
+    // A second entry into Ready (after a return that drafted it again) is a new cause, so a new
+    // mark. (Since S-28.10 the fake remembers the write, so the draft is put back explicitly.)
+    redraft();
     await ready('00000000-0000-4000-9000-000000000002');
     expect(updates).toEqual([READY, READY]);
   });
