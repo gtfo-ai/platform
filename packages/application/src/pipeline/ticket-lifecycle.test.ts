@@ -1230,11 +1230,11 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
   ) => {
     await harness.memory.transaction(async (scope) => {
       const stored = taskOf(harness);
-      await harness.store.tasks.save(scope.tx, {
-        ...stored,
-        task: { ...stored.task, state },
-        ...(withMergeRequest ? { mr: mergeRequest.ref } : {}),
-      });
+      await harness.store.tasks.save(scope.tx, { ...stored, task: { ...stored.task, state } });
+      if (withMergeRequest) {
+        // The merge request is its own column's (`recordMergeRequest`), never `save`'s (WP-138).
+        await harness.store.tasks.recordMergeRequest(scope.tx, stored.task.id, mergeRequest.ref);
+      }
     });
   };
   /** A webhook's status change, moved by a person the delivery names. */
