@@ -73,7 +73,14 @@ describe('settingsNotApplied', () => {
     // Every pattern names a path under a key the strict schema accepts — a typo here would be a
     // report nobody could ever trigger.
     for (const pattern of Object.keys(SETTINGS_UNREAD_KEYS)) {
-      expect(['pipeline', 'stages']).toContain(pattern.split('.')[0]);
+      expect(['pipeline', 'stages', 'human_returns']).toContain(pattern.split('.')[0]);
     }
+  });
+
+  /** S-28.2 (review of #139): the acknowledgement words are accepted and reported as ignored. */
+  it('reports human_returns.acknowledgements as accepted and ignored (M28 R1)', () => {
+    const report = settingsNotApplied({ human_returns: { acknowledgements: ['díky'] } });
+    expect(report.map((item) => item.key)).toEqual(['human_returns.acknowledgements']);
+    expect(report[0]?.reason).toMatch(/accepted and ignored/);
   });
 });

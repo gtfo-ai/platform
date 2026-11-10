@@ -241,16 +241,47 @@ describe('humanReturnDecision (WP-174 criterion 6, M28 R1)', () => {
       ).toMatchObject({ kind: 'pass', status: 'Ready for Merge' });
     });
 
-    it('isForwardMove: a change to a status that is not a return status, never the entry itself', () => {
-      const of = (status: string | null, entryStatus: string | null) =>
-        isForwardMove({ slots: SLOTS, status, entryStatus });
+    it('isForwardMove: a change to a slot ahead of the stage, never the entry itself (review of #139)', () => {
+      const of = (status: string | null, entryStatus: string | null, stage = 'ready_for_merge') =>
+        isForwardMove({ stage, slots: SLOTS, status, entryStatus });
       expect(of('Ready for Merge', 'Reviewed')).toBe(true);
-      expect(of('Somewhere unmapped', 'Reviewed')).toBe(true);
+      expect(of('Reviewed', 'Testing')).toBe(true);
+      expect(of('Ready for Merge', 'Testing', 'qa')).toBe(true);
+      // An unmapped status is not forward.
+      expect(of('Reopened', 'Reviewed')).toBe(false);
+      // The platform's own writes, landing late, are never forward: in_review, approved at qa, qa at qa.
+      expect(of('Waiting for review', 'Reviewed')).toBe(false);
+      expect(of('Reviewed', 'Testing', 'qa')).toBe(false);
+      expect(of('Testing', 'Reviewed', 'qa')).toBe(false);
       expect(of('reviewed', 'Reviewed')).toBe(false);
       expect(of('Sent back', 'Reviewed')).toBe(false);
       expect(of('Doing', 'Reviewed')).toBe(false);
       expect(of(null, 'Reviewed')).toBe(false);
       expect(of('Ready for Merge', null)).toBe(false);
+    });
+
+    it('an unmapped status beside an open review thread: the thread still returns the task', () => {
+      expect(
+        humanReturnDecision(
+          input({
+            status: 'Reopened',
+            forwardSeenAt: null,
+            words: [thread('mr_diff', 'one more thing')],
+          }),
+        ),
+      ).toMatchObject({ kind: 'return', forms: ['mr_diff'] });
+    });
+
+    it('the platform’s own in_review write landing late does not outrank an open thread', () => {
+      expect(
+        humanReturnDecision(
+          input({
+            status: 'Waiting for review',
+            forwardSeenAt: null,
+            words: [thread('mr_diff', 'one more thing')],
+          }),
+        ).kind,
+      ).toBe('return');
     });
   });
 
