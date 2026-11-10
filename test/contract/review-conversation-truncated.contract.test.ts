@@ -129,7 +129,9 @@ const world = async (maxPages: number) => {
         thread_replies: [
           {
             thread_id: 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee01',
-            kind: 'fixed',
+            // `not_changed`: a `fixed` reply also reads the merge request's live head (S-28.3),
+            // which this recorded conversation does not carry; the case is about the marker.
+            kind: 'not_changed',
             reply: 'Added the VAT line.',
           },
         ],
