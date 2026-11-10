@@ -1110,9 +1110,9 @@ describe('raising a task’s cap (WP-131)', () => {
   });
 
   /**
-   * S-28.1 (M28 ruling 2): AUT-6655's raises — 51, 52, 53, 54 against a minimum of 50.99 + nothing,
-   * here 50.5 — are refused through the real router with the minimum and its parts as `details`,
-   * and audited nowhere: the raise did not happen.
+   * S-28.1 (M28 ruling 2): a raise below the minimum (AUT-6655's shape: 10.99 spent, a 40 reserve,
+   * a minimum of 50.99; here 50.5) is refused through the real router with the minimum and its parts
+   * as `details`, and audited nowhere: the raise did not happen.
    */
   it('answers 409 budget_raise_insufficient with the minimum and its parts, and audits nothing', async () => {
     world.role = 'maintainer';
