@@ -210,9 +210,8 @@ export const LowRiskPlans = ({ projectId }: { readonly projectId: string }): Rea
     <Card className="flex flex-col gap-3" data-low-risk-plans="">
       <SectionHeading>Low-risk plans</SectionHeading>
       {config.isPending ? <Loading label="Loading configuration…" /> : null}
-      {config.isError ? (
-        <ErrorNotice title="This project’s configuration could not be read." error={config.error} />
-      ) : null}
+      {/* A refused read is said once on this screen, by the Features section; here the
+          controls stay disabled rather than repeat the same notice. */}
       <label className="flex items-center gap-2 text-sm font-semibold">
         <input
           type="checkbox"
