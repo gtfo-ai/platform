@@ -40,7 +40,7 @@ import type { Id } from '@platform/contracts';
 import { reviewVerdictDataSchema } from '@platform/contracts';
 import { READY_FOR_MERGE_STAGE } from '@platform/domain';
 import type { MergeRequest } from '../ports/integrations/git-provider.js';
-import type { Jobs } from '../ports/jobs.js';
+import { JOB_QUEUES, type Jobs } from '../ports/jobs.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
 import { READY_MERGE_RECHECK_MS } from '../recovery/ready-merge-check.js';
 import {
@@ -49,8 +49,13 @@ import {
   noRunScopedSecrets,
   type PipelineIntegrations,
 } from './integrations.js';
-import { enqueueOutbound, enqueueReviewCommentWindow, type PipelineOutboundData } from './jobs.js';
-import { type PlatformMergeOptions, recoverLostMergeSignal, whoMerges } from './platform-merge.js';
+import { enqueueReviewCommentWindow, type PipelineOutboundData } from './jobs.js';
+import {
+  type PlatformMergeOptions,
+  platformMergeSingletonKey,
+  recoverLostMergeSignal,
+  whoMerges,
+} from './platform-merge.js';
 import { closeOwnThreads, type ReviewConversationOptions } from './review-conversation.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ReadyMergeCheck, StoredTask } from './store.js';
@@ -91,11 +96,16 @@ const decideMerge = async (
     }),
   );
   if (who.by === 'platform' && (input.check.mergeable === true || rebaseOnly)) {
-    await enqueueOutbound(merge.jobs, {
-      duty: 'platform_merge',
-      project_id: stored.task.projectId,
-      task_id: stored.task.id,
-      cause_event_id: stored.task.id,
+    // One queued wake-up per task (`platformMergeSingletonKey`), so checks do not stack merges.
+    await merge.jobs.enqueue({
+      queue: JOB_QUEUES.pipelineOutbound,
+      singletonKey: platformMergeSingletonKey(stored.task.id),
+      data: {
+        duty: 'platform_merge',
+        project_id: stored.task.projectId,
+        task_id: stored.task.id,
+        cause_event_id: stored.task.id,
+      } satisfies PipelineOutboundData,
     });
   }
 };

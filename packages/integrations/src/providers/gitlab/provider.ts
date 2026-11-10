@@ -1495,6 +1495,13 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
           renamed_file: file.renamed_file ?? false,
           deleted_file: file.deleted_file ?? false,
           omitted,
+          // TD-038 amendment A: the modes, which the change digest reads (a mode change is a change).
+          ...(typeof file.a_mode === 'string' && /^[0-7]{1,6}$/.test(file.a_mode)
+            ? { old_mode: file.a_mode }
+            : {}),
+          ...(typeof file.b_mode === 'string' && /^[0-7]{1,6}$/.test(file.b_mode)
+            ? { new_mode: file.b_mode }
+            : {}),
         };
       });
     },

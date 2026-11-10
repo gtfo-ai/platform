@@ -253,6 +253,17 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > (`changeDigest`, `packages/domain/src/policies/merge.ts`) and the commit count are identical and the
 > CI gate's own verdict passes the new head's pipeline; the platform then writes `ready_head_sha =
 > ci_head_sha = H′` (the two existing narrow writers, in one transaction) and merges with `sha = H′`.
+> **Review of #158:** the merge request is read again after the change digest and immediately before
+> the rebase call, and the rebase is asked only while its head is still the reviewed one (a push in
+> that window is `head_moved`; a push after it changes the commit count and is caught); a cut diff
+> list (100 files, the adapter's one page) gives no digest; a file with no added or removed line
+> (a binary edit, a mode change) gives none either, and modes and rename paths are part of the
+> digest; a rebase that changed nothing settles on the reviewed head, a `merge_error` GitLab showed
+> before the rebase is never read as this rebase's conflict; a merge request whose target is not
+> the project's default branch is a person's (`target_not_default`); the task is read again just
+> before the merge call, an answer that does not read back merged is not recorded as a merge, and
+> every wake-up runs under the task's duty lease with one queued follow-up per task. `task_merges`
+> is keyed `(task, head, kind)` so a head may carry a settled rebase and then its merge.
 > **Deviation, stated:** the merge's notification reuses the `task_completed` class (a refusal or
 > failure `escalation`), because `notifications.class` is a check constraint whose widening is a
 > contract migration (BACKLOG 1591).

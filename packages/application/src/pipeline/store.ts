@@ -1393,6 +1393,14 @@ export interface TaskRepository {
     taskId: Id,
     decision: { readonly mergeBy: 'person' | 'platform'; readonly wait: string | null },
   ): Promise<void>;
+  /** Who merges and what the platform last waited for, as recorded; `null` when nothing was. */
+  mergeDecisionOf(
+    tx: Transaction,
+    taskId: Id,
+  ): Promise<{
+    readonly mergeBy: 'person' | 'platform' | null;
+    readonly wait: string | null;
+  } | null>;
   /**
    * Records the platform's merge attempt for one head (S-28.15, migration 0119, `task_merges`):
    * an insert that does nothing when a row for `(task, head)` exists. Answers whether this call

@@ -92,7 +92,30 @@ interface World {
   readonly ticket?: { readonly status: string; readonly category?: 'done' | 'in_progress' };
   readonly capabilities?: { readonly merge?: boolean; readonly rebase?: boolean };
   readonly mergeAnswer?: 'ok' | 'refuse' | 'transport';
-  readonly rebaseAnswer?: 'clean' | 'changed' | 'conflict' | 'refuse';
+  /**
+   * What the provider's rebase does: `clean` (a new head, the same change), `changed` (one more
+   * added line), `pushed` (a person's commit rode along: one more commit and one more line),
+   * `recounted` (one more commit, the same lines), `noop` (nothing to rebase: the head stays and the
+   * blocker clears), `conflict`, `refuse`.
+   */
+  readonly rebaseAnswer?:
+    | 'clean'
+    | 'changed'
+    | 'pushed'
+    | 'recounted'
+    | 'noop'
+    | 'conflict'
+    | 'refuse';
+  /** A person pushes while the diff is read, before the rebase is asked (review of #158). */
+  readonly pushDuringDiff?: boolean;
+  /** GitLab still shows an earlier rebase's `merge_error` before this one is asked. */
+  readonly staleRebaseError?: boolean;
+  /** The project's risk class matches the merge request's changed paths. */
+  readonly riskClass?: boolean;
+  /** The merge request's target branch. @default `main`, the project's default branch. */
+  readonly target?: string;
+  /** The merge answers 200 without the merge request reading merged. */
+  readonly mergeAnswersOpen?: boolean;
   readonly pipeline?: 'success' | 'failed' | 'running' | null;
   readonly portless?: boolean;
 }
@@ -135,7 +158,7 @@ const storedTask = (world: World): StoredTask =>
     ticketSnapshot: null,
     reviewSubject: null,
     historySample: null,
-    riskClasses: world.probation === true ? ['payments'] : [],
+    riskClasses: world.riskClass === true ? ['payments'] : [],
     coverage: null,
     dependencies: null,
     requiredReviewers: null,
@@ -188,7 +211,7 @@ const setup = async (world: World = {}) => {
       title: 'fix',
       description: '',
       source_branch: MR.branch,
-      target_branch: 'main',
+      target_branch: world.target ?? 'main',
       head_sha: live.head,
       mergeable: live.mergeable,
       has_conflicts: false,
@@ -226,9 +249,20 @@ const setup = async (world: World = {}) => {
               ],
             },
           ],
-    getMergeRequestDiff: async () => live.files,
+    getMergeRequestDiff: async () => {
+      const files = live.files.map((file) => ({ ...file }));
+      if (world.pushDuringDiff === true) {
+        // A person's push lands between the diff read and the re-read before the rebase.
+        live.head = 'e'.repeat(40);
+        live.commits += 1;
+      }
+      return files;
+    },
     countMergeRequestCommits: async () => live.commits,
-    getMergeRequestRebase: async () => ({ in_progress: false, failed: live.rebaseFailed }),
+    getMergeRequestRebase: async () => ({
+      in_progress: false,
+      failed: live.rebaseFailed || world.staleRebaseError === true,
+    }),
     getPipelineStatus: async (_project: string, sha: string) =>
       world.pipeline === null || world.pipeline === undefined
         ? null
@@ -250,12 +284,18 @@ const setup = async (world: World = {}) => {
         live.rebaseFailed = true;
         return;
       }
-      counter += 1;
-      live.head = counter.toString(16).padStart(40, 'c');
       live.blocker = null;
       live.mergeable = true;
-      if (world.rebaseAnswer === 'changed') {
+      if (world.rebaseAnswer === 'noop') {
+        return;
+      }
+      counter += 1;
+      live.head = counter.toString(16).padStart(40, 'c');
+      if (world.rebaseAnswer === 'changed' || world.rebaseAnswer === 'pushed') {
         live.files = [{ ...(live.files[0] as FileDiff), diff: `${PATCH}\n+const c = 4;` }];
+      }
+      if (world.rebaseAnswer === 'pushed' || world.rebaseAnswer === 'recounted') {
+        live.commits += 1;
       }
     },
     mergeMergeRequest: async (
@@ -279,6 +319,9 @@ const setup = async (world: World = {}) => {
         throw new MergeRefusedError('fake-git', 'not_mergeable', 'cannot merge', {
           httpStatus: 422,
         });
+      }
+      if (world.mergeAnswersOpen === true) {
+        return toMr();
       }
       live.state = 'merged';
       live.mergeCommit = 'd'.repeat(40);
@@ -345,7 +388,27 @@ const setup = async (world: World = {}) => {
     calendar: undefined as never,
     settings: staticProjectSettings((projectId) =>
       defaultProjectSettings(projectId, {
-        config: world.setting === undefined ? {} : { policies: { merge: { by: world.setting } } },
+        config: {
+          policies: {
+            ...(world.setting === undefined ? {} : { merge: { by: world.setting } }),
+            // A risk class that matches the merge request's changed file (`src/a.ts`).
+            ...(world.riskClass === true
+              ? { risk_classes: { payments: { paths: ['src/**'], require: ['plan_approval'] } } }
+              : {}),
+          },
+        } as never,
+        // The dial's probation: the first five tasks — none completed in this store.
+        ...(world.probation === true
+          ? {
+              autonomy: {
+                level: 'supervised',
+                preset_version: 1,
+                applied_at: NOW,
+                applied_by: null,
+                policies: toWireAutonomyPolicies(AUTONOMY_PRESETS.supervised),
+              } as never,
+            }
+          : {}),
         ...(world.shadowDial === true
           ? {
               autonomy: {
@@ -460,7 +523,11 @@ const setup = async (world: World = {}) => {
         (event): event is Extract<DomainEvent, { type: 'task.merge.attempted' }> =>
           event.type === 'task.merge.attempted',
       );
+  const waitedFor = async () =>
+    (await memory.transaction(async (scope) => store.tasks.mergeDecisionOf(scope.tx, TASK)))
+      ?.wait ?? null;
   return {
+    waitedFor,
     options,
     memory,
     store,
@@ -480,24 +547,32 @@ const reload = async (w: Awaited<ReturnType<typeof setup>>) =>
   w.memory.transaction(async (scope) => w.store.tasks.load(scope.tx, TASK));
 
 describe('the dangerous negatives — no merge call, and the named reason (TD-038 decision 3)', () => {
-  it.each<[string, World, string]>([
+  it.each<[string, World, string, string | null]>([
     [
       'the MR head moved since the review',
       { setting: 'platform', plan: null, live: { head: 'e'.repeat(40) } },
       'waiting',
+      'head_moved',
     ],
     [
       'the reviewed head is not the CI-gated one',
       { setting: 'platform', plan: null, ciHead: 'f'.repeat(40) },
       'waiting',
+      'head_moved',
     ],
     [
       'the provider says not mergeable',
       { setting: 'platform', live: { mergeable: false } },
       'waiting',
+      'provider_blocked',
     ],
-    ['mergeable not decided', { setting: 'platform', live: { mergeable: null } }, 'waiting'],
-    ['a draft', { setting: 'platform', live: { draft: true } }, 'waiting'],
+    [
+      'mergeable not decided',
+      { setting: 'platform', live: { mergeable: null } },
+      'waiting',
+      'provider_blocked',
+    ],
+    ['a draft', { setting: 'platform', live: { draft: true } }, 'waiting', 'provider_blocked'],
     [
       'a provider blocker (unresolved threads)',
       {
@@ -507,54 +582,106 @@ describe('the dangerous negatives — no merge call, and the named reason (TD-03
         },
       },
       'waiting',
+      'provider_blocked',
     ],
-    ['the MR is closed', { setting: 'platform', live: { state: 'closed' } }, 'waiting'],
+    [
+      'the MR is closed',
+      { setting: 'platform', live: { state: 'closed' } },
+      'waiting',
+      'merge_request_not_open',
+    ],
     [
       'the latest verdict asks for changes',
       { setting: 'platform', verdicts: ['approve', 'request_changes'] },
       'waiting',
+      'review_not_approved',
     ],
-    ['no verdict at all', { setting: 'platform', verdicts: [] }, 'waiting'],
-    ['a human-return window is open', { setting: 'platform', windowOpen: true }, 'waiting'],
+    ['no verdict at all', { setting: 'platform', verdicts: [] }, 'waiting', 'review_not_approved'],
+    [
+      'a human-return window is open',
+      { setting: 'platform', windowOpen: true },
+      'waiting',
+      'person_words',
+    ],
     [
       'a person wrote younger than the window',
       { setting: 'platform', personNoteAt: '2026-11-10T13:59:30.000Z' },
       'waiting',
+      'person_words',
     ],
     [
       'the ticket is closed on a fresh read',
       { setting: 'platform', ticket: { status: 'Done' } },
       'waiting',
+      'ticket_closed',
     ],
     [
       'the ticket was taken by a person (hands-off)',
       { setting: 'platform', ticket: { status: 'Doing', category: 'in_progress' } },
       'waiting',
+      'ticket_hands_off',
     ],
     [
       'the repository’s merge settings unknown',
       { setting: 'platform', live: { mergeOptions: null } },
       'waiting',
+      'merge_settings_unknown',
     ],
     [
       'a plan approval still pending',
       { setting: 'platform', plan: { status: 'pending' } },
       'waiting',
+      'plan_not_decided',
     ],
-    ['the setting is person', { setting: 'person' }, 'person'],
-    ['the setting is absent (the default)', {}, 'person'],
-    ['capability merge false', { setting: 'platform', capabilities: { merge: false } }, 'person'],
-    ['a shadow task', { setting: 'platform', mode: 'shadow' }, 'person'],
-    ['a project in shadow mode', { setting: 'platform', shadowDial: true }, 'person'],
-  ])('%s', async (_name, world, outcome) => {
+    ['the setting is person', { setting: 'person' }, 'person', 'setting_person'],
+    ['the setting is absent (the default)', {}, 'person', 'setting_person'],
+    [
+      'capability merge false',
+      { setting: 'platform', capabilities: { merge: false } },
+      'person',
+      'provider_cannot_merge',
+    ],
+    ['a shadow task', { setting: 'platform', mode: 'shadow' }, 'person', 'shadow_mode'],
+    [
+      'a project in shadow mode',
+      { setting: 'platform', shadowDial: true },
+      'person',
+      'shadow_mode',
+    ],
+    [
+      'the MR targets a branch that is not the default branch',
+      { setting: 'platform', target: 'release/1.x' },
+      'person',
+      'target_not_default',
+    ],
+  ])('%s', async (_name, world, outcome, wait) => {
     const w = await setup(world);
     expect(await w.run()).toBe(outcome);
+    expect(await w.waitedFor()).toBe(wait);
     expect(w.merges).toEqual([]);
     expect(await w.attempts()).toEqual([]);
     expect(w.attempted()).toEqual([]);
     expect(w.auditLog.entries.filter((entry) => entry.action === 'merge_merge_request')).toEqual(
       [],
     );
+  });
+
+  it('records nothing as the platform’s merge when a retry finds the MR merged at another head (a person’s merge)', async () => {
+    const w = await setup({
+      setting: 'platform',
+      live: { state: 'merged', head: 'e'.repeat(40), mergeCommit: 'd'.repeat(40) },
+    });
+    expect(await w.run({ count: 1, limit: 2 })).not.toBe('merged');
+    expect(await w.attempts()).toEqual([]);
+    expect(w.merges).toEqual([]);
+  });
+
+  it('never records a merge the merge request does not read back: the job tries again, the last try says failed', async () => {
+    const w = await setup({ setting: 'platform', mergeAnswersOpen: true });
+    await expect(w.run({ count: 0, limit: 2 })).rejects.toThrow('did not read back merged');
+    expect(await w.attempts()).toEqual([]);
+    expect(await w.run({ count: 2, limit: 2 })).toBe('failed');
+    expect((await w.attempts())[0]?.providerStatus).toBe('not_merged');
   });
 
   it('asks again once the human-return window has closed, and merges nothing meanwhile', async () => {
@@ -615,7 +742,8 @@ describe('who merges — the plan decision is the human checkpoint (TD-038 decis
   });
 
   it('merges a risk-class task after its plan was approved', async () => {
-    const w = await setup({ setting: 'platform', probation: true, plan: { status: 'approved' } });
+    // `src/**` is a risk class requiring plan approval and the change is `src/a.ts`.
+    const w = await setup({ setting: 'platform', riskClass: true, plan: { status: 'approved' } });
     expect(await w.run()).toBe('merged');
     expect(w.merges).toHaveLength(1);
   });
@@ -788,6 +916,96 @@ describe('need_rebase (TD-038 amendment A)', () => {
     expect(w.rebases).toEqual([]);
     expect(w.merges).toEqual([]);
   });
+
+  it('asks no rebase when a person pushed while the change was read (the window before the call)', async () => {
+    const w = await setup({ setting: 'platform', live: rebaseOnly, pushDuringDiff: true });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_moved');
+    expect(w.rebases).toEqual([]);
+    expect(await w.attempts()).toEqual([]);
+  });
+
+  it('catches a person’s commit that rode along with the rebase (pushed after the re-read)', async () => {
+    const w = await setup({
+      setting: 'platform',
+      live: rebaseOnly,
+      pipeline: 'success',
+      rebaseAnswer: 'pushed',
+    });
+    expect(await w.run()).toBe('rebase_asked');
+    expect(await w.run()).toBe('rebase_changed');
+    expect(w.merges).toEqual([]);
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+  });
+
+  it('refuses a rebased head whose commit count alone changed (the count check)', async () => {
+    const w = await setup({
+      setting: 'platform',
+      live: rebaseOnly,
+      pipeline: 'success',
+      rebaseAnswer: 'recounted',
+    });
+    expect(await w.run()).toBe('rebase_asked');
+    expect(await w.run()).toBe('rebase_changed');
+    expect((await w.attempts())[0]?.providerStatus).toBe('commits_changed');
+    expect(w.merges).toEqual([]);
+  });
+
+  it('refuses a commit pushed after the rebase finished, whose lines are the same', async () => {
+    const w = await setup({ setting: 'platform', live: rebaseOnly, pipeline: 'success' });
+    expect(await w.run()).toBe('rebase_asked');
+    // A person pushes an empty-diff commit onto the rebased branch before the duty looks again.
+    w.live.head = '9'.repeat(40);
+    w.live.commits += 1;
+    expect(await w.run()).toBe('rebase_changed');
+    expect((await w.attempts())[0]?.providerStatus).toBe('commits_changed');
+    expect(w.merges).toEqual([]);
+  });
+
+  it('a rebase that changed nothing settles on the reviewed head, which then merges', async () => {
+    const w = await setup({ setting: 'platform', live: rebaseOnly, rebaseAnswer: 'noop' });
+    expect(await w.run()).toBe('rebase_asked');
+    expect(await w.run()).toBe('rebase_accepted');
+    expect(await w.run()).toBe('merged');
+    expect(w.merges).toEqual([{ expected: HEAD, squash: true, remove: false }]);
+  });
+
+  it('reads a merge_error GitLab already showed before the rebase as unknown, never as a conflict', async () => {
+    const w = await setup({
+      setting: 'platform',
+      live: rebaseOnly,
+      rebaseAnswer: 'noop',
+      staleRebaseError: true,
+    });
+    expect(await w.run()).toBe('rebase_asked');
+    expect(await w.run()).toBe('rebase_changed');
+    expect((await w.attempts())[0]?.providerStatus).toBe('rebase_unknown');
+    expect((await reload(w))?.task.currentStage).toBe('ready_for_merge');
+  });
+
+  it.each([
+    [99, 'rebase_asked'],
+    [100, 'waiting'],
+  ] as const)(
+    'digests a %i-file change only below the page bound (a cut list gives no digest)',
+    async (count, outcome) => {
+      const files: FileDiff[] = Array.from({ length: count }, (_, n) => ({
+        new_path: `src/f${n}.ts`,
+        old_path: `src/f${n}.ts`,
+        diff: PATCH,
+        new_file: false,
+        renamed_file: false,
+        deleted_file: false,
+        omitted: false,
+      }));
+      const w = await setup({ setting: 'platform', live: { ...rebaseOnly, files } });
+      expect(await w.run()).toBe(outcome);
+      expect(w.rebases).toHaveLength(outcome === 'rebase_asked' ? 1 : 0);
+      if (outcome === 'waiting') {
+        expect(await w.waitedFor()).toBe('rebase_no_digest');
+      }
+    },
+  );
 
   it('with the setting at person nothing rebases or merges', async () => {
     const w = await setup({ setting: 'person', live: rebaseOnly });

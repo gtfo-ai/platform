@@ -494,6 +494,8 @@ export const createMemoryPipelineStore = (
   >();
   /** S-28.15 (migration 0119): the platform's merge attempts, `task#head` → the record. */
   const taskMerges = new Map<string, TaskMergeRecord>();
+  const mergeKind = (outcome: TaskMergeRecord['outcome']): string =>
+    outcome.startsWith('rebase') ? 'rebase' : 'merge';
   const mergeRowDue = (stored: StoredTask, stale: number): boolean => {
     const row = mergeChecks.get(stored.task.id);
     if (row === undefined || !(Date.parse(row.claimedAt) < stale)) {
@@ -1557,14 +1559,22 @@ export const createMemoryPipelineStore = (
         mergeWait: decision.wait,
       });
     },
+    mergeDecisionOf: async (_tx, taskId) => {
+      const row = mergeChecks.get(taskId);
+      return row === undefined
+        ? null
+        : { mergeBy: row.mergeBy ?? null, wait: row.mergeWait ?? null };
+    },
     recordMerge: async (_tx, merge) => {
-      const key = `${merge.taskId}#${merge.headSha}`;
+      const key = `${merge.taskId}#${merge.headSha}#${mergeKind(merge.outcome)}`;
       if (!tasks.has(merge.taskId) || taskMerges.has(key)) return false;
       taskMerges.set(key, { ...merge });
       return true;
     },
     mergeFor: async (_tx, taskId, headSha) => {
-      const merge = taskMerges.get(`${taskId}#${headSha}`);
+      const merge =
+        taskMerges.get(`${taskId}#${headSha}#merge`) ??
+        taskMerges.get(`${taskId}#${headSha}#rebase`);
       return merge === undefined ? null : { ...merge };
     },
     latestMerge: async (_tx, taskId) => {
@@ -1572,7 +1582,9 @@ export const createMemoryPipelineStore = (
         .filter((merge) => merge.taskId === taskId)
         .sort(
           (a, b) =>
-            b.attemptedAt.localeCompare(a.attemptedAt) || b.headSha.localeCompare(a.headSha),
+            b.attemptedAt.localeCompare(a.attemptedAt) ||
+            b.headSha.localeCompare(a.headSha) ||
+            Number(mergeKind(b.outcome) === 'merge') - Number(mergeKind(a.outcome) === 'merge'),
         )[0];
       return latest === undefined ? null : { ...latest };
     },
@@ -1581,11 +1593,13 @@ export const createMemoryPipelineStore = (
         .filter((merge) => merge.taskId === taskId)
         .sort(
           (a, b) =>
-            b.attemptedAt.localeCompare(a.attemptedAt) || b.headSha.localeCompare(a.headSha),
+            b.attemptedAt.localeCompare(a.attemptedAt) ||
+            b.headSha.localeCompare(a.headSha) ||
+            Number(mergeKind(b.outcome) === 'merge') - Number(mergeKind(a.outcome) === 'merge'),
         )
         .map((merge) => ({ ...merge })),
     settleRebase: async (_tx, taskId, headSha, settled) => {
-      const key = `${taskId}#${headSha}`;
+      const key = `${taskId}#${headSha}#rebase`;
       const merge = taskMerges.get(key);
       if (merge === undefined || merge.outcome !== 'rebased') return false;
       taskMerges.set(key, {
@@ -1597,7 +1611,7 @@ export const createMemoryPipelineStore = (
       return true;
     },
     countMergeSignalPass: async (_tx, taskId, headSha) => {
-      const key = `${taskId}#${headSha}`;
+      const key = `${taskId}#${headSha}#merge`;
       const merge = taskMerges.get(key);
       if (merge === undefined || merge.outcome !== 'merged') return 0;
       const next = { ...merge, signalPasses: merge.signalPasses + 1 };

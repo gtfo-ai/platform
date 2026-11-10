@@ -196,6 +196,9 @@ export interface ChangeDigestFile {
   readonly diff: string | null | undefined;
   /** The provider has a patch and did not send it (too large, collapsed). */
   readonly omitted: boolean;
+  /** The file's mode before and after, when the provider says; part of the digest. */
+  readonly oldMode?: string | null;
+  readonly newMode?: string | null;
 }
 
 /**
@@ -206,8 +209,10 @@ export interface ChangeDigestFile {
  * hunks sit; a rebase that changed a single added or removed line changes it.
  *
  * `null` — no digest, and a person decides — when the list was cut (`truncated`), a file's patch
- * was omitted or absent (other than a pure rename or a deletion with no patch), or the list is
- * empty. The residual, stated: context lines are ignored, so a rebase over code that changed
+ * was omitted or absent (other than a rename or a deletion with no patch), the list is empty, or a
+ * file that is neither renamed nor deleted has **no** added or removed line (a binary edit, a mode
+ * change, an empty new file: a change the lines cannot show). The paths, the flags and the modes
+ * are part of every file's entry, so a rename or a mode change moves the digest. The residual, stated: context lines are ignored, so a rebase over code that changed
  * around the change keeps the digest; the pipeline on the new head judges that.
  */
 export const changeDigest = (
@@ -236,6 +241,9 @@ export const changeDigest = (
       // GitLab's `diff` carries hunks only (no `---`/`+++` file header lines), so every line that
       // opens with `+` or `-` is an added or a removed line; `@@` headers and context are dropped.
       .filter((line) => line.startsWith('+') || line.startsWith('-'));
+    if (lines.length === 0 && !(file.renamedFile || file.deletedFile)) {
+      return null;
+    }
     parts.push(
       JSON.stringify([
         file.oldPath,
@@ -243,6 +251,8 @@ export const changeDigest = (
         file.newFile,
         file.deletedFile,
         file.renamedFile,
+        file.oldMode ?? null,
+        file.newMode ?? null,
         lines,
       ]),
     );

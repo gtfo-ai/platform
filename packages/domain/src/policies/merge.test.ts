@@ -209,6 +209,28 @@ describe('changeDigest (TD-038 amendment A)', () => {
     expect(changeDigest([a, b], false)).toBe(changeDigest([b, a], false));
   });
 
+  it('gives no digest for a file whose change has no added or removed line (binary edit, mode change)', () => {
+    expect(changeDigest([file('Binary files a/logo.png and b/logo.png differ')], false)).toBeNull();
+    expect(changeDigest([{ ...file(''), oldMode: '100644', newMode: '100755' }], false)).toBeNull();
+    // A pure rename with no patch is a change the paths show.
+    expect(
+      changeDigest(
+        [{ ...file(''), oldPath: 'a.ts', newPath: 'b.ts', renamedFile: true, diff: null }],
+        false,
+      ),
+    ).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('moves the digest with a mode change or a rename beside the same lines', () => {
+    const base = changeDigest([file(PATCH)], false);
+    expect(
+      changeDigest([{ ...file(PATCH), oldMode: '100644', newMode: '100755' }], false),
+    ).not.toBe(base);
+    expect(
+      changeDigest([{ ...file(PATCH), oldPath: 'src/old.ts', renamedFile: true }], false),
+    ).not.toBe(base);
+  });
+
   it('gives no digest for a cut list, an omitted patch, a missing patch or no files', () => {
     expect(changeDigest([file(PATCH)], true)).toBeNull();
     expect(changeDigest([{ ...file(PATCH), omitted: true }], false)).toBeNull();

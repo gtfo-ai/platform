@@ -889,6 +889,7 @@ export const taskMerges = pgTable(
       .notNull()
       .references(() => tasks.id, { onDelete: 'cascade' }),
     headSha: text('head_sha').notNull(),
+    kind: text('kind').notNull(),
     outcome: text('outcome').notNull(),
     providerStatus: text('provider_status'),
     mergeCommitSha: text('merge_commit_sha'),
@@ -900,7 +901,7 @@ export const taskMerges = pgTable(
     attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull(),
     signalPasses: integer('signal_passes').notNull().default(0),
   },
-  (table) => [primaryKey({ columns: [table.taskId, table.headSha] })],
+  (table) => [primaryKey({ columns: [table.taskId, table.headSha, table.kind] })],
 );
 
 /**

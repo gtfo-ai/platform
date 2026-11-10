@@ -108,6 +108,14 @@ type TaskMergeAttemptedPayload = Extract<DomainEvent, { type: 'task.merge.attemp
  * The platform's merge in one line (S-28.15, TD-038 decision 7): what happened, why, what next —
  * platform text and two shas, never provider text (the status word is the port's closed word).
  */
+/** A refusal's port word in plain words — the task page's own words (`ui/words/merge-status.ts`). */
+const REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  head_moved: 'the branch moved since the reviewed commit (409)',
+  not_allowed: 'the merge request cannot be merged (405)',
+  not_mergeable: 'the branch cannot be merged (422)',
+  unauthorised: 'the platform’s account may not merge here (401)',
+};
+
 export const platformMergeDetail = (payload: TaskMergeAttemptedPayload): string => {
   const head = payload.head_sha.slice(0, 7);
   switch (payload.outcome) {
@@ -116,9 +124,9 @@ export const platformMergeDetail = (payload: TaskMergeAttemptedPayload): string 
         payload.merge_commit_sha === null ? '' : `, commit ${payload.merge_commit_sha.slice(0, 7)}`
       } (reviewed commit ${head}). The task moves on when the provider reports the merge.`;
     case 'refused':
-      return `The platform’s merge of commit ${head} was refused (${
-        payload.provider_status ?? 'refused'
-      }). Merge it yourself, or send the task back.`;
+      return `The platform’s merge of commit ${head} was refused: ${
+        REFUSAL_WORDS[payload.provider_status ?? ''] ?? 'the git provider would not merge it'
+      }. Merge it yourself, or send the task back.`;
     case 'failed':
       return `The platform could not reach the git provider to merge commit ${head} after 3 tries. Merge it yourself, or send the task back.`;
   }

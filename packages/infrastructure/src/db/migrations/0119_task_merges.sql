@@ -34,6 +34,8 @@
 create table task_merges (
   task_id uuid not null references tasks (id) on delete cascade,
   head_sha text not null,
+  -- `merge` or `rebase`: a head may carry a rebase that settled on itself and then its merge.
+  kind text not null,
   outcome text not null,
   provider_status text,
   merge_commit_sha text,
@@ -44,7 +46,11 @@ create table task_merges (
   rebased_to text,
   attempted_at timestamptz not null,
   signal_passes integer not null default 0,
-  primary key (task_id, head_sha),
+  primary key (task_id, head_sha, kind),
+  constraint task_merges_kind_known check (kind in ('merge', 'rebase')),
+  constraint task_merges_kind_matches_outcome check (
+    (kind = 'rebase') = (outcome in ('rebased', 'rebase_refused', 'rebase_conflict', 'rebase_changed'))
+  ),
   constraint task_merges_outcome_known check (
     outcome in (
       'merged', 'refused', 'failed', 'rebased', 'rebase_refused', 'rebase_conflict',

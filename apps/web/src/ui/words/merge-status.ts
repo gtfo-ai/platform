@@ -13,6 +13,8 @@ const PERSON_WHY: Readonly<Record<string, string>> = {
     'the git provider cannot merge through the platform. Merge it on the provider when it is ready.',
   shadow_mode:
     'this is a shadow run, so the platform writes nothing to the git provider. Merge it there yourself if you want it.',
+  target_not_default:
+    'the merge request targets a branch that is not this project’s default branch, and the platform merges only into the default branch.',
 };
 
 /** What the platform's merge waits for, after *"— now: "*. */
@@ -40,6 +42,8 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
   rebase_unsupported:
     'the provider wants a rebase the platform cannot ask for — rebase and merge it yourself',
   rebase_refused: 'the provider refused to rebase it — rebase and merge it yourself, or Send back',
+  rebase_no_change:
+    'the provider wants a rebase again although its last rebase changed nothing — rebase and merge it yourself',
   rebase_changed:
     'after the provider’s rebase the change is not the one reviewed — merge it yourself, or Send back',
 };
@@ -82,6 +86,8 @@ const REBASE_WHY: Readonly<Record<string, string>> = {
   pipeline_failed: 'the pipeline on the rebased commit did not pass',
   cannot_push: 'the platform may not push to the source branch',
   not_enqueued: 'the provider could not queue the rebase',
+  rebase_unknown:
+    'the provider still showed an earlier rebase’s failure, so whether this rebase went through cannot be told',
   rebase_failed:
     'it conflicts with the target branch, so the task went back to the up-to-date check',
 };
@@ -124,7 +130,9 @@ export const mergeAttemptSentence = (
         status === null ? 'no' : (REFUSED_WHY[status] ?? status.replaceAll('_', ' '))
       } — merge it yourself or Send back.`;
     case 'failed':
-      return `The platform could not reach ${provider} to merge it after 3 tries — merge it yourself or Send back.`;
+      return status === 'not_merged'
+        ? `${provider} answered the platform’s merge but the merge request did not read back merged — check it there, and merge it yourself or Send back.`
+        : `The platform could not reach ${provider} to merge it after 3 tries — merge it yourself or Send back.`;
     case 'rebased':
       return `The platform asked ${provider} to rebase the merge request at ${at}; it merges the rebased commit once its pipeline passes and the change is the one reviewed.`;
     case 'rebase_refused':

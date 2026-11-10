@@ -1762,13 +1762,28 @@ export const createPostgresPipelineStore = (
       );
     },
 
+    mergeDecisionOf: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{
+        merge_by: string | null;
+        merge_wait: string | null;
+      }>('select merge_by, merge_wait from task_merge_checks where task_id = $1', [taskId]);
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : {
+            mergeBy: (row.merge_by ?? null) as 'person' | 'platform' | null,
+            wait: row.merge_wait,
+          };
+    },
+
     recordMerge: async (tx, merge) => {
       const { rows } = await sqlOf(tx).query(
         `insert into task_merges
-           (task_id, head_sha, outcome, provider_status, merge_commit_sha, plan_decision,
+           (task_id, head_sha, kind, outcome, provider_status, merge_commit_sha, plan_decision,
             plan_approval_id, change_digest, commit_count, rebased_to, attempted_at, signal_passes)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         on conflict (task_id, head_sha) do nothing
+         values ($1, $2, case when $3::text like 'rebase%' then 'rebase' else 'merge' end, $3, $4,
+                 $5, $6, $7, $8, $9, $10, $11, $12)
+         on conflict (task_id, head_sha, kind) do nothing
          returning task_id`,
         [
           merge.taskId,
@@ -1790,7 +1805,8 @@ export const createPostgresPipelineStore = (
 
     mergeFor: async (tx, taskId, headSha) => {
       const { rows } = await sqlOf(tx).query<TaskMergeRow>(
-        `${TASK_MERGE_SELECT} where task_id = $1 and head_sha = $2`,
+        `${TASK_MERGE_SELECT} where task_id = $1 and head_sha = $2
+          order by (kind = 'merge') desc limit 1`,
         [taskId, headSha],
       );
       return rows[0] === undefined ? null : toTaskMerge(rows[0]);
@@ -1798,7 +1814,8 @@ export const createPostgresPipelineStore = (
 
     latestMerge: async (tx, taskId) => {
       const { rows } = await sqlOf(tx).query<TaskMergeRow>(
-        `${TASK_MERGE_SELECT} where task_id = $1 order by attempted_at desc, head_sha desc limit 1`,
+        `${TASK_MERGE_SELECT} where task_id = $1
+          order by attempted_at desc, head_sha desc, (kind = 'merge') desc limit 1`,
         [taskId],
       );
       return rows[0] === undefined ? null : toTaskMerge(rows[0]);
@@ -1806,7 +1823,8 @@ export const createPostgresPipelineStore = (
 
     mergesOf: async (tx, taskId) => {
       const { rows } = await sqlOf(tx).query<TaskMergeRow>(
-        `${TASK_MERGE_SELECT} where task_id = $1 order by attempted_at desc, head_sha desc`,
+        `${TASK_MERGE_SELECT} where task_id = $1
+          order by attempted_at desc, head_sha desc, (kind = 'merge') desc`,
         [taskId],
       );
       return rows.map(toTaskMerge);
@@ -1815,7 +1833,7 @@ export const createPostgresPipelineStore = (
     settleRebase: async (tx, taskId, headSha, settled) => {
       const result = await sqlOf(tx).query(
         `update task_merges set outcome = $3, provider_status = $4, rebased_to = $5
-          where task_id = $1 and head_sha = $2 and outcome = 'rebased'`,
+          where task_id = $1 and head_sha = $2 and kind = 'rebase' and outcome = 'rebased'`,
         [taskId, headSha, settled.outcome, settled.providerStatus, settled.rebasedTo],
       );
       return (result.rowCount ?? 0) > 0;

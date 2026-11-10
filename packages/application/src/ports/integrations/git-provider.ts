@@ -190,6 +190,18 @@ export const fileDiffSchema = z.strictObject({
    * from "no patch" prints nothing. Standing rule 18 — the absent case must not be the quiet one.
    */
   omitted: z.boolean(),
+  /**
+   * The file's mode before and after, when the provider says (GitLab's `a_mode`/`b_mode`, octal
+   * digits) — TD-038 amendment A's change digest reads them, because a mode change has no patch line.
+   */
+  old_mode: z
+    .string()
+    .regex(/^[0-7]{1,6}$/)
+    .nullish(),
+  new_mode: z
+    .string()
+    .regex(/^[0-7]{1,6}$/)
+    .nullish(),
 });
 
 export type FileDiff = z.infer<typeof fileDiffSchema>;

@@ -132,9 +132,9 @@ describe('the merge block (S-28.15, TD-038 decision 7)', () => {
       [taskId, userId],
     );
     await pool.query(
-      `insert into task_merges (task_id, head_sha, outcome, merge_commit_sha, plan_decision,
+      `insert into task_merges (task_id, head_sha, kind, outcome, merge_commit_sha, plan_decision,
                                 plan_approval_id, attempted_at)
-       values ($1, $2, 'merged', $3, 'approved_by_person', $4, now())`,
+       values ($1, $2, 'merge', 'merged', $3, 'approved_by_person', $4, now())`,
       [taskId, 'b'.repeat(40), 'd'.repeat(40), approval.id],
     );
     // Past Ready (the merge moved it on): the attempt is still served, the wait is not.
@@ -152,8 +152,8 @@ describe('the merge block (S-28.15, TD-038 decision 7)', () => {
     const taskId = await readyTask(5);
     const insert = () =>
       pool.query(
-        `insert into task_merges (task_id, head_sha, outcome, plan_decision, attempted_at)
-         values ($1, $2, 'refused', 'not_required', now())`,
+        `insert into task_merges (task_id, head_sha, kind, outcome, plan_decision, attempted_at)
+         values ($1, $2, 'merge', 'refused', 'not_required', now())`,
         [taskId, 'c'.repeat(40)],
       );
     await insert();

@@ -207,6 +207,9 @@ export const gitlabMergeRequestDiffSchema = z.object({
   deleted_file: z.boolean().nullish(),
   collapsed: z.boolean().nullish(),
   too_large: z.boolean().nullish(),
+  /** TD-038 amendment A: the file modes before and after — a mode change has no `+`/`-` line. */
+  a_mode: z.string().nullish(),
+  b_mode: z.string().nullish(),
 });
 
 /**

@@ -157,8 +157,38 @@ export const LOST_MERGE_SIGNAL_PASSES = 3;
 /** Provider rebases per entry into Ready (TD-038 amendment A, decision 5). */
 export const MAX_REBASES_PER_READY_ENTRY = 3;
 
-/** Files the change digest reads at most; a longer list gives no digest (amendment A). */
-export const CHANGE_DIGEST_MAX_FILES = 500;
+/**
+ * Files the change digest reads at most (amendment A). GitLab's diffs page holds 100 and the adapter
+ * reads one page, so a list that reaches this many may be cut — and a cut list gives **no** digest
+ * (a person decides), never a digest of part of the change.
+ */
+export const CHANGE_DIGEST_MAX_FILES = 100;
+
+/** The follow-up's singleton key: one queued `platform_merge` wake-up per task. */
+export const platformMergeSingletonKey = (taskId: string): string => `platform_merge:${taskId}`;
+
+/** A follow-up wake-up of this duty, one per task while one is queued. */
+const enqueueFollowUp = async (
+  options: Pick<PlatformMergeOptions, 'jobs'>,
+  input: {
+    readonly projectId: Id;
+    readonly taskId: Id;
+    readonly causeEventId: Id;
+    readonly startAfter?: Date;
+  },
+): Promise<void> => {
+  await options.jobs.enqueue({
+    queue: JOB_QUEUES.pipelineOutbound,
+    singletonKey: platformMergeSingletonKey(input.taskId),
+    ...(input.startAfter === undefined ? {} : { startAfter: input.startAfter }),
+    data: {
+      duty: 'platform_merge',
+      project_id: input.projectId,
+      task_id: input.taskId,
+      cause_event_id: input.causeEventId,
+    } satisfies PipelineOutboundData,
+  });
+};
 
 /** After a review window, the duty looks again this much after the window's length. */
 export const PERSON_WORDS_FOLLOW_UP_MS = 15_000;
@@ -382,11 +412,13 @@ export const runPlatformMerge = async (
   if (
     live.state === 'merged' &&
     headSha !== null &&
+    live.head_sha === headSha &&
     read.attempt === null &&
     (job?.retries?.count ?? 0) > 0
   ) {
-    // A retry after a transport failure, and the merge request is merged: the lost answer was the
-    // platform's merge (TD-038 decision 5, "already merged → done").
+    // A retry after a transport failure, and the merge request is merged **at the reviewed head**:
+    // the lost answer was the platform's merge (TD-038 decision 5, "already merged → done"). Merged
+    // at another head is a person's merge, which the ordinary `mr.merged` path takes.
     await recordAttempt(step, {
       headSha,
       outcome: 'merged',
@@ -395,7 +427,19 @@ export const runPlatformMerge = async (
     });
     return 'merged';
   }
-  if (read.attempt !== null && read.attempt.outcome === 'rebased') {
+  if (live.state === 'opened' && live.target_branch !== settings.defaultBranch) {
+    // Only the project's default branch is the platform's to merge into (review of #158): a merge
+    // request retargeted elsewhere is a person's.
+    await decideAs('person', 'target_not_default');
+    return 'person';
+  }
+  if (
+    read.attempt !== null &&
+    read.attempt.outcome === 'rebased' &&
+    read.attempt.rebasedTo === null
+  ) {
+    // A rebase asked of this head and not settled yet. A settled one (a no-op rebase on this head)
+    // goes on to the checks; a later need_rebase for the head is then a person's (`startRebase`).
     return continueRebase(step, read.attempt, live);
   }
   const windowMs = options.reviewCommentWindowMs ?? 2 * 60_000;
@@ -433,19 +477,28 @@ export const runPlatformMerge = async (
       // The human-return window decides the words first; the merge is asked again once it has
       // closed — a re-read, not a provider retry. Every entry into Ready opens one, so without this
       // the first check after the entry would wait for the recovery pass's ten minutes.
-      await options.jobs.enqueue({
-        queue: JOB_QUEUES.pipelineOutbound,
+      await enqueueFollowUp(options, {
+        projectId,
+        taskId,
+        causeEventId: step.causeEventId,
         startAfter: new Date(now + windowMs + PERSON_WORDS_FOLLOW_UP_MS),
-        data: {
-          duty: 'platform_merge',
-          project_id: projectId,
-          task_id: taskId,
-          cause_event_id: step.causeEventId,
-        } satisfies PipelineOutboundData,
       });
     }
     logger.info({ task_id: taskId, wait }, 'platform merge: waiting — a check does not hold yet');
     return 'waiting';
+  }
+  // The task, read again immediately before the call: still at Ready at the same reviewed head
+  // (a cancel — a closed ticket cancels its task, S-28.14 — or a return since the reads above).
+  const still = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.load(scope.tx, taskId),
+  );
+  if (
+    still === null ||
+    still.task.state !== 'ready_for_merge' ||
+    still.task.currentStage !== READY_FOR_MERGE_STAGE ||
+    still.readyHeadSha !== headSha
+  ) {
+    return 'not_at_ready';
   }
   await step.decide(null);
   let merged: MergeRequest | null;
@@ -500,6 +553,28 @@ export const runPlatformMerge = async (
     // A shadow task makes no call — unreachable, `shadow_mode` held it above; said, not assumed.
     return 'person';
   }
+  if (merged.state !== 'merged') {
+    // An answer that is not a merge is not recorded as one: read the merge request again.
+    const reread = await reads.mergeRequest(mr, context);
+    if (reread?.state !== 'merged' || reread.head_sha !== headSha) {
+      if (!isLastTry(job ?? {})) {
+        throw new IntegrationError(
+          'unavailable',
+          git.ref.provider,
+          'the merge was answered but the merge request did not read back merged',
+          { action: 'merge_merge_request' },
+        );
+      }
+      await recordAttempt(step, {
+        headSha,
+        outcome: 'failed',
+        providerStatus: 'not_merged',
+        mergeCommitSha: null,
+      });
+      return 'failed';
+    }
+    merged = reread;
+  }
   await recordAttempt(step, {
     headSha,
     outcome: 'merged',
@@ -545,6 +620,8 @@ const changeOf = async (
             renamedFile: file.renamed_file,
             diff: file.diff ?? null,
             omitted: file.omitted,
+            oldMode: file.old_mode ?? null,
+            newMode: file.new_mode ?? null,
           })),
           files.length >= CHANGE_DIGEST_MAX_FILES,
         );
@@ -579,9 +656,29 @@ const startRebase = async (step: MergeStep, headSha: string): Promise<PlatformMe
     );
     return 'waiting';
   }
+  if (
+    read.merges.some((merge) => merge.headSha === headSha && merge.outcome.startsWith('rebase'))
+  ) {
+    // A rebase was already asked of this head and changed nothing: a person rebases and merges.
+    await step.decide('rebase_no_change');
+    return 'waiting';
+  }
+  const context = { projectId: stored.task.projectId, taskId: stored.task.id };
+  const reads = gitReads(step.integrations);
+  // A `merge_error` already there is an earlier attempt's, never this rebase's (review of #158).
+  const earlier = await reads.mergeRequestRebase(stored.mr, context);
   const before = await changeOf(step);
   if (before.digest === null || before.commits === null) {
     await step.decide('rebase_no_digest');
+    return 'waiting';
+  }
+  // **The window between the reads and the call** (review of #158, blocker 1): the diff names no
+  // head, so the merge request is read again after it and the rebase is asked only while its head
+  // is still the reviewed one. A push after this read adds a commit — the commit count and the
+  // digest after the rebase then differ, and the rebased head is not accepted.
+  const again = await reads.mergeRequest(stored.mr, context);
+  if (again === null || again.state !== 'opened' || again.head_sha !== headSha) {
+    await step.decide('head_moved');
     return 'waiting';
   }
   try {
@@ -615,22 +712,19 @@ const startRebase = async (step: MergeStep, headSha: string): Promise<PlatformMe
   await recordAttempt(step, {
     headSha,
     outcome: 'rebased',
-    providerStatus: null,
+    // `stale_error`: GitLab already showed a failed rebase before this one was asked.
+    providerStatus: earlier?.failed === true ? 'stale_error' : null,
     mergeCommitSha: null,
     changeDigest: before.digest,
     commitCount: before.commits,
   });
   await step.decide('rebase_in_progress');
   // One follow-up a minute later — not a loop: the recovery pass asks again after that.
-  await options.jobs.enqueue({
-    queue: JOB_QUEUES.pipelineOutbound,
+  await enqueueFollowUp(options, {
+    projectId: stored.task.projectId,
+    taskId: stored.task.id,
+    causeEventId: step.causeEventId,
     startAfter: new Date(Date.parse(options.clock.now()) + REBASE_FOLLOW_UP_MS),
-    data: {
-      duty: 'platform_merge',
-      project_id: stored.task.projectId,
-      task_id: stored.task.id,
-      cause_event_id: step.causeEventId,
-    } satisfies PipelineOutboundData,
   });
   return 'rebase_asked';
 };
@@ -656,7 +750,20 @@ const continueRebase = async (
     await step.decide('rebase_in_progress');
     return 'waiting';
   }
-  if (state.failed) {
+  if (state.failed && live.head_sha === rebase.headSha) {
+    if (rebase.providerStatus === 'stale_error') {
+      // GitLab showed a failed rebase before this one was asked, and still does: whether this
+      // rebase failed cannot be told from it, so a person decides rather than a conflict assumed.
+      await options.unitOfWork.transaction(async (scope) =>
+        options.store.tasks.settleRebase(scope.tx, taskId, rebase.headSha, {
+          outcome: 'rebase_changed',
+          providerStatus: 'rebase_unknown',
+          rebasedTo: null,
+        }),
+      );
+      await step.decide('rebase_changed');
+      return 'rebase_changed';
+    }
     await options.unitOfWork.transaction(async (scope) =>
       options.store.tasks.settleRebase(scope.tx, taskId, rebase.headSha, {
         outcome: 'rebase_conflict',
@@ -667,10 +774,31 @@ const continueRebase = async (
     await reenterRebaseGate(options, taskId);
     return 'rebase_conflict';
   }
-  if (live.state !== 'opened' || live.head_sha === rebase.headSha) {
-    // Queued and not yet run, or the merge request left `opened`: nothing to judge yet.
-    await step.decide('rebase_in_progress');
+  if (live.state !== 'opened') {
+    await step.decide('merge_request_not_open');
     return 'waiting';
+  }
+  if (live.head_sha === rebase.headSha) {
+    if (live.merge_blocker?.reason === 'rebase') {
+      // Not run yet: the recovery pass asks again after the follow-up.
+      await step.decide('rebase_in_progress');
+      return 'waiting';
+    }
+    // GitLab rebased nothing — the branch was already up to date — and no longer wants a rebase:
+    // the reviewed head stands. Settled on itself, so a later need_rebase is a person's.
+    await options.unitOfWork.transaction(async (scope) =>
+      options.store.tasks.settleRebase(scope.tx, taskId, rebase.headSha, {
+        outcome: 'rebased',
+        providerStatus: 'no_change',
+        rebasedTo: rebase.headSha,
+      }),
+    );
+    await enqueueFollowUp(options, {
+      projectId: stored.task.projectId,
+      taskId,
+      causeEventId: step.causeEventId,
+    });
+    return 'rebase_accepted';
   }
   const after = await changeOf(step);
   const changed =
@@ -718,7 +846,12 @@ const continueRebase = async (
   // compare-and-set on the head the rebase started from.
   const accepted = await options.unitOfWork.transaction(async (scope) => {
     const current = await options.store.tasks.load(scope.tx, taskId);
-    if (current === null || current.readyHeadSha !== rebase.headSha) {
+    if (
+      current === null ||
+      current.task.state !== 'ready_for_merge' ||
+      current.task.currentStage !== READY_FOR_MERGE_STAGE ||
+      current.readyHeadSha !== rebase.headSha
+    ) {
       return false;
     }
     await options.store.tasks.saveReadyHead(scope.tx, taskId, live.head_sha);
@@ -737,14 +870,10 @@ const continueRebase = async (
     await step.decide('head_moved');
     return 'waiting';
   }
-  await options.jobs.enqueue({
-    queue: JOB_QUEUES.pipelineOutbound,
-    data: {
-      duty: 'platform_merge',
-      project_id: stored.task.projectId,
-      task_id: taskId,
-      cause_event_id: step.causeEventId,
-    } satisfies PipelineOutboundData,
+  await enqueueFollowUp(options, {
+    projectId: stored.task.projectId,
+    taskId,
+    causeEventId: step.causeEventId,
   });
   return 'rebase_accepted';
 };

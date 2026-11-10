@@ -378,8 +378,12 @@ const dispatchOutbound =
         });
         return;
       // S-28.15 (TD-038): the platform's merge, pinned to the reviewed head, re-validated on fire.
+      // Under the task's duty lease (review of #158): two wake-ups of one task never race the
+      // recorded outcome, and the merge never runs beside the Ready check's own thread writes.
       case 'platform_merge':
-        await runPlatformMerge(options, data, job);
+        await underReviewConversationLease(options, data, async () => {
+          await runPlatformMerge(options, data, job);
+        });
         return;
       default:
         logger.warn(
