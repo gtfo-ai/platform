@@ -3855,7 +3855,6 @@ describe('a human’s way into Ready (WP-79)', () => {
         'answerQuestion', // Question aggregate
         'assertNoPendingApproval', // a refusal inside `humanEnter` (S-27.1, BACKLOG 854)
         'assertRunTransition', // a check
-        'cancelTask', // → cancelled
         'canTransitionTask', // a check
         'compilePipeline', // pure
         'decideApproval', // Approval aggregate
@@ -3883,7 +3882,8 @@ describe('a human’s way into Ready (WP-79)', () => {
         'TaskMergedError', // a refusal (WP-152)
         'takeOverTask', // → paused
         'taskBranchName', // pure
-        'withdrawApproval', // Approval aggregate: a cancelled task's pending approval (S-27.1)
+        // S-28.14: `cancelTask` (→ cancelled) and `withdrawApproval` moved with the cancellation
+        // to `task-cancel.ts`, which `cancelTaskCommand` calls.
       ].sort(),
     );
     const body = source.slice(source.indexOf('const humanEnter = async'));
