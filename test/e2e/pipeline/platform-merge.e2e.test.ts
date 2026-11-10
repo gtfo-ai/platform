@@ -73,9 +73,20 @@ describe('the platform merges (S-28.15)', () => {
     await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
 
     // The platform's merge: the fake GitLab merged the merge request, pinned to the reviewed head.
-    await pipeline.waitFor('the platform merged the merge request', async () =>
-      Promise.resolve(pipeline.git.merges.some((merge) => merge.outcome === 'merged')),
-    );
+    // Entering Ready opens the human-return window (two minutes), and the platform reads people's
+    // words first, so the merge comes after it — a deadline of our own, longer than `waitFor`'s.
+    const deadline = Date.now() + 210_000;
+    while (!pipeline.git.merges.some((merge) => merge.outcome === 'merged')) {
+      if (Date.now() > deadline) {
+        const decided = await pipeline.query(
+          'select mergeable, reason, merge_by, merge_wait from task_merge_checks',
+        );
+        throw new Error(
+          `the platform did not merge; merge calls ${JSON.stringify(pipeline.git.merges)}, decision ${JSON.stringify(decided)}`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
     const [merge] = pipeline.git.merges;
     const [task] = await pipeline.query<{ id: string; ready_head_sha: string; state: string }>(
       'select id, ready_head_sha, state from tasks',
@@ -116,5 +127,5 @@ describe('the platform merges (S-28.15)', () => {
     );
     expect(announced.length).toBeLessThanOrEqual(1);
     expect(pipeline.git.merges).toHaveLength(1);
-  }, 240_000);
+  }, 480_000);
 });

@@ -160,6 +160,9 @@ export const MAX_REBASES_PER_READY_ENTRY = 3;
 /** Files the change digest reads at most; a longer list gives no digest (amendment A). */
 export const CHANGE_DIGEST_MAX_FILES = 500;
 
+/** After a review window, the duty looks again this much after the window's length. */
+export const PERSON_WORDS_FOLLOW_UP_MS = 15_000;
+
 /** After a rebase is asked, the duty looks again once this much later (the recovery pass after). */
 export const REBASE_FOLLOW_UP_MS = 60_000;
 
@@ -426,6 +429,21 @@ export const runPlatformMerge = async (
   }
   if (wait !== null || headSha === null || live.merge_options == null) {
     await step.decide(wait ?? 'provider_blocked');
+    if (wait === 'person_words') {
+      // The human-return window decides the words first; the merge is asked again once it has
+      // closed — a re-read, not a provider retry. Every entry into Ready opens one, so without this
+      // the first check after the entry would wait for the recovery pass's ten minutes.
+      await options.jobs.enqueue({
+        queue: JOB_QUEUES.pipelineOutbound,
+        startAfter: new Date(now + windowMs + PERSON_WORDS_FOLLOW_UP_MS),
+        data: {
+          duty: 'platform_merge',
+          project_id: projectId,
+          task_id: taskId,
+          cause_event_id: step.causeEventId,
+        } satisfies PipelineOutboundData,
+      });
+    }
     logger.info({ task_id: taskId, wait }, 'platform merge: waiting — a check does not hold yet');
     return 'waiting';
   }

@@ -557,6 +557,19 @@ describe('the dangerous negatives — no merge call, and the named reason (TD-03
     );
   });
 
+  it('asks again once the human-return window has closed, and merges nothing meanwhile', async () => {
+    const w = await setup({ setting: 'platform', windowOpen: true });
+    expect(await w.run()).toBe('waiting');
+    const follow = w.jobs.history.filter(
+      (request) =>
+        request.queue === JOB_QUEUES.pipelineOutbound &&
+        (request.data as unknown as PipelineOutboundData).duty === 'platform_merge',
+    );
+    expect(follow).toHaveLength(1);
+    expect(follow[0]?.startAfter?.getTime()).toBeGreaterThan(Date.parse(NOW) + 2 * 60_000);
+    expect(w.merges).toEqual([]);
+  });
+
   it('a merge that waited is due again for the recovery pass; a person’s merge is not', async () => {
     const due = async (world: World) => {
       const w = await setup(world);
