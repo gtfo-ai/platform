@@ -15,7 +15,6 @@ import {
 import { describe, expect, it } from 'vitest';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
-import type { InboxStore } from '../integrations/inbound.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import {
@@ -25,6 +24,7 @@ import {
   type MergeRequest,
   RebaseRefusedError,
 } from '../ports/integrations/git-provider.js';
+import type { InboxStore } from '../ports/integrations/inbox.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import {
@@ -34,7 +34,7 @@ import {
 } from '../testing/memory-integrations.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
-import { reviewWrites, staticPipelineIntegrations } from './integrations.js';
+import { noRunScopedSecrets, reviewWrites, staticPipelineIntegrations } from './integrations.js';
 import type { PipelineOutboundData } from './jobs.js';
 import {
   LOST_MERGE_SIGNAL_PASSES,
@@ -392,6 +392,16 @@ const setup = async (world: World = {}) => {
   } as unknown as PlatformMergeOptions;
   await memory.transaction(async (scope) => {
     await store.tasks.insert(scope.tx, storedTask(world));
+    // The two heads are narrow writes (the insert, like the SQL one, leaves them null).
+    await store.tasks.saveReadyHead(
+      scope.tx,
+      TASK,
+      world.readyHead === undefined ? HEAD : world.readyHead,
+    );
+    await store.tasks.saveCiSettlement(scope.tx, TASK, {
+      headSha: world.ciHead === undefined ? HEAD : world.ciHead,
+      excusedPaths: [],
+    });
     let version = 0;
     for (const verdict of world.verdicts ?? ['approve']) {
       version += 1;
@@ -624,7 +634,7 @@ describe('one decisive call per task and reviewed head (TD-038 decision 5)', () 
 
   it('the executor replays the merge for the same (task, head) key: a second call reaches no provider', async () => {
     const w = await setup({ setting: 'platform' });
-    const integrations = await w.options.integrations.forProject(PROJECT);
+    const integrations = await w.options.integrations.forProject(PROJECT, noRunScopedSecrets());
     const call = () =>
       reviewWrites(integrations).merge(
         {
@@ -816,7 +826,7 @@ describe('a lost mr.merged (TD-038 decision 6)', () => {
     const w = await setup({ setting: 'platform' });
     expect(await w.run()).toBe('merged');
     const stored = (await reload(w)) as StoredTask;
-    const integrations = await w.options.integrations.forProject(PROJECT);
+    const integrations = await w.options.integrations.forProject(PROJECT, noRunScopedSecrets());
     const live = await (integrations.git?.port.getMergeRequest(MR) as Promise<MergeRequest>);
     const pass = () =>
       recoverLostMergeSignal(w.options, {

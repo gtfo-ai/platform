@@ -350,6 +350,7 @@ import {
   type NormalisedEvent,
   type PipelineStatus,
   type PipelineStatusValue,
+  RebaseRefusedError,
   type RepositoryCommit,
   type RunTokenApiAccess,
   type WebhookDelivery,

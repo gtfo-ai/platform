@@ -82,7 +82,8 @@ const REBASE_WHY: Readonly<Record<string, string>> = {
   pipeline_failed: 'the pipeline on the rebased commit did not pass',
   cannot_push: 'the platform may not push to the source branch',
   not_enqueued: 'the provider could not queue the rebase',
-  rebase_failed: 'it conflicts with the target branch, so the task went back to the rebase gate',
+  rebase_failed:
+    'it conflicts with the target branch, so the task went back to the up-to-date check',
 };
 
 const why = (status: string | null): string =>

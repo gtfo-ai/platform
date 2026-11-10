@@ -82,7 +82,7 @@ export const WhoMerges = ({ projectId }: { readonly projectId: string }): ReactE
       </fieldset>
       {mayChange || session.isPending ? null : (
         <p className="text-xs text-fg-muted" data-who-merges-role="">
-          Changing this needs the administrator role.
+          Changing who merges needs the administrator role.
         </p>
       )}
       {commands.writeConfig.isError ? (

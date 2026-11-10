@@ -356,6 +356,14 @@ const gitlabScript = (): Script => ({
   [`PUT /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
   // S-28.15: the merge answers the merge request, planted like every other.
   [`PUT /projects/${P}/merge_requests/7/merge`]: { body: gitlabMr() },
+  // TD-038 amendment A: the rebase answers two booleans; the commits page is counted, never echoed.
+  [`PUT /projects/${P}/merge_requests/7/rebase`]: {
+    status: 202,
+    body: { rebase_in_progress: true },
+  },
+  [`GET /projects/${P}/merge_requests/7/commits`]: {
+    body: [{ id: SHA, title: `fix ${GITLAB_TOKEN}`, message: `fix ${GITLAB_TOKEN}` }],
+  },
   [`GET /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
   'POST /api/graphql': {
     body: {
@@ -574,6 +582,9 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   get_merge_request: 'getMergeRequest',
   close_merge_request: 'closeMergeRequest',
   merge_merge_request: 'mergeMergeRequest',
+  rebase_merge_request: 'rebaseMergeRequest',
+  get_merge_request_rebase: 'getMergeRequestRebase',
+  count_merge_request_commits: 'countMergeRequestCommits',
   find_open_merge_request: 'findOpenMergeRequest',
   authenticated_user: 'authenticatedUser',
   project_member_access: 'projectMemberAccess',
@@ -691,6 +702,10 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       squash: false,
       remove_source_branch: true,
     });
+    // TD-038 amendment A: three answers of booleans and a number — driven so the census holds.
+    emitted.rebase_merge_request = await port.rebaseMergeRequest(ref);
+    emitted.get_merge_request_rebase = await port.getMergeRequestRebase(ref);
+    emitted.count_merge_request_commits = await port.countMergeRequestCommits(ref);
     emitted.get_merge_request_diff_stats = await port.getMergeRequestDiffStats(ref);
     // WP-138: the listing answers a merged merge request, which the open filter drops — driven so
     // the census holds; the other two answer planted provider text.

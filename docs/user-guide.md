@@ -1328,7 +1328,7 @@ repository's own merge method, squash and branch-removal settings, and never app
 request or changes a setting. When GitLab only wants a rebase (a fast-forward project), the platform
 asks GitLab to rebase it — at most three times while the task waits at Ready — and merges the rebased
 commit only when its added and removed lines and its number of commits are exactly the reviewed ones
-and its pipeline passed; a rebase that conflicts sends the task back to the rebase gate.
+and its pipeline passed; a rebase that conflicts sends the task back to the up-to-date check.
 
 Afterwards: *"Merged by the platform at 14:02, commit abc1234 — plan approved by Jana Nováková"* (or
 *plan approved by the platform as low-risk*, *no plan approval required*), and the task moves on when

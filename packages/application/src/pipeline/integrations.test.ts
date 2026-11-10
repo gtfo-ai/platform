@@ -139,6 +139,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // S-28.13's `ready_merge_check` duty: one resolution for the close of the platform's own threads
   // and the mergeability read at Ready — in a job, outside every transaction and any run.
   'ready-merge-check.ts': 1,
+  // S-28.15's `platform_merge` duty: one resolution for the merge (and a rebase), in a job, outside
+  // every transaction and any run.
+  'platform-merge.ts': 1,
   // WP-24's three duties each resolve the project's bindings once: the check before it creates the
   // task, the post before it writes the threads, the observation before it reads them back.
   // WP-179's three review-conversation duties (`review_findings_post`, `conversation_replies`,

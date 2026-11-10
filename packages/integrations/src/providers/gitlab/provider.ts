@@ -128,6 +128,7 @@ import {
   mergeRequestSchema,
   type NormalisedDelivery,
   type PipelineStatus,
+  RebaseRefusedError,
   type RepositoryCommit,
   type SecretRedactor,
   type WebhookDelivery,

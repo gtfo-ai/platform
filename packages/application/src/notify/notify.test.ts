@@ -334,7 +334,7 @@ describe('the handler decides and never calls', () => {
     });
   });
 
-  it('registers at TD-005 priority 210 for the nine types technical/02 names', () => {
+  it('registers at TD-005 priority 210 for the ten types technical/02 names', () => {
     const handler = notifyHandler({} as never);
     expect(handler.priority).toBe(210);
     expect(handler.eventTypes).toEqual([
@@ -348,6 +348,8 @@ describe('the handler decides and never calls', () => {
       'budget.exhausted',
       // WP-43: the buttons technical/02 names, now that a click can reach the platform.
       'task.approval.requested',
+      // S-28.15 (TD-038 decision 7): the platform's merge, announced once.
+      'task.merge.attempted',
     ]);
   });
 

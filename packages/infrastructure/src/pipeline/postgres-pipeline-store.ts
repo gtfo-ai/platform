@@ -331,7 +331,7 @@ const mergeCheckDueAgain = (stale: string): string => `c.mergeable is distinct f
   or exists (select 1 from task_merges m
               where m.task_id = t.id and m.outcome = 'merged' and m.attempted_at < ${stale})`;
 
-interface TaskMergeRow {
+interface TaskMergeRow extends Record<string, unknown> {
   task_id: string;
   head_sha: string;
   outcome: TaskMergeRecord['outcome'];

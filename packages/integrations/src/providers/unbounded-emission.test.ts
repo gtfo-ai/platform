@@ -389,6 +389,11 @@ describe('one getMergeRequest, with the provider hostile in every string it cont
     // bytes. The **list of unbounded paths above did not move**, which is the assertion that
     // matters here — the new field is a `shaSchema`, so it is bounded by construction and a
     // hostile provider cannot grow it.
-    expect(bytesOf(JSON.stringify(mergeRequest) ?? '')).toBe(1_180_338);
+    //
+    // **It moved by exactly 45 at S-28.15**: `MergeRequest` gained `merge_options` and
+    // `merge_commit_sha`, both `null` for this fixture (no `squash_on_merge`, not merged) —
+    // `,"merge_options":null` is 21 bytes and `,"merge_commit_sha":null` 24. Both are bounded by
+    // construction (two booleans, a `shaSchema`), and the path list above did not move.
+    expect(bytesOf(JSON.stringify(mergeRequest) ?? '')).toBe(1_180_383);
   });
 });

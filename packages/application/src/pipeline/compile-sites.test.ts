@@ -124,6 +124,10 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 1,
     how: "the reverse sync's escalation (S-28.5), inside its own task transaction: the re-loaded row's `stored.pipelineDial` — the escalation closes the stage's row as every escalation does",
   },
+  'packages/application/src/pipeline/platform-merge.ts': {
+    sites: 2,
+    how: "the platform's merge (S-28.15, TD-038): whether the frozen pipeline runs an enabled CI gate, off the loaded row's `stored.pipelineDial`, and the re-entry of the rebase gate after a failed rebase (amendment A), inside its own task transaction off the re-loaded row's `current.pipelineDial` — as `passQa` does",
+  },
   'packages/application/src/pipeline/ticket-claim.ts': {
     sites: 1,
     how: "the claim's refusal (WP-177), inside its own escalation transaction: the re-loaded row's `current.pipelineDial` — the escalation the claim raises closes the stage's row as every escalation does",
@@ -256,9 +260,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2323 ms (median 1927 ms); 2× it, 15 s floor.
-  it('counts forty — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5 — and states how each resolves the dial', () => {
+  it('counts forty-two — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5, forty before S-28.15 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(40);
+    expect(total).toBe(42);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

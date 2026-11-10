@@ -28,7 +28,9 @@
 --   merge_wait  what the platform last waited for at the moment of merging, for the task page.
 --
 -- Additive by TD-032's list: a new table the previous build never names, registered below, and two
--- nullable columns with `not valid` checks over the columns this file adds.
+-- nullable columns, `merge_by` with a `not valid` check over its own values. `merge_wait` carries no
+-- check (a shape check is not null-propagating by construction, TD-032 amendment C): its one
+-- writer is the platform's, and the task read parses it with the published shape.
 create table task_merges (
   task_id uuid not null references tasks (id) on delete cascade,
   head_sha text not null,
@@ -73,8 +75,6 @@ alter table task_merge_checks add column merge_wait text;
 
 alter table task_merge_checks
   add constraint task_merge_checks_merge_by_known check (merge_by in ('person', 'platform')) not valid;
-alter table task_merge_checks
-  add constraint task_merge_checks_merge_wait_shape check (merge_wait ~ '^[a-z_]{1,64}$') not valid;
 
 comment on column task_merge_checks.merge_by is
   'Who merges this task as last decided (S-28.15): person or platform; a platform row with no task_merges row for the reviewed head is due again in the recovery pass.';

@@ -223,6 +223,8 @@ export const whoMerges = async (
   integrations: PipelineIntegrations,
 ): Promise<{ readonly by: 'person' | 'platform'; readonly reason: string | null }> => {
   const settings = await options.settings.forProject(stored.task.projectId);
+  // A configuration that cannot be read (`settings.configRefusal`, WP-106) holds the merge for a
+  // person: `mergeDecisionFor` reads it as shadow mode, never as the platform's leave to merge.
   const reasons = mergeDecisionFor({
     stored,
     settings,
@@ -322,6 +324,7 @@ export const runPlatformMerge = async (
   const { stored } = read;
   const projectId = stored.task.projectId;
   const settings = await options.settings.forProject(projectId);
+  // `settings.configRefusal` (WP-106) holds the merge for a person below (`mergeDecisionFor`).
   const integrations = await integrationsForProject(
     options.integrations,
     projectId,
