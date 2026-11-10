@@ -48,6 +48,15 @@ export const workers = pgTable('workers', {
     'everything' | 'mine_and_unassigned' | 'mine' | 'pick_only'
   >(),
   concurrency: integer('concurrency').notNull().default(1),
+  /**
+   * S-28.12 (migration 0117): the machine could not provision a run's workspace — when, the
+   * classified cause (`WORKSPACE_UNAVAILABLE_CAUSES`) and the launcher error's first line as the
+   * worker redacted it. Written by the worker's `release provision_failed`, cleared by its next
+   * claim; `null` while it can provision.
+   */
+  workspaceUnavailableAt: timestamp('workspace_unavailable_at', { withTimezone: true }),
+  workspaceUnavailableCause: text('workspace_unavailable_cause'),
+  workspaceUnavailableDetail: text('workspace_unavailable_detail'),
 });
 
 /** A device-flow code pair, both halves stored hashed (RFC 8628's shape, TD-031 §10c). */

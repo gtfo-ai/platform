@@ -27,6 +27,7 @@ import {
 } from './worker.js';
 import { workerClaimBlockersSchema } from './worker-claim-blockers.js';
 import { workerIdleReasonSchema } from './worker-idle-reason.js';
+import { workspaceUnavailableSchema } from './workspace-unavailable.js';
 
 /** What a person typed: normalised by the server (case, spaces, hyphen), so only bounded here. */
 export const typedUserCodeSchema = z.string().min(1).max(32);
@@ -176,6 +177,13 @@ export const workerSummarySchema = z.strictObject({
    * this build's server always sends it.
    */
   idle_reason: workerIdleReasonSchema.nullable().optional(),
+  /**
+   * S-28.12: the machine could not provision a run's workspace — the classified cause, the launcher
+   * error's first line (the worker's redaction; untrusted text) and since when — from its `release
+   * provision_failed` until its next claim. Its claim blockers then include `workspace_unavailable`.
+   * Optional on the wire for the SPA's fixtures; this build's server always sends it.
+   */
+  workspace_unavailable: workspaceUnavailableSchema.nullable().optional(),
 });
 export type WorkerSummary = z.infer<typeof workerSummarySchema>;
 

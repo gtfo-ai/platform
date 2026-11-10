@@ -40,5 +40,6 @@ export * from './worker-claim-blockers.js';
 export * from './worker-idle-reason.js';
 export * from './worker-local.js';
 export * from './workers.js';
+export * from './workspace-unavailable.js';
 
 export const packageId = '@platform/contracts' as const;

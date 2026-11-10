@@ -1040,3 +1040,37 @@ describe('Your limit — a person’s limit on tasks in flight (S-28.6)', () => 
     expect(puts).toEqual([{ max_tasks_in_flight: 4 }]);
   });
 });
+
+describe('a machine that cannot start runs, on its row (S-28.12)', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', '/workers');
+  });
+
+  it('is red with the cause, never Ready, and keeps the error under Details', async () => {
+    const items = [
+      worker({
+        name: 'jan-mbp',
+        last_seen_at: new Date().toISOString(),
+        claim_blockers: ['workspace_unavailable'],
+        can_claim: false,
+        workspace_unavailable: {
+          cause: 'docker_networks_exhausted',
+          detail:
+            'Docker engine answered 400: all predefined address pools have been fully subnetted',
+          since: '2026-11-04T12:00:00.000Z',
+        },
+      }),
+    ];
+    const { fetchImpl } = fetchFor('missing', items);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await screen.findByText('jan-mbp');
+    const state = container.querySelector('[data-worker-state]');
+    expect(state?.getAttribute('data-worker-state')).toBe('needs_you');
+    expect(state?.textContent).toBe(
+      'Can’t take work: It can’t start runs on this computer — Docker has no free network ranges',
+    );
+    expect(container.querySelector('[data-workspace-detail]')?.textContent).toBe(
+      'Docker engine answered 400: all predefined address pools have been fully subnetted',
+    );
+  });
+});

@@ -136,6 +136,8 @@ export const claimFactsOf = (
     eligibleProjects: facts?.eligibleProjects ?? null,
     // S-26.4: *pick only* is the policy now — a legacy `[]` scope reads as it (`claimPolicy`).
     pickOnly: row.claimPolicy === 'pick_only',
+    // S-28.12: it handed a run back because it could not provision the workspace.
+    workspaceUnavailable: (row.workspaceUnavailable ?? null) !== null,
   };
 };
 
@@ -192,6 +194,14 @@ const toWireWorkerRow = (
   })),
   claim_policy: row.claimPolicy,
   policy_skipped_offers: row.policySkippedOffers ?? null,
+  workspace_unavailable:
+    row.workspaceUnavailable === undefined || row.workspaceUnavailable === null
+      ? null
+      : {
+          cause: row.workspaceUnavailable.cause,
+          detail: row.workspaceUnavailable.detail,
+          since: iso(row.workspaceUnavailable.since),
+        },
   last_update:
     row.lastUpdate === undefined || row.lastUpdate === null
       ? null

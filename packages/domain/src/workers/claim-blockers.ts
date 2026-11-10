@@ -57,6 +57,11 @@ export interface CoreWorkerClaimFacts {
   readonly eligibleProjects: number | null;
   /** Its claim scope is `[]`, *pick only*: an automatic claim takes nothing. */
   readonly pickOnly: boolean;
+  /**
+   * S-28.12: it handed a run back because it could not provision the workspace, and has not
+   * claimed since (`workers.workspace_unavailable_at`). Absent is no.
+   */
+  readonly workspaceUnavailable?: boolean;
 }
 
 /** Whether a worker holding `held` holds both of the core's run images. */
@@ -84,6 +89,7 @@ export const coreClaimBlockersOf = (facts: CoreWorkerClaimFacts): WorkerClaimBlo
   if (facts.coreDigests === null) blockers.push('platform_images_unresolved');
   if (facts.hold !== null) blockers.push(facts.hold);
   if (facts.usagePaused) blockers.push('usage_limited');
+  if (facts.workspaceUnavailable === true) blockers.push('workspace_unavailable');
   blockers.push(...imageBlockers(facts.heldDigests, facts.coreDigests));
   if (facts.eligibleProjects === 0) blockers.push('no_eligible_project');
   if (facts.pickOnly) blockers.push('pick_only');
@@ -107,6 +113,8 @@ export interface LocalWorkerClaimFacts {
   readonly heldDigests: readonly string[];
   /** The run and egress digests its core's handshake named, or `null` before one. */
   readonly coreDigests: RunImageDigests | null;
+  /** S-28.12: its last run's workspace could not be provisioned and no retry has worked yet. */
+  readonly workspaceUnavailable?: boolean;
 }
 
 /** The worker's half of its blockers, in the vocabulary's order; empty when it takes work. */
@@ -123,6 +131,7 @@ export const localClaimBlockersOf = (facts: LocalWorkerClaimFacts): WorkerClaimB
   else if (facts.manuallyPaused) blockers.push('paused');
   if (facts.usagePaused) blockers.push('usage_limited');
   if (facts.launcherAnswered === false) blockers.push('launcher_unreachable');
+  if (facts.workspaceUnavailable === true) blockers.push('workspace_unavailable');
   else if (facts.launcherAnswered === true) {
     blockers.push(...imageBlockers(facts.heldDigests, facts.coreDigests));
   }

@@ -94,6 +94,8 @@ import {
   leadingClaimBlocker,
   UPDATING_WORDS,
   WORKER_CLAIM_BLOCKER_WORDS,
+  WORKSPACE_CAUSE_SHORT,
+  WORKSPACE_CAUSE_WORDS,
   workerIdleWords,
 } from '../ui/humanize.js';
 import {
@@ -202,6 +204,10 @@ const blockerReason = (
     );
   }
   const word = WORKER_CLAIM_BLOCKER_WORDS[blocker].word;
+  if (blocker === 'workspace_unavailable' && (worker.workspace_unavailable ?? null) !== null) {
+    // S-28.12: the cause, in words — the long form and the error are under *Why?* and *Details*.
+    return `${word} — ${WORKSPACE_CAUSE_SHORT[(worker.workspace_unavailable as NonNullable<WorkerSummary['workspace_unavailable']>).cause]}`;
+  }
   if (blocker === 'offline') {
     const seen = worker.last_seen_at === null ? null : formatAgo(worker.last_seen_at, nowMs);
     return seen === null ? `${word} — not seen yet` : `${word} — last seen ${seen}`;
@@ -448,7 +454,18 @@ const WhyList = ({ worker }: { readonly worker: WorkerSummary }): ReactElement =
             <span className={line.updating ? 'font-medium text-running' : 'font-medium text-fg'}>
               {line.word}
             </span>
-            <span className="text-fg-muted">{line.fix}</span>
+            <span className="text-fg-muted">
+              {line.blocker === 'workspace_unavailable' &&
+              (worker.workspace_unavailable ?? null) !== null
+                ? WORKSPACE_CAUSE_WORDS[
+                    (
+                      worker.workspace_unavailable as NonNullable<
+                        WorkerSummary['workspace_unavailable']
+                      >
+                    ).cause
+                  ]
+                : line.fix}
+            </span>
           </li>
         ))}
       </ul>
@@ -541,6 +558,22 @@ const WorkerRow = ({
                   ? 'Not seen yet'
                   : (formatAgo(worker.last_seen_at, nowMs) ?? formatDateTime(worker.last_seen_at))}
               </dd>
+              {(worker.workspace_unavailable ?? null) === null ? null : (
+                <>
+                  <dt className="text-fg-muted">Workspace error</dt>
+                  <dd className="break-all" data-workspace-detail="">
+                    <UntrustedText
+                      value={
+                        (
+                          worker.workspace_unavailable as NonNullable<
+                            WorkerSummary['workspace_unavailable']
+                          >
+                        ).detail ?? 'The machine sent no error text.'
+                      }
+                    />
+                  </dd>
+                </>
+              )}
               {worker.revoked_at === null ? null : (
                 <>
                   <dt className="text-fg-muted">Revoked</dt>

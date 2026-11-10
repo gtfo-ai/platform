@@ -259,6 +259,7 @@ const COUNT_WORDS: Readonly<
   draining: 'draining',
   usage_limited: 'at the Claude usage limit',
   launcher_unreachable: ['with its launcher not answering', 'with their launchers not answering'],
+  workspace_unavailable: ['unable to start runs', 'unable to start runs'],
   images_missing: 'without run images',
   images_outdated: ['needs an update', 'need an update'],
   no_eligible_project: 'given no project',

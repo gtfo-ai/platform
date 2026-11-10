@@ -75,6 +75,7 @@ export {
   type IdleWords,
   workerIdleWords,
 } from './words/worker-idle.js';
+export { WORKSPACE_CAUSE_SHORT, WORKSPACE_CAUSE_WORDS } from './words/workspace-causes.js';
 
 export const TASK_STATE_LABEL: Readonly<Record<TaskState, string>> = {
   queued: 'Queued',

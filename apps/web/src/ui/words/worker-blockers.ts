@@ -76,6 +76,10 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
     word: 'Its launcher isn’t answering',
     fix: 'The worker checks again before each claim. On that computer, “docker compose ps” must show the launcher running; “docker compose up -d” starts it.',
   },
+  workspace_unavailable: {
+    word: 'It can’t start runs on this computer',
+    fix: 'Its last run’s workspace could not be created, so it handed the run back and takes nothing until it tries again by itself. The reason is on its row and its page; fix it on that computer, then press Try again on the worker’s page.',
+  },
   images_missing: {
     word: 'It has no run images',
     fix: 'Its launcher isn’t answering, or the images are still downloading. On that computer, run “docker compose up -d” and let the download finish.',

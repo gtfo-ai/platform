@@ -1199,6 +1199,66 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(`${started.statusCode} ${started.json().error?.code}`).toBe('409 run_started');
   });
 
+  /**
+   * S-28.12, the AUT-6861 scenario (Autix, 2026-11-10): Alice's machine cannot provision a
+   * workspace (Docker out of network ranges). It hands the run back with the cause — no attempt
+   * spent, no `finish`, the task not escalated — and Bob's healthy machine takes the same run, while
+   * Alice's is kept off that offer. Her Workers row says why until her machine claims again.
+   */
+  it('release provision_failed with its cause: the healthy machine runs it, nothing escalates, the row says why until the next claim', async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    const released = await post(w, WORKER_PATHS.runRelease, w.runId, pkg.runToken, {
+      epoch: 1,
+      reason: 'provision_failed',
+      workspace: {
+        cause: 'docker_networks_exhausted',
+        detail:
+          'Docker engine answered 400: all predefined address pools have been fully subnetted',
+      },
+    });
+    expect(released.statusCode).toBe(204);
+    const aliceRow = async () =>
+      (await w.store.listWorkers(null)).find((row) => row.id === w.alice.workerId);
+    expect((await aliceRow())?.workspaceUnavailable).toMatchObject({
+      cause: 'docker_networks_exhausted',
+      detail: 'Docker engine answered 400: all predefined address pools have been fully subnetted',
+    });
+    // The offer is open again with Alice's machine excluded, and the run was never finished.
+    expect(w.harness.store.offerRows()[0]?.state).toBe('open');
+    expect(w.harness.types()).not.toContain('run.failed');
+    expect(w.harness.types()).not.toContain('task.escalated');
+    // Bob's healthy machine takes the same run.
+    const bobs = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.claims),
+      headers: bearer(w.bob.credential),
+      payload: bodies(1)[WORKER_PATHS.claims],
+    });
+    expect(bobs.statusCode).toBe(200);
+    expect(runPackageSchema.parse(bobs.json()).runId).toBe(w.runId);
+    // Alice's next claim (her retry) is admitted to ask — and clears the recorded cause.
+    const again = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.claims),
+      headers: bearer(w.alice.credential),
+      payload: bodies(1)[WORKER_PATHS.claims],
+    });
+    expect(again.statusCode).toBe(204);
+    expect((await aliceRow())?.workspaceUnavailable ?? null).toBeNull();
+  });
+
+  it('refuses a workspace cause on any release but provision_failed (S-28.12)', async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    const response = await post(w, WORKER_PATHS.runRelease, w.runId, pkg.runToken, {
+      epoch: 1,
+      reason: 'image_missing',
+      workspace: { cause: 'disk_full', detail: null },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it('spawn: the marker’s instant, replayed unchanged; lease_lost for a stale epoch', async () => {
     const w = await world();
     const pkg = await claimAsAlice(w);

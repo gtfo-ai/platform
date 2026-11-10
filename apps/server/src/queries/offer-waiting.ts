@@ -64,6 +64,8 @@ export interface WaitingMachineFacts {
   readonly hold: 'paused' | 'draining' | null;
   /** A usage limit's pause still ahead. */
   readonly usagePaused: boolean;
+  /** S-28.12: it could not provision a run's workspace and has not claimed since. Absent is no. */
+  readonly workspaceUnavailable?: boolean;
   readonly heldDigests: readonly string[];
   readonly lastSeenAt: string | null;
 }
@@ -96,6 +98,8 @@ export const CANNOT_TAKE_BLOCKERS: ReadonlySet<WorkerClaimBlocker> = new Set<Wor
   'platform_images_unresolved',
   'draining',
   'usage_limited',
+  // S-28.12: the machine could not provision a run's workspace and has not claimed since.
+  'workspace_unavailable',
   'images_missing',
   'images_outdated',
 ]);
@@ -156,6 +160,7 @@ export const machineWaitingOf = (
           // This project's question is `here`; the worker's count of projects is not asked.
           eligibleProjects: null,
           pickOnly: !machine.policyTakes,
+          workspaceUnavailable: machine.workspaceUnavailable === true,
         }),
       );
 
@@ -294,6 +299,7 @@ const PERSON_MACHINES = `coalesce((
                                    order by h.created_at desc, h.id desc
                                    limit 1) end,
            'usage_paused', (pw.paused_until is not null and pw.paused_until > now()),
+           'workspace_unavailable', pw.workspace_unavailable_at is not null,
            'held', pw.image_digests,
            'last_seen_at', pw.last_seen_at) order by pw.id)
     from workers pw
@@ -309,6 +315,7 @@ interface MachineRow {
   readonly manually_paused: boolean;
   readonly hold_via: string | null;
   readonly usage_paused: boolean;
+  readonly workspace_unavailable?: boolean;
   readonly held: unknown;
   readonly last_seen_at: string | null;
 }
@@ -336,6 +343,7 @@ const machineFactsOf = (row: MachineRow): WaitingMachineFacts => ({
   protocolVersion: row.protocol_version ?? null,
   hold: holdOf(row.manually_paused === true, row.hold_via ?? null),
   usagePaused: row.usage_paused === true,
+  workspaceUnavailable: row.workspace_unavailable === true,
   heldDigests: Array.isArray(row.held)
     ? row.held.filter((digest): digest is string => typeof digest === 'string')
     : [],

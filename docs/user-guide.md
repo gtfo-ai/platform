@@ -2212,6 +2212,16 @@ organisation's maximum; above it is refused and says the maximum) or **Use the d
 starts your waiting tasks that now fit. An administrator also sees **Everyone's limit** and may change
 anybody's.
 
+**A machine that cannot start runs** (S-28.12). When a machine's Docker cannot create a run's
+workspace — out of network ranges, not answering, out of disk, or an image it cannot download — it
+hands the run back to the platform at once (another machine takes it; no attempt of the stage is
+spent and nothing is escalated), and stops taking work. Its row turns red — *Can't take work: It
+can't start runs on this computer — Docker has no free network ranges* — with what to do under
+*Why?* and the error itself under *Details*; its own page says the same with **Try again**. It also
+tries again by itself after 1, 5 and then every 15 minutes, and the first run it starts clears it.
+A task whose only machine is in this state waits with *Waiting for Jan's machine … it can't start
+runs on this computer*.
+
 **Workers** lists the machines registered to run agent stages for this platform — yours, or every
 one if you are an administrator. **Add a worker** at the top opens the wizard below, and **Approve a
 machine** the approval page. Each row says first **whether the machine can take work**, as the

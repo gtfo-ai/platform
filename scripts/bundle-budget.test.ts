@@ -240,7 +240,7 @@ describe('the bundle budget guard', () => {
     const passed = run(['--dist', dist.path, '--budget-bytes', '300000']);
     expect(passed.status).toBe(0);
     expect(passed.stdout).toContain(
-      `worker.html: ${dist.initialBytes} B gzipped over 2 initial assets, budget 120000 B`,
+      `worker.html: ${dist.initialBytes} B gzipped over 2 initial assets, budget 125000 B`,
     );
     // Under the SPA's budget, over the worker page's: the worker page's line fails.
     const over = run([

@@ -32,6 +32,7 @@ import {
 } from './worker.js';
 import { WORKER_CLAIM_BLOCKERS, workerClaimBlockerSchema } from './worker-claim-blockers.js';
 import { workerIdleReasonSchema } from './worker-idle-reason.js';
+import { workspaceUnavailableSchema } from './workspace-unavailable.js';
 
 /** The local verbs' prefix on the worker's UI listener. */
 export const WORKER_LOCAL_API_PREFIX = '/api/local';
@@ -306,6 +307,15 @@ export const workerLocalStateSchema = z.strictObject({
    * said it, or when it said nothing stands in the way. Always sent, optional as above.
    */
   idle_reason: workerIdleReasonSchema.nullable().optional(),
+  /**
+   * S-28.12: this machine could not provision a run's workspace — the cause, the error's first line
+   * (redacted) and since when — and when it tries again by itself (`retry_at`); `null` while it can.
+   * Its claim blockers then include `workspace_unavailable`, and *Try again* tries at once.
+   */
+  workspace_unavailable: workspaceUnavailableSchema
+    .extend({ retry_at: isoDateTimeSchema.nullable() })
+    .nullable()
+    .optional(),
   /** The *Error reporting* setting (WP-295). */
   error_reporting: workerLocalErrorReportingSchema,
   /**

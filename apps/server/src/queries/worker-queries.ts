@@ -35,6 +35,8 @@ import {
   type WorkerClaimPolicy,
   type WorkerManualPauseVia,
   type WorkerUpdateResult,
+  type WorkspaceUnavailableCause,
+  workspaceUnavailableCauseSchema,
 } from '@platform/contracts';
 import {
   checkDeviceDecision,
@@ -136,6 +138,15 @@ export interface WorkerListRow {
    * reads as (`effectiveClaimPolicy`: `pick_only` over a legacy `[]` scope, else `everything`).
    */
   readonly claimPolicy: WorkerClaimPolicy;
+  /**
+   * S-28.12 (migration 0117): the machine could not provision a run's workspace, from its `release
+   * provision_failed` until its next claim; `null` while it can. Absent where a read does not ask.
+   */
+  readonly workspaceUnavailable?: {
+    readonly cause: WorkspaceUnavailableCause;
+    readonly detail: string | null;
+    readonly since: Date;
+  } | null;
   /**
    * Open offers its eligibility and scope admit now and its policy refuses (S-26.4) — read by
    * {@link WorkerStore.listWorkers} only, against the core's digests; `null` when they were not
@@ -378,6 +389,18 @@ export interface WorkerStore {
    */
   policySkippedOffers(workerId: string, coreDigests: RunImageDigests): Promise<number | null>;
   /**
+   * S-28.12: records why the machine cannot provision a workspace (its `release provision_failed`),
+   * or clears it (`null`, its next claim) — a write only when something changes.
+   */
+  setWorkspaceUnavailable(input: {
+    readonly workerId: string;
+    readonly value: {
+      readonly cause: WorkspaceUnavailableCause;
+      readonly detail: string | null;
+      readonly at: Date;
+    } | null;
+  }): Promise<void>;
+  /**
    * **A usage limit's pause** (`POST pause`, WP-285, TD-031 decision 11): `paused_until`,
    * `paused_reason = 'usage_limited'` and whether the instant is the default pause. A repeat stores
    * the same; nothing else on the row moves — never `manually_paused_at`, a person's hold, which
@@ -540,6 +563,9 @@ type WorkerRowSql = {
   paused_reason: string | null;
   paused_until_estimated: boolean;
   manually_paused_at: Date | null;
+  workspace_unavailable_at?: Date | null;
+  workspace_unavailable_cause?: string | null;
+  workspace_unavailable_detail?: string | null;
   concurrency: number;
   running: { run_id: string; task_id: string; project_id: string }[];
 };
@@ -676,6 +702,17 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
       ? null
       : row.claim_projects.map((project) => ({ id: project.id, key: project.key })),
   claimPolicy: effectiveClaimPolicy(row.claim_policy, row.claim_project_ids),
+  // S-28.12: a cause this build does not know reads as `unknown`, never as no block.
+  workspaceUnavailable:
+    row.workspace_unavailable_at === null || row.workspace_unavailable_at === undefined
+      ? null
+      : {
+          cause:
+            workspaceUnavailableCauseSchema.safeParse(row.workspace_unavailable_cause).data ??
+            'unknown',
+          detail: row.workspace_unavailable_detail ?? null,
+          since: at(row.workspace_unavailable_at) as Date,
+        },
   ...(row.policy_skipped_offers === undefined
     ? {}
     : {
@@ -1103,6 +1140,23 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
         via: 'workers_screen',
       }),
     );
+  },
+
+  async setWorkspaceUnavailable({ workerId, value }) {
+    if (value === null) {
+      await database.execute(sql`
+        update workers
+           set workspace_unavailable_at = null, workspace_unavailable_cause = null,
+               workspace_unavailable_detail = null
+         where id = ${workerId} and workspace_unavailable_at is not null`);
+      return;
+    }
+    await database.execute(sql`
+      update workers
+         set workspace_unavailable_at = coalesce(workspace_unavailable_at, ${value.at}),
+             workspace_unavailable_cause = ${value.cause},
+             workspace_unavailable_detail = ${value.detail}
+       where id = ${workerId}`);
   },
 
   async organisationTimezone() {

@@ -173,6 +173,8 @@ export const createMemoryWorkerStore = (
   const refused = new Set<string>();
   const claims = new Map<string, Date>();
   const skipped = new Map<string, number | null>();
+  /** S-28.12: why a machine cannot provision a workspace (`workers.workspace_unavailable_*`). */
+  const workspace = new Map<string, NonNullable<WorkerListRow['workspaceUnavailable']>>();
 
   /** The SQL store's `CLAIM_FACTS_OF_WORKER`, over this double's maps (S-22.19). */
   const claimFactsOf = (worker: WorkerRowMemory): WorkerClaimRowFacts => {
@@ -234,6 +236,7 @@ export const createMemoryWorkerStore = (
       pausedUntilEstimated: worker.pausedUntil !== null && worker.pausedUntilEstimated === true,
       manuallyPausedAt: worker.manuallyPausedAt,
       claimPolicy: effectiveClaimPolicy(worker.claimPolicy ?? null, worker.claimProjectIds ?? null),
+      workspaceUnavailable: workspace.get(worker.id) ?? null,
       claimProjects:
         worker.claimProjectIds === undefined || worker.claimProjectIds === null
           ? null
@@ -496,6 +499,18 @@ export const createMemoryWorkerStore = (
           claimFacts: claimFactsOf(worker),
           policySkippedOffers: coreDigests === null ? null : (skipped.get(worker.id) ?? null),
         }));
+    },
+
+    async setWorkspaceUnavailable({ workerId, value }) {
+      if (value === null) {
+        workspace.delete(workerId);
+        return;
+      }
+      workspace.set(workerId, {
+        cause: value.cause,
+        detail: value.detail,
+        since: workspace.get(workerId)?.since ?? value.at,
+      });
     },
 
     async policySkippedOffers(workerId) {

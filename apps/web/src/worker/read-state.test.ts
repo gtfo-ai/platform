@@ -25,6 +25,7 @@ import {
   workerLocalStateSchema,
   workerLocalTakeResponseSchema,
   workerUiAuthSchema,
+  workspaceUnavailableCauseSchema,
 } from '@platform/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import { createLocalClient, LocalCallError, takeToken } from './client.js';
@@ -62,6 +63,7 @@ import {
   TERMINAL_REASONS,
   TRANSCRIPT_ENTRY,
   UI_AUTHS,
+  WORKSPACE_CAUSES,
 } from './read-state.js';
 
 /**
@@ -316,6 +318,8 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     expect(sorted(SIGN_IN_FAILURES)).toEqual(sorted(workerLocalSignInFailureSchema.options));
     expect(sorted(UI_AUTHS)).toEqual(sorted(workerUiAuthSchema.options));
     expect(sorted(CLAIM_BLOCKERS)).toEqual(sorted(workerClaimBlockerSchema.options));
+    // S-28.12: why the machine cannot start runs.
+    expect(sorted(WORKSPACE_CAUSES)).toEqual(sorted(workspaceUnavailableCauseSchema.options));
     expect(HOOKS.length).toBeGreaterThan(0);
     expect(Object.keys(workerLocalStateSchema.shape.core_protocol.unwrap().shape).sort()).toEqual([
       'accepted',

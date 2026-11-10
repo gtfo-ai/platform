@@ -32,7 +32,11 @@ import {
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { PlatformToolContext, RunProgressRecorder } from '@platform/application';
+import {
+  type PlatformToolContext,
+  type RunProgressRecorder,
+  WorkspaceError,
+} from '@platform/application';
 import {
   type RunPackage,
   runPackageSchema,
@@ -1365,9 +1369,13 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     /** The launcher's health check (default: it answers, holding the run and egress images). */
     readonly health?: () => Promise<unknown>;
     readonly updateDrainSignInHoldMs?: number;
+    /** S-28.12: the launcher's create, asked before the fake's — throw to refuse it. */
+    readonly beforeCreate?: (n: number) => void;
   }) => {
     const lines: string[] = [];
     const launcher = fakeLauncher(options.core.events);
+    let creates = 0;
+    const createRun = launcher.client.createRun.bind(launcher.client);
     const worker = await startRemoteWorker({
       ...(options.claudeCli === undefined ? {} : { claudeCli: options.claudeCli }),
       ...(options.probeFetch === undefined ? {} : { probeFetch: options.probeFetch }),
@@ -1400,6 +1408,11 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       coreFetch: options.core.fetch,
       launcher: {
         ...(launcher.client as object),
+        createRun: async (request: launcherAdapters.CreateRunRequestPayload) => {
+          creates += 1;
+          options.beforeCreate?.(creates);
+          return createRun(request);
+        },
         health: options.health ?? (async () => ({ images: { run: DIGEST, egress: DIGEST } })),
       } as unknown as launcherAdapters.LauncherControlClient,
       spawnFor: () => {
@@ -3032,4 +3045,62 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       }
     },
   );
+
+  /**
+   * S-28.12 (Autix, 2026-11-10): a machine whose Docker has no free network ranges claimed and
+   * failed six runs in three minutes. A provisioning failure before the CLI is the machine's: the
+   * run is handed back (`release provision_failed` with the cause), no `finish`, the worker claims
+   * nothing more until its retry — *Try again* here — and the next run that provisions clears it.
+   */
+  it('hands a run back when this machine cannot provision its workspace, stops claiming, and clears on the next run that provisions', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({ claims: [runPackage(), runPackage()] });
+    const { worker } = await start({
+      stateDir,
+      core,
+      auth: 'none',
+      beforeCreate: (n) => {
+        if (n === 1) {
+          throw new WorkspaceError(
+            'workspace_failed',
+            'Docker engine answered 400: all predefined address pools have been fully subnetted',
+            { runId: RUN_ID },
+          );
+        }
+      },
+    });
+    try {
+      const port = portOf(worker.uiAddress());
+      await until('the run was handed back', () => core.events.includes('core:release'));
+      const release = workerRunReleaseRequestSchema.parse(
+        JSON.parse(core.captured.find((call) => call.verb === 'runs/:id/release')?.body ?? '{}'),
+      );
+      expect(release).toMatchObject({
+        reason: 'provision_failed',
+        workspace: {
+          cause: 'docker_networks_exhausted',
+          detail:
+            'Docker engine answered 400: all predefined address pools have been fully subnetted',
+        },
+      });
+      expect(core.events).not.toContain('core:finish');
+      await until('the session ended', () => worker.sessions.size === 0);
+      const page = await localState(port);
+      expect(page.claim_blockers).toContain('workspace_unavailable');
+      expect(page.workspace_unavailable).toMatchObject({ cause: 'docker_networks_exhausted' });
+      expect(Date.parse(page.workspace_unavailable?.retry_at ?? '')).toBeGreaterThan(Date.now());
+      // No further claim while it waits for its retry.
+      const claims = core.captured.filter((call) => call.verb === 'claims').length;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(core.captured.filter((call) => call.verb === 'claims').length).toBe(claims);
+      // *Try again*: it claims at once, the next run provisions, and the block clears.
+      expect((await post(port, 'retry', {})).status).toBe(200);
+      await until('the next run started', () => core.events.includes('core:spawn'));
+      const after = await localState(port);
+      expect(after.claim_blockers).not.toContain('workspace_unavailable');
+      expect(after.workspace_unavailable).toBeNull();
+    } finally {
+      await worker.stop();
+    }
+  });
 });

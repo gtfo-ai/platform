@@ -25,6 +25,10 @@ import * as z from 'zod';
  * - `draining`: a drain — finish what runs, take nothing new (the page's *Drain*, or its updater);
  * - `usage_limited`: paused until its Claude usage limit resets;
  * - `launcher_unreachable` *(local)*: its launcher does not answer, so it cannot start a run;
+ * - `workspace_unavailable`: its launcher answered but could not provision a run's workspace (S-28.12
+ *   — Docker out of network ranges, unreachable, out of disk, an image it cannot pull); it handed the
+ *   run back and claims nothing until a retry on a backoff, or its owner's *Try again*, succeeds.
+ *   The core holds it from the worker's `release provision_failed` until its next claim;
  * - `images_missing`: it holds none of the run images (its launcher is down, or still pulling);
  * - `images_outdated`: it holds images of another build than the core's current one;
  * - `no_eligible_project` *(core)*: no project would give it work — none it may run in admits
@@ -48,6 +52,7 @@ export const WORKER_CLAIM_BLOCKERS = [
   'draining',
   'usage_limited',
   'launcher_unreachable',
+  'workspace_unavailable',
   'images_missing',
   'images_outdated',
   'no_eligible_project',

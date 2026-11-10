@@ -71,6 +71,10 @@ import {
   workspaceSpecSchema,
 } from './run-spec.js';
 import { workerIdleReasonSchema } from './worker-idle-reason.js';
+import {
+  WORKSPACE_UNAVAILABLE_DETAIL_MAX_CHARS,
+  workspaceUnavailableCauseSchema,
+} from './workspace-unavailable.js';
 
 // ── Versions ─────────────────────────────────────────────────────────────────
 
@@ -1064,10 +1068,27 @@ export const workerRunReleaseRequestSchema = z
     epoch: leaseEpochSchema,
     reason: workerReleaseReasonSchema,
     resets_at: isoDateTimeSchema.optional(),
+    /**
+     * S-28.12: why the machine could not provision the workspace — the classified cause and the
+     * launcher error's first line, redacted by the worker. With `provision_failed` only; the core
+     * holds the worker's `workspace_unavailable` blocker until its next claim. Optional, so an older
+     * worker's release is unchanged; an older core refuses the key (strict), and the worker then
+     * releases without it.
+     */
+    workspace: z
+      .strictObject({
+        cause: workspaceUnavailableCauseSchema,
+        detail: z.string().max(WORKSPACE_UNAVAILABLE_DETAIL_MAX_CHARS).nullable(),
+      })
+      .optional(),
   })
   .refine((body) => body.resets_at === undefined || body.reason === 'usage_limited', {
     message: 'resets_at belongs to a usage_limited release only',
     path: ['resets_at'],
+  })
+  .refine((body) => body.workspace === undefined || body.reason === 'provision_failed', {
+    message: 'workspace belongs to a provision_failed release only',
+    path: ['workspace'],
   });
 
 /** The terminal statuses a run may end in — `TerminalRunStatus` of the runner port. */

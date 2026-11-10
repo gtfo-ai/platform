@@ -42,6 +42,7 @@ const WORKER_WORDS = [
   'ui/words/terminal-reasons.ts', // the guard's vocabulary of how a run ended
   'ui/words/worker-blockers.ts', // why this worker takes no work (S-22.19)
   'ui/words/worker-idle.ts', // why a ready worker runs nothing (more) (S-28.6)
+  'ui/words/workspace-causes.ts', // why this machine cannot start runs (S-28.12)
 ];
 
 const STATIC_IMPORT =

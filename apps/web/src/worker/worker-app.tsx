@@ -521,7 +521,15 @@ export const WorkerApp = ({
       >
         <p className="flex min-w-0 items-start gap-2 text-sm text-fg">
           <StatusIcon status={hold.status} decorative className="mt-0.5" />
-          <span data-hold-line="">{hold.text}</span>
+          <span className="flex flex-col gap-1">
+            <span data-hold-line="">{hold.text}</span>
+            {/* S-28.12: the launcher's own first line, redacted, as text. */}
+            {state.workspace_unavailable?.detail == null ? null : (
+              <span className="text-xs text-fg-muted" data-workspace-detail="">
+                <TerminalText value={state.workspace_unavailable.detail} />
+              </span>
+            )}
+          </span>
         </p>
         {hold.action === 'resume' ? (
           <div className="flex max-w-56 flex-col gap-1">
@@ -539,7 +547,7 @@ export const WorkerApp = ({
           </div>
         ) : hold.action === 'try_now' ? (
           <Button tone="primary" disabled={busy} onClick={() => void control(() => client.retry())}>
-            Try now
+            {claimBlockerOf(state) === 'workspace_unavailable' ? 'Try again' : 'Try now'}
           </Button>
         ) : null}
       </section>

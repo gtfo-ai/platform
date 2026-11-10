@@ -40,6 +40,7 @@ import { ROLE_LABEL } from '../ui/words/roles.js';
 import { stageLabel } from '../ui/words/stages.js';
 import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/words/worker-blockers.js';
 import { type IdleWords, workerIdleWords } from '../ui/words/worker-idle.js';
+import { WORKSPACE_CAUSE_WORDS } from '../ui/words/workspace-causes.js';
 
 /**
  * The worker's own state, in a person's words. `blocked` (S-22.19) is a connected worker that is
@@ -132,6 +133,8 @@ export interface HoldLine {
 const RETRYABLE: ReadonlySet<WorkerClaimBlocker> = new Set([
   'launcher_unreachable',
   'images_missing',
+  // S-28.12: *Try again* claims at once, and the next run is the probe.
+  'workspace_unavailable',
 ]);
 
 export const holdLineOf = (state: WorkerLocalState, nowMs: number): HoldLine => {
@@ -165,6 +168,19 @@ export const holdLineOf = (state: WorkerLocalState, nowMs: number): HoldLine => 
     case 'blocked': {
       const blocker = claimBlockerOf(state) as WorkerClaimBlocker;
       const words = WORKER_CLAIM_BLOCKER_WORDS[blocker];
+      const workspace = state.workspace_unavailable ?? null;
+      if (blocker === 'workspace_unavailable' && workspace !== null) {
+        // S-28.12: the cause in words, and when it tries again by itself.
+        const retry =
+          workspace.retry_at === null
+            ? ' It is trying again with the next run.'
+            : ` It tries again by itself ${untilWords(workspace.retry_at, nowMs)}.`;
+        return {
+          status: 'needs_you',
+          text: `Can’t start runs on this machine: ${WORKSPACE_CAUSE_WORDS[workspace.cause]}${retry}`,
+          action: 'try_now',
+        };
+      }
       return {
         status: 'needs_you',
         text: `Connected, but not taking work: ${inSentence(words.word)}. ${words.fix}`,
@@ -598,6 +614,13 @@ export const logLineWords = (line: string): string => {
     // Not JSON: shown as it is.
   }
   return line;
+};
+
+/** "in 4 min", "in 30 s", "now" — when the machine tries again (S-28.12). */
+export const untilWords = (iso: string, nowMs: number): string => {
+  const seconds = Math.round((Date.parse(iso) - nowMs) / 1000);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'now';
+  return seconds < 90 ? `in ${seconds} s` : `in ${Math.round(seconds / 60)} min`;
 };
 
 /**

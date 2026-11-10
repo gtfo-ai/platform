@@ -809,6 +809,18 @@ name}`, the person's `count` of `limit` and their tasks as `holders`; `holders.n
 holders waiting for a person (`waiting_answers`, `waiting_approval`). `idle_reason`'s `owner_limit` is
 produced for the machine's own person.
 
+**A machine that cannot provision a workspace** (S-28.12). `POST runs/:id/release` takes an optional
+`workspace {cause, detail}` with `provision_failed` only (`workspaceUnavailableCauseSchema`:
+`docker_networks_exhausted`, `docker_unreachable`, `image_missing`, `disk_full`, `unknown`; `detail` the
+launcher error's first line as the worker redacted it, ≤ 500). The worker sends it when a start fails
+before its CLI is asked for and `workspaceFaultOf` reads the failure as the machine's (never an
+`invalid_spec`, never a helper's own failure); an older core answers `400` to the key and the worker
+releases again without it. The release keeps the worker off that offer, re-opens it and spends no
+attempt; the core records the cause on `workers.workspace_unavailable_*` (migration 0117) and clears it
+at the worker's next claim. `GET /api/workers` carries `workspace_unavailable {cause, detail, since}` and
+the claim blocker `workspace_unavailable`; the worker's local state carries the same with `retry_at`;
+the waiting read counts it among `owner_worker_cannot_take`'s blockers.
+
 **Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8). The task record (`GET /api/tasks/:id`'s
 `task` and every item of `GET /api/projects/:id/tasks`) and every `GET /api/org/agents` item carry
 `waiting` — `{reason, user, last_seen_at, assignee_name, blockers}` for the run's **open** offer (the task's: its

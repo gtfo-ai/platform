@@ -626,6 +626,11 @@ export const registerWorkerProtocolRoutes = async (
       if (release === null) {
         throw unresolved();
       }
+      // S-28.12: a claim is the worker saying it can start runs again — its retry, or its owner's
+      // *Try again* — so a recorded provisioning failure is cleared.
+      if ((row.workspaceUnavailable ?? null) !== null) {
+        await options.store.setWorkspaceUnavailable({ workerId, value: null });
+      }
       // The owner's hold (WP-292) answers at once, as a worker's own `paused` does: the claim's
       // eligibility would refuse it anyway, and holding the request would only keep a slot busy.
       if (request.body.paused || row.manuallyPausedAt !== null) {
@@ -794,7 +799,7 @@ export const registerWorkerProtocolRoutes = async (
       schema: {
         summary: 'Hand a claimed run back unspent, before its CLI spawn marker (TD-031 §6)',
         description:
-          'Run token. Only while the run is `starting` and its CLI spawn marker is unwritten: the offer `claimed → open` (epoch kept), the lease cleared, the run `starting → created`, `run.offer.released`, the worker excluded for `usage_limited` and `provision_failed`, the minted credential revoked; nothing charged. A repeat answers `204` again. `409 run_started` once the marker is written — a started run ends through `finish`; `409 lease_lost` for another claim or an ended run (WP-281).',
+          'Run token. Only while the run is `starting` and its CLI spawn marker is unwritten: the offer `claimed → open` (epoch kept), the lease cleared, the run `starting → created`, `run.offer.released`, the worker excluded for `usage_limited` and `provision_failed`, the minted credential revoked; nothing charged. S-28.12: `workspace {cause, detail}` (with `provision_failed` only) records why the machine could not provision a workspace — its Workers row carries the `workspace_unavailable` blocker until its next claim clears it. A repeat answers `204` again. `409 run_started` once the marker is written — a started run ends through `finish`; `409 lease_lost` for another claim or an ended run (WP-281).',
         tags: ['worker'],
         params: runParamsSchema,
         body: workerRunReleaseRequestSchema,
@@ -811,6 +816,15 @@ export const registerWorkerProtocolRoutes = async (
         reason: request.body.reason,
         now: isoNow(now),
       });
+      // S-28.12: the machine could not provision the workspace — its row says why until its next
+      // claim. Recorded for a performed release or a repeat; a refused one changed nothing.
+      const workspace = request.body.workspace;
+      if (workspace !== undefined && (result === 'released' || result === 'already_released')) {
+        await options.store.setWorkspaceUnavailable({
+          workerId: subject.workerId,
+          value: { cause: workspace.cause, detail: workspace.detail, at: now() },
+        });
+      }
       if (result === 'run_started') {
         throw new HttpError(
           409,

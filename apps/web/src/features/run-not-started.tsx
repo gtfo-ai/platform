@@ -20,9 +20,14 @@
  * the panel never tells a person who cancelled a run that its workspace could not be created.
  */
 
-import type { RunRecord, RunStartFailure } from '@platform/contracts';
+import {
+  classifyWorkspaceFailure,
+  type RunRecord,
+  type RunStartFailure,
+} from '@platform/contracts';
 import type { ReactElement } from 'react';
 import { TerminalText, UntrustedText } from '../ui/untrusted.js';
+import { WORKSPACE_CAUSE_WORDS } from '../ui/words/workspace-causes.js';
 
 /** Did a stop end this run — a person's cancel, or a hand-back at shutdown — rather than a failure? */
 export const isStoppedRun = (run: Pick<RunRecord, 'status' | 'terminal_reason'>): boolean =>
@@ -58,6 +63,15 @@ export const RunNotStartedPanel = ({
         {failure.retryable
           ? ' — the stage was queued to try again.'
           : ' — the task was handed to a person.'}
+      </p>
+    )}
+    {stopped ||
+    failure.detail === null ||
+    classifyWorkspaceFailure(failure.detail) === 'unknown' ? null : (
+      // S-28.12: a machine's own fault, said in words — the cause the classifier read off the
+      // launcher's error, with what to do on that computer.
+      <p data-workspace-cause={classifyWorkspaceFailure(failure.detail)}>
+        {`The machine that took it could not start runs: ${WORKSPACE_CAUSE_WORDS[classifyWorkspaceFailure(failure.detail)]}`}
       </p>
     )}
     <p className="font-mono text-xs">

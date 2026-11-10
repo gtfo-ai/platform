@@ -77,8 +77,12 @@ const TARGET = 'bundle:check';
 /** TD-013, in SI kilobytes. */
 export const BUDGET_BYTES = 300_000;
 
-/** The worker's local page (TD-031's worker-UI amendment §3, WP-292), in SI kilobytes. */
-export const WORKER_BUDGET_BYTES = 120_000;
+/**
+ * The worker's local page (TD-031's worker-UI amendment §3, WP-292), in SI kilobytes — 120 kB until
+ * S-28.12, which raised it to 125 kB (the coordinator's authorisation) for the words of a machine
+ * that cannot start runs.
+ */
+export const WORKER_BUDGET_BYTES = 125_000;
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 

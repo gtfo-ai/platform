@@ -29,6 +29,7 @@ import type {
 import { ROLE_LABEL } from '../ui/words/roles.js';
 import { TERMINAL_REASON_LABEL } from '../ui/words/terminal-reasons.js';
 import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/words/worker-blockers.js';
+import { WORKSPACE_CAUSE_WORDS } from '../ui/words/workspace-causes.js';
 
 /** The local verbs' prefix — `WORKER_LOCAL_API_PREFIX`, held equal by the test. */
 export const LOCAL_API_PREFIX = '/api/local';
@@ -92,6 +93,8 @@ export const CONNECTIONS = [
 export const LAUNCHERS = ['unknown', 'ok', 'unreachable'] as const;
 /** `workerClaimPolicySchema`'s members (S-26.4) — the guard's mirror only; the words are S-26.7's. */
 export const CLAIM_POLICIES = ['everything', 'mine_and_unassigned', 'mine', 'pick_only'] as const;
+/** `workspaceUnavailableCauseSchema`'s members (S-28.12) — the words' keys, held by the test. */
+export const WORKSPACE_CAUSES: readonly string[] = Object.keys(WORKSPACE_CAUSE_WORDS);
 /** The first-run wizard's enums (WP-294) — each held to its zod enum by the test. */
 export const SOURCES = ['environment', 'file'] as const;
 export const CORE_FAILURES = [
@@ -345,6 +348,15 @@ export const STATE: Spec = object({
   claim_policy: nullish({ t: 'enum', values: CLAIM_POLICIES }),
   policy_skipped_offers: nullish(count),
   idle_reason: nullish(IDLE_REASON),
+  // S-28.12: why this machine cannot provision a run's workspace, and when it tries again.
+  workspace_unavailable: nullish(
+    object({
+      cause: { t: 'enum', values: WORKSPACE_CAUSES },
+      detail: nullable(str({ max: 500 })),
+      since: datetime,
+      retry_at: nullable(datetime),
+    }),
+  ),
   error_reporting: object({
     source: nullable({ t: 'enum', values: SOURCES }),
     host: nullable(str({ max: 253 })),

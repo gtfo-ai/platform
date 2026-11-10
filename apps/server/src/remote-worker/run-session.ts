@@ -78,8 +78,17 @@ import {
   unspawnedStepOf,
   unspawnedStop,
 } from '@platform/application';
-import type { Id, JsonObject, JsonValue, RunPackage, TranscriptEvent } from '@platform/contracts';
+import type {
+  Id,
+  JsonObject,
+  JsonValue,
+  RunPackage,
+  TranscriptEvent,
+  WorkspaceUnavailableCause,
+} from '@platform/contracts';
 import {
+  classifyWorkspaceFailure,
+  firstLineOf,
   WORKER_LOCAL_TRANSCRIPT_TAIL,
   WORKER_REMOTE_LEASE_RENEW_MS,
   WORKER_TRANSCRIPT_BATCH_MAX_BYTES,
@@ -88,6 +97,38 @@ import { redaction as redactionAdapters, runner as runnerAdapters } from '@platf
 import * as z from 'zod';
 import { CoreCallError, isRunLost, type RunScopedClient } from './core-client.js';
 import { retrying, selfTerminationMsOf, sleepMs } from './retry.js';
+
+/** A provisioning failure that is the machine's fault (S-28.12): its cause and first line. */
+export interface WorkspaceFault {
+  readonly cause: WorkspaceUnavailableCause;
+  /** The launcher error's first line, through the session's redactor — untrusted text. */
+  readonly detail: string | null;
+}
+
+/**
+ * **Whether a start that threw is this machine's fault** (S-28.12): the CLI was never asked for, a
+ * workspace said something, and it is not a refused spec (a task's problem — a commit that does
+ * not exist, a protocol the run image does not speak). It is then the machine's when the launcher
+ * could not reach its engine (`engine_unavailable`), the words name a cause the classifier knows,
+ * or the Docker engine itself refused — never a helper's own failure (a clone of a repository
+ * that refuses it is the project's, and another machine would fail it the same way).
+ */
+export const workspaceFaultOf = (
+  report: NotStartedReport,
+  spawnAsked: boolean,
+  redact: (text: string) => string,
+): WorkspaceFault | null => {
+  if (spawnAsked || report.detail === null) return null;
+  if (/\binvalid_spec\b/.test(report.failure)) return null;
+  const cause = classifyWorkspaceFailure(report.detail);
+  const machine =
+    /\bengine_unavailable\b/.test(report.failure) ||
+    cause !== 'unknown' ||
+    /^docker engine/i.test(report.detail.trim());
+  if (!machine) return null;
+  const line = firstLineOf(report.detail);
+  return { cause, detail: line === null ? null : firstLineOf(redact(line)) };
+};
 
 /** How long the last acks' beat is given before `finish` goes anyway (see `settle`). */
 export const FINAL_ACK_WAIT_MS = 3_000;
@@ -301,6 +342,14 @@ export interface RunSessionOptions {
   readonly usagePausedUntil?: () => string | null;
   /** The run's session reported a usage limit (`RunOutcome.usageLimit`): the worker pauses (WP-285). */
   readonly onUsageLimit?: (limit: NonNullable<RunOutcome['usageLimit']>) => Promise<void> | void;
+  /**
+   * S-28.12: the workspace could not be provisioned and it is the machine's fault
+   * ({@link workspaceFaultOf}) — the worker stops claiming. Told whether or not the run could be
+   * handed back.
+   */
+  readonly onWorkspaceFault?: (fault: WorkspaceFault) => void;
+  /** S-28.12: a workspace was provisioned (the CLI was asked for): the machine can start runs. */
+  readonly onWorkspaceProvisioned?: () => void;
 }
 
 export interface RunSession {
@@ -791,6 +840,46 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
       return false;
     }
   };
+  /**
+   * S-28.12: the machine could not provision the workspace — the run is handed back as
+   * `provision_failed` with the cause, which keeps this worker off the offer and lets another
+   * machine take it; no start attempt is spent and the task is not escalated. A core that refuses
+   * the cause (one built before it: strict schema, `400`) is asked again without it. A release the
+   * core refuses otherwise leaves the session to finish the run as not started, as before.
+   */
+  const releaseForWorkspace = async (fault: WorkspaceFault): Promise<boolean> => {
+    const send = (withCause: boolean) =>
+      call('release', () =>
+        core.release({
+          epoch,
+          reason: 'provision_failed',
+          ...(withCause ? { workspace: { cause: fault.cause, detail: fault.detail } } : {}),
+        }),
+      );
+    try {
+      try {
+        await send(true);
+      } catch (error) {
+        if (error instanceof CoreCallError && error.status === 400 && loss === null) {
+          await send(false);
+        } else {
+          throw error;
+        }
+      }
+      released = true;
+      logger.warn(
+        { run_id: runId, lease_epoch: epoch, cause: fault.cause },
+        'this machine could not provision the run’s workspace, so the run is handed back for another machine and this worker stops claiming (S-28.12)',
+      );
+      return true;
+    } catch (error) {
+      logger.error(
+        { run_id: runId, err: error, cause: fault.cause },
+        'this machine could not provision the run’s workspace and could not hand the run back; it is finished as not started',
+      );
+      return false;
+    }
+  };
   const spawnView = {
     hooks: {
       beforeCliSpawn: async () => false,
@@ -908,6 +997,7 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
               await releaseForUsageLimit(pausedUntil);
               return false;
             }
+            options.onWorkspaceProvisioned?.();
             try {
               await call('spawn', () => core.spawn({ epoch }));
               spawn.written = true;
@@ -938,6 +1028,15 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
           return ending;
         }
         const report = notStartedReportOf(error, { spawnRequested: spawnView.mayHaveReachedCli() });
+        const fault = workspaceFaultOf(report, spawn.asked, (text) => local.redactText(text).value);
+        if (fault !== null && loss === null) {
+          const handedBack = await releaseForWorkspace(fault);
+          options.onWorkspaceFault?.(fault);
+          if (handedBack) {
+            ending = 'released';
+            return ending;
+          }
+        }
         logger.error(
           { run_id: runId, err: error, transient: report.transient },
           'this worker could not start the run; it is finished as not started',

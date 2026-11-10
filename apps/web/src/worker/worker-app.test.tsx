@@ -1176,3 +1176,35 @@ describe('why nothing (more) runs here — the core’s one sentence (S-28.6)', 
     expect(silent.container.textContent).toContain('Nothing runs here right now.');
   });
 });
+
+describe('a machine that cannot start runs (S-28.12)', () => {
+  it('says the cause in words with Try again, the error as text, and no “Taking work”', async () => {
+    const client = fakeClient(
+      state({
+        runs: [],
+        claim_blockers: ['workspace_unavailable'],
+        workspace_unavailable: {
+          cause: 'docker_networks_exhausted',
+          detail:
+            'Docker engine answered 400: all predefined address pools have been fully subnetted',
+          since: '2026-11-05T10:04:00.000Z',
+          retry_at: '2026-11-05T10:09:00.000Z',
+        },
+      }),
+    );
+    const { container } = renderPage(client);
+    await screen.findByText('Runs on this machine');
+    const line = container.querySelector('[data-hold-line]')?.textContent ?? '';
+    expect(line).toMatch(
+      /^Can’t start runs on this machine: Docker on this machine has no free network ranges/,
+    );
+    expect(line).toContain('docker network prune');
+    expect(line).toContain('It tries again by itself in 4 min.');
+    expect(container.querySelector('[data-workspace-detail]')?.textContent).toBe(
+      'Docker engine answered 400: all predefined address pools have been fully subnetted',
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(client.retry).toHaveBeenCalledTimes(1);
+  });
+});

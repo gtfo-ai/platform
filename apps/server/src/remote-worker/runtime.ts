@@ -96,6 +96,7 @@ import {
   type WorkerLocalOffers,
   type WorkerLocalState,
   type WorkerProtocolRange,
+  type WorkspaceUnavailableCause,
   workerLocalClaimScopeSchema,
   workerLocalErrorReportingTestResponseSchema,
   workerLocalOffersSchema,
@@ -148,7 +149,15 @@ import {
   redactKeysAndValues,
   startRunSession,
   WORKER_SECRET_NAMES,
+  type WorkspaceFault,
 } from './run-session.js';
+
+/**
+ * S-28.12: how long a machine that could not provision a workspace waits before it tries again —
+ * after the first failure in a row, the second, and every one after.
+ */
+export const WORKSPACE_RETRY_MS: readonly number[] = [60_000, 5 * 60_000, 15 * 60_000];
+
 import {
   CLAUDE_TOKEN_FILE,
   CORE_URL_FILE,
@@ -533,6 +542,19 @@ export const startRemoteWorker = async (
   /** The open offers the policy leaves for others, as the core last counted them (S-26.4). */
   let policySkippedOffers: number | null = null;
   /**
+   * S-28.12: this machine could not provision a run's workspace. It handed the run back and claims
+   * nothing until `retryAt` (1, 5, then every 15 minutes after each failure in a row) or its owner's
+   * *Try again*; the next run it claims then is the probe — provisioned, and the block clears; failed
+   * again, and the next wait is longer. `retryAt` `null` is a retry under way.
+   */
+  let workspaceBlock: {
+    readonly cause: WorkspaceUnavailableCause;
+    readonly detail: string | null;
+    readonly since: string;
+    retryAt: number | null;
+  } | null = null;
+  let workspaceFailures = 0;
+  /**
    * Why this machine runs nothing (more), as the core last said it on the offers list (S-28.6, the
    * M28 ruling A) — the page polls the list, so it is as fresh as the page needs it.
    */
@@ -546,6 +568,36 @@ export const startRemoteWorker = async (
   const wakeClaims = (): void => {
     slotFreed?.();
   };
+  /** S-28.12: the machine could not provision a workspace — stop claiming until a retry. */
+  const noteWorkspaceFault = (fault: WorkspaceFault): void => {
+    workspaceFailures += 1;
+    const wait = WORKSPACE_RETRY_MS[
+      Math.min(workspaceFailures, WORKSPACE_RETRY_MS.length) - 1
+    ] as number;
+    workspaceBlock = {
+      cause: fault.cause,
+      detail: fault.detail,
+      since: workspaceBlock?.since ?? new Date().toISOString(),
+      retryAt: Date.now() + wait,
+    };
+    loggerPort.error(
+      { cause: fault.cause, detail: fault.detail, retry_in_ms: wait },
+      'this machine cannot start runs: it could not provision a run’s workspace, so it claims nothing until it tries again',
+    );
+  };
+  /** S-28.12: a workspace was provisioned — the machine starts runs again. */
+  const noteWorkspaceProvisioned = (): void => {
+    workspaceFailures = 0;
+    if (workspaceBlock !== null) {
+      workspaceBlock = null;
+      loggerPort.info({}, 'this machine provisioned a run’s workspace again: it takes work again');
+    }
+  };
+  /** Milliseconds until the workspace retry, `0` when due (or no block). */
+  const workspaceWaitMs = (): number =>
+    workspaceBlock === null || workspaceBlock.retryAt === null
+      ? 0
+      : Math.max(0, workspaceBlock.retryAt - Date.now());
   const restartCycle = (why: string): void => {
     cycle.abort();
     cycle = new AbortController();
@@ -822,6 +874,8 @@ export const startRemoteWorker = async (
       sleep,
       usagePausedUntil: () => (usagePauseRemainingMs() > 0 ? usagePausedUntil : null),
       onUsageLimit: noteUsageLimit,
+      onWorkspaceFault: noteWorkspaceFault,
+      onWorkspaceProvisioned: noteWorkspaceProvisioned,
       provisionerFor: ({ sshSign, exportsAllowed }) =>
         packageWorkspaceProvisioner(pkg, {
           launcher,
@@ -878,6 +932,19 @@ export const startRemoteWorker = async (
         slotFreed = null;
         continue;
       }
+      // S-28.12: a machine that could not provision a workspace waits for its retry, then claims —
+      // the next run it gets is the probe.
+      const workspaceWait = workspaceWaitMs();
+      if (workspaceWait > 0) {
+        await new Promise<void>((resolve) => {
+          slotFreed = resolve;
+          const timer = setTimeout(resolve, workspaceWait);
+          (timer as { unref?: () => void }).unref?.();
+        });
+        slotFreed = null;
+        continue;
+      }
+      if (workspaceBlock !== null) workspaceBlock.retryAt = null;
       claimAbort = new AbortController();
       try {
         // Asked before every claim: an image pulled (or removed) since the last one counts now.
@@ -1498,6 +1565,12 @@ export const startRemoteWorker = async (
    * worker with nothing to ask again answers `409`.
    */
   const retry = async (): Promise<void> => {
+    if (connection === 'connected' && workspaceBlock !== null) {
+      // S-28.12: *Try again* — the next run it claims is the probe, now.
+      workspaceBlock.retryAt = Date.now();
+      wakeClaims();
+      return;
+    }
     if (connection === 'connected') {
       if (launcherReach === 'ok' && heldDigests.length > 0) {
         throw new LocalUiError(409, 'connected', 'this worker is connected');
@@ -1603,6 +1676,7 @@ export const startRemoteWorker = async (
         draining,
         usagePaused: usagePauseRemainingMs() > 0,
         launcherAnswered: launcherReach === 'unknown' ? null : launcherReach === 'ok',
+        workspaceUnavailable: workspaceBlock !== null,
         heldDigests,
         coreDigests:
           coreDigests === null
@@ -1612,6 +1686,18 @@ export const startRemoteWorker = async (
       claim_policy: claimPolicy,
       policy_skipped_offers: policySkippedOffers,
       idle_reason: idleReason,
+      workspace_unavailable:
+        workspaceBlock === null
+          ? null
+          : {
+              cause: workspaceBlock.cause,
+              detail: workspaceBlock.detail,
+              since: workspaceBlock.since,
+              retry_at:
+                workspaceBlock.retryAt === null
+                  ? null
+                  : new Date(workspaceBlock.retryAt).toISOString(),
+            },
       // What the reporter sends to now, not what was stored: a client that failed to build is *Off*.
       error_reporting: ((dsn: string | null) => ({
         source: dsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',
