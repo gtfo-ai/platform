@@ -343,6 +343,12 @@ export interface GitLabClient {
   ): Promise<{ readonly jobs: z.output<typeof gitlabJobSchema>[]; readonly truncated: boolean }>;
   /** § "Retrieve a job log file" (`GET /projects/:id/jobs/:job_id/trace`). */
   jobTrace(project: string, jobId: number): Promise<string | null>;
+  /**
+   * <https://docs.gitlab.com/api/jobs/> § "Run a job" — `POST /projects/:id/jobs/:job_id/play`
+   * (S-28.7): *"For a job in manual status, trigger an action to start the job."* Answers the job
+   * object. No body: the platform sends no `job_variables_attributes`.
+   */
+  playJob(project: string, jobId: number): Promise<z.output<typeof gitlabJobSchema>>;
   /** <https://docs.gitlab.com/api/repository_files/> § "Retrieve a raw file from a repository". */
   rawFile(project: string, path: string, ref: string): Promise<string | null>;
   /**
@@ -797,6 +803,17 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
       });
       return response === null ? null : response.body;
     },
+
+    playJob: async (project, jobId) =>
+      required(
+        gitlabJobSchema,
+        'play_job',
+        http.request({
+          method: 'POST',
+          path: `/projects/${encodeProjectId(project)}/jobs/${jobId}/play`,
+          action: 'play_job',
+        }),
+      ),
 
     projectMember: async (project, userId) => {
       const response = await http.request({

@@ -160,6 +160,32 @@ it('gitlab replay refuses a request it has no fixture for', async () => {
  * shrug: `unusedFixtures()` above is what turned "there is a recorded 404 for a protected-branch
  * lookup" into "and no test has ever sent that request".
  */
+/**
+ * S-28.7 (the M28 ruling): GitLab refuses to play a manual job for an account that may not merge to
+ * its branch (or deploy to its protected environment). The adapter answers `forbidden`, which the
+ * `ci_play_manual` duty records as `refused` — the job then falls back to a person — and it refuses a
+ * job id that is not GitLab's numeric shape before any request is made.
+ */
+describe('GitLab in replay: starting a manual job (S-28.7)', () => {
+  it('answers forbidden when GitLab refuses the account, and sends nothing for a non-numeric id', async () => {
+    const { port, replay } = gitlabReplayContext();
+    let caught: unknown;
+    try {
+      await port.playJob(GITLAB_PROJECT, '9074');
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { code?: string }).code).toBe('forbidden');
+    expect(replay.requests.map((request) => request.key)).toEqual([
+      'POST /projects/acme%2Fapi/jobs/9074/play',
+    ]);
+    await expect(port.playJob(GITLAB_PROJECT, 'build_composer')).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+    expect(replay.requests, 'a refused id reaches no request').toHaveLength(1);
+  });
+});
+
 describe('GitLab in replay: revocation, and the Q40 compensating control', () => {
   /**
    * The round 1 major, through the port. Absorbing a 404 is right only where the adapter minted

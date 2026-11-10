@@ -1810,6 +1810,51 @@ export const ciManualNotRunSchema = z.strictObject({
 });
 export type CiManualNotRun = z.infer<typeof ciManualNotRunSchema>;
 
+/** The most jobs `ci_manual_started` records on one attempt (S-28.7). */
+export const MAX_CI_MANUAL_STARTED_JOBS = 50;
+
+/**
+ * A provider id the platform keys a play by (S-28.7, the M28 ruling): **digits only**, at most 20,
+ * so no provider text ever reaches the play's idempotency key or the record's identity.
+ */
+export const providerNumericIdSchema = z.string().regex(/^[0-9]{1,20}$/);
+
+/**
+ * What became of the platform's start of one manual job (S-28.7): `started` — the provider
+ * accepted the play; `refused` — the provider refused the platform's account (a `403`: it may not
+ * run that job), so a person starts it; `unsupported` — the git binding cannot start a manual job
+ * at all, so a person starts it.
+ */
+export const ciManualStartOutcomeSchema = z.enum(['started', 'refused', 'unsupported']);
+export type CiManualStartOutcome = z.infer<typeof ciManualStartOutcomeSchema>;
+
+/**
+ * **The manual jobs the platform started, or tried to** (S-28.7, the M28 ruling) — `task_stages
+ * .ci_manual_started` (migration 0113) on a `ci_gate` attempt: one entry per job id, written by
+ * the `ci_play_manual` duty after its call (`started`, `refused`, `unsupported`), at most
+ * {@link MAX_CI_MANUAL_STARTED_JOBS}. The job's name is the **provider's** text (BD-022), redacted
+ * by the git binding's redactor and cut at {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; the ids are digits
+ * only; `url` is the job's page, kept only as an `http(s)` URL with no credentials that the
+ * redactor leaves unchanged, else `null`. `at` is the instant of the attempt to start it. A reader
+ * renders the name as untrusted text and the URL through `safeHref`. A new column rather than keys
+ * in `ci_pending_read`, which an older build parses strictly (TD-032 decision 2).
+ */
+export const ciManualStartedSchema = z
+  .array(
+    z.strictObject({
+      job_id: providerNumericIdSchema,
+      pipeline_id: providerNumericIdSchema,
+      name: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS),
+      url: httpUrlSchema.nullable(),
+      at: isoDateTimeSchema,
+      outcome: ciManualStartOutcomeSchema,
+    }),
+  )
+  .min(1)
+  .max(MAX_CI_MANUAL_STARTED_JOBS);
+export type CiManualStarted = z.infer<typeof ciManualStartedSchema>;
+export type CiManualStartedJob = CiManualStarted[number];
+
 /** The most holding tasks {@link queueWaitSchema} lists; `holders.total` counts them all. */
 export const MAX_QUEUE_WAIT_HOLDERS = 10;
 
@@ -2277,6 +2322,13 @@ export const taskDetailResponseSchema = z.strictObject({
    * item's `gate_wait` is; the task read always sends it.
    */
   ci_manual_not_run: ciManualNotRunSchema.nullable().optional(),
+  /**
+   * The manual jobs the platform started, or tried to start, on the latest `ci_gate` attempt
+   * (S-28.7) — {@link ciManualStartedSchema}, whatever that attempt's state; `null` when it
+   * recorded none or the task never reached the gate. Optional on the wire as `ci_manual_not_run`
+   * is; `GET /api/tasks/:id` always sends it.
+   */
+  ci_manual_started: ciManualStartedSchema.nullable().optional(),
   /**
    * Why a `queued` task waits, and what frees it (S-25.16): {@link queueWaitSchema}; `null` for
    * every other state, and for a reader that does not ask (an agent's `get_task_context`). Optional

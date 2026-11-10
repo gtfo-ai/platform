@@ -479,3 +479,260 @@ describe('the gate never passes what it must not', () => {
     expect(heldPasses, 'the generator produced passing held pipelines').toBeGreaterThan(0);
   });
 });
+
+/**
+ * S-28.7 (the M28 ruling): `pipeline.ci.manual_jobs` — `run` (the platform starts it and it is a
+ * required check), `wait` (a person starts it; `required_manual_jobs`' meaning) and `ignore` (never
+ * started, never a check). Autix's shape: `build_composer` held first; the test jobs `needs:` it and
+ * are `manual` only once it has succeeded; `nette-tester` is optional; a deploy trigger is manual.
+ */
+describe('manual_jobs — run, wait and ignore (S-28.7)', () => {
+  const MODES = (
+    modes: Record<string, 'run' | 'wait' | 'ignore'>,
+    base: ManualJobPolicy = DEFAULT_MANUAL_JOB_POLICY,
+  ): ManualJobPolicy => ({ ...base, modes: new Map(Object.entries(modes)) });
+  const AUTIX = MODES({ build_composer: 'run', codeception: 'run', 'crawler-test': 'wait' });
+
+  /** Wave 1: `build_composer` held; the jobs that `needs:` it are `created` (the port's `pending`). */
+  const WAVE_1 = pipeline('manual', [
+    job('phpstan', 'success', 'test'),
+    job('build_composer', 'manual', 'build-deps'),
+    job('codeception', 'pending', 'test'),
+    job('crawler-test', 'pending', 'test'),
+    job('nette-tester', 'manual', 'test_optional', true),
+  ]);
+  /** Wave 2: `build_composer` succeeded; the test jobs are `manual` now. */
+  const WAVE_2 = pipeline('manual', [
+    job('phpstan', 'success', 'test'),
+    job('build_composer', 'success', 'build-deps'),
+    job('codeception', 'manual', 'test'),
+    job('crawler-test', 'manual', 'test'),
+    job('nette-tester', 'manual', 'test_optional', true),
+  ]);
+
+  it('reads manual_jobs beside required_manual_jobs, and leaves an old policy unchanged', () => {
+    const of = (ci: Record<string, unknown>) =>
+      manualJobPolicyOf(defaultProjectSettings('p', { config: { pipeline: { ci: ci as never } } }));
+    expect(of({ manual_jobs: { codeception: 'run' } })).toEqual({
+      kind: 'default',
+      modes: new Map([['codeception', 'run']]),
+    });
+    expect(of({ required_manual_jobs: ['e2e'], manual_jobs: { deploy: 'ignore' } })).toEqual({
+      kind: 'named',
+      names: new Set(['e2e']),
+      modes: new Map([['deploy', 'ignore']]),
+    });
+    // No `modes` key at all without the key: an old configuration reads exactly as before.
+    expect(of({ required_manual_jobs: ['e2e'] })).toEqual({
+      kind: 'named',
+      names: new Set(['e2e']),
+    });
+    // A word the schema would refuse is skipped, never read as run.
+    expect(of({ manual_jobs: { codeception: 'start' } })).toEqual(DEFAULT_MANUAL_JOB_POLICY);
+  });
+
+  it('wave 1: starts build_composer, and waits — never on nette-tester, which is not chosen', () => {
+    const judged = judgeCiPipeline(WAVE_1, AUTIX);
+    expect(judged).toMatchObject({ kind: 'waiting', cause: 'in_flight' });
+    expect(judged.kind === 'waiting' && judged.toStart.map((each) => each.name)).toEqual([
+      'build_composer',
+    ]);
+  });
+
+  it('wave 2: starts codeception, waits on a person for crawler-test, and never starts the rest', () => {
+    const judged = judgeCiPipeline(WAVE_2, AUTIX);
+    expect(judged).toMatchObject({ kind: 'waiting', cause: 'manual_required' });
+    if (judged.kind !== 'waiting') return;
+    expect(judged.toStart.map((each) => each.name)).toEqual(['codeception']);
+    expect(judged.heldAt.map((each) => each.name)).toEqual(['codeception', 'crawler-test']);
+    // `mr_pipeline`'s question: held for a person (crawler-test), so a fresh pipeline is asked —
+    expect(manualJobsHolding(WAVE_2, AUTIX).heldForPerson).toBe(true);
+    // — but never because of a job the platform starts itself.
+    const onlyRun = MODES({ build_composer: 'run', codeception: 'run', 'crawler-test': 'run' });
+    expect(manualJobsHolding(WAVE_2, onlyRun)).toMatchObject({ holds: true, heldForPerson: false });
+  });
+
+  it('an already-started run job is not started again: the pipeline is running and waits', () => {
+    const started = pipeline('running', [
+      job('build_composer', 'success', 'build-deps'),
+      job('codeception', 'running', 'test'),
+      job('crawler-test', 'manual', 'test'),
+    ]);
+    const judged = judgeCiPipeline(started, AUTIX);
+    expect(judged).toMatchObject({ kind: 'waiting', cause: 'in_flight' });
+    expect(judged.kind === 'waiting' && judged.toStart).toEqual([]);
+  });
+
+  it('a played run job that failed fails the gate even with allow_failure, on a green pipeline too', () => {
+    const red = pipeline('success', [
+      job('build_composer', 'success', 'build-deps'),
+      job('codeception', 'failed', 'test', true),
+    ]);
+    const judged = judgeCiPipeline(red, MODES({ codeception: 'run' }));
+    expect(judged).toMatchObject({ kind: 'failed', required: true });
+    expect(judged.kind === 'failed' && judged.failing.map((each) => each.name)).toEqual([
+      'codeception',
+    ]);
+    // Without the choice the same pipeline passes: an allowed failure is not the gate's.
+    expect(judgeCiPipeline(red, DEFAULT_MANUAL_JOB_POLICY).kind).toBe('passed');
+  });
+
+  it('passes once every run and wait job has run green', () => {
+    const done = pipeline('success', [
+      job('build_composer', 'success', 'build-deps'),
+      job('codeception', 'success', 'test'),
+      job('crawler-test', 'success', 'test'),
+      job('nette-tester', 'manual', 'test_optional', true),
+    ]);
+    expect(judgeCiPipeline(done, AUTIX).kind).toBe('passed');
+  });
+
+  it('ignore: a blocking manual test job is not waited for, and its failure is not the gate’s', () => {
+    const held = pipeline('manual', [job('unit', 'success', 'test'), job('e2e', 'manual', 'test')]);
+    expect(judgeCiPipeline(held, DEFAULT_MANUAL_JOB_POLICY).kind).toBe('waiting');
+    const ignored = judgeCiPipeline(held, MODES({ e2e: 'ignore' }));
+    expect(ignored.kind).toBe('passed');
+    // Still named as not run: the provider may still show the pipeline blocked at it.
+    expect(ignored.kind === 'passed' && ignored.notRun.map((each) => each.name)).toEqual(['e2e']);
+    expect(judgeCiPipeline(held, MODES({ e2e: 'ignore' }, { kind: 'all' })).kind).toBe('passed');
+    const failedIgnored = pipeline('manual', [
+      job('unit', 'success', 'test'),
+      job('deploy', 'failed', 'deploy'),
+      job('release', 'manual', 'release'),
+    ]);
+    expect(judgeCiPipeline(failedIgnored, DEFAULT_MANUAL_JOB_POLICY).kind).toBe('failed');
+    expect(judgeCiPipeline(failedIgnored, MODES({ deploy: 'ignore' })).kind).toBe('passed');
+  });
+
+  it('never starts a trigger job: run reads as wait for one', () => {
+    const held = pipeline('manual', [
+      job('unit', 'success', 'test'),
+      { ...job('deploy:tenants:hetzner', 'manual', 'test'), trigger: true },
+    ]);
+    const judged = judgeCiPipeline(held, MODES({ 'deploy:tenants:hetzner': 'run' }));
+    expect(judged).toMatchObject({ kind: 'waiting', cause: 'manual_required' });
+    expect(judged.kind === 'waiting' && judged.toStart).toEqual([]);
+    expect(manualJobsHolding(held, MODES({ 'deploy:tenants:hetzner': 'run' })).heldForPerson).toBe(
+      true,
+    );
+  });
+
+  it('wait on a success pipeline is a named job, like required_manual_jobs', () => {
+    const green = pipeline('success', [
+      job('unit', 'success', 'test'),
+      job('smoke', 'manual', 'deploy', true),
+    ]);
+    expect(judgeCiPipeline(green, MODES({ smoke: 'wait' }))).toMatchObject({
+      kind: 'waiting',
+      cause: 'manual_required',
+      toStart: [],
+    });
+    expect(judgeCiPipeline(green, MODES({ smoke: 'run' }))).toMatchObject({
+      kind: 'waiting',
+      toStart: [expect.objectContaining({ name: 'smoke' })],
+    });
+  });
+});
+
+/**
+ * **An old configuration behaves exactly as before S-28.7** (the M28 ruling): the rule as it stood
+ * at S-27.2, kept here verbatim as the oracle, against the rule now — over every random pipeline and
+ * every policy with no `manual_jobs`. And nothing is ever offered to start without a `run` mode.
+ */
+describe('a configuration without manual_jobs is judged as before S-28.7', () => {
+  const blockingManual = (each: Job): boolean => each.status === 'manual' && !each.allow_failure;
+  const legacyHold = (
+    judged: typeof AUT_6655 & { jobs_truncated?: boolean },
+    policy: ManualJobPolicy,
+  ) => {
+    const unseen =
+      judged.status === 'manual' &&
+      (judged.jobs_truncated === true || !judged.jobs.some(blockingManual));
+    switch (policy.kind) {
+      case 'none':
+        return { holds: false, jobs: [] as Job[], unseen };
+      case 'all': {
+        const jobs = judged.jobs.filter(blockingManual);
+        return { holds: jobs.length > 0 || unseen, jobs, unseen };
+      }
+      case 'named': {
+        const jobs = judged.jobs.filter(
+          (each) => each.status === 'manual' && policy.names.has(each.name),
+        );
+        return { holds: jobs.length > 0 || unseen, jobs, unseen };
+      }
+      default: {
+        const hasTest = judged.jobs.some((each) => each.stage === 'test');
+        const counted = (each: Job) => !hasTest || each.stage === 'test' || each.stage === null;
+        const jobs = judged.jobs.filter((each) => blockingManual(each) && counted(each));
+        return { holds: jobs.length > 0 || unseen, jobs, unseen };
+      }
+    }
+  };
+  const jobArb = fc.record({
+    id: fc.string({ minLength: 1, maxLength: 4 }),
+    name: fc.constantFrom('build', 'unit', 'e2e', 'sentry-release-commit'),
+    status: fc.constantFrom(
+      'success',
+      'failed',
+      'canceled',
+      'skipped',
+      'pending',
+      'running',
+      'manual',
+    ) as fc.Arbitrary<Job['status']>,
+    stage: fc.constantFrom<string | null>('build', 'test', 'release', null),
+    log_ref: fc.constant(null),
+    allow_failure: fc.boolean(),
+  });
+  const pipelineArb = fc.record({
+    status: fc.constantFrom(
+      'success',
+      'failed',
+      'canceled',
+      'skipped',
+      'pending',
+      'running',
+      'manual',
+    ) as fc.Arbitrary<PipelineStatus['status']>,
+    jobs: fc.array(jobArb, { maxLength: 6 }),
+    jobs_truncated: fc.boolean(),
+  });
+  const policyArb: fc.Arbitrary<ManualJobPolicy> = fc.oneof(
+    fc.constant(DEFAULT_MANUAL_JOB_POLICY),
+    fc.constant<ManualJobPolicy>({ kind: 'none' }),
+    fc.constant<ManualJobPolicy>({ kind: 'all' }),
+    fc
+      .subarray(['build', 'unit', 'e2e', 'sentry-release-commit'])
+      .map((names): ManualJobPolicy => ({ kind: 'named', names: new Set(names) })),
+  );
+
+  it('holds exactly where the S-27.2 rule held, for the same jobs, and only for a person', () => {
+    fc.assert(
+      fc.property(pipelineArb, policyArb, (judged, policy) => {
+        const now = manualJobsHolding(judged, policy);
+        const before = legacyHold(judged, policy);
+        expect(now.holds).toBe(before.holds);
+        expect(now.jobs).toEqual(before.jobs);
+        expect(now.unseen).toBe(before.unseen);
+        expect(now.heldForPerson).toBe(now.holds);
+      }),
+    );
+  });
+
+  it('offers nothing to start, and a mode for a job the pipeline lacks changes no verdict', () => {
+    fc.assert(
+      fc.property(pipelineArb, policyArb, (judged, policy) => {
+        const verdict = judgeCiPipeline(judged, policy);
+        if (verdict.kind === 'waiting') expect(verdict.toStart).toEqual([]);
+        const absent = { ...policy, modes: new Map([['not-in-any-pipeline', 'run' as const]]) };
+        const withAbsent = judgeCiPipeline(judged, absent);
+        // A run/wait name makes a green pipeline asked about names, so only compare when the base
+        // policy already asks, or when the pipeline is not green.
+        if (policy.kind === 'named' || judged.status !== 'success') {
+          expect(withAbsent).toEqual(verdict);
+        }
+      }),
+    );
+  });
+});

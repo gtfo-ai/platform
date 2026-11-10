@@ -2282,6 +2282,70 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         ).rejects.toThrow();
       });
 
+      /**
+       * S-28.7 (migration 0113): `ci_manual_started` has one writer, the `ci_play_manual` duty —
+       * one entry per job id on the attempt's open row, replaced by a later write for the same id,
+       * refused on a closed row and refused (never cut) outside the schema.
+       */
+      it('records the manual jobs the platform started, one entry per job id, on the open row only (S-28.7)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const entry = (attempt: number) => ({ taskId: stored.task.id, stage: 'ci_gate', attempt });
+        const started = {
+          job_id: '9071',
+          pipeline_id: '907',
+          name: 'build_composer',
+          url: 'https://gitlab.example.test/acme/api/-/jobs/9071',
+          at: '2026-11-10T09:00:00.000Z',
+          outcome: 'started' as const,
+        };
+        expect(await store.tasks.recordCiManualStarted(tx, entry(1), started)).toBe(false);
+        expect(await store.tasks.ciManualStartedOf(tx, stored.task.id, 'ci_gate', 1)).toBeNull();
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.recordCiManualStarted(tx, entry(2), started)).toBe(false);
+        expect(await store.tasks.recordCiManualStarted(tx, entry(1), started)).toBe(true);
+        const refused = {
+          ...started,
+          job_id: '9074',
+          name: 'codeception',
+          outcome: 'refused' as const,
+        };
+        expect(await store.tasks.recordCiManualStarted(tx, entry(1), refused)).toBe(true);
+        // The same job id again replaces its entry rather than adding a second.
+        const again = { ...started, at: '2026-11-10T09:01:00.000Z' };
+        expect(await store.tasks.recordCiManualStarted(tx, entry(1), again)).toBe(true);
+        expect(await store.tasks.ciManualStartedOf(tx, stored.task.id, 'ci_gate', 1)).toEqual([
+          refused,
+          again,
+        ]);
+        // Outside the schema — a name of provider text where an id goes — is refused at the write.
+        await expect(
+          store.tasks.recordCiManualStarted(tx, entry(1), { ...started, job_id: 'build_composer' }),
+        ).rejects.toThrow();
+        await store.tasks.recordStageExited(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          state: 'completed',
+          outcome: 'protected_paths_clean',
+          returnReason: null,
+          returnedTo: null,
+        });
+        // Closed: a late write is refused and the value kept, and still read.
+        expect(
+          await store.tasks.recordCiManualStarted(tx, entry(1), { ...started, job_id: '1' }),
+        ).toBe(false);
+        expect(await store.tasks.ciManualStartedOf(tx, stored.task.id, 'ci_gate', 1)).toEqual([
+          refused,
+          again,
+        ]);
+      });
+
       it('refuses to record a CI read its schema does not admit (backlog 1078)', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);

@@ -72,6 +72,7 @@ import type {
   MintedCredential,
   MintedRunCredential,
   PipelineStatus,
+  PlayedJob,
   RepositoryCommit,
   RepositorySettings,
 } from '../ports/integrations/git-provider.js';
@@ -2548,6 +2549,33 @@ export const codeMergeRequestWrites = (integrations: PipelineIntegrations) => ({
       () => null as unknown as CreatedPipeline,
       (result) => (result === null ? null : { pipeline_id: result.id, head_sha: result.head_sha }),
       replayable<CreatedPipeline>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * Starts one manual job of the binding's project (S-28.7, the M28 ruling): a mutation through the
+   * executor, keyed per job id by the caller (`ci_play:<task>:<pipeline id>:<job id>`, digits only),
+   * so a retried wake-up replays the first answer rather than playing twice. `null` without a git
+   * binding, and in shadow mode (nothing is asked of the provider).
+   */
+  playJob: async (
+    input: { readonly jobId: string; readonly idempotencyKey: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<PlayedJob | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'play_job',
+      { project: git.project, job_id: input.jobId },
+      context,
+      async () => git.port.playJob(git.project, input.jobId),
+      () => null as unknown as PlayedJob,
+      (result) => (result === null ? null : { job_id: result.id, status: result.status }),
+      replayable<PlayedJob>(input.idempotencyKey),
     );
   },
 });

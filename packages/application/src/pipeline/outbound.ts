@@ -56,6 +56,7 @@ import {
   runRunCredentialRevocation,
 } from '../recovery/run-credential.js';
 import { runShadowReport, type ShadowReportOptions } from '../shadow/report.js';
+import { runCiPlayManual } from './ci-play.js';
 import { runCiSettle } from './ci-settle.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
@@ -262,6 +263,10 @@ const dispatchOutbound =
         return;
       case 'ci_settle':
         await runCiSettle(options, data);
+        return;
+      // S-28.7: start one manual job the project set to run, re-validated on fire.
+      case 'ci_play_manual':
+        await runCiPlayManual(options, data);
         return;
       case 'dependency_gate':
         await runDependencyGate(options, data);

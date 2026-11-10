@@ -530,6 +530,17 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   `manual` waits even on a `success` pipeline, ran and failed fails, **skipped by the pipeline's
 >   rules fails** ("the required manual job X was skipped by the pipeline's rules", BACKLOG 1493),
 >   absent is not waited for. From the repository file the key only tightens (technical/12).
+> - **`pipeline.ci.manual_jobs`** (S-28.7, the M28 ruling) gives a job a mode that wins over the
+>   rest for that name: `wait` is a name in `required_manual_jobs`; `run` is the same check and the
+>   judgement also lists the `run` jobs that are `manual` now (`toStart`, never a trigger job), which
+>   the job that judged enqueues as one `pipeline.outbound` **`ci_play_manual`** wake-up per job
+>   (`ci-play.ts`) — re-validated on fire (the attempt, the live head, that head's latest pipeline,
+>   the job still `manual`, the name still `run`) and played through `IntegrationActionExecutor`
+>   keyed `ci_play:<task>:<pipeline id>:<job id>` (digits only); the outcome (`started`, `refused`
+>   on a `403`, `unsupported`) is `task_stages.ci_manual_started` (migration 0113), and a recorded
+>   job is not offered again on that attempt. A `run` job's failure fails the gate even with
+>   `allow_failure: true`. `ignore` is never waited for and its failure is not the gate's.
+>   `mr_pipeline` never asks for a fresh pipeline because of a `run` job (`heldForPerson`).
 > - **A cut job list never passes on this rule** (BACKLOG 1490): GitLab's list stops at
 >   `max_pages` × 100 jobs and the port says so (`PipelineStatus.jobs_truncated`), so a held
 >   pipeline — or a green one asked for names — on a cut list waits as before.

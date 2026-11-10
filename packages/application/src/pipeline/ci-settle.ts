@@ -28,7 +28,9 @@
  * `manual` hook — carries no jobs, so the duty re-reads the live head's **latest** pipeline and
  * judges it by the CI gate's manual-job rule (`gates.ts`' `ciVerdictOf`), as it does a `success`
  * event when the project names required manual jobs (a named job may still be manual). A pass and
- * a failure settle; a wait is the gate's poll's, and this wake-up settles nothing.
+ * a failure settle; a wait is the gate's poll's, and this wake-up settles nothing — except that
+ * the jobs the project set to `run` which are `manual` now are handed to `ci_play_manual`
+ * (S-28.7), so the second wave of a held pipeline is started when its hook arrives.
  *
  * **The read count this costs**: one `get_merge_request` per finished pipeline for a task waiting
  * at a CI gate, and one per poll of the gate (`gates.ts`). A pipeline for a task *not* at the gate
@@ -40,7 +42,15 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { failingJobs } from './ci-log.js';
-import { type CiReading, ciVerdictOf, judgeCiSettlement, manualJobPolicyFor } from './gates.js';
+import { asksForNamedJobs } from './ci-manual-jobs.js';
+import { enqueueCiPlays } from './ci-play.js';
+import {
+  CI_GATE_STAGE,
+  type CiReading,
+  ciVerdictOf,
+  judgeCiSettlement,
+  manualJobPolicyFor,
+} from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { gateSettlementOf, type PipelineOutboundData, settleGate } from './jobs.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -121,7 +131,7 @@ export const runCiSettle = async (
     status: held ? 'manual' : passed ? 'success' : 'failed',
   });
   let reread: CiReading | null = null;
-  if (held || (passed && policy.kind === 'named')) {
+  if (held || (passed && asksForNamedJobs(policy))) {
     const pipeline = await gitReads(integrations).pipelineStatus(headSha, context);
     const redact = (text: string): string =>
       integrations.git === null ? text : integrations.git.redactor.redactText(text).value;
@@ -129,6 +139,28 @@ export const runCiSettle = async (
       pipeline === null
         ? null
         : ciVerdictOf(pipeline, policy, { redact, checkedAt: options.clock.now() });
+    // S-28.7: a held pipeline whose `run` jobs are `manual` now — the second wave included —
+    // has them started by the `ci_play_manual` duty, on this attempt, before the wait is left to
+    // the gate's poll.
+    if (
+      stage === CI_GATE_STAGE &&
+      pipeline !== null &&
+      verdict?.kind === 'waiting' &&
+      verdict.judgement.toStart.length > 0
+    ) {
+      await enqueueCiPlays(
+        options,
+        {
+          taskId,
+          projectId: stored.task.projectId,
+          attempt: stored.task.stageAttempts[stage] ?? 1,
+          headSha,
+          pipelineId: pipeline.id,
+          jobs: verdict.judgement.toStart,
+        },
+        data.cause_event_id,
+      );
+    }
     if (verdict === null || verdict.kind === 'waiting') {
       logger.info(
         {

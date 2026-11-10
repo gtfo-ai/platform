@@ -1,0 +1,52 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/jobs/9073/play",
+      "status": 200,
+      "body": {
+        "id": 9073,
+        "name": "sentry-release-commit",
+        "stage": "release",
+        "status": "pending",
+        "allow_failure": false,
+        "coverage": null,
+        "created_at": "2026-06-01T07:20:00.000Z",
+        "started_at": null,
+        "finished_at": null,
+        "failure_reason": null,
+        "web_url": "https://gitlab.example.test/acme/api/-/jobs/9073"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "\"Run a job\" (POST /projects/:id/jobs/:job_id/play, \"For a job in manual status, trigger an action to start the job\"): the example response is a job object with status pending and started_at null. The job is pipelines-manual.json's held sentry-release-commit (id 9073); the runner, user, commit and artifacts members the adapter never reads are removed. S-28.7."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/jobs/404404/play",
+      "status": 404,
+      "body": { "message": "404 Not found" },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-11-10",
+        "kind": "inferred",
+        "note": "The \"Run a job\" section documents only the 200 and a 429 for the manual job run rate limit; a job id the project does not have is answered by GitLab's general REST status table, 404 for a resource that could not be found. The body is the table's generic message. S-28.7."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/jobs/9074/play",
+      "status": 403,
+      "body": { "message": "403 Forbidden" },
+      "source": {
+        "url": "https://docs.gitlab.com/ci/jobs/job_control/",
+        "retrieved": "2026-11-10",
+        "kind": "inferred",
+        "note": "\"To run a manual job, you must have permission to merge to the assigned branch\", and a protected environment admits only its Allowed to deploy list. The jobs API page does not state the status for an account without that permission; 403 is GitLab's general REST status for an authenticated request the account may not make (https://docs.gitlab.com/api/rest/troubleshooting/). The body is that table's generic message. S-28.7."
+      }
+    }
+  ]
+}

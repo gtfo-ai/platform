@@ -316,6 +316,8 @@ export const gitlabReplayContext = (
     emitReviewComment: (text) => signedDelivery('Note Hook', reviewCommentHookBody(text)),
     emitPipelineFinished: () => signedDelivery('Pipeline Hook', pipelineHookBody()),
     emitPipelineHeld: () => signedDelivery('Pipeline Hook', heldPipelineHookBody()),
+    // S-28.7: `jobs-play.json` records a 404 for job 404404.
+    missingJobId: '404404',
     projectId: GITLAB_PROJECT_ID,
     integrationId: GITLAB_INTEGRATION_ID,
     cleanup: async () => {},

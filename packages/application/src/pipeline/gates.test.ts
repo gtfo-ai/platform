@@ -354,6 +354,8 @@ const evaluation = (
     readonly ciTimeoutMinutes?: number;
     /** S-27.2: `pipeline.ci.required_manual_jobs`. @default absent — TD-036's default. */
     readonly requiredManualJobs?: 'all' | readonly string[];
+    /** S-28.7: `pipeline.ci.manual_jobs`. @default absent. */
+    readonly manualJobs?: Readonly<Record<string, 'run' | 'wait' | 'ignore'>>;
   } = {},
 ) =>
   createGateEvaluator({
@@ -365,7 +367,8 @@ const evaluation = (
       defaultProjectSettings(projectId, {
         ...(world.protectedPaths === undefined &&
         world.ciTimeoutMinutes === undefined &&
-        world.requiredManualJobs === undefined
+        world.requiredManualJobs === undefined &&
+        world.manualJobs === undefined
           ? {}
           : {
               config: {
@@ -376,14 +379,21 @@ const evaluation = (
                   ...(world.ciTimeoutMinutes === undefined
                     ? {}
                     : { limits: { ci_timeout_minutes: world.ciTimeoutMinutes } }),
-                  ...(world.requiredManualJobs === undefined
+                  ...(world.requiredManualJobs === undefined && world.manualJobs === undefined
                     ? {}
                     : {
                         ci: {
-                          required_manual_jobs:
-                            world.requiredManualJobs === 'all'
-                              ? ('all' as const)
-                              : [...world.requiredManualJobs],
+                          ...(world.requiredManualJobs === undefined
+                            ? {}
+                            : {
+                                required_manual_jobs:
+                                  world.requiredManualJobs === 'all'
+                                    ? ('all' as const)
+                                    : [...world.requiredManualJobs],
+                              }),
+                          ...(world.manualJobs === undefined
+                            ? {}
+                            : { manual_jobs: { ...world.manualJobs } }),
                         },
                       }),
                 },
@@ -1359,6 +1369,93 @@ describe('a manual job nobody started (S-27.2, TD-036)', () => {
       });
       expect(result).toMatchObject({ kind: 'settled', passed: true });
     });
+  });
+});
+
+/**
+ * S-28.7 (the M28 ruling): the gate's pending answer names the jobs the project set to `run` that
+ * are `manual` now — what `stage.execute` enqueues a start for — and says it is starting them.
+ */
+describe('manual jobs the project set to run (S-28.7)', () => {
+  const pipelineWith = (status: PipelineStatus['status'], jobs: PipelineStatus['jobs']) => ({
+    getPipelineStatus: async () => ({ ...pipelineStatus(status, jobs), finished_at: null }),
+  });
+  const WAVE_1 = [
+    job('phpstan', 'success', false, 'test'),
+    job('build_composer', 'manual', false, 'build-deps'),
+    job('codeception', 'pending', false, 'test'),
+    job('nette-tester', 'manual', true, 'test_optional'),
+  ];
+
+  it('carries the run jobs on the wait, and says the platform is starting them', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      pipelineWith('manual', WAVE_1),
+      { manualJobs: { build_composer: 'run', codeception: 'run' } },
+    );
+    expect(result).toMatchObject({
+      kind: 'pending',
+      ciPlay: {
+        headSha: HEAD_SHA,
+        pipelineId: 'pipeline-1',
+        jobs: [{ id: 'job-build_composer', name: 'build_composer' }],
+      },
+    });
+    expect((result as { detail: string }).detail).toContain(
+      'the platform is starting the manual job "build_composer" the project set to run (pipeline.ci.manual_jobs), and waits for its result',
+    );
+    // The read is still recorded, as on every pending answer.
+    expect(result).toHaveProperty('ciRead');
+  });
+
+  it('starts a run job inside a running pipeline too, and nothing without a run choice', async () => {
+    const running = pipelineWith('running', [
+      job('build_composer', 'success', false, 'build-deps'),
+      job('codeception', 'running', false, 'test'),
+      job('crawler-test', 'manual', false, 'test'),
+    ]);
+    const chosen = await evaluate(templateStage('ci_gate'), storedTask(MR), running, {
+      manualJobs: { 'crawler-test': 'run' },
+    });
+    expect(chosen).toMatchObject({ kind: 'pending', ciPlay: { jobs: [{ name: 'crawler-test' }] } });
+    for (const config of [{}, { manualJobs: { 'crawler-test': 'wait' as const } }]) {
+      const result = await evaluate(templateStage('ci_gate'), storedTask(MR), running, config);
+      expect(result.kind, JSON.stringify(config)).toBe('pending');
+      expect(result, JSON.stringify(config)).not.toHaveProperty('ciPlay');
+    }
+  });
+
+  it('fails the gate when a played run job failed, even with allow_failure, naming the key', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      {
+        getPipelineStatus: async () =>
+          pipelineStatus('success', [
+            job('build_composer', 'success', false, 'build-deps'),
+            job('codeception', 'failed', true, 'test'),
+          ]),
+      },
+      { manualJobs: { codeception: 'run' } },
+    );
+    expect(result).toMatchObject({ kind: 'settled', passed: false });
+    expect(result.kind === 'settled' ? result.detail : '').toContain(
+      'a manual job the project requires (pipeline.ci.manual_jobs) ran and did not succeed: codeception',
+    );
+  });
+
+  it('passes a held pipeline whose only unstarted job the project set to ignore', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      pipelineWith('manual', [
+        job('build', 'success', false, 'build'),
+        job('e2e', 'manual', false, 'test'),
+      ]),
+      { manualJobs: { e2e: 'ignore' } },
+    );
+    expect(result).toMatchObject({ kind: 'settled', passed: true });
   });
 });
 

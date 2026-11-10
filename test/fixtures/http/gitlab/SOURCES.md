@@ -605,3 +605,23 @@ one project, `acme/many-rules`, whose two lists each run to a second page.
 - `https://docs.gitlab.com/api/rest/` § "Pagination" — `x-next-page` is *"The index of the next page"*,
   and `per_page` is at most 100, the adapter's page size. The page does not say what the header holds on
   the last page, so both second pages are `inferred`, as `discussions-paged.json`'s is.
+
+## Pages read for S-28.7 — `jobs-play.json`
+
+Retrieved **2026-11-10**, without a GitLab instance; nothing was recorded. S-28.7 starts a manual job
+the project set to `run` in `pipeline.ci.manual_jobs`, so the fixture is three plays of jobs of
+`acme/api`.
+
+- `https://docs.gitlab.com/api/jobs/` § "Run a job" — `POST /projects/:id/jobs/:job_id/play`, *"For a
+  job in manual status, trigger an action to start the job"*, optional `job_inputs` and
+  `job_variables_attributes` (the platform sends neither), the example response a job object with
+  `status` `pending`; and *"If you exceed the manual job run rate limits … this endpoint returns a
+  `429 Too Many Requests` status code with a `Retry-After` header"*. The `200` replays
+  `pipelines-manual.json`'s held `sentry-release-commit` (job 9073) and is `documented-adapted`. The
+  section documents no status for a job the project does not have, nor for an account that may not
+  run the job, so the `404` and the `403` are `inferred` from the REST status table above.
+- `https://docs.gitlab.com/ci/jobs/job_control/` — *"To run a manual job, you must have permission to
+  merge to the assigned branch"*, and a protected environment admits only its *Allowed to deploy*
+  list: what the `403` stands for, and what the operator guide tells an administrator to grant the
+  platform's account. The page does not mention trigger jobs being played through this endpoint, and
+  the platform never plays one (the M28 ruling).

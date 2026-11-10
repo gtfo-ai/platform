@@ -185,6 +185,75 @@ describe('the keys a file may not apply', () => {
     });
   });
 
+  /**
+   * S-28.7 (the M28 ruling): `run` and `ignore` in `pipeline.ci.manual_jobs` come only from the
+   * project settings — starting a job runs CI with the project's permissions and ignoring one drops
+   * a check — so the repository file, written by the agent the gate judges, may only add `wait`.
+   */
+  describe('pipeline.ci.manual_jobs from the file (S-28.7)', () => {
+    const file = (modes: Record<string, string>, required?: string[]) => ({
+      pipeline: {
+        ci: {
+          manual_jobs: modes as Record<string, 'run' | 'wait' | 'ignore'>,
+          ...(required === undefined ? {} : { required_manual_jobs: required }),
+        },
+      },
+    });
+    type Settings = Parameters<typeof tightenRepositoryLayer>[0];
+    const applied = (repo: ReturnType<typeof file>, settings: Settings = {}) => {
+      const graded = withoutNotAppliedKeys(repo);
+      const tightened = tightenRepositoryLayer(settings, graded.values);
+      return {
+        ci: tightened.values.pipeline?.ci,
+        notApplied: [...graded.notApplied, ...tightened.notApplied],
+      };
+    };
+
+    it('drops a file’s run and ignore by name and reports each, keeping its wait', () => {
+      const result = applied(
+        file({ codeception: 'run', 'deploy:tenants': 'ignore', 'crawler-test': 'wait' }),
+      );
+      expect(result.ci?.manual_jobs).toEqual({ 'crawler-test': 'wait' });
+      expect(result.notApplied.map((item) => item.key)).toEqual([
+        'pipeline.ci.manual_jobs.codeception',
+        'pipeline.ci.manual_jobs.deploy:tenants',
+      ]);
+      expect(result.notApplied[0]?.reason).toContain('only the project settings may tell');
+      expect(result.notApplied[1]?.reason).toContain('ignore takes a manual job out');
+      // The refusal is the stored reading's own, as the `[]` one is: the refresh logs it.
+      expect(
+        withoutNotAppliedKeys(file({ codeception: 'run' })).notApplied.map((item) => item.key),
+      ).toEqual(['pipeline.ci.manual_jobs.codeception']);
+      // A file of nothing but refused entries leaves no empty record behind.
+      expect(withoutNotAppliedKeys(file({ codeception: 'run' })).values).toEqual({});
+    });
+
+    it('keeps the settings’ run over the file’s wait, and applies wait over the settings’ ignore', () => {
+      const settings: Settings = {
+        pipeline: { ci: { manual_jobs: { codeception: 'run', 'nette-tester': 'ignore' } } },
+      };
+      const result = applied(file({ codeception: 'wait', 'nette-tester': 'wait' }), settings);
+      expect(result.ci?.manual_jobs).toEqual({ 'nette-tester': 'wait' });
+      expect(result.notApplied.map((item) => item.key)).toEqual([
+        'pipeline.ci.manual_jobs.codeception',
+      ]);
+      expect(result.notApplied[0]?.reason).toContain('(run), which is still in force');
+    });
+
+    it('never adds to required_manual_jobs a name the settings set to run or ignore', () => {
+      const settings: Settings = {
+        pipeline: {
+          ci: { required_manual_jobs: ['e2e'], manual_jobs: { codeception: 'run' } },
+        },
+      };
+      const result = applied(file({}, ['codeception', 'smoke']), settings);
+      expect(result.ci?.required_manual_jobs).toEqual(['e2e', 'smoke']);
+      expect(result.notApplied.map((item) => item.reason).join('\n')).toContain(
+        '"codeception" is set to run in the project settings',
+      );
+    });
+  });
+
   it('applies both prompt keys when they name a prompt file, and drops one that names another path (WP-92)', () => {
     expect(REPOSITORY_KEY_GRADES['stages.*.prompt']).toBe('operational');
     expect(REPOSITORY_KEY_GRADES['stages.*.prompt_append']).toBe('operational');

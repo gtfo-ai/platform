@@ -441,6 +441,10 @@ const gitlabScript = (): Script => ({
       },
     ],
   },
+  // S-28.7: a played job answers the job object; its name is provider text the port drops.
+  [`POST /projects/${P}/jobs/9002/play`]: {
+    body: { id: 9002, name: `build ${GITLAB_TOKEN}`, status: 'pending', allow_failure: false },
+  },
   [`GET /projects/${P}/jobs/9002/trace`]: {
     text: `$ echo pushing\nremote: https://oauth2:${GITLAB_TOKEN}@gitlab.example.test/acme/api\nfatal\n`,
   },
@@ -576,6 +580,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   create_discussion: 'createDiscussion',
   get_pipeline_status: 'getPipelineStatus',
   get_job_log: 'getJobLog',
+  play_job: 'playJob',
   get_branch_head: 'getBranchHead',
   repository_settings: 'repositorySettings',
   read_codeowners: 'readCodeowners',
@@ -703,6 +708,8 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     emitted.get_merge_request_diff = await port.getMergeRequestDiff(ref, { limit: 10 });
     emitted.get_pipeline_status = await port.getPipelineStatus(PROJECT, SHA);
     emitted.get_job_log = await port.getJobLog(PROJECT, '9002');
+    // S-28.7: the play answers an id and a status, never the job's name — driven so the census holds.
+    emitted.play_job = await port.playJob(PROJECT, '9002');
     emitted.get_branch_head = await port.getBranchHead(PROJECT, 'main');
     emitted.repository_settings = await port.repositorySettings(PROJECT);
     emitted.read_codeowners = await port.readCodeowners(PROJECT, 'main');

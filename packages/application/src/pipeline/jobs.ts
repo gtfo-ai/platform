@@ -76,6 +76,7 @@ import {
   heldRetryReason,
   isUnchangedHeldRetry,
 } from './ci-pending-read.js';
+import { enqueueCiPlays } from './ci-play.js';
 import { ciWaitBrief, ciWaitReason, decideCiWait } from './ci-wait.js';
 import {
   decideGateOutage,
@@ -305,6 +306,12 @@ export interface PipelineOutboundData {
      */
     | 'ci_settle'
     /**
+     * S-28.7 (the M28 ruling): start one manual job the project set to `run` in
+     * `pipeline.ci.manual_jobs`, re-validated on fire against the live head, its latest pipeline,
+     * the job's status and the settings (`ci-play.ts`).
+     */
+    | 'ci_play_manual'
+    /**
      * WP-61, PROGRESS backlog 179: read the size of a merge request the platform merged, once, and
      * record it as `task.mr.measured` — the delivery's own `diff_stats` is `null` on GitLab.
      */
@@ -460,8 +467,15 @@ export interface PipelineOutboundData {
    * wake-up without its payload and settles nothing, rather than reading `manual` as a failure.
    */
   readonly ci_held?: boolean;
-  /** `ci_settle` on a held pipeline only: the provider's pipeline id, for the log line. */
+  /**
+   * `ci_settle` on a held pipeline: the provider's pipeline id, for the log line. `ci_play_manual`
+   * (S-28.7): the pipeline the judgement read, which the duty re-reads as the head's latest.
+   */
   readonly ci_pipeline_id?: string;
+  /** `ci_play_manual` only (S-28.7): the `ci_gate` attempt the judgement was made on. */
+  readonly ci_attempt?: number;
+  /** `ci_play_manual` only (S-28.7): the provider's id of the job to start, digits only. */
+  readonly ci_job_id?: string;
   readonly failed_jobs?: readonly string[];
   /**
    * `ci_settle` only (WP-81): each failing job's name with the log reference the event carried, so a
@@ -968,11 +982,34 @@ export const stageExecuteHandler = (
     const checks = (data.gate_checks ?? 0) + 1;
 
     if (result.kind === 'pending') {
+      /**
+       * S-28.7 (the M28 ruling): the jobs the project set to `run` that the read found `manual` are
+       * started by the `ci_play_manual` duty — one wake-up per job this attempt has not recorded,
+       * enqueued here, after the gate's own reads and outside every transaction.
+       */
+      const plays =
+        result.ciPlay === undefined
+          ? []
+          : await enqueueCiPlays(
+              options,
+              {
+                taskId: request.taskId,
+                projectId: request.projectId,
+                attempt: request.attempt,
+                headSha: result.ciPlay.headSha,
+                pipelineId: result.ciPlay.pipelineId,
+                jobs: result.ciPlay.jobs,
+              },
+              // The gate's poll names no event; the play's own key is its identity.
+              `ci_gate:${request.taskId}:${String(request.attempt)}`,
+            );
       // Backlog 1078: the CI gate's read is recorded on its attempt on every binding, and a retry
-      // whose first read finds the previous attempt's held pipeline unchanged escalates at once.
+      // whose first read finds the previous attempt's held pipeline unchanged escalates at once —
+      // unless this read just started a job the project set to `run` (S-28.7): the held pipeline
+      // is then about to move, which is not the Retry nobody acted on that rule exists for.
       if (
         result.ciRead !== undefined &&
-        (await recordCiRead(options, request, result.ciRead, result.ciWait))
+        (await recordCiRead(options, request, result.ciRead, result.ciWait, plays.length === 0))
       ) {
         return;
       }
@@ -1150,6 +1187,8 @@ const recordCiRead = async (
   request: StageExecutionJob,
   ciRead: CiGateRead,
   wait: CiWait | undefined,
+  /** S-28.7: `false` when this read started a `run` job — the unchanged-retry rule then waits. */
+  mayEscalateUnchanged = true,
 ): Promise<boolean> => {
   const logger: Logger = options.logger ?? silentLogger;
   const pipeline = ciRead.pipeline;
@@ -1193,6 +1232,7 @@ const recordCiRead = async (
     !written ||
     pipeline === null ||
     !firstHeldRead ||
+    !mayEscalateUnchanged ||
     !isUnchangedHeldRetry(previous, pipeline)
   ) {
     return false;

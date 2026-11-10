@@ -105,6 +105,8 @@ const world = async (
     readonly jobNames?: readonly string[];
     /** S-27.2: `pipeline.ci.required_manual_jobs`. @default absent — TD-036's default. */
     readonly requiredManualJobs?: 'all' | readonly string[];
+    /** S-28.7: `pipeline.ci.manual_jobs`. */
+    readonly manualJobs?: Readonly<Record<string, 'run' | 'wait' | 'ignore'>>;
     /** The task's state when the duty fires. @default `active` at `code_review`. */
     readonly state?: 'active' | 'ready_for_merge' | 'done' | 'paused';
     /** The live merge request on the provider. @default an open draft. */
@@ -231,16 +233,23 @@ const world = async (
     store,
     settings: staticProjectSettings((projectId) =>
       defaultProjectSettings(projectId, {
-        ...(options.requiredManualJobs === undefined
+        ...(options.requiredManualJobs === undefined && options.manualJobs === undefined
           ? {}
           : {
               config: {
                 pipeline: {
                   ci: {
-                    required_manual_jobs:
-                      options.requiredManualJobs === 'all'
-                        ? 'all'
-                        : [...options.requiredManualJobs],
+                    ...(options.requiredManualJobs === undefined
+                      ? {}
+                      : {
+                          required_manual_jobs:
+                            options.requiredManualJobs === 'all'
+                              ? 'all'
+                              : [...options.requiredManualJobs],
+                        }),
+                    ...(options.manualJobs === undefined
+                      ? {}
+                      : { manual_jobs: { ...options.manualJobs } }),
                   },
                 },
               },
@@ -373,6 +382,27 @@ describe('the mr_pipeline duty, after the Developer stage (backlog 486)', () => 
       await (await world({ ...held, requiredManualJobs: ['sentry-release-commit'] })).run(),
     ).toBe('requested');
     expect(await (await world({ ...held, requiredManualJobs: ['e2e'] })).run()).toBe('not_needed');
+  });
+
+  it('never asks for a pipeline because of a job the project set to run — the CI gate starts it (S-28.7)', async () => {
+    const held = {
+      pipeline: true,
+      pipelineStatus: 'manual',
+      jobStatuses: ['success', 'manual'],
+      jobStages: ['test', 'build-deps'],
+      jobNames: ['phpstan', 'build_composer'],
+    } as const;
+    // Under `all` the held build job asks for a fresh pipeline; set to run, it is the gate's to start.
+    expect(await (await world({ ...held, requiredManualJobs: 'all' })).run()).toBe('requested');
+    expect(
+      await (
+        await world({ ...held, requiredManualJobs: 'all', manualJobs: { build_composer: 'run' } })
+      ).run(),
+    ).toBe('not_needed');
+    // `wait` is a person's job, so a fresh pipeline is still asked for, as for a required name.
+    expect(await (await world({ ...held, manualJobs: { build_composer: 'wait' } })).run()).toBe(
+      'requested',
+    );
   });
 
   it('asks for nothing when the only manual job is an optional one (allow_failure), as in every Autix pipeline', async () => {

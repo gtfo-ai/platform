@@ -30,6 +30,8 @@ import type {
   BudgetApprovalSubjectDetail,
   CiGateEnding,
   CiManualNotRun,
+  CiManualStarted,
+  CiManualStartedJob,
   ContextPackRecord,
   EstimateBasis,
   HistorySample,
@@ -1310,6 +1312,29 @@ export interface TaskRepository {
     entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt?: number },
     value: CiManualNotRun,
   ): Promise<boolean>;
+  /**
+   * Records what the platform did about one `run` manual job on `stage`'s attempt `attempt`
+   * (`task_stages.ci_manual_started`, migration 0113, S-28.7): the entry for `job.job_id` is added,
+   * or replaced when the attempt already holds one for that id, **only while the row is open**;
+   * answers whether it wrote. The one writer is the `ci_play_manual` duty. The resulting array is
+   * parsed before the write (at most `MAX_CI_MANUAL_STARTED_JOBS` entries), so a write that would
+   * exceed the bound is refused, never cut.
+   */
+  recordCiManualStarted(
+    tx: Transaction,
+    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
+    job: CiManualStartedJob,
+  ): Promise<boolean>;
+  /**
+   * `stage`'s attempt `attempt`'s `ci_manual_started`, or `null` when it recorded none (or has no
+   * row). A stored value that does not parse is refused, never defaulted.
+   */
+  ciManualStartedOf(
+    tx: Transaction,
+    taskId: Id,
+    stage: Slug,
+    attempt: number,
+  ): Promise<CiManualStarted | null>;
   /**
    * What `stage`'s **current pass** left unstarted (S-27.2, the security review of #114): the
    * `ci_manual_not_run` of the stage's **newest** attempt, only when that attempt closed `completed`

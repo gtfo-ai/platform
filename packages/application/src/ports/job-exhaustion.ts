@@ -346,6 +346,10 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
     shape: 'bound_and_escalate',
     why: 'a head with no pipeline, or one held at a manual job, is a CI gate waiting for a pipeline nobody asked for; nothing re-runs the duty for this completion',
   },
+  ci_play_manual: {
+    shape: 'notification_shaped',
+    why: 'one start of a manual job the project set to run (S-28.7): the CI gate re-judges the pipeline on its next poll or held hook and offers the job again while it is still manual and unrecorded, and the CI wait’s own bound (its checks, or the CI timeout) ends a wait nothing answers',
+  },
   mr_ready: {
     shape: 'bound_and_escalate',
     why: 'a task at ready_for_merge whose merge request is still a draft cannot be merged by the person it waits for; nothing re-runs the duty for this entry',

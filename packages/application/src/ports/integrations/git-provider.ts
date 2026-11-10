@@ -185,6 +185,13 @@ export const pipelineJobSchema = z.strictObject({
    * credentials that the binding's redactor leaves unchanged, or `null`.
    */
   web_url: urlSchema.nullish(),
+  /**
+   * `true` for a **trigger** job — one that starts a downstream pipeline rather than running a
+   * script (GitLab's *bridges*) — absent or `false` for every other job (S-28.7). The platform does
+   * not start a trigger job in this version (the M28 ruling): `pipeline.ci.manual_jobs` `run` reads
+   * as `wait` for one.
+   */
+  trigger: z.boolean().optional(),
 });
 
 /**
@@ -214,6 +221,15 @@ export const createdPipelineSchema = z.strictObject({
   head_sha: shaSchema,
   status: pipelineStatusValueSchema,
   url: urlSchema.nullish(),
+});
+
+/**
+ * What {@link GitProviderPort.playJob} answers: the job it started, with the status the provider
+ * reports right after (S-28.7) — `pending` or `running` for a job that was started.
+ */
+export const playedJobSchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  status: pipelineStatusValueSchema,
 });
 
 /** CODEOWNERS, parsed. Patterns keep provider syntax; owners keep their `@` prefix. */
@@ -426,6 +442,7 @@ export type Discussion = z.infer<typeof discussionSchema>;
 export type DiscussionNote = z.infer<typeof discussionNoteSchema>;
 export type PipelineStatus = z.infer<typeof pipelineStatusSchema>;
 export type CreatedPipeline = z.infer<typeof createdPipelineSchema>;
+export type PlayedJob = z.infer<typeof playedJobSchema>;
 export type PipelineStatusValue = z.infer<typeof pipelineStatusValueSchema>;
 export type CodeownersRules = z.infer<typeof codeownersRulesSchema>;
 export type MergedMergeRequest = z.infer<typeof mergedMergeRequestSchema>;
@@ -517,6 +534,12 @@ export interface GitProviderCapabilities {
   readonly coverageArtifacts: boolean;
   /** Whether pipelines run on draft merge requests. */
   readonly draftPipelines: boolean;
+  /**
+   * Whether the binding can **start a manual job** ({@link GitProviderPort.playJob}, S-28.7). A
+   * provider that cannot answers `false`, and the CI gate then treats a job the project set to
+   * `run` as one a person starts (`wait`), saying why.
+   */
+  readonly manualJobPlay: boolean;
   /** Thread resolution API (`resolveDiscussion`). */
   readonly discussionResolution: boolean;
   /**
@@ -1001,6 +1024,25 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * once more with the binding's redactor before it cuts anything. Still open: the count of what was
    * removed is reported through the adapter's `onRedaction`, which nothing yet persists.
    */
+  /**
+   * **Starts a manual job** (S-28.7, the M28 ruling) — GitLab's `POST /projects/:id/jobs/:job_id/play`,
+   * the API form of the job's *Run* button. `jobId` is the port's `PipelineStatus.jobs[].id`. The
+   * CI gate asks only for a job the project set to `run` in `pipeline.ci.manual_jobs` (project
+   * settings only, never the repository file) that the provider reports `manual`, and never for a
+   * trigger job.
+   *
+   * **It is a mutation** (technical/06): every call goes through `IntegrationActionExecutor`, keyed
+   * per job id by the caller (`ci_play:<task>:<pipeline id>:<job id>`), so a retried wake-up plays a
+   * job at most once.
+   *
+   * @throws {IntegrationError} `forbidden` when the binding's account may not start it (GitLab: it
+   * must be allowed to merge to the job's branch, and to deploy to a protected environment);
+   * `not_found` for a job the provider does not have; `invalid_request` for a job that is not
+   * playable any more (someone started it); `unsupported_capability` when
+   * `capabilities().manualJobPlay` is false; {@link IntegrationRateLimitedError} for a `429`.
+   */
+  readonly playJob: (project: string, jobId: string) => Promise<PlayedJob>;
+
   readonly getJobLog: (
     project: string,
     logRef: string,

@@ -41,6 +41,23 @@
  * gate, saying the pipeline's rules skipped it (BACKLOG 1493). And a job list the provider cut
  * (`jobs_truncated`, BACKLOG 1490) never passes on this rule: the gate waits as before.
  *
+ * ## The project's per-job choice (S-28.7, the M28 ruling)
+ *
+ * `pipeline.ci.manual_jobs` maps an **exact** job name to `run`, `wait` or `ignore`, and a mode
+ * wins over everything above for that name:
+ *  - `wait` — exactly a name in `required_manual_jobs`: a person must start it, the gate waits, its
+ *    failure (or the pipeline's rules skipping it) fails the gate;
+ *  - `run` — the same check, **and** the platform starts it: every wait the rule answers lists the
+ *    `run` jobs currently `manual` as `toStart` (never a trigger job, which this version does not
+ *    start), and the `ci_play_manual` duty plays them (`ci-play.ts`). A played job's failure fails
+ *    the gate even with `allow_failure: true`;
+ *  - `ignore` — never started and never a check, even when it blocks the provider's pipeline: it is
+ *    not waited for by any policy and its failure is not the gate's (the gate judges the jobs that
+ *    ran). A pass still lists it in `notRun` when it is blocking, because the provider may still
+ *    show the pipeline blocked at it.
+ * A name with no mode keeps exactly the behaviour above. `run` and `ignore` come only from the
+ * project settings (`repository-grades.ts`).
+ *
  * ## What it does not change
  *
  * A `pending` or `running` pipeline waits, and a `failed`, `canceled` or `skipped` one fails, as
@@ -56,12 +73,19 @@ import type { ProjectSettings } from './settings.js';
 type PipelineJob = PipelineStatus['jobs'][number];
 type JudgedPipeline = Pick<PipelineStatus, 'status' | 'jobs' | 'jobs_truncated'>;
 
-/** `pipeline.ci.required_manual_jobs`, read (TD-036 decision 3). */
-export type ManualJobPolicy =
+/** One job's mode in `pipeline.ci.manual_jobs` (S-28.7, the M28 ruling). */
+export type ManualJobMode = 'run' | 'wait' | 'ignore';
+
+/**
+ * `pipeline.ci.required_manual_jobs`, read (TD-036 decision 3) — and, beside it, the per-job
+ * `modes` of `pipeline.ci.manual_jobs` (S-28.7), absent when the project states none.
+ */
+export type ManualJobPolicy = (
   | { readonly kind: 'default' }
   | { readonly kind: 'none' }
   | { readonly kind: 'all' }
-  | { readonly kind: 'named'; readonly names: ReadonlySet<string> };
+  | { readonly kind: 'named'; readonly names: ReadonlySet<string> }
+) & { readonly modes?: ReadonlyMap<string, ManualJobMode> };
 
 export const DEFAULT_MANUAL_JOB_POLICY: ManualJobPolicy = { kind: 'default' };
 
@@ -71,7 +95,12 @@ export const DEFAULT_MANUAL_JOB_POLICY: ManualJobPolicy = { kind: 'default' };
  * reading that keeps a test from being skipped.
  */
 export const manualJobPolicyOf = (settings: Pick<ProjectSettings, 'config'>): ManualJobPolicy => {
-  const stated: unknown = settings.config.pipeline?.ci?.required_manual_jobs;
+  const base = requiredPolicyOf(settings.config.pipeline?.ci?.required_manual_jobs);
+  const modes = manualJobModesOf(settings.config.pipeline?.ci?.manual_jobs);
+  return modes === null ? base : { ...base, modes };
+};
+
+const requiredPolicyOf = (stated: unknown): ManualJobPolicy => {
   if (stated === 'all') {
     return { kind: 'all' };
   }
@@ -82,6 +111,66 @@ export const manualJobPolicyOf = (settings: Pick<ProjectSettings, 'config'>): Ma
   }
   return DEFAULT_MANUAL_JOB_POLICY;
 };
+
+const MODES: ReadonlySet<string> = new Set(['run', 'wait', 'ignore']);
+
+/**
+ * `pipeline.ci.manual_jobs` as a map, or `null` when it states nothing. The schema bounds it at the
+ * document; an entry that is somehow not one of the three words is **skipped** — the name then
+ * keeps the behaviour it has with no mode, which never starts a job and never drops a check.
+ */
+const manualJobModesOf = (stated: unknown): ReadonlyMap<string, ManualJobMode> | null => {
+  if (typeof stated !== 'object' || stated === null || Array.isArray(stated)) {
+    return null;
+  }
+  const modes = new Map<string, ManualJobMode>();
+  for (const [name, mode] of Object.entries(stated)) {
+    if (typeof mode === 'string' && MODES.has(mode)) {
+      modes.set(name, mode as ManualJobMode);
+    }
+  }
+  return modes.size === 0 ? null : modes;
+};
+
+/**
+ * A job's mode under the policy: its `manual_jobs` entry, else `wait` for a name in
+ * `required_manual_jobs`, else `null` — no choice, TD-036's rule.
+ */
+export const manualJobModeOf = (policy: ManualJobPolicy, name: string): ManualJobMode | null =>
+  policy.modes?.get(name) ?? (policy.kind === 'named' && policy.names.has(name) ? 'wait' : null);
+
+/** A job the project requires by name — `run` or `wait`, from either key. */
+const isRequiredJob = (policy: ManualJobPolicy, job: Pick<PipelineJob, 'name'>): boolean => {
+  const mode = manualJobModeOf(policy, job.name);
+  return mode === 'run' || mode === 'wait';
+};
+
+const isIgnoredJob = (policy: ManualJobPolicy, job: Pick<PipelineJob, 'name'>): boolean =>
+  manualJobModeOf(policy, job.name) === 'ignore';
+
+/**
+ * Whether the policy names any job it requires — the question that decides whether a `success`
+ * pipeline is asked about jobs at all (TD-036's ruling on #114), and whether the pipeline event's
+ * duty re-reads a green pipeline (`ci-settle.ts`).
+ */
+export const asksForNamedJobs = (policy: ManualJobPolicy): boolean =>
+  policy.kind === 'named' ||
+  [...(policy.modes?.values() ?? [])].some((mode) => mode === 'run' || mode === 'wait');
+
+/**
+ * The `run` jobs the platform may start now: `manual`, named `run`, and not a trigger job (a
+ * downstream pipeline's bridge — `run` is refused for those in this version, the M28 ruling).
+ */
+export const manualJobsToStart = (
+  pipeline: Pick<PipelineStatus, 'jobs'>,
+  policy: ManualJobPolicy,
+): readonly PipelineJob[] =>
+  pipeline.jobs.filter(
+    (job) =>
+      job.status === 'manual' &&
+      job.trigger !== true &&
+      manualJobModeOf(policy, job.name) === 'run',
+  );
 
 /** A job a person has to start, which the provider counts toward the pipeline (decision 1). */
 export const isBlockingManualJob = (job: Pick<PipelineJob, 'status' | 'allow_failure'>): boolean =>
@@ -102,30 +191,48 @@ export const manualJobsHolding = (
   readonly holds: boolean;
   readonly jobs: readonly PipelineJob[];
   readonly unseen: boolean;
+  /**
+   * S-28.7: whether it holds for a reason **a person** must answer — a held job that is not one the
+   * platform starts itself ({@link manualJobsToStart}), or an unseen hold. What `mr_pipeline` asks:
+   * a fresh pipeline is never requested because of a `run` job. Equal to `holds` for a policy with
+   * no `run` mode.
+   */
+  readonly heldForPerson: boolean;
 } => {
   // BACKLOG 1490: a job list the provider cut is a list that may hide what holds the pipeline.
   const unseen =
     pipeline.status === 'manual' &&
     (pipeline.jobs_truncated === true || !pipeline.jobs.some((job) => isBlockingManualJob(job)));
-  switch (policy.kind) {
-    case 'none':
-      return { holds: false, jobs: [], unseen };
-    case 'all': {
-      const jobs = pipeline.jobs.filter(isBlockingManualJob);
-      return { holds: jobs.length > 0 || unseen, jobs, unseen };
+  const counted = (job: PipelineJob): boolean => !isIgnoredJob(policy, job);
+  // S-28.7: a job the project requires by mode (`run`/`wait`) holds under every policy.
+  const required = pipeline.jobs.filter(
+    (job) => job.status === 'manual' && isRequiredJob(policy, job),
+  );
+  const base = ((): readonly PipelineJob[] => {
+    switch (policy.kind) {
+      case 'none':
+        return [];
+      case 'all':
+        return pipeline.jobs.filter((job) => isBlockingManualJob(job) && counted(job));
+      case 'named':
+        return pipeline.jobs.filter(
+          (job) => job.status === 'manual' && policy.names.has(job.name) && counted(job),
+        );
+      case 'default': {
+        const test = isTestJob(hasTestStage(pipeline.jobs));
+        return pipeline.jobs.filter((job) => isBlockingManualJob(job) && test(job) && counted(job));
+      }
     }
-    case 'named': {
-      const jobs = pipeline.jobs.filter(
-        (job) => job.status === 'manual' && policy.names.has(job.name),
-      );
-      return { holds: jobs.length > 0 || unseen, jobs, unseen };
-    }
-    case 'default': {
-      const counted = isTestJob(hasTestStage(pipeline.jobs));
-      const jobs = pipeline.jobs.filter((job) => isBlockingManualJob(job) && counted(job));
-      return { holds: jobs.length > 0 || unseen, jobs, unseen };
-    }
-  }
+  })();
+  const jobs = pipeline.jobs.filter((job) => base.includes(job) || required.includes(job));
+  const unseenHolds = unseen && policy.kind !== 'none';
+  const toStart = manualJobsToStart(pipeline, policy);
+  return {
+    holds: jobs.length > 0 || unseenHolds,
+    jobs,
+    unseen,
+    heldForPerson: jobs.some((job) => !toStart.includes(job)) || unseenHolds,
+  };
 };
 
 /** Why a pipeline the rule does not pass is still waited on — the gate's words pick from it. */
@@ -174,6 +281,13 @@ export type CiPipelineJudgement =
        * blocking manual job (the one a held pipeline is held at) — what the gate's sentence names.
        */
       readonly heldAt: readonly PipelineJob[];
+      /**
+       * S-28.7: the `run` jobs currently `manual` that the platform may start
+       * ({@link manualJobsToStart}) — on every wait, a running pipeline's included, so the second
+       * wave (a test job that `needs:` a started build job) is started when it appears. Empty for a
+       * policy with no `run` mode.
+       */
+      readonly toStart: readonly PipelineJob[];
     };
 
 const TERMINAL_FAIL = new Set(['failed', 'canceled', 'skipped']);
@@ -195,6 +309,13 @@ export const judgeCiPipeline = (
   const hold = manualJobsHolding(pipeline, policy);
   const blocking = jobs.filter(isBlockingManualJob);
   const heldAt = [...hold.jobs, ...blocking.filter((job) => !hold.jobs.includes(job))];
+  const toStart = manualJobsToStart(pipeline, policy);
+  const waiting = (cause: CiWaitCause): CiPipelineJudgement => ({
+    kind: 'waiting',
+    cause,
+    heldAt,
+    toStart,
+  });
   if (TERMINAL_FAIL.has(pipeline.status)) {
     return {
       kind: 'failed',
@@ -204,17 +325,15 @@ export const judgeCiPipeline = (
     };
   }
   if (pipeline.status === 'pending' || pipeline.status === 'running') {
-    return { kind: 'waiting', cause: 'in_flight', heldAt };
+    return waiting('in_flight');
   }
-  const requiredFailed =
-    policy.kind === 'named'
-      ? jobs.filter((job) => ranAndFailed(job) && policy.names.has(job.name))
-      : [];
+  // TD-036 decision 3, and S-28.7's `run`/`wait`: a required job that ran and failed fails the
+  // gate whatever its `allow_failure` — a played job's result is a required check.
+  const requiredFailed = jobs.filter((job) => ranAndFailed(job) && isRequiredJob(policy, job));
   // BACKLOG 1493: a required job the pipeline's rules skipped never runs, so it is never satisfied.
-  const requiredSkipped =
-    policy.kind === 'named'
-      ? jobs.filter((job) => job.status === 'skipped' && policy.names.has(job.name))
-      : [];
+  const requiredSkipped = jobs.filter(
+    (job) => job.status === 'skipped' && isRequiredJob(policy, job),
+  );
   /**
    * **A `success` pipeline keeps the behaviour before TD-036** (the coordinator's ruling on #114):
    * the provider's green is believed, and only the project's **named** jobs are asked of it — a
@@ -224,7 +343,7 @@ export const judgeCiPipeline = (
    * would hold every such task until its CI timeout.
    */
   if (pipeline.status === 'success') {
-    if (policy.kind !== 'named') {
+    if (!asksForNamedJobs(policy)) {
       return { kind: 'passed', notRun: blocking };
     }
     if (requiredFailed.length > 0 || requiredSkipped.length > 0) {
@@ -236,15 +355,16 @@ export const judgeCiPipeline = (
       };
     }
     if (pipeline.jobs_truncated === true) {
-      return { kind: 'waiting', cause: 'jobs_unseen', heldAt };
+      return waiting('jobs_unseen');
     }
-    return hold.holds
-      ? { kind: 'waiting', cause: 'manual_required', heldAt }
-      : { kind: 'passed', notRun: blocking };
+    return hold.holds ? waiting('manual_required') : { kind: 'passed', notRun: blocking };
   }
   // `manual`: held at a blocking manual job. (b) — and a required job that ran and failed, or was
   // skipped, fails the gate (decision 3, BACKLOG 1493).
-  const disallowed = jobs.filter((job) => ranAndFailed(job) && !job.allow_failure);
+  // S-28.7: an `ignore` job is not a check — its failure is not the gate's.
+  const disallowed = jobs.filter(
+    (job) => ranAndFailed(job) && !job.allow_failure && !isIgnoredJob(policy, job),
+  );
   if (disallowed.length > 0 || requiredFailed.length > 0 || requiredSkipped.length > 0) {
     const failing = [
       ...disallowed,
@@ -259,22 +379,22 @@ export const judgeCiPipeline = (
   }
   // (a): nothing passes while a job is still queued (behind the held one) or running.
   if (jobs.some((job) => job.status === 'pending' || job.status === 'running')) {
-    return { kind: 'waiting', cause: 'in_flight', heldAt };
+    return waiting('in_flight');
   }
   // BACKLOG 1490: on a cut job list the rule never passes.
   if (pipeline.jobs_truncated === true) {
-    return { kind: 'waiting', cause: 'jobs_unseen', heldAt };
+    return waiting('jobs_unseen');
   }
   // (c)
   if (!jobs.some((job) => job.status === 'success')) {
-    return { kind: 'waiting', cause: 'nothing_ran', heldAt };
+    return waiting('nothing_ran');
   }
   if (hold.unseen) {
-    return { kind: 'waiting', cause: 'manual_unseen', heldAt };
+    return waiting('manual_unseen');
   }
   // (d), or the project's list.
   if (hold.holds) {
-    return { kind: 'waiting', cause: 'manual_required', heldAt };
+    return waiting('manual_required');
   }
   return { kind: 'passed', notRun: blocking };
 };

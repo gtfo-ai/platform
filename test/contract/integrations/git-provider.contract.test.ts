@@ -472,6 +472,8 @@ runGitProviderContract({
       emitPipelineFinished: () =>
         port.emitPipelineFinished({ project: PROJECT, headSha: existing.head_sha }),
       emitPipelineHeld: () => port.emitPipelineFinished({ project: PROJECT, headSha: HELD_SHA }),
+      // S-28.7: shaped like the fake's job ids (`<pipeline>-<n>`), and never issued.
+      missingJobId: '4242-1',
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
       cleanup: async () => {},

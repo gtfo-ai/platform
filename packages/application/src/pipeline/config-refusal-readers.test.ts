@@ -111,12 +111,12 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
   'packages/application/src/pipeline/gates.ts': {
     count: 3,
     reason:
-      'the CI wait on a poll-only binding (WP-136) and the same gate’s provider-outage bound (backlog 490) read only `ci_timeout_minutes`; on the defaults each waits 60 minutes and parks (closed), and the gate it waits for settles through `judgeCiSettlement`, which refuses a refused configuration by name; the manual-job policy (S-27.2, `manualJobPolicyFor`) reads only `pipeline.ci.required_manual_jobs`, and a pass it allows on the defaults settles through the same `judgeCiSettlement`, so it is refused by name too',
+      'the CI wait on a poll-only binding (WP-136) and the same gate’s provider-outage bound (backlog 490) read only `ci_timeout_minutes`; on the defaults each waits 60 minutes and parks (closed), and the gate it waits for settles through `judgeCiSettlement`, which refuses a refused configuration by name; the manual-job policy (S-27.2, `manualJobPolicyFor`) reads only `pipeline.ci` (`required_manual_jobs`, and since S-28.7 `manual_jobs`, whose `run` is acted on only by `ci_play_manual`, which refuses a refused configuration itself), and a pass it allows on the defaults settles through the same `judgeCiSettlement`, so it is refused by name too',
   },
   'packages/application/src/pipeline/merge-request-ready.ts': {
     count: 1,
     reason:
-      '`mr_pipeline` (S-27.2) reads only `pipeline.ci.required_manual_jobs` to decide whether to ask the provider for a fresh pipeline; on the defaults it asks for one or not by the default rule, which moves no task — the CI gate that reads the pipeline refuses a refused configuration by name at `judgeCiSettlement`',
+      '`mr_pipeline` (S-27.2) reads only `pipeline.ci` to decide whether to ask the provider for a fresh pipeline; on the defaults it asks for one or not by the default rule, which moves no task — the CI gate that reads the pipeline refuses a refused configuration by name at `judgeCiSettlement`',
   },
   'packages/application/src/pipeline/manual-start.ts': {
     count: 1,

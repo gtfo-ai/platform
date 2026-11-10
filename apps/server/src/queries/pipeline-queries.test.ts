@@ -27,6 +27,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
   ciManualNotRunOf,
+  ciManualStartedOf,
   conversationSeenFor,
   gateWaitOf,
   lastGateWaitOf,
@@ -569,5 +570,41 @@ describe('conversation_seen on the task detail (S-28.2)', () => {
       { source: 'mr_note', author: null, written_at: null, seen_at: '2026-11-10T10:44:00.000Z' },
     ]);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('ci_manual_started on the task detail (S-28.7)', () => {
+  type Row = Parameters<typeof ciManualStartedOf>[0][number];
+  const TASK = '00000000-0000-4000-8000-000000002807';
+  const STARTED = [
+    {
+      job_id: '9071',
+      pipeline_id: '907',
+      name: 'build_composer',
+      url: null,
+      at: '2026-11-10T09:00:00.000Z',
+      outcome: 'started',
+    },
+  ];
+  const row = (over: Partial<Row> = {}): Row =>
+    ({
+      taskId: TASK,
+      stage: 'ci_gate',
+      attempt: 1,
+      ciManualStarted: STARTED,
+      ...over,
+    }) as unknown as Row;
+
+  it('serves the newest ci_gate attempt’s value whatever its state, and null when it recorded none', () => {
+    expect(ciManualStartedOf([row()])).toEqual(STARTED);
+    expect(ciManualStartedOf([row(), row({ attempt: 2, ciManualStarted: null })])).toBeNull();
+    expect(ciManualStartedOf([row({ stage: 'rebase_gate' })])).toBeNull();
+    expect(ciManualStartedOf([])).toBeNull();
+  });
+
+  it('refuses a stored value that does not parse, by name, never as null', () => {
+    expect(() =>
+      ciManualStartedOf([row({ ciManualStarted: [{ ...STARTED[0], job_id: 'build' }] })]),
+    ).toThrow(/ci_manual_started/);
   });
 });

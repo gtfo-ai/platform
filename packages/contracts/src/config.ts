@@ -252,9 +252,59 @@ export const requiredManualJobsSchema = z.union([
  * `pipeline.limits`, which holds bounds (how long and how often, BD-008): this is a policy about
  * what counts, and `ci_timeout_minutes` stays where every document states it.
  */
-export const pipelineCiConfigSchema = z.strictObject({
-  required_manual_jobs: requiredManualJobsSchema.optional(),
-});
+/** The most jobs `pipeline.ci.manual_jobs` may name (S-28.7, the M28 ruling). */
+export const MAX_MANUAL_JOB_MODES = 50;
+
+/** One job's choice in `pipeline.ci.manual_jobs` (S-28.7). */
+export const manualJobModeSchema = z.enum(['run', 'wait', 'ignore']);
+export type ManualJobModeConfig = z.infer<typeof manualJobModeSchema>;
+
+/**
+ * **What the platform does with each manual job, by exact name** (S-28.7, the M28 ruling on the
+ * owner's feedback of 2026-11-10). A record of job name → mode, at most
+ * {@link MAX_MANUAL_JOB_MODES} entries, each name 1–{@link MAX_REQUIRED_MANUAL_JOB_CHARS}
+ * characters, no globs (a job name is an identity):
+ *
+ *  - **`run`** — the platform starts the job when the provider holds it at `manual` (never a trigger
+ *    job in this version), and its result is a **required check**: a failure fails the CI gate even
+ *    when the job has `allow_failure: true`;
+ *  - **`wait`** — a person must start it and the gate waits: exactly a name in
+ *    `required_manual_jobs`;
+ *  - **`ignore`** — never started and never a check, even when it blocks the provider's pipeline:
+ *    the gate judges the jobs that ran.
+ *
+ * A job named nowhere keeps TD-036's behaviour and is **never** started. `run` and `ignore` are
+ * accepted **only from the project settings** — playing a job runs CI with the project's
+ * permissions, and the repository file is written by the agent whose change the gate judges — so a
+ * repository file may add `wait` only (`repository-grades.ts` drops and reports the rest).
+ */
+export const manualJobsSchema = z
+  .record(z.string().min(1).max(MAX_REQUIRED_MANUAL_JOB_CHARS), manualJobModeSchema)
+  .refine((modes) => Object.keys(modes).length <= MAX_MANUAL_JOB_MODES, {
+    message: `at most ${MAX_MANUAL_JOB_MODES} jobs`,
+  });
+
+export const pipelineCiConfigSchema = z
+  .strictObject({
+    required_manual_jobs: requiredManualJobsSchema.optional(),
+    /** S-28.7: the per-job choice — see {@link manualJobsSchema}. */
+    manual_jobs: manualJobsSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    // A name in both keys must mean the same thing: a name in `required_manual_jobs` is `wait`.
+    const required = value.required_manual_jobs;
+    if (!Array.isArray(required) || value.manual_jobs === undefined) return;
+    for (const name of required) {
+      const mode = Object.hasOwn(value.manual_jobs, name) ? value.manual_jobs[name] : undefined;
+      if (mode !== undefined && mode !== 'wait') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['manual_jobs', name],
+          message: `${JSON.stringify(name)} is in required_manual_jobs, which means wait, and manual_jobs says ${mode}; name it in one place`,
+        });
+      }
+    }
+  });
 
 export const pipelineConfigSchema = z.strictObject({
   template_overrides: z.record(templateIdSchema, templateOverrideSchema).optional(),
