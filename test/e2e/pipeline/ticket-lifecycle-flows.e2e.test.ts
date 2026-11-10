@@ -708,7 +708,16 @@ const expectReviewConversation = async (
   for (const note of persons) {
     expect([note.resolvable, note.resolved]).toEqual([true, false]);
   }
-  const generalReplies = opensWith(REPLY_MARKER);
+  // S-28.3 (M28 ruling R3): a Developer run whose duty reads the person's thread before the run
+  // that answers it may tell it *still open* first — the harness back-dates the person's note into
+  // the earlier run (see the module docblock) — so those notes are counted apart from the answers.
+  const stillOpen = opensWith(REPLY_MARKER).filter((discussion) =>
+    discussion.notes[0]?.body.includes('.open-'),
+  );
+  expect(stillOpen.length).toBeLessThanOrEqual(expected.personNotes);
+  const generalReplies = opensWith(REPLY_MARKER).filter(
+    (discussion) => !discussion.notes[0]?.body.includes('.open-'),
+  );
   expect(generalReplies).toHaveLength(expected.personNotes);
   for (const reply of generalReplies) {
     expect(reply.notes[0]?.author.external_id).toBe(BOT);
@@ -721,7 +730,7 @@ const expectReviewConversation = async (
   const gitActions = pipeline.git.core.calls.map((call) => call.action);
   expect(gitActions.filter((action) => action === 'resolve_discussion')).toHaveLength(2);
   expect(gitActions.filter((action) => action === 'reply_to_discussion')).toHaveLength(
-    2 + expected.personNotes,
+    2 + expected.personNotes + stillOpen.length,
   );
 };
 
