@@ -18,8 +18,13 @@
  * lifecycle. Each reader decides what the first four mean for it; the pipeline reads all four as
  * *no lifecycle*, and so does the superseded flag.
  */
-import { type BindingLifecycle, bindingLifecycleOf } from '@platform/application';
+import {
+  type BindingLifecycle,
+  bindingLifecycleOf,
+  bindingStatusPolicyOf,
+} from '@platform/application';
 import type { JsonValue } from '@platform/contracts';
+import type { TicketStatusPolicy } from '@platform/domain';
 import { secrets as secretAdapters } from '@platform/infrastructure';
 import { accountOnlyFieldsOf } from '@platform/integrations';
 import { type SQL, sql } from 'drizzle-orm';
@@ -67,6 +72,14 @@ const asObject = (value: unknown): Record<string, JsonValue> =>
     ? (value as Record<string, JsonValue>)
     : {};
 
+/** One row's merged configuration, as the binding repository hands it to the loader. */
+const mergedConfigOf = (row: TicketLifecycleBindingRow) =>
+  secretAdapters.overlayBindingConfig(
+    asObject(row.integration_config),
+    asObject(row.binding_config),
+    accountOnlyFieldsOf(row.provider),
+  );
+
 /** The classification of {@link TICKET_LIFECYCLE_BINDINGS_SQL}'s rows. Pure. */
 export const ticketLifecycleOfRows = (
   rows: readonly TicketLifecycleBindingRow[],
@@ -77,16 +90,20 @@ export const ticketLifecycleOfRows = (
   if (rows.length > 1) {
     return { kind: 'ambiguous', bindings: rows.length };
   }
-  const row = rows[0] as TicketLifecycleBindingRow;
-  const reading = bindingLifecycleOf(
-    secretAdapters.overlayBindingConfig(
-      asObject(row.integration_config),
-      asObject(row.binding_config),
-      accountOnlyFieldsOf(row.provider),
-    ),
-  );
-  return reading;
+  return bindingLifecycleOf(mergedConfigOf(rows[0] as TicketLifecycleBindingRow));
 };
+
+/**
+ * The status policy the pipeline applies (M28 ruling 1, S-28.4): the one task-management binding's,
+ * defaults included when it has no `lifecycle` block; `null` — no status judged — for no binding,
+ * two bindings, or a block that fails its schema (each loud elsewhere).
+ */
+export const ticketStatusPolicyOfRows = (
+  rows: readonly TicketLifecycleBindingRow[],
+): TicketStatusPolicy | null =>
+  rows.length === 1
+    ? bindingStatusPolicyOf(mergedConfigOf(rows[0] as TicketLifecycleBindingRow))
+    : null;
 
 /** The lifecycle the pipeline applies: a parsed block, or `null` for every other reading. */
 export const appliedTicketLifecycle = (reading: ProjectTicketLifecycle): BindingLifecycle | null =>

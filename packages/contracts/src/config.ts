@@ -1061,6 +1061,28 @@ export const statusMappingSchema = z.record(slugSchema, nonEmptyStringSchema);
 /** How many names the `returned` slot may hold (TD-029 decision 1). */
 export const MAX_LIFECYCLE_RETURNED_STATUSES = 10;
 
+/**
+ * How many names `start_from` and `closed` may each hold (M28 ruling 1, S-28.4): twenty, which
+ * covers a To-Do or Done category of a busy workflow (the dogfood tracker's To-Do category has
+ * seven statuses, its Done category four) and keeps the JQL clause one bounded line.
+ */
+export const MAX_LIFECYCLE_POLICY_STATUSES = 20;
+
+/**
+ * What the platform does with a live task whose ticket a person moved to a `closed` status (M28
+ * ruling 1): `stop` — the default — stops it, `ignore` leaves it to run.
+ */
+export const ON_TICKET_CLOSED = ['stop', 'ignore'] as const;
+export type OnTicketClosed = (typeof ON_TICKET_CLOSED)[number];
+
+/**
+ * The block's **status policy** keys (M28 ruling 1, S-28.4): which statuses a ticket may be started
+ * from and which mean a person finished it. They are not slots — the platform never writes them —
+ * and they are not the claim's switch: a block that holds **only** these keys does not claim
+ * (`lifecycleClaims` in the domain), so a binding that sets them does not start assigning tickets.
+ */
+export const LIFECYCLE_STATUS_POLICY_KEYS = ['start_from', 'closed', 'on_ticket_closed'] as const;
+
 /** The slots that name **one** status each, in the order a ticket normally passes them. */
 export const LIFECYCLE_SINGLE_SLOTS = [
   'in_progress',
@@ -1114,7 +1136,11 @@ const lifecycleStatusNameSchema = nonEmptyStringSchema
  * pick) is assigned the ticket in the tracker too, through the `ticket_owner_assign` duty; it
  * defaults to **false**, block or no block. It is not a slot, so it does not supersede
  * `status_mapping` — but a block that exists claims (`claim`'s default), so a binding that wants the
- * write-back without the claim sets `claim: false` beside it. None of them carries a `.default()`,
+ * write-back without the claim sets `claim: false` beside it. `start_from`, `closed` and
+ * `on_ticket_closed` (M28 ruling 1, S-28.4) are the **status policy**: which statuses a ticket is
+ * started from and which mean a person finished it — read whether or not the block exists (absent,
+ * the tracker's To Do and Done categories decide), and a block holding only them does not claim.
+ * None of them carries a `.default()`,
  * because published schemas carry none (the package convention) — the reader applies the default.
  */
 export const ticketLifecycleSchema = z
@@ -1128,8 +1154,59 @@ export const ticketLifecycleSchema = z
     claim: z.boolean().optional(),
     take_assigned_tickets: z.boolean().optional(),
     assign_owner: z.boolean().optional(),
+    /**
+     * The statuses a ticket may be **started** from (M28 ruling 1, S-28.4). Absent means every
+     * status whose tracker category is To Do; a status of an unknown category is then never
+     * startable. `pickup_status` (the `pick_up_from` slot) is always startable beside these. At
+     * least one name: an empty list would start nothing, which is what removing the label says.
+     */
+    start_from: z
+      .array(lifecycleStatusNameSchema)
+      .min(1)
+      .max(MAX_LIFECYCLE_POLICY_STATUSES)
+      .optional(),
+    /**
+     * The statuses that mean a person **finished** the ticket (M28 ruling 1): a ticket in one is
+     * never started, and a live task whose ticket moves into one is stopped (`on_ticket_closed`).
+     * Absent means every status whose tracker category is Done.
+     */
+    closed: z.array(lifecycleStatusNameSchema).max(MAX_LIFECYCLE_POLICY_STATUSES).optional(),
+    /** `stop` (the reader's default) or `ignore` — see {@link ON_TICKET_CLOSED}. */
+    on_ticket_closed: z.enum(ON_TICKET_CLOSED).optional(),
   })
   .superRefine((block, ctx) => {
+    // M28 ruling 1: each list names a status once, and no status both starts and closes a ticket.
+    const startKeys = new Set<string>();
+    for (const [index, name] of (block.start_from ?? []).entries()) {
+      const key = lifecycleStatusKey(name);
+      if (startKeys.has(key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['start_from', index],
+          message: 'start_from names one status twice',
+        });
+      }
+      startKeys.add(key);
+    }
+    const closedKeys = new Set<string>();
+    for (const [index, name] of (block.closed ?? []).entries()) {
+      const key = lifecycleStatusKey(name);
+      if (closedKeys.has(key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['closed', index],
+          message: 'closed names one status twice',
+        });
+      }
+      if (startKeys.has(key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['closed', index],
+          message: `"${name}" is in start_from and in closed; a status either starts a ticket or finishes it`,
+        });
+      }
+      closedKeys.add(key);
+    }
     const seen = new Map<string, string>();
     for (const slot of LIFECYCLE_SINGLE_SLOTS) {
       const name = block[slot];

@@ -461,3 +461,52 @@ describe('the ticket lifecycle (WP-171, divergences 12–16)', () => {
     expect(error).toMatchObject({ code: 'unsupported_capability', action: member });
   });
 });
+
+describe('the status policy (divergence 20, S-28.4)', () => {
+  const port = createFakeTaskManagement({
+    integrationId: INTEGRATION_ID,
+    statuses: [
+      { name: 'Not started', rawCategory: 'new' },
+      { name: 'Doing', rawCategory: 'indeterminate' },
+      { name: 'Released', rawCategory: 'done' },
+      'Unsaid',
+    ],
+    tickets: [
+      { key: 'FAKE-1', title: 'ready', status: 'Not started', labels: ['agentic'] },
+      { key: 'FAKE-2', title: 'working', status: 'Doing', labels: ['agentic'] },
+      { key: 'FAKE-3', title: 'released', status: 'Released', labels: ['agentic'] },
+      { key: 'FAKE-4', title: 'unsaid', status: 'Unsaid', labels: ['agentic'] },
+    ],
+  });
+  const keysOf = async (rule: Parameters<typeof port.matchTickets>[0]) =>
+    (await port.matchTickets(rule)).map((match) => match.ref.key).sort();
+
+  it('reports a seeded category with the ticket, and none for a plain name', async () => {
+    const ref = (key: string) => ({
+      provider: 'fake-task-management',
+      key,
+      url: `https://tickets.example.test/${key}`,
+    });
+    expect((await port.readTicket(ref('FAKE-3'))).status_category).toBe('done');
+    expect((await port.readTicket(ref('FAKE-4'))).status_category ?? null).toBeNull();
+  });
+
+  it('filters a rule by startable statuses or the To Do category, keeping an unsaid category', async () => {
+    expect(await keysOf({ kind: 'label', label: 'agentic' })).toEqual([
+      'FAKE-1',
+      'FAKE-2',
+      'FAKE-3',
+      'FAKE-4',
+    ]);
+    expect(
+      await keysOf({ kind: 'label', label: 'agentic', startable: { kind: 'todo_category' } }),
+    ).toEqual(['FAKE-1', 'FAKE-4']);
+    expect(
+      await keysOf({
+        kind: 'label',
+        label: 'agentic',
+        startable: { kind: 'statuses', statuses: ['doing'] },
+      }),
+    ).toEqual(['FAKE-2']);
+  });
+});

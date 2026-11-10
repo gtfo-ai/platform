@@ -30,6 +30,15 @@
  * the take has already assigned the owner in the tracker, so the claim reads a linked member and
  * keeps it as `member` — the claim and the write-back never write the ticket against each other.
  *
+ * ## The status re-check (S-28.4)
+ *
+ * The same pre-read judges the ticket's **status** first (M28 ruling 3 (d), `claimStatusDecision`):
+ * a ticket moved to a `closed` status while its task waited refuses every claim with
+ * `ticket_closed_in_tracker` (unless the binding says `on_ticket_closed: ignore`), and a first claim
+ * of a ticket no longer startable refuses with `ticket_not_startable`. Nothing is written to the
+ * tracker; the task is escalated with a brief naming the status. It runs only where the claim runs
+ * — a claiming binding — and a binding that does not claim is left to the reverse sync.
+ *
  * When the claim does assign, the binding's account is written into `tasks.ticket_assignee` in the
  * claim's own transaction, so the next owner sync, which reads that account, changes nothing.
  *
@@ -84,9 +93,11 @@ import {
   claimPreReadDecision,
   claimReadback,
   claimRefusedCommentMarker,
+  claimStatusDecision,
   compilePipeline,
   isRunnableTaskState,
   lifecycleClaims,
+  type TicketStatusPolicy,
   ticketClaimIsFirst,
   ticketClaimNeeded,
 } from '@platform/domain';
@@ -110,10 +121,16 @@ import { PIPELINE_ACTOR, type StoredTask } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 import { releaseTicket } from './ticket-release.js';
+import { boundStatusName } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
 
-/** The two reasons a claim refuses (technical/02's catalogue, `ticketClaimRefusalSchema`). */
-export type TicketClaimRefusal = 'ticket_assigned_elsewhere' | 'ticket_claim_failed';
+/** The reasons a claim refuses (technical/02's catalogue, `ticketClaimRefusalSchema`). */
+export type TicketClaimRefusal =
+  | 'ticket_assigned_elsewhere'
+  | 'ticket_claim_failed'
+  // M28 ruling 3 (d), S-28.4: the pre-read found the ticket moved while its task waited.
+  | 'ticket_not_startable'
+  | 'ticket_closed_in_tracker';
 
 /** What the `stage.execute` job does next. */
 export type TicketClaimOutcome =
@@ -213,7 +230,15 @@ export const ensureTicketClaim = async (
 
   let attempt: ClaimAttempt;
   try {
-    attempt = await claim(options, integrations, stored, lifecycle, request, first);
+    attempt = await claim(
+      options,
+      integrations,
+      stored,
+      lifecycle,
+      request,
+      first,
+      settings.ticketStatusPolicy ?? null,
+    );
   } catch (error) {
     if (
       error instanceof TransactionOpenError ||
@@ -236,6 +261,24 @@ export const ensureTicketClaim = async (
       reason: 'ticket_claim_failed',
       assignee: null,
       code: error.code,
+    });
+  }
+
+  if (attempt.statusRefusal !== null) {
+    (options.logger ?? silentLogger).warn(
+      {
+        task_id: task.id,
+        stage: request.stage,
+        reason: attempt.statusRefusal.reason,
+        status: attempt.statusRefusal.status,
+      },
+      'the ticket moved to a status work does not start from while the task waited; the task is escalated and no run starts',
+    );
+    return refuse(options, integrations, stored, request, {
+      reason: attempt.statusRefusal.reason,
+      assignee: null,
+      code: null,
+      status: attempt.statusRefusal.status,
     });
   }
 
@@ -297,6 +340,14 @@ interface ClaimAttempt {
   readonly heldBy: TicketClaimHeldBy | null;
   /** The binding's account display name, redacted — what `ticket_assignee` stores after an assign. */
   readonly selfDisplayName: string | null;
+  /**
+   * The pre-read's status verdict (M28 ruling 3 (d), S-28.4): the ticket moved to a status the
+   * claim refuses — nothing was written. `status` is the redacted, bounded name.
+   */
+  readonly statusRefusal: {
+    readonly reason: 'ticket_not_startable' | 'ticket_closed_in_tracker';
+    readonly status: string;
+  } | null;
 }
 
 /**
@@ -310,6 +361,7 @@ const claim = async (
   lifecycle: BindingLifecycle,
   request: TicketClaimRequest,
   first: boolean,
+  statusPolicy: TicketStatusPolicy | null,
 ): Promise<ClaimAttempt> => {
   const { task } = stored;
   const context = { projectId: task.projectId, taskId: task.id };
@@ -353,6 +405,36 @@ const claim = async (
    * `ticket_claim_failed` path below and syncs nothing either.)
    */
   const before = await ticketReads(integrations).ticket(task.ticket, context);
+  /**
+   * **The ticket's status, re-checked before anything is written** (M28 ruling 3 (d), S-28.4): a
+   * task that waited — WIP-queued, or behind a gate — may find its ticket released, or taken by a
+   * person, by the time its first agent run is admitted. `claimStatusDecision` has the table; a
+   * refusal writes nothing to the tracker and escalates the task by name.
+   */
+  if (before !== null && statusPolicy !== null && !shadow) {
+    const verdict = claimStatusDecision({
+      status: before.status,
+      category: before.status_category ?? null,
+      policy: statusPolicy,
+      first,
+    });
+    if (verdict.kind === 'refuse') {
+      return {
+        self,
+        inProgressWritten: false,
+        shadow,
+        readback: { kind: 'held' },
+        heldBy: null,
+        selfDisplayName: null,
+        statusRefusal: {
+          reason: verdict.reason,
+          status: boundStatusName(
+            integrations.taskManagement?.redactor.redactText(before.status).value ?? before.status,
+          ),
+        },
+      };
+    }
+  }
   const holder = before?.assignee ?? null;
   // A read that answered no ticket names no holder, so there is nothing to sync and nothing to keep.
   const facts =
@@ -393,6 +475,7 @@ const claim = async (
       readback: { kind: 'elsewhere', assignee: decision.assignee },
       heldBy: null,
       selfDisplayName: null,
+      statusRefusal: null,
     };
   }
   if (decision.kind === 'keep') {
@@ -413,6 +496,7 @@ const claim = async (
       readback: { kind: 'held' },
       heldBy: decision.heldBy,
       selfDisplayName: null,
+      statusRefusal: null,
     };
   }
   const writeContext = { ...context, mode: task.mode, causeEventId: null };
@@ -436,6 +520,7 @@ const claim = async (
       readback: { kind: 'held' },
       heldBy: null,
       selfDisplayName: null,
+      statusRefusal: null,
     };
   }
   const reread = await ticketReads(integrations).ticket(task.ticket, context);
@@ -446,6 +531,7 @@ const claim = async (
     readback: claimReadback(self, reread?.assignee ?? null),
     heldBy: null,
     selfDisplayName: redactedName(self),
+    statusRefusal: null,
   };
 };
 
@@ -600,10 +686,28 @@ const recordClaim = async (
 const refusalBrief = (
   stored: StoredTask,
   stage: Slug,
-  refusal: { readonly reason: TicketClaimRefusal; readonly code: string | null },
+  refusal: {
+    readonly reason: TicketClaimRefusal;
+    readonly code: string | null;
+    readonly status?: string;
+  },
   assignPermission: string,
 ): string => {
   const key = stored.task.ticket.key;
+  // S-28.4: the status is the tracker's own name, redacted and bounded by the claim.
+  const status = refusal.status ?? 'another status';
+  if (refusal.reason === 'ticket_closed_in_tracker') {
+    return (
+      `The platform did not start the "${stage}" stage of ${key}: while the task waited, the ticket was moved to "${status}", a status that means a person finished it, so the platform stopped working on it. ` +
+      'Cancel the task, or move the ticket back to a status work starts from and hand the task back.'
+    );
+  }
+  if (refusal.reason === 'ticket_not_startable') {
+    return (
+      `The platform did not start the "${stage}" stage of ${key}: while the task waited, the ticket was moved to "${status}", which is not a status this project starts work from — a person may be working on it. ` +
+      'Agree who takes it. To let the agent work it, move the ticket back to a status work starts from and hand the task back; otherwise cancel the task.'
+    );
+  }
   if (refusal.reason === 'ticket_assigned_elsewhere') {
     return (
       `The platform did not start the "${stage}" stage of ${key}: the ticket is assigned to somebody other than the account this project's tracker binding uses, ` +
@@ -643,6 +747,8 @@ const refuse = async (
     readonly reason: TicketClaimRefusal;
     readonly assignee: ExternalIdentity | null;
     readonly code: string | null;
+    /** The status a status refusal read (S-28.4), redacted and bounded. */
+    readonly status?: string;
   },
 ): Promise<TicketClaimOutcome> => {
   const { task } = stored;

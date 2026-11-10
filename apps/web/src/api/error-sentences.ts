@@ -489,6 +489,8 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
   ticket_not_found: 'The tracker has no ticket with that key. Check the key and try again.',
   ticket_outside_binding_scope:
     'That ticket is outside the tracker projects this connection reads. Use a ticket from one of them, or add its project to the connection.',
+  ticket_status_not_startable:
+    'That ticket is in a status this project does not start work from, or one that means it is finished. Move it to a status work starts from in the tracker, or change those statuses in the project’s tracker settings.',
   ticket_unreadable: 'The ticket tracker did not answer. Try again in a moment.',
   lifecycle_status_unknown:
     'The tracker has no status by some of the names you chose. Pick them from the tracker’s list.',

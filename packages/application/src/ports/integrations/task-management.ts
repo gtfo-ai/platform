@@ -17,6 +17,7 @@
  */
 import {
   isoDateTimeSchema,
+  MAX_LIFECYCLE_POLICY_STATUSES,
   MAX_LIFECYCLE_STATUS_NAME_CHARS,
   nonEmptyStringSchema,
   type TicketStatusCategory,
@@ -92,6 +93,14 @@ export const ticketSchema = z.strictObject({
   /** Untrusted markdown (BD-022). */
   description: z.string(),
   status: nonEmptyStringSchema,
+  /**
+   * The status's tracker category (`normaliseStatusCategory`'s answer), when the provider reports
+   * one with the ticket — M28 ruling 3, S-28.4: intake and the claim judge a ticket's status by it
+   * when the binding names no `start_from`/`closed` list. Absent or `null` is "the provider did not
+   * say", which is **not** `unknown` (a category it reported and the platform does not recognise):
+   * intake fails open on the first and never starts from the second.
+   */
+  status_category: ticketStatusCategorySchema.nullish(),
   priority: nonEmptyStringSchema.nullish(),
   labels: z.array(nonEmptyStringSchema),
   comments: z.array(ticketCommentSchema),
@@ -137,11 +146,49 @@ export const MAX_TICKET_MATCH_KEYS = 100;
  * mapping moves it on, and its edits would otherwise reach a running task only by webhook. No
  * configuration produces a `keys` rule: a binding's `pollPlan()` answers a pick-up rule.
  */
+/**
+ * **Which statuses a pick-up rule may match** (M28 ruling 3 (a), S-28.4): a pick-up rule says a
+ * ticket is meant for the platform, and this says it is ready. `statuses` — the binding's
+ * `start_from` (plus `pickup_status`, which is always startable); `todo_category` — no list was
+ * named, so every status of the tracker's To Do category. Absent: no status constraint (a `status`
+ * rule, which already names its one status, and every rule built before S-28.4). A provider renders
+ * it into its own query (Jira: `AND status in (…)` / `AND statusCategory = "To Do"`); intake judges
+ * every match again after its read, so a provider that cannot render it widens the read, never the
+ * set of tickets started.
+ */
+export const ticketStartableStatusesSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('statuses'),
+    statuses: z
+      .array(nonEmptyStringSchema.max(MAX_LIFECYCLE_STATUS_NAME_CHARS))
+      .min(1)
+      .max(MAX_LIFECYCLE_POLICY_STATUSES + 1),
+  }),
+  z.strictObject({ kind: z.literal('todo_category') }),
+]);
+export type TicketStartableStatuses = z.infer<typeof ticketStartableStatusesSchema>;
+
 export const ticketMatchRuleSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('label'), label: nonEmptyStringSchema }),
-  z.strictObject({ kind: z.literal('status'), status: nonEmptyStringSchema }),
-  z.strictObject({ kind: z.literal('epic'), epic_key: nonEmptyStringSchema }),
-  z.strictObject({ kind: z.literal('query'), query: nonEmptyStringSchema }),
+  z.strictObject({
+    kind: z.literal('label'),
+    label: nonEmptyStringSchema,
+    startable: ticketStartableStatusesSchema.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('status'),
+    status: nonEmptyStringSchema,
+    startable: ticketStartableStatusesSchema.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('epic'),
+    epic_key: nonEmptyStringSchema,
+    startable: ticketStartableStatusesSchema.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('query'),
+    query: nonEmptyStringSchema,
+    startable: ticketStartableStatusesSchema.optional(),
+  }),
   z
     .strictObject({
       kind: z.literal('keys'),

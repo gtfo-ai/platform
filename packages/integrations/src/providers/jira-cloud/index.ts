@@ -97,6 +97,7 @@ import {
   type TicketPollPlan,
   type TicketRefInput,
   type TicketScopeVerdict,
+  type TicketStartableStatuses,
   type TicketTransition,
   type TransitionResult,
   ticketSchema,
@@ -1409,10 +1410,13 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     if (!config.poll_enabled || pickup.kind === 'none') {
       return null;
     }
+    // S-28.4 (M28 ruling 3 (a)): a label rule asks only for tickets in a startable status, so a
+    // labelled ticket a person released weeks ago is not read every minute. A status rule names
+    // its one status already, which is always startable.
     return {
       rule:
         pickup.kind === 'label'
-          ? { kind: 'label', label: pickup.label }
+          ? { kind: 'label', label: pickup.label, startable: startableStatusesOf(config) }
           : { kind: 'status', status: pickup.status },
       interval_seconds: config.poll_interval_seconds,
     };
@@ -1437,6 +1441,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     siteUrl,
     projectKeys: config.project_keys,
     pickup,
+    startable: startableStatusesOf(config),
     // The inbound half. A delivery is not a response, so it never crosses `client.ts`: without
     // this line a comment carrying this binding's own webhook secret would be written to
     // `events.payload` verbatim (BD-003: append-only, so it cannot be fixed later).
@@ -1591,12 +1596,47 @@ export const buildJql = (rule: TicketMatchRule, since: string | null, now: strin
       }
     }
   })();
+  const startable = rule.kind === 'keys' ? undefined : rule.startable;
+  const constrained =
+    startable === undefined
+      ? clause
+      : startable.kind === 'todo_category'
+        ? // S-28.4 (M28 ruling 3 (a)): the category's documented JQL name (JQL fields reference,
+          // `statusCategory`: "To Do", "In Progress", "Done").
+          `${clause} AND statusCategory = "To Do"`
+        : `${clause} AND status in (${startable.statuses.map(jqlLiteral).join(', ')})`;
   if (since === null) {
-    return `${clause} ORDER BY updated ASC`;
+    return `${constrained} ORDER BY updated ASC`;
   }
   const elapsedMs = Date.parse(now) - Date.parse(since);
   const minutes = Number.isFinite(elapsedMs) ? Math.max(1, Math.ceil(elapsedMs / 60_000)) : 1;
-  return `${clause} AND updated >= "-${minutes}m" ORDER BY updated ASC`;
+  return `${constrained} AND updated >= "-${minutes}m" ORDER BY updated ASC`;
+};
+
+/**
+ * **Which statuses a pick-up may match** (M28 rulings 1 and 3 (a)–(b), S-28.4): the binding's
+ * `lifecycle.start_from` with `pickup_status` beside it, or — no list — the tracker's To Do
+ * category. Intake judges every match again after its own read (the authoritative check), so this
+ * only keeps a poll from reading, and a webhook from announcing, tickets intake would skip.
+ */
+export const startableStatusesOf = (config: {
+  readonly pickup_status?: string | null;
+  readonly lifecycle?: { readonly start_from?: readonly string[] } | undefined;
+}): TicketStartableStatuses => {
+  const list = config.lifecycle?.start_from;
+  if (list === undefined) {
+    return { kind: 'todo_category' };
+  }
+  const pickup =
+    typeof config.pickup_status === 'string' && config.pickup_status.length > 0
+      ? [config.pickup_status]
+      : [];
+  const statuses = [...pickup, ...list].filter(
+    (name, index, all) =>
+      all.findIndex((other) => lifecycleStatusKey(other) === lifecycleStatusKey(name)) === index,
+  );
+  // `start_from` holds at least one name (its schema), so the list is never empty.
+  return { kind: 'statuses', statuses };
 };
 
 /** The rule a webhook announces a match with. See `jiraCloudConfigSchema` for why status wins. */

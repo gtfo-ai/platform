@@ -299,6 +299,36 @@ which then assigns the ticket to the new owner when you take it) or somebody cha
 change in the tracker after your take wins as usual: it replaces the owner, and the next claim
 follows the rules above again. A cancel or a rework of such a task unassigns nobody.
 
+**Which statuses start work, and which mean a ticket is finished** (since S-28.4). A pick-up label
+says a ticket is meant for the agent, not that it is ready — a ticket somebody delivered and released
+weeks ago may still carry it. So the form has two more checkbox lists: **Start work only from these
+statuses** and **A ticket in these statuses is finished**. Until you change them they are ticked by
+your tracker's own categories — every *To Do* status starts work, every *Done* status is finished —
+and a line under them says what that means: *"With these settings, tickets in To Do, Ready start.
+Idea, Discovery wait. Released, Done are never started and stop a task."* *Pick up from*, when
+mapped, always starts work too. A status of no known category never starts work. Ticking a status in
+one list unticks it in the other, and the form will not save a setting that starts nothing. Lists
+left as the categories tick them are saved as "follow the categories", so a status your tracker adds
+to *To Do* later starts work without a visit here.
+
+What the platform does with them:
+
+- A labelled ticket in any other status **does not become a task**: the poll only asks the tracker
+  for tickets in a starting status, a webhook announces only those, and intake reads the ticket and
+  checks again — that last check covers every way a ticket arrives. It records the skip with the
+  status (*"its status is Released"*). A ticket the tracker cannot read at that moment is started as
+  before; so is one whose tracker reports no category for its status when no list decides.
+- **Start** on the board, for a ticket whose status does not start work, is refused with a sentence
+  naming the status; nothing is recorded. Move the ticket to a starting status first (or add that
+  status to the list).
+- A task that waited (queued behind the limits, or behind a check) reads its ticket again before
+  its first agent run, as part of the claim: a ticket moved meanwhile to a finished status stops the
+  task in **Needs you** — *"The ticket was finished in the tracker"*, with *Cancel the task, or move
+  the ticket back to continue* — and one a person moved into a working status stops it with *"The
+  ticket moved to a status work doesn't start from"*. Nothing is written to the tracker. This check
+  runs where the claim runs (a tracker whose lifecycle claims). The switch **Stop a task when a
+  person moves its ticket to a finished status** (on by default) turns the first of these off.
+
 **Save the ticket lifecycle** checks every name against the tracker's statuses before anything is
 written. A name the tracker does not list is refused, the slot that names it is marked, and nothing
 is saved; if the tracker cannot be read at that moment, the form says the statuses could not be

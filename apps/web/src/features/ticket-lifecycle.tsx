@@ -35,6 +35,14 @@
  *   lifecycle_statuses_unavailable` says the statuses could not be loaded and nothing was saved, and
  *   **keeps the form**: nothing here resets the draft on a failure.
  *
+ * - **Which statuses start work, and which mean a ticket is finished** (S-28.4, the M28 rulings 1
+ *   and 6): two checkbox lists, *Start work only from these statuses* and *A ticket in these
+ *   statuses is finished*, pre-ticked from the tracker's own categories (To Do and Done) when the
+ *   block stores no list, with a preview line that says which statuses start, which wait and which
+ *   are never started. A ticked set equal to the category default is saved **absent**, so a status
+ *   the tracker adds to the category later is covered; any other set is saved as the list. The
+ *   *stop* switch is `on_ticket_closed`. At least one status must start work.
+ *
  * Status names are provider text (BD-022). They are rendered as React text — in an `<option>` or a
  * checkbox's label, through `sanitiseUntrusted`; everywhere else through `UntrustedText`.
  */
@@ -43,6 +51,7 @@ import {
   LIFECYCLE_SINGLE_SLOTS,
   type LifecycleSingleSlot,
   lifecycleStatusKey,
+  MAX_LIFECYCLE_POLICY_STATUSES,
   MAX_LIFECYCLE_RETURNED_STATUSES,
   type TicketStatus,
   type TicketStatusCategory,
@@ -115,13 +124,113 @@ export interface LifecycleDraft {
   readonly takeAssignedTickets: boolean;
   /** *Assign the owner in the tracker* (S-26.3's write-back, S-26.8a's switch): off by default. */
   readonly assignOwner: boolean;
+  /** `start_from` (S-28.4): the ticked statuses, or `null` for the tracker's To Do category. */
+  readonly startFrom: readonly string[] | null;
+  /** `closed` (S-28.4): the ticked statuses, or `null` for the tracker's Done category. */
+  readonly closed: readonly string[] | null;
+  /** `on_ticket_closed` (S-28.4): stop a task whose ticket a person finishes. On by default. */
+  readonly stopOnClosed: boolean;
 }
 
-/** A stored name the loaded set does not hold, and the slot it was stored in. */
+/** The status policy's two lists (S-28.4). */
+export type PolicyList = 'start_from' | 'closed';
+
+/** What each list does, in a user's words. Platform text. */
+export const POLICY_COPY: Readonly<Record<PolicyList, { label: string; hint: string }>> = {
+  start_from: {
+    label: 'Start work only from these statuses',
+    hint: 'A ticket with the pick-up label (or in Pick up from) becomes a task only while it is in one of these. Ticked by the tracker’s To Do category until you change them.',
+  },
+  closed: {
+    label: 'A ticket in these statuses is finished',
+    hint: 'A ticket in one of these is never started, even with the pick-up label on. Ticked by the tracker’s Done category until you change them.',
+  },
+};
+
+/** A stored name the loaded set does not hold, and the slot (or list) it was stored in. */
 export interface DroppedName {
-  readonly slot: LifecycleSlot;
+  readonly slot: LifecycleSlot | PolicyList;
   readonly name: string;
 }
+
+/** The label a dropped name's slot or list is shown with. */
+const droppedLabel = (slot: DroppedName['slot']): string =>
+  slot === 'start_from' || slot === 'closed' ? POLICY_COPY[slot].label : SLOT_COPY[slot].label;
+
+/**
+ * The tracker's own defaults (M28 ruling 1): the To Do category starts work, the Done category is
+ * finished. A status of another or an unknown category is in neither.
+ */
+export const policyDefaults = (
+  statuses: readonly TicketStatus[],
+): { readonly startFrom: readonly string[]; readonly closed: readonly string[] } => ({
+  startFrom: statuses.filter((status) => status.category === 'todo').map((status) => status.name),
+  closed: statuses.filter((status) => status.category === 'done').map((status) => status.name),
+});
+
+/** Two name lists hold the same statuses, compared as the server compares. */
+const sameStatuses = (left: readonly string[], right: readonly string[]): boolean => {
+  const keys = (list: readonly string[]) => new Set(list.map(lifecycleStatusKey));
+  const a = keys(left);
+  const b = keys(right);
+  return a.size === b.size && [...a].every((key) => b.has(key));
+};
+
+/** `list` without any of `names`, compared as the server compares. */
+export const withoutNames = (
+  list: readonly string[],
+  names: readonly string[],
+): readonly string[] => {
+  const dropped = new Set(names.map(lifecycleStatusKey));
+  return list.filter((name) => !dropped.has(lifecycleStatusKey(name)));
+};
+
+/** The ticked lists the form shows: the stored lists, or the category defaults. */
+export const tickedPolicy = (
+  draft: LifecycleDraft,
+  statuses: readonly TicketStatus[],
+): { readonly startFrom: readonly string[]; readonly closed: readonly string[] } => {
+  const defaults = policyDefaults(statuses);
+  return {
+    startFrom: draft.startFrom ?? defaults.startFrom,
+    closed: draft.closed ?? defaults.closed,
+  };
+};
+
+/**
+ * The preview line's three groups (S-28.4, M28 ruling 6): which statuses start work (the ticked
+ * list, and *Pick up from*), which are finished, and which wait — every other status the tracker
+ * lists. Names in the tracker's order.
+ */
+export const statusPolicyPreview = (
+  draft: LifecycleDraft,
+  statuses: readonly TicketStatus[],
+): {
+  readonly start: readonly string[];
+  readonly wait: readonly string[];
+  readonly finished: readonly string[];
+} => {
+  const ticked = tickedPolicy(draft, statuses);
+  const has = (list: readonly string[], name: string) =>
+    list.some((entry) => lifecycleStatusKey(entry) === lifecycleStatusKey(name));
+  const pickUp = draft.names.pick_up_from;
+  const start: string[] = [];
+  const wait: string[] = [];
+  const finished: string[] = [];
+  for (const status of statuses) {
+    if (has(ticked.closed, status.name)) {
+      finished.push(status.name);
+    } else if (
+      has(ticked.startFrom, status.name) ||
+      (pickUp !== '' && has([pickUp], status.name))
+    ) {
+      start.push(status.name);
+    } else {
+      wait.push(status.name);
+    }
+  }
+  return { start, wait, finished };
+};
 
 const asObject = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -142,7 +251,7 @@ export const lifecycleDraftOf = (
 ): { readonly draft: LifecycleDraft; readonly dropped: readonly DroppedName[] } => {
   const loaded = new Map(statuses.map((status) => [lifecycleStatusKey(status.name), status.name]));
   const dropped: DroppedName[] = [];
-  const match = (slot: LifecycleSlot, stored: string | null): string => {
+  const match = (slot: DroppedName['slot'], stored: string | null): string => {
     if (stored === null) {
       return '';
     }
@@ -164,6 +273,13 @@ export const lifecycleDraftOf = (
   const returned = storedReturned
     .map((name) => match('returned', nonEmptyString(name)))
     .filter((name) => name !== '');
+  // S-28.4: a stored list is matched name by name; absent is the category default (`null`).
+  const policyList = (list: PolicyList): readonly string[] | null => {
+    const stored: unknown = block?.[list];
+    return Array.isArray(stored)
+      ? stored.map((name) => match(list, nonEmptyString(name))).filter((name) => name !== '')
+      : null;
+  };
   return {
     draft: {
       names,
@@ -173,6 +289,9 @@ export const lifecycleDraftOf = (
       takeAssignedTickets:
         typeof block?.take_assigned_tickets === 'boolean' ? block.take_assigned_tickets : false,
       assignOwner: block?.assign_owner === true,
+      startFrom: policyList('start_from'),
+      closed: policyList('closed'),
+      stopOnClosed: block?.on_ticket_closed !== 'ignore',
     },
     dropped,
   };
@@ -187,6 +306,8 @@ export const lifecycleOverlayOf = (
   stored: Readonly<Record<string, unknown>> | undefined,
   draft: LifecycleDraft,
   accountPickupStatus: string | null,
+  /** The statuses the form showed (S-28.4): a list equal to their category default is absent. */
+  statuses: readonly TicketStatus[] = [],
 ): Record<string, unknown> => {
   const { pickup_status: _pickup, lifecycle: storedLifecycle, ...rest } = stored ?? {};
   const lifecycle: Record<string, unknown> = {};
@@ -205,6 +326,25 @@ export const lifecycleOverlayOf = (
   const storedBlock = storedLifecycle as Readonly<Record<string, unknown>> | null | undefined;
   if (draft.assignOwner || typeof storedBlock?.assign_owner === 'boolean') {
     lifecycle.assign_owner = draft.assignOwner;
+  }
+  // S-28.4: a list equal to the category default is saved absent (the default stays dynamic);
+  // `statuses` is what the form showed, so the comparison is against the same set.
+  const defaults = policyDefaults(statuses);
+  if (draft.startFrom !== null && !sameStatuses(draft.startFrom, defaults.startFrom)) {
+    // Nothing ticked beside Pick up from: work starts from that one status (a list is never empty).
+    const startFrom =
+      draft.startFrom.length === 0 && draft.names.pick_up_from !== ''
+        ? [draft.names.pick_up_from]
+        : draft.startFrom;
+    if (startFrom.length > 0) {
+      lifecycle.start_from = [...startFrom];
+    }
+  }
+  if (draft.closed !== null && !sameStatuses(draft.closed, defaults.closed)) {
+    lifecycle.closed = [...draft.closed];
+  }
+  if (!draft.stopOnClosed || typeof storedBlock?.on_ticket_closed === 'string') {
+    lifecycle.on_ticket_closed = draft.stopOnClosed ? 'stop' : 'ignore';
   }
   const pickup = draft.names.pick_up_from;
   return {
@@ -270,9 +410,13 @@ export const wizardWritesDefaultBlock = (input: {
 };
 
 /** The slot a `422 lifecycle_status_unknown` detail's `path` names, or `null` for another path. */
-export const slotOfDetailPath = (path: string): LifecycleSlot | null => {
+export const slotOfDetailPath = (path: string): LifecycleSlot | PolicyList | null => {
   if (path === 'pickup_status') {
     return 'pick_up_from';
+  }
+  const list = /^lifecycle\.(start_from|closed)\[\d+\]$/u.exec(path)?.[1];
+  if (list === 'start_from' || list === 'closed') {
+    return list;
   }
   if (/^lifecycle\.returned\[\d+\]$/u.test(path)) {
     return 'returned';
@@ -282,8 +426,10 @@ export const slotOfDetailPath = (path: string): LifecycleSlot | null => {
 };
 
 /** The refused slots of a failed save, each with the server's sentences. */
-const refusedSlots = (error: unknown): ReadonlyMap<LifecycleSlot, readonly string[]> => {
-  const refused = new Map<LifecycleSlot, string[]>();
+const refusedSlots = (
+  error: unknown,
+): ReadonlyMap<LifecycleSlot | PolicyList, readonly string[]> => {
+  const refused = new Map<LifecycleSlot | PolicyList, string[]>();
   if (!(error instanceof ApiError) || error.code !== 'lifecycle_status_unknown') {
     return refused;
   }
@@ -376,6 +522,95 @@ const ReturnedRow = ({
     ))}
   </CheckboxList>
 );
+
+/**
+ * *Start work only from these statuses* / *A ticket in these statuses is finished* (S-28.4): a
+ * `CheckboxList` each, ticked from the stored list or the tracker's category.
+ */
+const PolicyRow = ({
+  list,
+  statuses,
+  value,
+  refusal,
+  onChange,
+  extraHint,
+}: {
+  readonly list: PolicyList;
+  readonly statuses: readonly TicketStatus[];
+  readonly value: readonly string[];
+  readonly refusal: readonly string[] | undefined;
+  readonly onChange: (names: readonly string[]) => void;
+  readonly extraHint?: string;
+}): ReactElement => (
+  <CheckboxList
+    legend={POLICY_COPY[list].label}
+    data={{ 'data-lifecycle-policy': list }}
+    options={statuses.map((status) => ({ value: status.name, label: optionText(status) }))}
+    value={value}
+    max={MAX_LIFECYCLE_POLICY_STATUSES}
+    invalid={refusal !== undefined}
+    hint={
+      extraHint === undefined ? POLICY_COPY[list].hint : `${POLICY_COPY[list].hint} ${extraHint}`
+    }
+    onChange={onChange}
+  >
+    {(refusal ?? []).map((message) => (
+      <p key={message} role="alert" className="text-xs text-danger">
+        <UntrustedText value={message} />
+      </p>
+    ))}
+  </CheckboxList>
+);
+
+/** A list of status names, each as untrusted text, joined with commas. */
+const NameList = ({ names }: { readonly names: readonly string[] }): ReactElement => (
+  <>
+    {names.map((name, index) => (
+      <span key={name}>
+        {index === 0 ? null : ', '}
+        <UntrustedText value={name} />
+      </span>
+    ))}
+  </>
+);
+
+/**
+ * The preview line (M28 ruling 6): *With these settings, tickets in To Do, Ready start. Idea,
+ * Discovery wait. Released, Done are never started and stop a task.*
+ */
+const PolicyPreview = ({
+  draft,
+  statuses,
+}: {
+  readonly draft: LifecycleDraft;
+  readonly statuses: readonly TicketStatus[];
+}): ReactElement => {
+  const preview = statusPolicyPreview(draft, statuses);
+  return (
+    <p className="text-xs" data-lifecycle="policy-preview">
+      {preview.start.length === 0 ? (
+        'With these settings, no ticket starts: tick at least one status work starts from.'
+      ) : (
+        <>
+          With these settings, tickets in <NameList names={preview.start} /> start.
+        </>
+      )}
+      {preview.wait.length === 0 ? null : (
+        <>
+          {' '}
+          <NameList names={preview.wait} /> wait.
+        </>
+      )}
+      {preview.finished.length === 0 ? null : (
+        <>
+          {' '}
+          <NameList names={preview.finished} /> are never started
+          {draft.stopOnClosed ? ' and stop a task.' : '.'}
+        </>
+      )}
+    </p>
+  );
+};
 
 /**
  * The statuses read's failure, in the person's words. The server's message is `ErrorNotice`'s to
@@ -499,6 +734,10 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
   const accountPickup = nonEmptyString(account?.pickup_status);
   const hasStoredBlock =
     asObject({ ...(account ?? {}), ...(overlay ?? {}) }.lifecycle) !== undefined;
+  const ticked = tickedPolicy(draft, items);
+  // `start_from` holds at least one status (its schema): none ticked, and no Pick up from, starts
+  // nothing — said in the preview and refused at the button rather than at the server.
+  const startsNothing = ticked.startFrom.length === 0 && draft.names.pick_up_from === '';
 
   return (
     <div className="flex flex-col gap-3" data-ticket-lifecycle={tracker.integration_id}>
@@ -529,7 +768,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
           className="text-xs"
           data-lifecycle-dropped={entry.slot}
         >
-          <Badge tone="warning">Not listed</Badge> {SLOT_COPY[entry.slot].label} was saved as “
+          <Badge tone="warning">Not listed</Badge> {droppedLabel(entry.slot)} was saved as “
           <UntrustedText value={entry.name} />
           ”, which the tracker no longer lists; saving leaves it out.
         </p>
@@ -551,6 +790,54 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
           refusal={refused.get('returned')}
           onChange={(names) => setDraft({ ...draft, returned: names })}
         />
+      </div>
+      <div className="flex flex-col gap-3" data-lifecycle="status-policy">
+        <p className="text-xs text-fg-muted">
+          A pick-up label says a ticket is meant for the agent, not that it is ready. Choose the
+          statuses work starts from, and the ones that mean a person finished the ticket.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <PolicyRow
+            list="start_from"
+            statuses={items}
+            value={ticked.startFrom}
+            refusal={refused.get('start_from')}
+            // A status either starts work or finishes a ticket: ticking it here unticks it there.
+            onChange={(names) =>
+              setDraft({
+                ...draft,
+                startFrom: names,
+                closed: withoutNames(ticked.closed, names),
+              })
+            }
+            {...(draft.names.pick_up_from === ''
+              ? {}
+              : { extraHint: 'Pick up from always starts work too.' })}
+          />
+          <PolicyRow
+            list="closed"
+            statuses={items}
+            value={ticked.closed}
+            refusal={refused.get('closed')}
+            onChange={(names) =>
+              setDraft({
+                ...draft,
+                closed: names,
+                startFrom: withoutNames(ticked.startFrom, names),
+              })
+            }
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            data-lifecycle-stop-on-closed=""
+            checked={draft.stopOnClosed}
+            onChange={(event) => setDraft({ ...draft, stopOnClosed: event.target.checked })}
+          />
+          Stop a task when a person moves its ticket to a finished status
+        </label>
+        <PolicyPreview draft={draft} statuses={items} />
       </div>
       <label className="flex items-center gap-2 text-sm">
         <input
@@ -588,7 +875,8 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
           tone={actionTone}
           disabled={
             commands.putBindings.isPending ||
-            draft.returned.length > MAX_LIFECYCLE_RETURNED_STATUSES
+            draft.returned.length > MAX_LIFECYCLE_RETURNED_STATUSES ||
+            startsNothing
           }
           onClick={() =>
             commands.putBindings.mutate({
@@ -597,7 +885,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
                 integration_id: item.integration_id,
                 config:
                   item.integration_id === tracker.integration_id
-                    ? lifecycleOverlayOf(overlay, draft, accountPickup)
+                    ? lifecycleOverlayOf(overlay, draft, accountPickup, items)
                     : bindingConfigOf(bound, item.integration_id),
               })),
             })

@@ -943,6 +943,14 @@ still reaches its task (WP-110). A binding can have both — a ticket seen by th
 poll is started once. What a poll does not carry (comments, the ticket linter's *created* event) is
 listed in the Jira setup guide's step 5.
 
+**A labelled ticket starts only from a starting status** (since S-28.4). Every task-management
+binding — with or without a lifecycle block — starts work only from the statuses its lifecycle's
+`start_from` lists, or, absent, the tracker's *To Do* category, and never from one its `closed` list
+(absent: the *Done* category) names. **This changed the behaviour of existing bindings on upgrade**:
+a ticket that still carries the pick-up label in an *In Progress* or *Done* status is no longer
+started. Intake records each skip as `ticket.intake.skipped` with the reason `status_not_startable`
+and the status. The Jira setup guide's step 5 has the JQL the poll now sends.
+
 A **GitLab** binding can poll its merge requests the same way (WP-110): the same two keys in its
 configuration, and a `project` to list. A poll turns each merge request into the events a webhook
 would have sent — a new or reopened one, an update, a merge, a close — so review-only mode starts

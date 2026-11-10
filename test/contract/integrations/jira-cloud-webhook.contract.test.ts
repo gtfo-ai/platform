@@ -316,6 +316,60 @@ describe('jira-cloud webhooks', () => {
     });
 
     /**
+     * S-28.4 (M28 ruling 3 (b)): a label match is announced only for a ticket in a status work starts
+     * from. The documented fixture's status carries no `statusCategory`; these patch in the
+     * `StatusDetails.statusCategory` the swagger documents (adapted, values the corpus's own).
+     */
+    it('does not announce the label on a released ticket: the To Do category default (S-28.4)', async () => {
+      const labelled = (status: Record<string, unknown>) =>
+        binding.port.inbound.normalise(
+          binding.replay.delivery('webhook-issue-updated-labels.json', {
+            patch: (body) => {
+              (body.issue as { fields: Record<string, unknown> }).fields.status = status;
+            },
+          }),
+          inboundContext(),
+        );
+      const released = await labelled({
+        id: '10020',
+        name: 'Released',
+        statusCategory: { id: 3, key: 'done', name: 'Done' },
+      });
+      expect(released.events.map((event) => event.type)).not.toContain('ticket.matched');
+      const working = await labelled({
+        id: '10010',
+        name: 'Doing',
+        statusCategory: { id: 4, key: 'indeterminate', name: 'In Progress' },
+      });
+      expect(working.events.map((event) => event.type)).not.toContain('ticket.matched');
+      const ready = await labelled({
+        id: '10002',
+        name: 'To pick up',
+        statusCategory: { id: 2, key: 'new', name: 'To Do' },
+      });
+      expect(ready.events.map((event) => event.type)).toContain('ticket.matched');
+    });
+
+    it('announces the label only in a start_from status when the binding names a list (S-28.4)', async () => {
+      const listed = createJiraBinding({ config: { lifecycle: { start_from: ['Doing'] } } });
+      const labelled = (name: string) =>
+        listed.port.inbound.normalise(
+          listed.replay.delivery('webhook-issue-updated-labels.json', {
+            patch: (body) => {
+              (body.issue as { fields: Record<string, unknown> }).fields.status = { name };
+            },
+          }),
+          inboundContext(),
+        );
+      expect((await labelled('doing')).events.map((event) => event.type)).toContain(
+        'ticket.matched',
+      );
+      expect((await labelled('To pick up')).events.map((event) => event.type)).not.toContain(
+        'ticket.matched',
+      );
+    });
+
+    /**
      * WP-60 (PROGRESS backlog 59): until then this case was *"an edit the pipeline does not act on
      * is ignored with a reason, not dropped"*, asserting `unsupported_event` naming `summary` — the
      * branch an edited description died on. Atlassian's own example is the golden input.

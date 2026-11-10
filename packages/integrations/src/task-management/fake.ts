@@ -121,6 +121,13 @@
  *     tracker holds its credential's. A test that puts somebody on a ticket out of band uses the
  *     control `assignInTracker`, which checks nothing — a person in the tracker's UI is not a port
  *     call.
+ * 20. **Different — a ticket's status category is reported only for a seeded category** (S-28.4).
+ *     A ticket whose status is a workflow seed with a `rawCategory` answers `status_category`; one
+ *     whose status is a plain name (or not in the workflow) answers none, which intake treats as
+ *     "not said" and fails open on. Jira always sends one. A rule's `startable` filters
+ *     `matchTickets` the same way: `statuses` by name (case-insensitive), `todo_category` by the
+ *     seeded category, keeping a ticket whose category was not seeded — intake judges it after its
+ *     read, so the fake reads wider, never starts more.
  */
 import {
   type AssignResult,
@@ -153,6 +160,7 @@ import {
   type TicketMatchRule,
   type TicketPollPlan,
   type TicketRefInput,
+  type TicketStartableStatuses,
   type TicketTransition,
   type TransitionResult,
   ticketCommentSchema,
@@ -163,7 +171,7 @@ import {
   unassignResultSchema,
   type WebhookDelivery,
 } from '@platform/application';
-import { type Id, MAX_TICKET_STATUSES } from '@platform/contracts';
+import { type Id, MAX_TICKET_STATUSES, type TicketStatusCategory } from '@platform/contracts';
 import * as z from 'zod';
 import {
   buildFakeDelivery,
@@ -465,6 +473,11 @@ export const createFakeTaskManagement = (
     },
   );
   const statuses = statusSet.map((status) => status.name);
+  /** Divergence 20: the category of a seeded status that names one, else `null` ("not said"). */
+  const reportedCategoryOf = (name: string): TicketStatusCategory | null => {
+    const status = statusSet.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+    return status === undefined || status.raw_category === null ? null : status.category;
+  };
   if (new Set(statuses.map((name) => name.toLowerCase())).size !== statuses.length) {
     // Divergence 14: one entry per status, as the port's union promises.
     throw new TypeError('a fake workflow names each status once, compared case-insensitively');
@@ -589,6 +602,10 @@ export const createFakeTaskManagement = (
       title: stored.title,
       description: stored.description,
       status: stored.status,
+      // Divergence 20 (S-28.4): only a seeded category is reported.
+      ...(reportedCategoryOf(stored.status) === null
+        ? {}
+        : { status_category: reportedCategoryOf(stored.status) }),
       priority: stored.priority,
       labels: [...stored.labels],
       comments: stored.comments.map((comment) => snapshot(comment)),
@@ -664,7 +681,25 @@ export const createFakeTaskManagement = (
     return { kind: 'epic', epic_key: value };
   };
 
-  const matches = (ticket: StoredTicket, rule: TicketMatchRule): boolean => {
+  const matches = (ticket: StoredTicket, rule: TicketMatchRule): boolean =>
+    matchesRule(ticket, rule) && (rule.kind === 'keys' || inStartable(ticket, rule.startable));
+
+  /** Divergence 20 (S-28.4): a rule's status constraint. */
+  const inStartable = (
+    ticket: StoredTicket,
+    startable: TicketStartableStatuses | undefined,
+  ): boolean => {
+    if (startable === undefined) {
+      return true;
+    }
+    if (startable.kind === 'statuses') {
+      return startable.statuses.some((name) => name.toLowerCase() === ticket.status.toLowerCase());
+    }
+    const category = reportedCategoryOf(ticket.status);
+    return category === null || category === 'todo';
+  };
+
+  const matchesRule = (ticket: StoredTicket, rule: TicketMatchRule): boolean => {
     switch (rule.kind) {
       case 'label':
         return ticket.labels.includes(rule.label);
@@ -673,7 +708,7 @@ export const createFakeTaskManagement = (
       case 'epic':
         return ticket.epic?.key === rule.epic_key;
       case 'query':
-        return matches(ticket, parseQuery(rule.query));
+        return matchesRule(ticket, parseQuery(rule.query));
       case 'keys':
         // WP-110: the tickets named, whatever their labels or status. WP-145: a rule's `ids` match
         // nothing here — the fake's tickets carry no stable id (divergence register above), so no

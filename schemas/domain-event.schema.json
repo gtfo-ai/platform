@@ -564,7 +564,9 @@
               "type": "string",
               "enum": [
                 "ticket_assigned_elsewhere",
-                "ticket_claim_failed"
+                "ticket_claim_failed",
+                "ticket_not_startable",
+                "ticket_closed_in_tracker"
               ]
             },
             "assignee": {
@@ -724,8 +726,13 @@
             "reason": {
               "type": "string",
               "enum": [
-                "assigned"
+                "assigned",
+                "status_not_startable"
               ]
+            },
+            "status": {
+              "maxLength": 255,
+              "$ref": "#/$defs/NonEmptyString"
             }
           },
           "required": [

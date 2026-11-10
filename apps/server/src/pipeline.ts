@@ -122,7 +122,7 @@ import type {
   OrganisationSettings,
 } from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
-import type { ConfigValues } from '@platform/domain';
+import type { ConfigValues, TicketStatusPolicy } from '@platform/domain';
 import { resolveWipLimits, SHIPPED_TEMPLATES } from '@platform/domain';
 import type {
   jobs as jobsAdapters,
@@ -179,6 +179,7 @@ import {
   type TicketLifecycleBindingRow,
   ticketLifecycleBindingsStatement,
   ticketLifecycleOfRows,
+  ticketStatusPolicyOfRows,
 } from './ticket-lifecycle.js';
 
 /**
@@ -779,11 +780,18 @@ export const createProjectSettingsPort = (
     );
     const layered = projectConfigWithRepository(projectRead.values, snapshot);
     const wip = resolveWipLimits(layered.values.pipeline?.wip, organisation.pipeline?.wip);
-    const ticketLifecycle = await readTicketLifecycle(executor, projectId, logger);
+    const { ticketLifecycle, ticketStatusPolicy } = await readTicketLifecycle(
+      executor,
+      projectId,
+      logger,
+    );
     return defaultProjectSettings(projectId, {
       // WP-177 (TD-029 decision 1): the task-management binding's `lifecycle` block, read on the
       // caller's connection like the rest — the handlers that decide a lifecycle moment ask here.
       ticketLifecycle,
+      // S-28.4 (M28 ruling 1): which statuses start work and which mean a person finished the
+      // ticket — defaults included for a binding with no block, read off the same rows.
+      ticketStatusPolicy,
       // WP-142: the stored branch is the one answer every pipeline reader takes.
       defaultBranch: row.default_branch,
       templates: SHIPPED_TEMPLATES,
@@ -842,7 +850,10 @@ const readTicketLifecycle = async (
   executor: Pick<pg.Pool, 'query'> | eventingAdapters.SqlExecutor,
   projectId: Id,
   logger: Logger,
-): Promise<BindingLifecycle | null> => {
+): Promise<{
+  readonly ticketLifecycle: BindingLifecycle | null;
+  readonly ticketStatusPolicy: TicketStatusPolicy | null;
+}> => {
   // WP-181: the statement and the classification are `ticket-lifecycle.ts`'s, shared with the
   // effective-configuration read so `status_mapping_superseded` says what this decides.
   const statement = ticketLifecycleBindingsStatement(projectId);
@@ -862,7 +873,10 @@ const readTicketLifecycle = async (
       'the task-management binding’s lifecycle block fails its schema; no ticket lifecycle applies',
     );
   }
-  return appliedTicketLifecycle(reading);
+  return {
+    ticketLifecycle: appliedTicketLifecycle(reading),
+    ticketStatusPolicy: ticketStatusPolicyOfRows(rows),
+  };
 };
 
 /**

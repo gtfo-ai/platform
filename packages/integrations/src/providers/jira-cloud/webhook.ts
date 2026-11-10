@@ -75,10 +75,12 @@ import {
   type NormalisedEvent,
   type SecretRedactor,
   type TaskManagementInboundEvent,
+  type TicketStartableStatuses,
   type WebhookDelivery,
 } from '@platform/application';
 import {
   type JsonObject,
+  lifecycleStatusKey,
   MAX_TICKET_UPDATED_FIELD_CHARS,
   MAX_TICKET_UPDATED_FIELDS,
   type TicketRef,
@@ -92,6 +94,7 @@ import {
   jiraIssueWithUpdatedSchema,
   jiraUserSchema,
   PROVIDER_ID,
+  statusCategoryOf,
   toTicketLinks,
 } from './mapping.js';
 
@@ -293,6 +296,11 @@ export interface JiraNormaliserOptions {
   readonly projectKeys: readonly string[];
   readonly pickup: JiraPickupRule;
   /**
+   * The statuses a label match may announce (M28 ruling 3 (b), S-28.4) — `startableStatusesOf` of
+   * the binding. Absent: no status constraint (a caller built before S-28.4).
+   */
+  readonly startable?: TicketStartableStatuses;
+  /**
    * TD-012, **required** (standing rules 31 and 35), applied to the whole delivery **before any
    * branch reads it**.
    *
@@ -456,6 +464,28 @@ export const createJiraInboundNormaliser = (
    * re-run intake for ever. So a match is either the ticket being **created** already matching, or
    * the change itself being what made it match.
    */
+  /**
+   * **Is the ticket in a status work starts from?** (M28 ruling 3 (b), S-28.4) — asked of a label
+   * match only, because a status rule's one status is always startable. When the delivery carries no
+   * status (or no category, for the To Do default) it cannot say, and the match stands: intake reads
+   * the ticket and judges it (ruling 3 (c)), so this only keeps a released ticket's relabel from
+   * being announced at all.
+   */
+  const inStartableStatus = (issue: NonNullable<JiraWebhookEnvelope['issue']>): boolean => {
+    const startable = options.startable;
+    const name = issue.fields.status?.name;
+    if (startable === undefined || name === undefined || name.length === 0) {
+      return true;
+    }
+    if (startable.kind === 'statuses') {
+      return startable.statuses.some(
+        (status) => lifecycleStatusKey(status) === lifecycleStatusKey(name),
+      );
+    }
+    const category = statusCategoryOf(issue.fields.status);
+    return category === null || category === 'todo';
+  };
+
   const pickupRuleHit = (
     issue: NonNullable<JiraWebhookEnvelope['issue']>,
     envelope: JiraWebhookEnvelope,
@@ -467,7 +497,9 @@ export const createJiraInboundNormaliser = (
     if (pickup.kind === 'label') {
       const has = (issue.fields.labels ?? []).includes(pickup.label);
       const added = labelsAddedBy(envelope).includes(pickup.label);
-      return (created && has) || added ? `label = "${pickup.label}"` : null;
+      return ((created && has) || added) && inStartableStatus(issue)
+        ? `label = "${pickup.label}"`
+        : null;
     }
     const status = statusChangeOf(envelope);
     const nowIn = issue.fields.status?.name === pickup.status;
