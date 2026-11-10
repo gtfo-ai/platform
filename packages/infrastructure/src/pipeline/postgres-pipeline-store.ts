@@ -49,6 +49,7 @@ import {
   silentLogger,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
+  withCiManualStartedEntry,
 } from '@platform/application';
 import type {
   ContextPackRecord,
@@ -1573,10 +1574,14 @@ export const createPostgresPipelineStore = (
       if (row === undefined) return false;
       const stored =
         row.ci_manual_started === null ? [] : ciManualStartedSchema.parse(row.ci_manual_started);
-      const next = ciManualStartedSchema.parse([
-        ...stored.filter((each) => each.job_id !== job.job_id),
-        job,
-      ]);
+      // The bound is one rule for both stores (`withCiManualStartedEntry`): at the cap the oldest
+      // played entry is dropped, and with none left to drop the write is skipped, never thrown.
+      const merged = withCiManualStartedEntry(
+        stored.length === 0 ? null : stored,
+        ciManualStartedSchema.element.parse(job),
+      );
+      if (merged === null) return false;
+      const next = ciManualStartedSchema.parse(merged);
       const { rowCount } = await sqlOf(tx).query(
         `update task_stages set ci_manual_started = $4::jsonb
           where task_id = $1 and stage = $2 and attempt = $3

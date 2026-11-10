@@ -2375,6 +2375,90 @@ describe('the CI gate', () => {
       });
     });
 
+    /**
+     * S-28.7 (TD-036's 2026-11-10 amendment): Autix's two waves. `build_composer` is held first;
+     * the test jobs `needs:` it and are `manual` only once it has succeeded. The gate's poll starts
+     * the first wave (`jobs.ts`), the held pipeline's hook the second (`ci-settle.ts`) — each path
+     * alone, so removing either start fails here.
+     */
+    it('starts the jobs the project set to run, wave by wave: the poll, then the held hook', async () => {
+      const played: string[] = [];
+      const world = {
+        status: 'manual' as PipelineStatus['status'],
+        jobs: [
+          { ...job('phpstan', 'success', 'test'), id: '9070' },
+          { ...job('build_composer', 'manual', 'build-deps'), id: '9071' },
+          { ...job('codeception', 'pending', 'test'), id: '9072' },
+          { ...job('nette-tester', 'manual', 'test_optional'), id: '9073', allow_failure: true },
+        ] as PipelineStatus['jobs'][number][],
+      };
+      const harness = harnessWith({
+        git: {
+          capabilities: () => ({ manualJobPlay: true }),
+          getPipelineStatus: async () => ({
+            id: '907',
+            head_sha: 'b'.repeat(40),
+            status: world.status,
+            url: null,
+            jobs: world.jobs.map((each) => ({ ...each })),
+            coverage_pct: null,
+            finished_at: null,
+          }),
+          getMergeRequest: async () => mergeRequest(false),
+          playJob: async (_project: string, jobId: string) => {
+            played.push(jobId);
+            world.jobs = world.jobs.map((each) =>
+              each.id === jobId ? { ...each, status: 'pending' } : each,
+            );
+            return { id: jobId, status: 'pending' };
+          },
+        },
+        settings: {
+          config: {
+            pipeline: { ci: { manual_jobs: { build_composer: 'run', codeception: 'run' } } },
+          },
+        },
+      });
+      await harness.publish([ticketMatched()]);
+      expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+      // Wave 1, from the gate's own poll: build_composer, and never the optional nette-tester.
+      expect(played).toEqual(['9071']);
+      // Wave 2: build_composer succeeded and codeception is held now. Only the hook asks.
+      world.jobs = world.jobs.map((each) =>
+        each.id === '9071'
+          ? { ...each, status: 'success' }
+          : each.id === '9072'
+            ? { ...each, status: 'manual' }
+            : each,
+      );
+      await harness.publish([
+        event('ci.pipeline.held', {
+          project_id: PROJECT,
+          task_id: taskOf(harness).task.id,
+          mr: mergeRequest(false).ref,
+          head_sha: 'b'.repeat(40),
+          pipeline_id: '907',
+        }),
+      ]);
+      expect(played).toEqual(['9071', '9072']);
+      const row = harness.store.stageRows.find((each) => each.stage === 'ci_gate');
+      expect(row?.ciManualStarted?.map((each) => [each.name, each.outcome])).toEqual([
+        ['build_composer', 'started'],
+        ['codeception', 'started'],
+      ]);
+      // A further hook starts nothing twice.
+      await harness.publish([
+        event('ci.pipeline.held', {
+          project_id: PROJECT,
+          task_id: taskOf(harness).task.id,
+          mr: mergeRequest(false).ref,
+          head_sha: 'b'.repeat(40),
+          pipeline_id: '907',
+        }),
+      ]);
+      expect(played).toEqual(['9071', '9072']);
+    });
+
     it('ignores a held pipeline for a revision that is not the merge request’s head', async () => {
       const { harness, world } = withHeldCi();
       await harness.publish([ticketMatched()]);

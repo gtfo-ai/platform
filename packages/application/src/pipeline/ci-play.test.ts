@@ -23,6 +23,7 @@ import {
   createVirtualTimer,
 } from '../testing/memory-integrations.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
+import { withCiManualStartedEntry } from './ci-manual-started.js';
 import { ciPlayIdempotencyKey, enqueueCiPlays, runCiPlayManual } from './ci-play.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import type { PipelineOutboundData } from './jobs.js';
@@ -354,20 +355,24 @@ describe('the ci_play_manual duty (S-28.7)', () => {
 });
 
 describe('enqueueCiPlays (S-28.7)', () => {
+  const request = {
+    taskId: TASK,
+    projectId: PROJECT,
+    attempt: 2,
+    mode: 'normal' as const,
+    headSha: HEAD,
+    pipelineId: '907',
+    jobs: [
+      { id: '9071', name: 'build_composer' },
+      { id: 'x-1', name: 'codeception' },
+    ],
+  };
+
   it('enqueues one wake-up per job this attempt has not recorded, and none for a non-digit id', async () => {
     const w = await world({ manualJobs: RUN_BUILD });
-    const request = {
-      taskId: TASK,
-      projectId: PROJECT,
-      attempt: 2,
-      headSha: HEAD,
-      pipelineId: '907',
-      jobs: [
-        { id: '9071', name: 'build_composer' },
-        { id: 'x-1', name: 'codeception' },
-      ],
-    };
-    expect(await enqueueCiPlays(w.options, request, 'cause')).toEqual(['9071']);
+    const first = await enqueueCiPlays(w.options, request, 'cause');
+    expect([...first.owed]).toEqual(['9071']);
+    expect(first.recorded).toBeNull();
     expect(w.enqueued).toHaveLength(1);
     expect(w.enqueued[0]?.queue).toBe(JOB_QUEUES.pipelineOutbound);
     expect(w.enqueued[0]?.data).toMatchObject({
@@ -377,10 +382,49 @@ describe('enqueueCiPlays (S-28.7)', () => {
       ci_job_id: '9071',
       head_sha: HEAD,
     });
-    // Once the attempt records the job (started, refused or unsupported) it is not offered again.
+    // Once the attempt records the job (started, refused or unsupported) it is not offered again,
+    // and the record comes back for the wait's words.
     expect(await w.run()).toBe('started');
-    expect(await enqueueCiPlays(w.options, request, 'cause')).toEqual([]);
+    const again = await enqueueCiPlays(w.options, request, 'cause');
+    expect([...again.owed]).toEqual([]);
+    expect(again.recorded?.map((entry) => entry.outcome)).toEqual(['started']);
     expect(w.enqueued).toHaveLength(1);
-    expect(await enqueueCiPlays(w.options, { ...request, pipelineId: 'p-1' }, 'cause')).toEqual([]);
+    expect([
+      ...(await enqueueCiPlays(w.options, { ...request, pipelineId: 'p-1' }, 'cause')).owed,
+    ]).toEqual([]);
+  });
+
+  it('offers a trial task nothing: its play would record nothing, so every poll would offer it again', async () => {
+    const w = await world({ manualJobs: RUN_BUILD, mode: 'shadow' });
+    const answer = await enqueueCiPlays(w.options, { ...request, mode: 'shadow' }, 'cause');
+    expect([...answer.owed]).toEqual([]);
+    expect(w.enqueued).toEqual([]);
+  });
+});
+
+describe('the record’s bound (S-28.7)', () => {
+  it('drops the oldest started entry at 50, keeps every refusal, and skips a write with no room', async () => {
+    const entry = (id: number, outcome: 'started' | 'refused') => ({
+      job_id: String(id),
+      pipeline_id: '907',
+      name: `job-${String(id)}`,
+      url: null,
+      at: '2026-11-10T09:00:00.000Z',
+      outcome,
+    });
+    const full = Array.from({ length: 50 }, (_, index) =>
+      entry(index + 1, index === 0 ? 'started' : 'refused'),
+    );
+    const next = withCiManualStartedEntry(full, entry(51, 'started'));
+    expect(next).toHaveLength(50);
+    expect(
+      next?.some((each) => each.job_id === '1'),
+      'the oldest played entry went',
+    ).toBe(false);
+    expect(next?.filter((each) => each.outcome === 'refused')).toHaveLength(49);
+    const refusals = Array.from({ length: 50 }, (_, index) => entry(index + 1, 'refused'));
+    expect(withCiManualStartedEntry(refusals, entry(51, 'started'))).toBeNull();
+    // Replacing an existing id needs no room.
+    expect(withCiManualStartedEntry(refusals, entry(1, 'started'))).toHaveLength(50);
   });
 });

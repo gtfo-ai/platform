@@ -83,6 +83,7 @@ import {
   UNOWNED,
 } from '@platform/domain';
 import { holdOf } from '../cost/pending.js';
+import { withCiManualStartedEntry } from '../pipeline/ci-manual-started.js';
 import { type CiPendingRead, ciPendingReadSchema } from '../pipeline/ci-pending-read.js';
 import { decideRelease } from '../pipeline/release.js';
 import type {
@@ -1443,8 +1444,10 @@ export const createMemoryPipelineStore = (
           candidate.exitedAt === null,
       );
       if (row === undefined) return false;
-      const others = (row.ciManualStarted ?? []).filter((each) => each.job_id !== job.job_id);
-      row.ciManualStarted = clone(ciManualStartedSchema.parse([...others, job]));
+      // S-28.7: the bound is one rule for both stores (`withCiManualStartedEntry`).
+      const next = withCiManualStartedEntry(row.ciManualStarted ?? null, job);
+      if (next === null) return false;
+      row.ciManualStarted = clone(ciManualStartedSchema.parse(next));
       return true;
     },
     ciManualStartedOf: async (_tx, taskId, stage, attempt) => {

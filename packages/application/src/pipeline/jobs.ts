@@ -89,6 +89,7 @@ import {
   CI_GATE_STAGE,
   type CiGateRead,
   type CiWait,
+  ciPlayDetail,
   createGateEvaluator,
   type GateProviderOutage,
   type GateResult,
@@ -989,13 +990,14 @@ export const stageExecuteHandler = (
        */
       const plays =
         result.ciPlay === undefined
-          ? []
+          ? null
           : await enqueueCiPlays(
               options,
               {
                 taskId: request.taskId,
                 projectId: request.projectId,
                 attempt: request.attempt,
+                mode: stored.task.mode,
                 headSha: result.ciPlay.headSha,
                 pipelineId: result.ciPlay.pipelineId,
                 jobs: result.ciPlay.jobs,
@@ -1003,13 +1005,26 @@ export const stageExecuteHandler = (
               // The gate's poll names no event; the play's own key is its identity.
               `ci_gate:${request.taskId}:${String(request.attempt)}`,
             );
+      // The wait's words about those jobs, from what this attempt recorded (TD-036's 2026-11-10
+      // amendment decision 5): "starting" only for a start still owed, the refusal by name.
+      const playWords =
+        result.ciPlay === undefined || plays === null
+          ? null
+          : ciPlayDetail(result.ciPlay, plays.owed, plays.recorded, stored.task.mode === 'shadow');
+      const detail = playWords === null ? result.detail : `${result.detail}; ${playWords}`;
       // Backlog 1078: the CI gate's read is recorded on its attempt on every binding, and a retry
       // whose first read finds the previous attempt's held pipeline unchanged escalates at once —
       // unless this read just started a job the project set to `run` (S-28.7): the held pipeline
       // is then about to move, which is not the Retry nobody acted on that rule exists for.
       if (
         result.ciRead !== undefined &&
-        (await recordCiRead(options, request, result.ciRead, result.ciWait, plays.length === 0))
+        (await recordCiRead(
+          options,
+          request,
+          result.ciRead,
+          result.ciWait,
+          plays === null || plays.owed.size === 0,
+        ))
       ) {
         return;
       }
@@ -1017,7 +1032,7 @@ export const stageExecuteHandler = (
       // unless its attempt has no row to time it from, which keeps the five checks below.
       if (
         result.ciWait !== undefined &&
-        (await waitForPollOnlyCi(options, request, result.detail, result.ciWait, checks))
+        (await waitForPollOnlyCi(options, request, detail, result.ciWait, checks))
       ) {
         return;
       }
@@ -1025,9 +1040,9 @@ export const stageExecuteHandler = (
         await settle(options, request, {
           kind: 'escalate',
           outcome: 'undecided',
-          reason: `the "${request.stage}" gate could not be decided after ${checks} attempts: ${result.detail}`,
+          reason: `the "${request.stage}" gate could not be decided after ${checks} attempts: ${detail}`,
           blockerBrief:
-            `The "${request.stage}" gate for this task still has no answer after ${checks} checks (${result.detail}). ` +
+            `The "${request.stage}" gate for this task still has no answer after ${checks} checks (${detail}). ` +
             'Look at the merge request or the pipeline yourself, then hand the task back.',
         });
         return;

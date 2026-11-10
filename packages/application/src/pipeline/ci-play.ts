@@ -45,7 +45,12 @@
  * whose manual jobs alone outlast it).
  */
 
-import type { CiManualStartedJob, CiManualStartOutcome } from '@platform/contracts';
+import type {
+  CiManualStarted,
+  CiManualStartedJob,
+  CiManualStartOutcome,
+  TaskMode,
+} from '@platform/contracts';
 import { type Id, type IsoDateTime, providerNumericIdSchema } from '@platform/contracts';
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { PipelineStatus } from '../ports/integrations/git-provider.js';
@@ -78,9 +83,18 @@ export interface CiPlayRequest {
   readonly taskId: Id;
   readonly projectId: Id;
   readonly attempt: number;
+  /** The task's mode: a trial (`shadow`) task is offered no start at all (it would record none). */
+  readonly mode: TaskMode;
   readonly headSha: string;
   readonly pipelineId: string;
   readonly jobs: readonly Pick<PipelineJob, 'id' | 'name'>[];
+}
+
+/** What {@link enqueueCiPlays} did, and what the attempt had recorded — the wait's words read both. */
+export interface CiPlaysEnqueued {
+  /** The job ids a wake-up was enqueued for. */
+  readonly owed: ReadonlySet<string>;
+  readonly recorded: CiManualStarted | null;
 }
 
 /** The idempotency key of one play — provider ids, digits only (the M28 ruling). */
@@ -94,19 +108,21 @@ const isNumericId = (value: unknown): value is string =>
  * **Enqueues one `ci_play_manual` wake-up per job this attempt has not recorded yet** — called by
  * the job that judged the pipeline (the gate's poll, or `ci-settle.ts`), after its transactions,
  * never from a handler. A job whose id or pipeline id is not digits only is not offered (the key
- * would carry provider text). Answers the job ids it enqueued.
+ * would carry provider text), and a trial (`shadow`) task is offered nothing: its play would ask
+ * the provider nothing and record nothing, so every poll would offer it again. Answers the job ids
+ * it enqueued and the attempt's record, which the wait's words are built from (`ciPlayDetail`).
  */
 export const enqueueCiPlays = async (
   options: { readonly jobs: Jobs; readonly unitOfWork: UnitOfWork; readonly store: PipelineStore },
   request: CiPlayRequest,
   causeEventId: string,
-): Promise<readonly string[]> => {
-  if (request.jobs.length === 0 || !isNumericId(request.pipelineId)) {
-    return [];
-  }
+): Promise<CiPlaysEnqueued> => {
   const recorded = await options.unitOfWork.transaction(async (scope) =>
     options.store.tasks.ciManualStartedOf(scope.tx, request.taskId, CI_GATE_STAGE, request.attempt),
   );
+  if (request.mode === 'shadow' || !isNumericId(request.pipelineId)) {
+    return { owed: new Set(), recorded };
+  }
   const seen = new Set((recorded ?? []).map((entry) => entry.job_id));
   const owed = request.jobs.filter((job) => isNumericId(job.id) && !seen.has(job.id));
   for (const job of owed) {
@@ -124,7 +140,7 @@ export const enqueueCiPlays = async (
     // `enqueueOutbound`'s one line, written here because importing it would close a cycle.
     await options.jobs.enqueue<OutboundJobData>({ queue: JOB_QUEUES.pipelineOutbound, data });
   }
-  return owed.map((job) => job.id);
+  return { owed: new Set(owed.map((job) => job.id)), recorded };
 };
 
 export type CiPlayOutcome =
