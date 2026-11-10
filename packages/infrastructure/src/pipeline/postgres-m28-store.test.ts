@@ -187,3 +187,117 @@ describe('the attempt reads and writes of S-28.1 and S-28.2', () => {
     expect(await store().tasks.observeTicketForward(recording([]).tx, entry)).toBeNull();
   });
 });
+
+describe('task_merges and the merge decision (S-28.15, migration 0119)', () => {
+  const ROW = {
+    task_id: TASK,
+    head_sha: 'b'.repeat(40),
+    outcome: 'merged',
+    provider_status: null,
+    merge_commit_sha: 'd'.repeat(40),
+    plan_decision: 'approved_by_person',
+    plan_approval_id: OWNER,
+    change_digest: null,
+    commit_count: null,
+    rebased_to: null,
+    attempted_at: AT,
+    signal_passes: 0,
+  };
+
+  it('records an attempt once per (task, head, kind), the kind read off the outcome', async () => {
+    const wrote = recording([{ task_id: TASK }]);
+    expect(
+      await store().tasks.recordMerge(wrote.tx, {
+        taskId: TASK,
+        headSha: 'b'.repeat(40),
+        outcome: 'rebased',
+        providerStatus: null,
+        mergeCommitSha: null,
+        planDecision: 'not_required',
+        planApprovalId: null,
+        changeDigest: 'a'.repeat(64),
+        commitCount: 2,
+        rebasedTo: null,
+        attemptedAt: AT,
+        signalPasses: 0,
+      }),
+    ).toBe(true);
+    expect(wrote.calls[0]?.text).toContain("case when $3::text like 'rebase%' then 'rebase'");
+    expect(wrote.calls[0]?.text).toContain('on conflict (task_id, head_sha, kind) do nothing');
+    const lost = recording([]);
+    expect(
+      await store().tasks.recordMerge(lost.tx, {
+        taskId: TASK,
+        headSha: 'b'.repeat(40),
+        outcome: 'merged',
+        providerStatus: null,
+        mergeCommitSha: null,
+        planDecision: 'not_required',
+        planApprovalId: null,
+        changeDigest: null,
+        commitCount: null,
+        rebasedTo: null,
+        attemptedAt: AT,
+        signalPasses: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it('maps a row for one head, the newest, and every attempt; and counts signal passes on a merge only', async () => {
+    const one = recording([ROW]);
+    expect(await store().tasks.mergeFor(one.tx, TASK, 'b'.repeat(40))).toMatchObject({
+      outcome: 'merged',
+      planDecision: 'approved_by_person',
+      planApprovalId: OWNER,
+      mergeCommitSha: 'd'.repeat(40),
+    });
+    expect(one.calls[0]?.text).toContain("order by (kind = 'merge') desc limit 1");
+    expect(await store().tasks.mergeFor(recording([]).tx, TASK, 'c'.repeat(40))).toBeNull();
+    expect((await store().tasks.latestMerge(recording([ROW]).tx, TASK))?.headSha).toBe(
+      'b'.repeat(40),
+    );
+    expect(await store().tasks.latestMerge(recording([]).tx, TASK)).toBeNull();
+    expect(await store().tasks.mergesOf(recording([ROW, ROW]).tx, TASK)).toHaveLength(2);
+    const passes = recording([{ signal_passes: 2 }]);
+    expect(await store().tasks.countMergeSignalPass(passes.tx, TASK, 'b'.repeat(40))).toBe(2);
+    expect(passes.calls[0]?.text).toContain("outcome = 'merged'");
+    expect(await store().tasks.countMergeSignalPass(recording([]).tx, TASK, 'b'.repeat(40))).toBe(
+      0,
+    );
+  });
+
+  it('settles only a rebase row still in flight', async () => {
+    const settled = recording([], 1);
+    expect(
+      await store().tasks.settleRebase(settled.tx, TASK, 'b'.repeat(40), {
+        outcome: 'rebase_changed',
+        providerStatus: 'digest_changed',
+        rebasedTo: 'c'.repeat(40),
+      }),
+    ).toBe(true);
+    expect(settled.calls[0]?.text).toContain("kind = 'rebase' and outcome = 'rebased'");
+    expect(
+      await store().tasks.settleRebase(recording([], 0).tx, TASK, 'b'.repeat(40), {
+        outcome: 'rebase_conflict',
+        providerStatus: null,
+        rebasedTo: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('upserts and reads who merges and what the platform waited for', async () => {
+    const write = recording([], 1);
+    await store().tasks.recordMergeDecision(write.tx, TASK, {
+      mergeBy: 'platform',
+      wait: 'person_words',
+    });
+    expect(write.calls[0]?.values).toEqual([TASK, 'platform', 'person_words']);
+    expect(
+      await store().tasks.mergeDecisionOf(
+        recording([{ merge_by: 'person', merge_wait: 'setting_person' }]).tx,
+        TASK,
+      ),
+    ).toEqual({ mergeBy: 'person', wait: 'setting_person' });
+    expect(await store().tasks.mergeDecisionOf(recording([]).tx, TASK)).toBeNull();
+  });
+});
