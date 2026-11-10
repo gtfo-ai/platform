@@ -12,7 +12,12 @@
  * Pure functions, so `approval-text.test.ts` holds every code to a sentence and a section — the set
  * is enumerated off the schema, so a code added to the vocabulary and forgotten here fails there.
  */
-import type { ApprovalKind, ApprovalReason, ApprovalSubject } from '@platform/contracts';
+import type {
+  ApprovalKind,
+  ApprovalReason,
+  ApprovalSubject,
+  RiskFactor,
+} from '@platform/contracts';
 import { formatUsd } from '../ui/kit.js';
 
 /** The project settings section that holds the lever a reason names. */
@@ -32,6 +37,28 @@ const listOf = (items: readonly string[]): string =>
   items.length <= 1
     ? (items[0] ?? '')
     : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+
+/** The words for the low-risk rule's setting, where a reason's link points (S-28.8). */
+const LOW_RISK_LINK = 'Low-risk plans';
+
+/**
+ * What each risk factor means, as the end of a sentence that starts *"The plan …"* (S-28.8). The
+ * chat message words the same factors on the server (`notify/approval-text.ts`).
+ */
+export const RISK_FACTOR_WORDS: Readonly<Record<RiskFactor, string>> = {
+  schema_migration: 'touches database migrations or stored data',
+  auth_security: 'touches sign-in, permissions or security code',
+  payments: 'touches payments or billing',
+  public_api: 'changes a public API',
+  infra_ci: 'changes CI, deployment or infrastructure',
+  data_deletion: 'deletes data',
+  many_files: 'changes many files',
+  unclear_requirements: 'rests on requirements that are not clear yet',
+  new_dependency: 'adds or changes a dependency',
+  other: 'has another risk the agent named',
+  protected_paths: 'changes protected files (tests, CI or agent configuration)',
+  split_proposed: 'proposes splitting the ticket',
+};
 
 /** One reason, in words, with its lever (TD-035 decision 7). */
 export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
@@ -91,6 +118,62 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
         stop: 'To be asked less, set How much agents do alone to a position with a higher threshold, or none.',
         section: 'policies',
         link: 'How much agents do alone',
+      };
+    // S-28.8: the project's low-risk rule. Who found a factor is said, because a platform finding
+    // cannot be argued away and the agent's own is the agent's word.
+    case 'risk_factor':
+      return {
+        why: `The plan ${listOf(reason.factors.map((factor) => RISK_FACTOR_WORDS[factor]))} (${
+          reason.source === 'platform' ? 'found by the platform' : 'the agent’s own assessment'
+        }).`,
+        stop: 'To be asked less, take these from the list of things that always wait for you under Low-risk plans. Keeping them is recommended.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
+    case 'confidence_below':
+      return {
+        why: `The agent’s confidence in the plan is ${reason.confidence} (its own assessment); this project lets a plan go ahead only at ${reason.minimum === 'high' ? 'high' : 'medium or high'} confidence.`,
+        stop: 'To be asked less, lower the confidence a plan needs under Low-risk plans.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
+    case 'risk_level_above':
+      return {
+        why: `The agent rates the plan’s risk ${reason.risk_level} (its own assessment); this project lets a plan go ahead only at ${reason.maximum === 'low' ? 'low' : 'low or medium'} risk.`,
+        stop: 'To be asked less, raise the risk a plan may have under Low-risk plans.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
+    case 'size_above':
+      return {
+        why: `The plan’s size is ${reason.size}, above the largest size (${reason.maximum}) this project lets go ahead without approval.`,
+        stop: 'To be asked less, raise the largest size under Low-risk plans.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
+    case 'open_questions':
+      return {
+        why:
+          reason.count === 1
+            ? 'The agent left one question open in the plan.'
+            : `The agent left ${reason.count} questions open in the plan.`,
+        stop: 'Answer them by approving with a note or sending the plan back; a plan with open questions always waits.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
+    case 'assessment_missing':
+      return {
+        why: 'The plan does not say how sure the agent is or how risky it is, so it cannot go ahead without you.',
+        stop: 'A plan written by the current agents says both; one that does not always waits.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
+    case 'low_risk_auto':
+      return {
+        why: `The plan went ahead without approval: ${reason.risk_level} risk, ${reason.confidence} confidence, size ${reason.size}, ${reason.files === 1 ? '1 file' : `${reason.files} files`}.`,
+        stop: 'To have every plan wait for you again, turn off Low-risk plans go ahead.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
       };
   }
 };

@@ -41,6 +41,7 @@ import {
   usdSchema,
 } from './common.js';
 import { customStageSchema } from './pipeline.js';
+import { planApprovalRiskConfigSchema } from './plan-risk.js';
 
 // ── project ──────────────────────────────────────────────────────────────────
 
@@ -553,6 +554,12 @@ export const policiesConfigSchema = z
     /** product/05 (Q7): what drift detection does when no `business/direction.md` exists. */
     drift_without_direction: z.enum(['disabled', 'label_unknown']).optional(),
     protected_paths: z.array(pathPatternSchema).optional(),
+    /**
+     * Let a low-risk plan go ahead without a person (S-28.8, the M28 ruling amending BD-006) —
+     * opt-in, off by default; see `planApprovalRiskConfigSchema`. Set on the project settings page;
+     * a repository file may only tighten it.
+     */
+    plan_approval_risk: planApprovalRiskConfigSchema.optional(),
     risk_classes: z.record(slugSchema, riskClassSchema).optional(),
     /**
      * Named review checklists a risk class selects with `checklist:<name>` — product/19 §14's

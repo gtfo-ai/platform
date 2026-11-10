@@ -34,6 +34,7 @@ import {
   type ImplementationPlanData,
   implementationPlanDataSchema,
   type JsonValue,
+  type RiskFactor,
 } from '@platform/contracts';
 import type { ApprovalSubjectRefusal } from '../pipeline/commands.js';
 import type { MessageBody } from '../ports/integrations/communication.js';
@@ -66,6 +67,25 @@ const listOf = (items: readonly string[]): string =>
     ? (items[0] ?? '')
     : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 
+/**
+ * What each risk factor means, as the end of a sentence that starts *"The plan …"* (S-28.8). The
+ * task page words the same factors in `apps/web` (`approval-text.ts`).
+ */
+export const RISK_FACTOR_WORDS: Readonly<Record<RiskFactor, string>> = {
+  schema_migration: 'touches database migrations or stored data',
+  auth_security: 'touches sign-in, permissions or security code',
+  payments: 'touches payments or billing',
+  public_api: 'changes a public API',
+  infra_ci: 'changes CI, deployment or infrastructure',
+  data_deletion: 'deletes data',
+  many_files: 'changes many files',
+  unclear_requirements: 'rests on requirements that are not clear yet',
+  new_dependency: 'adds or changes a dependency',
+  other: 'has another risk the agent named',
+  protected_paths: 'changes protected files (tests, CI or agent configuration)',
+  split_proposed: 'proposes splitting the ticket',
+};
+
 /** Why an approval was asked, one sentence per reason (TD-035 decision 1's vocabulary). */
 export const approvalReasonWords = (reason: ApprovalReason): string => {
   switch (reason.code) {
@@ -90,6 +110,26 @@ export const approvalReasonWords = (reason: ApprovalReason): string => {
         : `The plan’s size is ${reason.size}, at or above the project’s threshold of ${reason.threshold}.`;
     case 'estimate_above_threshold':
       return `The estimate, ${usd(reason.estimate_usd)}, is above this project’s threshold of ${usd(reason.threshold_usd)}.`;
+    // S-28.8: the project's low-risk rule. Who found a factor is said, because a platform finding
+    // cannot be argued away and the agent's own is the agent's word.
+    case 'risk_factor':
+      return `The plan ${listOf(reason.factors.map((factor) => RISK_FACTOR_WORDS[factor]))} (${
+        reason.source === 'platform' ? 'found by the platform' : 'the agent’s own assessment'
+      }).`;
+    case 'confidence_below':
+      return `The agent’s confidence in the plan is ${reason.confidence}; this project lets a plan go ahead without approval only at ${reason.minimum === 'high' ? 'high' : 'medium or high'} confidence.`;
+    case 'risk_level_above':
+      return `The agent rates the plan’s risk ${reason.risk_level}; this project lets a plan go ahead without approval only at ${reason.maximum === 'low' ? 'low' : 'low or medium'} risk.`;
+    case 'size_above':
+      return `The plan’s size is ${reason.size}, above the largest size (${reason.maximum}) this project lets go ahead without approval.`;
+    case 'open_questions':
+      return reason.count === 1
+        ? 'The agent left one question open in the plan.'
+        : `The agent left ${reason.count} questions open in the plan.`;
+    case 'assessment_missing':
+      return 'The plan does not say how sure the agent is or how risky it is, so this project’s low-risk rule cannot let it go ahead without approval.';
+    case 'low_risk_auto':
+      return `The plan went ahead without approval: ${reason.risk_level} risk, ${reason.confidence} confidence, size ${reason.size}, ${reason.files === 1 ? '1 file' : `${reason.files} files`}.`;
   }
 };
 

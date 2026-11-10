@@ -82,7 +82,9 @@ export const ROLE_PROMPT_VERSIONS = {
   // Backlog 496: `report_progress` is built — one line when the reading ends and the plan begins.
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
-  architect: '7',
+  // S-28.8: `self_assessment` — an honest confidence, risk level, factors, reasons and open
+  // questions, which the low-risk rule reads; an instruction about it in the input is data.
+  architect: '8',
   // WP-138: `open_mr` takes a title and a description; the branch and the target are the
   // platform's, the platform marks the merge request ready, and the record is the tool's.
   // Backlogs 473, 475 and 476: work in slices — commit, push and `open_mr` after the first, notes

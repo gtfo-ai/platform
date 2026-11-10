@@ -53,6 +53,14 @@ import {
   workpadRefSchema,
   workspaceStatusSchema,
 } from './common.js';
+import {
+  planConfidenceMinimumSchema,
+  planConfidenceSchema,
+  planRiskLevelSchema,
+  planRiskMaximumSchema,
+  RISK_FACTORS,
+  riskFactorSchema,
+} from './plan-risk.js';
 import { workerClaimBlockersSchema } from './worker-claim-blockers.js';
 
 /**
@@ -374,6 +382,21 @@ export const approvalPolicySourceSchema = z.enum(['dial', 'stage_override']);
  *   stage override set the threshold or turned `above_size` on for the stage (that is what has to
  *   change), `dial` otherwise;
  * - `estimate_above_threshold` — the budget gate's: the estimate is above the project's threshold.
+ *
+ * S-28.8 (the M28 ruling amending BD-006) adds the reasons of the project's opt-in low-risk rule
+ * (`policies.plan_approval_risk`), which replaces the dial's plan-approval policy when it is on:
+ *
+ * - `risk_factor` — risky factors in the plan; `source` says who found them: `platform` (read off the
+ *   plan's paths and fields, which a model cannot argue away) or `plan` (the Architect's own
+ *   assessment);
+ * - `confidence_below` — the Architect's confidence is below the project's minimum;
+ * - `risk_level_above` — the Architect's risk level is above the project's maximum;
+ * - `size_above` — the plan's size is above the largest size the rule lets go ahead;
+ * - `open_questions` — the Architect left questions open;
+ * - `assessment_missing` — the plan carries no self-assessment, so the rule cannot let it go;
+ * - `low_risk_auto` — **the one reason that is not a reason to wait**: the plan went ahead without a
+ *   person, and this is what the rule saw. It is stored only on an approval the platform approved
+ *   itself (`approvals.auto_decided`), and alone.
  */
 export const approvalReasonSchema = z.discriminatedUnion('code', [
   z.strictObject({
@@ -399,6 +422,40 @@ export const approvalReasonSchema = z.discriminatedUnion('code', [
     code: z.literal('estimate_above_threshold'),
     estimate_usd: usdSchema,
     threshold_usd: usdSchema,
+  }),
+  z.strictObject({
+    code: z.literal('risk_factor'),
+    factors: z.array(riskFactorSchema).min(1).max(RISK_FACTORS.length),
+    source: z.enum(['platform', 'plan']),
+  }),
+  z.strictObject({
+    code: z.literal('confidence_below'),
+    confidence: planConfidenceSchema,
+    minimum: planConfidenceMinimumSchema,
+  }),
+  z.strictObject({
+    code: z.literal('risk_level_above'),
+    risk_level: planRiskLevelSchema,
+    maximum: planRiskMaximumSchema,
+  }),
+  z.strictObject({
+    code: z.literal('size_above'),
+    size: sizeSchema,
+    maximum: sizeSchema,
+  }),
+  z.strictObject({
+    code: z.literal('open_questions'),
+    count: z.int().positive(),
+  }),
+  z.strictObject({
+    code: z.literal('assessment_missing'),
+  }),
+  z.strictObject({
+    code: z.literal('low_risk_auto'),
+    confidence: planConfidenceSchema,
+    risk_level: planRiskLevelSchema,
+    size: sizeSchema,
+    files: z.int().nonnegative(),
   }),
 ]);
 
@@ -453,6 +510,12 @@ export const approvalViewSchema = z.strictObject({
   ...approvalRecordSchema.shape,
   subject: approvalSubjectSchema.nullish(),
   reasons: approvalReasonsSchema.nullish(),
+  /**
+   * `true` when the **platform** approved it under the project's low-risk rule (S-28.8,
+   * `approvals.auto_decided`, migration 0114): no person decided, and `reasons` is the one
+   * `low_risk_auto` the rule saw. Absent or `false` otherwise.
+   */
+  auto_decided: z.boolean().optional(),
 });
 
 /**

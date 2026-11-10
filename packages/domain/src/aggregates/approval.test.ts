@@ -18,6 +18,7 @@ import {
   APPROVAL_WITHDRAWN_REASON,
   type Approval,
   assertNoPendingApproval,
+  autoApproveApproval,
   canTransitionApproval,
   createApproval,
   decideApproval,
@@ -254,6 +255,38 @@ describe('a human entry never moves a task past a pending approval (BACKLOG 854)
       expect((refused as ApprovalPendingError).from).toBe(state);
       expect((refused as Error).message).toContain(APPROVAL_ID);
     }
+  });
+});
+
+describe('a low-risk plan goes ahead without a person (S-28.8, M28 ruling 5)', () => {
+  it('approves the plan with no decider, on the approval stream, with the ordinary event', () => {
+    const shared = world();
+    const { aggregate, events } = autoApproveApproval(pending(shared), context(shared));
+    expect(aggregate.status).toBe('approved');
+    expect(aggregate.decidedByUserId).toBeNull();
+    expect(aggregate.decidedAt).not.toBeNull();
+    expect(aggregate.reason).toBeNull();
+    expect(events.map((event) => [event.type, event.stream_type])).toEqual([
+      ['task.approval.decided', 'approval'],
+    ]);
+    // No new payload key: an older build reading the event during a rollback accepts it.
+    expect(Object.keys(events[0]?.payload ?? {}).sort()).toEqual(
+      ['approval_id', 'decided_by_user_id', 'decision', 'project_id', 'reason', 'task_id'].sort(),
+    );
+    expect(events[0]?.payload).toMatchObject({ decision: 'approved', decided_by_user_id: null });
+  });
+
+  it('refuses any kind but a plan, and an approval already decided', () => {
+    const shared = world();
+    expect(() => autoApproveApproval(pending(shared, 'budget'), context(shared))).toThrow(
+      /only a plan approval/,
+    );
+    const decided = decideApproval(
+      pending(shared),
+      { decision: 'rejected', userId: USER_ID, role: 'maintainer' },
+      context(shared),
+    ).aggregate;
+    expect(() => autoApproveApproval(decided, context(shared))).toThrow(IllegalTransitionError);
   });
 });
 

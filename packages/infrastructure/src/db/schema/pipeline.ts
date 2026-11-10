@@ -595,6 +595,8 @@ export const approvals = pgTable('approvals', {
   subjectArtifactId: uuid('subject_artifact_id'),
   subjectDetail: jsonb('subject_detail'),
   reasons: jsonb('reasons'),
+  /** S-28.8, migration 0114: the platform approved it under the project's low-risk rule. */
+  autoDecided: boolean('auto_decided').notNull().default(false),
 });
 
 export const workspaces = pgTable('workspaces', {

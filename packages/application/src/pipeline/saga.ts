@@ -36,7 +36,9 @@ import {
   type ExternalIdentity,
   type Id,
   type IsoDateTime,
+  implementationPlanDataSchema,
   type RiskClass,
+  refinedSpecDataSchema,
   type Size,
   type Slug,
   type TicketLifecycle,
@@ -52,6 +54,7 @@ import type {
 } from '@platform/domain';
 import {
   amendEscalation,
+  autoApproveApproval,
   budgetApprovalReasons,
   compilePipeline,
   createApproval,
@@ -66,7 +69,9 @@ import {
   markQuestionEscalated,
   opensWithPlatformCommentMarker,
   orderQueue,
-  planApprovalReasons,
+  planApprovalOutcome,
+  planApprovalRiskPolicyOf,
+  planRiskFacts,
   QA_STAGE_ID,
   queueTask,
   READY_FOR_MERGE_STAGE,
@@ -1086,6 +1091,15 @@ const planPaths = (data: unknown): readonly string[] => {
  * substituting the supervised preset would turn probation on for a project that never chose it.
  * Migration 0021 backfilled every row that existed and all three writers supply one, so the branch
  * is reachable only from a harness.
+ *
+ * **S-28.8 — low-risk plans go ahead** (the M28 ruling amending BD-006). A project that switches on
+ * `policies.plan_approval_risk` has the dial's `above_size`/`always` branch replaced by the rule in
+ * `packages/domain/src/policies/plan-risk.ts`: the platform's facts and the Architect's
+ * self-assessment, either of which can only add a reason to wait. When neither asks (and neither
+ * does probation nor a risk class), the gate writes the approval **already approved** —
+ * `auto_decided`, no decider, the one `low_risk_auto` reason — and the task goes on to the next
+ * stage in this same transaction, which is the path a person's approval takes through
+ * `applyDecision`. Off (the default), the gate is exactly what it was.
  */
 const planApprovalGate = async (
   options: PipelineSagaOptions,
@@ -1164,7 +1178,7 @@ const planApprovalGate = async (
       ? {}
       : { planApprovalSizeThreshold: override.size_threshold }),
   };
-  const reasons = planApprovalReasons({
+  const dialInput: Parameters<typeof planApprovalOutcome>[0] = {
     preset,
     size,
     // TD-035: which of the two fields the stage override supplied, so a reason's `source` is a
@@ -1187,12 +1201,74 @@ const planApprovalGate = async (
       settings.config.policies?.risk_classes as Readonly<Record<string, RiskClass>> | undefined,
       planPaths(plan?.data),
     ),
-  });
-  if (reasons.length === 0) {
+  };
+  /**
+   * S-28.8 (the M28 ruling amending BD-006): the project's opt-in low-risk rule. Read only when it
+   * is on — a project that never set it pays no extra query — and then it replaces the dial's
+   * policy branch alone (`planApprovalOutcome`). The plan is parsed here, so a stored plan that does
+   * not read as one has no self-assessment and waits (fail closed).
+   */
+  const riskPolicy = planApprovalRiskPolicyOf(settings.config.policies?.plan_approval_risk);
+  let risk: Parameters<typeof planApprovalOutcome>[1] = null;
+  if (riskPolicy.enabled) {
+    const parsedPlan = implementationPlanDataSchema.safeParse(plan?.data);
+    const specArtifact = await options.store.artifacts.latest(
+      context.scope.tx,
+      stored.task.id,
+      'RefinedSpec',
+    );
+    const spec = refinedSpecDataSchema.safeParse(specArtifact?.data);
+    const planData = parsedPlan.success ? parsedPlan.data : null;
+    risk = {
+      policy: riskPolicy,
+      facts: planRiskFacts({
+        plan: planData,
+        riskClasses: settings.config.policies?.risk_classes as
+          | Readonly<Record<string, RiskClass>>
+          | undefined,
+        protectedPaths: settings.config.policies?.protected_paths ?? [],
+        spec: spec.success
+          ? { drift: spec.data.drift.flag, questions: spec.data.questions.length }
+          : null,
+      }),
+      assessment: planData?.self_assessment ?? null,
+    };
+  }
+  const outcome = planApprovalOutcome(dialInput, risk);
+  if (outcome.kind === 'none') {
     return false;
   }
 
   const commandContext = contextFor(options, stored.task.id, context.event.event.id);
+  if (outcome.kind === 'auto') {
+    // M28 ruling 5: the row still exists — subject, the one reason, approved, no decider,
+    // `auto_decided` — and the pipeline goes on in this transaction the way a decided approval
+    // does (`applyDecision`'s `approved` branch re-asks the interpreter; here the caller does, by
+    // carrying on). No `task.approval.requested`: nobody is asked, so nothing asks for a decision.
+    const approved = autoApproveApproval(
+      createApproval(
+        {
+          id: options.ids.next(),
+          taskId: stored.task.id,
+          projectId: stored.task.projectId,
+          kind: 'plan',
+        },
+        commandContext,
+      ),
+      commandContext,
+    );
+    await options.store.approvals.insert(context.scope.tx, {
+      approval: approved.aggregate,
+      stage,
+      attempt,
+      subjectArtifactId: plan?.id ?? null,
+      reasons: outcome.reasons,
+      autoDecided: true,
+    });
+    await context.emit(approved.events);
+    return false;
+  }
+  const reasons = outcome.reasons;
   const approval = createApproval(
     {
       id: options.ids.next(),

@@ -2897,6 +2897,12 @@ export interface StoredApproval {
   readonly subjectArtifactId?: Id | null;
   readonly subjectDetail?: BudgetApprovalSubjectDetail | null;
   readonly reasons?: readonly ApprovalReason[] | null;
+  /**
+   * `true` for a plan the project's low-risk rule let go ahead (S-28.8, migration 0114,
+   * `autoApproveApproval`): approved by the platform, no decider. Written once, by `insert`, like
+   * the reasons; absent is `false`.
+   */
+  readonly autoDecided?: boolean;
 }
 
 /**

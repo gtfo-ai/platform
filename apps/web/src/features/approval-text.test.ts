@@ -23,6 +23,14 @@ const SAMPLES: readonly ApprovalReason[] = [
   { code: 'size_at_or_above', size: 'XL', threshold: 'L', source: 'dial' },
   { code: 'size_at_or_above', size: 'M', threshold: 'M', source: 'stage_override' },
   { code: 'estimate_above_threshold', estimate_usd: 61.5, threshold_usd: 50 },
+  { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
+  { code: 'risk_factor', factors: ['payments', 'other'], source: 'plan' },
+  { code: 'confidence_below', confidence: 'medium', minimum: 'high' },
+  { code: 'risk_level_above', risk_level: 'medium', maximum: 'low' },
+  { code: 'size_above', size: 'L', maximum: 'M' },
+  { code: 'open_questions', count: 1 },
+  { code: 'assessment_missing' },
+  { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'S', files: 2 },
 ];
 
 describe('reasonCopy', () => {

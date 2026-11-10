@@ -76,6 +76,7 @@ export * from './policies/epic-split.js';
 export * from './policies/iteration-limits.js';
 export * from './policies/notifications.js';
 export * from './policies/path-patterns.js';
+export * from './policies/plan-risk.js';
 export * from './policies/queue-wait.js';
 export * from './policies/review-only.js';
 export * from './policies/reviewer-routing.js';

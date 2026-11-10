@@ -150,6 +150,48 @@
         ],
         "additionalProperties": false
       }
+    },
+    "self_assessment": {
+      "type": "object",
+      "properties": {
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "risk_level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "risk_factors": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_04eb4825"
+          }
+        },
+        "reasons": {
+          "$ref": "#/$defs/anon_cfa6c979"
+        },
+        "open_questions": {
+          "$ref": "#/$defs/anon_cfa6c979"
+        }
+      },
+      "required": [
+        "confidence",
+        "risk_level",
+        "risk_factors",
+        "reasons",
+        "open_questions"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [
@@ -207,6 +249,32 @@
         "value"
       ],
       "additionalProperties": false
+    },
+    "anon_04eb4825": {
+      "type": "string",
+      "enum": [
+        "schema_migration",
+        "auth_security",
+        "payments",
+        "public_api",
+        "infra_ci",
+        "data_deletion",
+        "many_files",
+        "unclear_requirements",
+        "new_dependency",
+        "other"
+      ]
+    },
+    "anon_45ab7723": {
+      "maxLength": 500,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_cfa6c979": {
+      "maxItems": 10,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_45ab7723"
+      }
     }
   }
 }

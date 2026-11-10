@@ -27,6 +27,7 @@ import {
   urlSchema,
   usdSchema,
 } from './common.js';
+import { planSelfAssessmentSchema } from './plan-risk.js';
 
 // ── Building blocks reused across artifact types ─────────────────────────────
 
@@ -124,6 +125,12 @@ export const implementationPlanDataSchema = z.strictObject({
   protected_path_changes: z.array(
     z.strictObject({ path: pathPatternSchema, reason: nonEmptyStringSchema }),
   ),
+  /**
+   * The Architect's own assessment (S-28.8, M28 ruling 2) — what the project's low-risk rule reads.
+   * Optional: a plan without one waits for a person when that rule is on. Model output, so it can
+   * only add a reason to wait (`planApprovalDecision`).
+   */
+  self_assessment: planSelfAssessmentSchema.optional(),
 });
 
 /**

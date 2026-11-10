@@ -28,6 +28,7 @@ const row = (over: Partial<ApprovalRow> = {}): ApprovalRow => ({
   subjectArtifactId: null,
   subjectDetail: null,
   reasons: null,
+  autoDecided: false,
   ...over,
 });
 
@@ -40,6 +41,23 @@ const chained = (id: string, version: number, attempt = 1) => ({
 });
 
 describe('assembleApprovalViews', () => {
+  it('says which approval the platform decided itself under the low-risk rule (S-28.8)', () => {
+    const auto = [
+      { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'S', files: 2 },
+    ];
+    const views = assembleApprovalViews(
+      [
+        row({ status: 'approved', autoDecided: true, decidedAt: AT, reasons: auto }),
+        row({ id: '00000000-0000-4000-8000-0000000000c2', status: 'pending' }),
+      ],
+      [],
+      [],
+    );
+    expect(views.map((view) => view.auto_decided)).toEqual([true, false]);
+    expect(views[0]?.reasons).toEqual(auto);
+    expect(views[0]?.decided_by_user_id).toBeNull();
+  });
+
   it('publishes every approval’s deadline_at as null, a stored one included (S-27.1)', () => {
     const views = assembleApprovalViews(
       [

@@ -159,6 +159,8 @@ export const ARTIFACT_FIELD_POLICIES = {
       'protected_path_changes[].reason',
       'risks[]',
       'rollout_notes',
+      'self_assessment.open_questions[]',
+      'self_assessment.reasons[]',
       'split_proposal[].scope',
       'split_proposal[].title',
       'test_plan[]',
