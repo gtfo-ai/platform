@@ -148,7 +148,7 @@ describe('ci_pending_read and ci_ending (backlog 1078)', () => {
   });
 });
 
-describe('ci_manual_started (S-28.7, migration 0113)', () => {
+describe('ci_manual_started (S-28.7, migration 0112)', () => {
   const STARTED = {
     job_id: '9071',
     pipeline_id: '907',

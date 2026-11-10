@@ -1314,7 +1314,7 @@ export interface TaskRepository {
   ): Promise<boolean>;
   /**
    * Records what the platform did about one `run` manual job on `stage`'s attempt `attempt`
-   * (`task_stages.ci_manual_started`, migration 0113, S-28.7): the entry for `job.job_id` is added,
+   * (`task_stages.ci_manual_started`, migration 0112, S-28.7): the entry for `job.job_id` is added,
    * or replaced when the attempt already holds one for that id, **only while the row is open**;
    * answers whether it wrote. The one writer is the `ci_play_manual` duty. The resulting array is
    * parsed before the write (at most `MAX_CI_MANUAL_STARTED_JOBS` entries), so a write that would
@@ -2898,7 +2898,7 @@ export interface StoredApproval {
   readonly subjectDetail?: BudgetApprovalSubjectDetail | null;
   readonly reasons?: readonly ApprovalReason[] | null;
   /**
-   * `true` for a plan the project's low-risk rule let go ahead (S-28.8, migration 0114,
+   * `true` for a plan the project's low-risk rule let go ahead (S-28.8, migration 0113,
    * `autoApproveApproval`): approved by the platform, no decider. Written once, by `insert`, like
    * the reasons; absent is `false`.
    */

@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0114 — an approval the platform decided itself (S-28.8, the M28 ruling amending BD-006).
+-- 0113 — an approval the platform decided itself (S-28.8, the M28 ruling amending BD-006).
 --
 -- A project may opt in to `policies.plan_approval_risk`: a plan the platform's own facts and the
 -- Architect's self-assessment both call low-risk goes ahead without a person. The approval row is

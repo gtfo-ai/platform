@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0113 — the manual jobs the platform started on a CI gate attempt (S-28.7, the M28 ruling on the
+-- 0112 — the manual jobs the platform started on a CI gate attempt (S-28.7, the M28 ruling on the
 -- owner's feedback of 2026-11-10).
 --
 -- Autix's CI holds `build_composer`, `codeception` and `crawler-test` at `manual` while the merge

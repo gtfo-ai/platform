@@ -1559,7 +1559,7 @@ export const createPostgresPipelineStore = (
       return (rowCount ?? 0) > 0;
     },
 
-    // S-28.7 (migration 0113): the column's one writer — the open row only, one entry per job id,
+    // S-28.7 (migration 0112): the column's one writer — the open row only, one entry per job id,
     // the whole array parsed before it is written. The row is locked first, so two plays of one
     // attempt recorded at once cannot lose each other's entry.
     recordCiManualStarted: async (tx, entry, job) => {

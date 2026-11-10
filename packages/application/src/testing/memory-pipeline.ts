@@ -174,7 +174,7 @@ interface StageRow {
   ciEnding?: CiGateEnding | null;
   /** `task_stages.ci_manual_not_run` (migration 0109, S-27.2): what a CI pass left unstarted. */
   ciManualNotRun?: CiManualNotRun | null;
-  /** `task_stages.ci_manual_started` (migration 0113, S-28.7): the manual jobs the platform started. */
+  /** `task_stages.ci_manual_started` (migration 0112, S-28.7): the manual jobs the platform started. */
   ciManualStarted?: CiManualStarted | null;
   enteredAt: number;
   /**

@@ -1830,7 +1830,7 @@ export type CiManualStartOutcome = z.infer<typeof ciManualStartOutcomeSchema>;
 
 /**
  * **The manual jobs the platform started, or tried to** (S-28.7, the M28 ruling) — `task_stages
- * .ci_manual_started` (migration 0113) on a `ci_gate` attempt: one entry per job id, written by
+ * .ci_manual_started` (migration 0112) on a `ci_gate` attempt: one entry per job id, written by
  * the `ci_play_manual` duty after its call (`started`, `refused`, `unsupported`), at most
  * {@link MAX_CI_MANUAL_STARTED_JOBS}. The job's name is the **provider's** text (BD-022), redacted
  * by the git binding's redactor and cut at {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; the ids are digits

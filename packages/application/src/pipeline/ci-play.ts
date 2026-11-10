@@ -29,7 +29,7 @@
  *
  * ## What it records
  *
- * The outcome on the attempt (`task_stages.ci_manual_started`, migration 0113), one entry per job
+ * The outcome on the attempt (`task_stages.ci_manual_started`, migration 0112), one entry per job
  * id: `started`; `refused` — the provider refused the platform's account (`forbidden`, a `403`):
  * the job falls back to `wait`, and the gate's words say the platform's account may not start it;
  * `unsupported` — the binding cannot start a manual job at all (`capabilities().manualJobPlay`).

@@ -2283,7 +2283,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
-       * S-28.7 (migration 0113): `ci_manual_started` has one writer, the `ci_play_manual` duty —
+       * S-28.7 (migration 0112): `ci_manual_started` has one writer, the `ci_play_manual` duty —
        * one entry per job id on the attempt's open row, replaced by a later write for the same id,
        * refused on a closed row and refused (never cut) outside the schema.
        */
@@ -5728,7 +5728,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
-       * S-28.8 (migration 0114, M28 ruling 5): a plan the low-risk rule let go ahead is inserted
+       * S-28.8 (migration 0113, M28 ruling 5): a plan the low-risk rule let go ahead is inserted
        * **already approved** — its decision columns written by the insert, `auto_decided` true —
        * and a later save does not clear the flag.
        */

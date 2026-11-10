@@ -522,7 +522,7 @@ export const approvalViewSchema = z.strictObject({
   reasons: approvalReasonsSchema.nullish(),
   /**
    * `true` when the **platform** approved it under the project's low-risk rule (S-28.8,
-   * `approvals.auto_decided`, migration 0114): no person decided, and `reasons` is the one
+   * `approvals.auto_decided`, migration 0113): no person decided, and `reasons` is the one
    * `low_risk_auto` the rule saw. Absent or `false` otherwise.
    */
   auto_decided: z.boolean().optional(),

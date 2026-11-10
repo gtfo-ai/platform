@@ -322,7 +322,7 @@ export const taskStages = pgTable('task_stages', {
   ciManualNotRun: jsonb('ci_manual_not_run').$type<unknown>(),
   /**
    * The manual jobs the platform started, or could not start, on this attempt (S-28.7, migration
-   * 0113): `ciManualStartedSchema`'s array, written by `recordCiManualStarted` (the `ci_play_manual`
+   * 0112): `ciManualStartedSchema`'s array, written by `recordCiManualStarted` (the `ci_play_manual`
    * duty) while the row is open; null when none. Typed `unknown` because every reader parses it.
    */
   ciManualStarted: jsonb('ci_manual_started').$type<unknown>(),
@@ -595,7 +595,7 @@ export const approvals = pgTable('approvals', {
   subjectArtifactId: uuid('subject_artifact_id'),
   subjectDetail: jsonb('subject_detail'),
   reasons: jsonb('reasons'),
-  /** S-28.8, migration 0114: the platform approved it under the project's low-risk rule. */
+  /** S-28.8, migration 0113: the platform approved it under the project's low-risk rule. */
   autoDecided: boolean('auto_decided').notNull().default(false),
 });
 
