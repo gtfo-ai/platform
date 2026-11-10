@@ -396,6 +396,27 @@
           "value": "(JSON.parse(output).thread_replies ?? []).some((r) => r.thread_id === '9f8e7d6c5b4a39281706f5e4d3c2b1a098f7e6d5')"
         }
       ]
+    },
+    {
+      "id": "dev-fixed-only-for-a-pushed-change",
+      "description": "S-28.3 (M28 ruling R3): fixed resolves the person's thread, so a request the run could not change and push is answered not_changed or needs_person, never fixed",
+      "vars": {
+        "plan": "Add the order's delivery date to the CSV export; test in src/export/orders.test.ts.",
+        "repo": "src/export/orders.ts, src/export/orders.test.ts. merge request iid 42 is open. git push is refused: the branch is protected.",
+        "open_mr_answer": "{\"status\":\"opened\",\"iid\":42,\"url\":\"https://gitlab.example.test/acme/api/-/merge_requests/42\",\"source_branch\":\"agentic/ACME-1\",\"target_branch\":\"develop\",\"draft\":true}",
+        "conversation": "[source=\"merge_request\" thread_id=\"6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091\" author_ref=\"rhea.v\" created_at=\"2026-10-02T11:00:00Z\"] Please call the column delivery_date."
+      },
+      "expect_fields": ["thread_replies"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-notes.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "!(JSON.parse(output).thread_replies ?? []).some((r) => r.thread_id === '6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091' && r.kind === 'fixed')"
+        }
+      ]
     }
   ]
 }

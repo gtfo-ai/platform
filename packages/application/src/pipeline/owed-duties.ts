@@ -49,7 +49,7 @@
  * is skipped, as `reviewConversationHandler` skips it.
  */
 import type { Id } from '@platform/contracts';
-import { implementationNotesDataSchema, reviewVerdictDataSchema } from '@platform/contracts';
+import { reviewVerdictDataSchema } from '@platform/contracts';
 import { TransactionOpenError } from '../events/open-transaction.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -102,7 +102,8 @@ const CONVERSATION_DUTIES: Readonly<
  * The duties the latest completed agent run's artifacts owe, in the order the handler enqueues
  * them — `review_findings_post` before `review_threads_resolve` for a verdict, then the replies.
  * The same conditions as `reviewConversationHandler`: a verdict always owes its post, the
- * resolutions only when it names threads, the replies only when the notes carry any.
+ * resolutions only when it names threads, and the replies for every set of notes (S-28.3 review:
+ * an empty list still tells each person's open thread it is still open).
  */
 const owedConversationDuties = (
   artifacts: readonly StoredArtifact[],
@@ -122,10 +123,9 @@ const owedConversationDuties = (
         owed.push({ duty: 'review_threads_resolve', artifactId: artifact.id });
       }
     } else if (artifact.type === 'ImplementationNotes') {
-      const parsed = implementationNotesDataSchema.safeParse(artifact.data);
-      if (parsed.success && (parsed.data.thread_replies ?? []).length > 0) {
-        owed.push({ duty: 'conversation_replies', artifactId: artifact.id });
-      }
+      // S-28.3 review: every set of notes owes the duty, replies or none — a run that answers
+      // nothing still tells each person's open thread it is still open (M28 ruling R3).
+      owed.push({ duty: 'conversation_replies', artifactId: artifact.id });
     }
   }
   return owed;

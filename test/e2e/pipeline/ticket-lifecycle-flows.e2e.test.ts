@@ -702,11 +702,11 @@ const expectReviewConversation = async (
     (discussion) => discussion.notes[0]?.author.external_id === QA_PERSON,
   );
   expect(persons).toHaveLength(expected.personNotes);
-  // The person's general thread can be resolved (M28 R1's returning shape), and the Developer's
-  // fixed reply resolved it after the reply landed (S-28.3, M28 ruling R3).
+  // The person's general thread can be resolved (M28 R1's returning shape). The fake run pushes no
+  // commit, so the merge request's live head never moves past the recorded one: the Developer's
+  // fixed reply says *not pushed yet* and the thread stays open (S-28.3 review, M28 ruling R3).
   for (const note of persons) {
-    expect([note.resolvable, note.resolved]).toEqual([true, true]);
-    expect(stepAt(log, 'resolve', note.id)).toBeGreaterThan(stepAt(log, 'reply', note.id));
+    expect([note.resolvable, note.resolved]).toEqual([true, false]);
   }
   const generalReplies = opensWith(REPLY_MARKER);
   expect(generalReplies).toHaveLength(expected.personNotes);
@@ -719,9 +719,7 @@ const expectReviewConversation = async (
     expect(stepAt(log, 'reply', person.id)).toBeGreaterThan(runAt(log, 'implementation', 3));
   }
   const gitActions = pipeline.git.core.calls.map((call) => call.action);
-  expect(gitActions.filter((action) => action === 'resolve_discussion')).toHaveLength(
-    2 + expected.personNotes,
-  );
+  expect(gitActions.filter((action) => action === 'resolve_discussion')).toHaveLength(2);
   expect(gitActions.filter((action) => action === 'reply_to_discussion')).toHaveLength(
     2 + expected.personNotes,
   );

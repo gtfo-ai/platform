@@ -213,11 +213,15 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > resolved"):* after `conversation_replies` posts the Developer's replies, a person's unresolved
 > resolvable thread whose every entry is `fixed` or `documented` is **resolved** through the executor
 > (`conversation_resolve:<task>:<run>:<n>`; shadow mode records `would_have`; a provider that cannot
-> resolve it is logged and skipped) and recorded `resolved` in the ledger; such a reply ends with
-> *Addressed in `<short sha>`* (the merge request's recorded head). `not_changed` and `needs_person`
-> reply and leave it open. A person's open thread the run did not answer, and the ledger does not
-> cover, gets *"Not addressed in this run — still open."* (`conversation_open:<task>:<run>:<thread>`),
-> left unresolved. A Jira comment keeps its reply comment and its `answered` row (Jira has no
+> resolve it is logged and skipped) and recorded `resolved` in the ledger — **only when the run
+> pushed** (the merge request's head, read live in the duty, moved past `tasks.mr_ref.head_sha`) and
+> no person wrote in the thread after the run was created (re-read right before the resolve); such
+> a reply ends with *Addressed in `<short sha>`* (the live head), and one after a run that pushed
+> nothing says *Not pushed yet — still open* and resolves nothing. `not_changed` and `needs_person`
+> reply and leave it open. The duty is owed after **every** Developer run, replies or none: a
+> person's open thread the run did not answer, and the ledger does not cover, gets *"Not addressed
+> in this run — still open."* (`conversation_open:<task>:<run>:<thread>`), left unresolved — once per
+> thread until a person writes again. A Jira comment keeps its reply comment and its `answered` row (Jira has no
 > resolve).
 >
 > Every form is passed to the interpreter as `mr.review.comment`, because per-task template snapshots

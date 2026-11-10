@@ -96,7 +96,8 @@ command. Each entry is `{thread_id, kind, reply, person}`:
 
 - `thread_id` is copied exactly from the note's marker: its `thread_id`, or its `comment_id` for a
   ticket comment. An id that is on no marker is never answered.
-- `kind` says what you did. `fixed`: you changed the code, and the change is pushed. `documented`:
+- `kind` says what you did. `fixed`: you changed the code, and the change is pushed. `fixed`
+  resolves the person's thread, so use it only for a change you pushed. `documented`:
   you answered the request with a change to the documentation only, and no code changed.
   `needs_person`: only a person can do it — a setting in a tool, an access right, a credential, a
   decision outside the repository. `not_changed`: you left it as it is on purpose, and `reply` says

@@ -98,7 +98,8 @@ export const ROLE_PROMPT_VERSIONS = {
   // never claimed done); a status-only return reads the conversation and asks when it finds nothing.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
   // S-28.2 (M28 ruling R2): `answered="true"` / `resolved="true"` on a block is not open business.
-  developer: '9',
+  // S-28.3 (M28 ruling R3): `fixed` resolves the person's thread — only for a change you pushed.
+  developer: '10',
   // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
   // compared against a RefinedSpec (the shadow report's review of the human MR).
   // WP-81: judge the plan's `protected_path_changes` into `protected_path_changes_confirmed`.

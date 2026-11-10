@@ -69,6 +69,8 @@ const VERDICT_ID = '00000000-0000-4000-8000-0000000017a5' as Id;
 const NOTES_ID = '00000000-0000-4000-8000-0000000017a6' as Id;
 const NOW = '2026-06-01T09:00:00.000Z' as IsoDateTime;
 const HEAD = 'b'.repeat(40);
+/** The head the fix run pushed — different from the task's recorded `HEAD` (S-28.3 review). */
+const LIVE_HEAD = 'c'.repeat(40);
 const MR_URL = 'https://git.example.test/acme/api/-/merge_requests/7';
 const MR = {
   provider: 'fake-git',
@@ -184,6 +186,11 @@ const world = async (
     readonly runCreatedAt?: IsoDateTime;
     /** The provider cannot resolve a discussion (S-28.3): `resolveDiscussion` is unsupported. */
     readonly resolveUnsupported?: boolean;
+    /**
+     * The merge request's live head (S-28.3 review). @default `'c'.repeat(40)` — a push past the
+     * task's recorded `HEAD`; pass `HEAD` for a run that pushed nothing.
+     */
+    readonly liveHead?: string;
     readonly discussions?: readonly Discussion[];
     readonly comments?: readonly TicketComment[];
     readonly artifacts?: readonly { id: Id; type: string; run: Id; data: unknown }[];
@@ -215,6 +222,21 @@ const world = async (
     capabilities: () => ({ discussionResolution: true }),
     authenticatedUser: async () => BOT,
     listDiscussions: async () => discussions.map((discussion) => structuredClone(discussion)),
+    getMergeRequest: async () => ({
+      ref: MR,
+      state: 'opened',
+      draft: true,
+      title: 'Draft: totals',
+      description: '',
+      source_branch: 'agentic/ACME-1',
+      target_branch: 'main',
+      head_sha: options.liveHead ?? LIVE_HEAD,
+      mergeable: true,
+      has_conflicts: false,
+      labels: [],
+      reviewers: [],
+      web_url: MR_URL,
+    }),
     createDiscussion: async (
       _ref: unknown,
       input: { path?: string | null; line?: number | null; markdown: string },
@@ -1212,7 +1234,9 @@ describe('(R3) resolving a person’s thread after the Developer’s reply', () 
       w.recorded.replied
         .filter((entry) => entry.discussionId === id)
         .map((entry) => entry.markdown);
-    expect(byThread('p-fixed')[0]).toContain(`Addressed in \`${HEAD.slice(0, 8)}\`.`);
+    // The live head the run left, never the task's recorded one (S-28.3 review).
+    expect(byThread('p-fixed')[0]).toContain(`Addressed in \`${LIVE_HEAD.slice(0, 8)}\`.`);
+    expect(byThread('p-fixed')[0]).not.toContain(HEAD.slice(0, 8));
     expect(byThread('p-documented')[0]).toContain('Addressed in');
     expect(byThread('p-not-changed')[0]).not.toContain('Addressed in');
     expect(byThread('p-needs-person')[0]).not.toContain('Addressed in');
@@ -1270,6 +1294,54 @@ describe('(R3) resolving a person’s thread after the Developer’s reply', () 
     await w.replies();
     expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['p-fixed']);
     expect(w.recorded.resolved).toEqual([]);
+  });
+
+  /**
+   * S-28.3 review: a `fixed` reply after a run that pushed nothing (the live head is still the
+   * recorded one) says so and resolves nothing.
+   */
+  it('resolves nothing and says not pushed yet when the live head did not move', async () => {
+    const w = await world({
+      liveHead: HEAD,
+      discussions: [personThread('p-fixed')],
+      artifacts: [notesArtifact([kinds[0]])],
+    });
+    await w.replies();
+    expect(w.recorded.resolved).toEqual([]);
+    expect(w.recorded.replied[0]?.markdown).toContain('**Not pushed yet — still open.**');
+    expect(w.recorded.replied[0]?.markdown).not.toContain('Addressed in');
+  });
+
+  /** S-28.3 review: a run that answered nothing still tells a person's open thread so. */
+  it('tells an open person thread it is still open when the run wrote no replies at all', async () => {
+    const w = await world({
+      discussions: [personThread('p-silent')],
+      artifacts: [notesArtifact([])],
+    });
+    await w.replies();
+    expect(w.recorded.replied.map((entry) => entry.discussionId)).toEqual(['p-silent']);
+    expect(w.recorded.replied[0]?.markdown).toContain('Not addressed in this run — still open.');
+  });
+
+  /** S-28.3 review: once per thread until a person writes again, never once per run. */
+  it('does not say still open again on a thread an earlier run already told, until a person writes', async () => {
+    const told: Discussion = {
+      ...personThread('p-silent'),
+      notes: [
+        note(PERSON, 'Please change p-silent.', 'src/totals.ts'),
+        note(
+          BOT,
+          `<!-- agentic:reply:${TASK}.earlier-run.open-p-silent -->\n**Not addressed in this run — still open.**`,
+        ),
+      ],
+    };
+    const w = await world({ discussions: [told], artifacts: [notesArtifact([])] });
+    await w.replies();
+    expect(w.recorded.replied).toEqual([]);
+    const again: Discussion = { ...told, notes: [...told.notes, note(PERSON, 'Any news?')] };
+    const w2 = await world({ discussions: [again], artifacts: [notesArtifact([])] });
+    await w2.replies();
+    expect(w2.recorded.replied.map((entry) => entry.discussionId)).toEqual(['p-silent']);
   });
 
   /** No thread is left silent: a person's open thread the run did not answer is told so, once. */
