@@ -1541,3 +1541,60 @@ describe('the manual CI jobs card (S-28.7)', () => {
     ).toBeTruthy();
   });
 });
+
+/**
+ * S-28.15 (TD-038 decision 1): *Who merges* — a person by default, TD-038's two sentences, and the
+ * choice written into the whole settings document with the hash it read (the route records the
+ * `project.config.write` row).
+ */
+describe('who merges', () => {
+  const recording =
+    (puts: { url: string; body: unknown }[], base: typeof fetch): typeof fetch =>
+    async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'PUT' && url.endsWith('/config')) {
+        puts.push({ url, body: JSON.parse(String(init.body)) });
+        return json({ hash: 'cafebabe', autonomy_level: 'supervised', not_applied: [] });
+      }
+      return base(input, init);
+    };
+
+  it('is a person by default and says each choice in one plain sentence', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const person = (await screen.findByRole('radio', { name: /^A person/ })) as HTMLInputElement;
+    const platform = screen.getByRole('radio', { name: /^The platform/ }) as HTMLInputElement;
+    expect(person.checked).toBe(true);
+    expect(platform.checked).toBe(false);
+    expect(document.querySelector('[data-who-merges-sentence="person"]')?.textContent).toBe(
+      'A person merges the merge request when it is ready; the platform tells you it is waiting.',
+    );
+    expect(document.querySelector('[data-who-merges-sentence="platform"]')?.textContent).toBe(
+      'The platform merges it once the reviews approved it, CI passed on that commit and GitLab says it can be merged, once its plan was approved or needed no approval.',
+    );
+    expect(document.body.textContent ?? '').not.toMatch(/merge\.by|policies\.merge/);
+  });
+
+  it('writes policies.merge.by into the whole document with the hash it read', async () => {
+    const puts: { url: string; body: unknown }[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: recording(
+          puts,
+          fetchFor({}, { config: { config: { version: 1, policies: { probation_tasks: 2 } } } }),
+        ),
+        realtime: false,
+      }).element,
+    );
+    const platform = (await screen.findByRole('radio', {
+      name: /^The platform/,
+    })) as HTMLInputElement;
+    await waitFor(() => expect(platform.disabled).toBe(false));
+    await user.click(platform);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]?.body).toEqual({
+      config: { version: 1, policies: { probation_tasks: 2, merge: { by: 'platform' } } },
+      base_hash: 'deadbeef',
+    });
+  });
+});

@@ -191,6 +191,8 @@ policies:
     min_confidence: high         # high | medium — the agent's own confidence a plan needs
     max_size: M                  # S | M | L | XL
     always_ask: [schema_migration, auth_security, payments, public_api, infra_ci, data_deletion, many_files, unclear_requirements, new_dependency, other, protected_paths, split_proposed]   # default: all; a repository file may only add
+  merge:                         # S-28.15 (TD-038): who merges a ready merge request; settings only — a repository file may say person, never platform
+    by: person                   # person (default) | platform — the platform merges once every check holds at that moment, pinned to the reviewed commit; the plan decision is the human checkpoint
   risk_classes:
     auth: { paths: ["**/auth/**", "**/session/**"], require: [plan_approval, reviewer:@security] }
     migrations: { paths: ["**/migrations/**"], require: [plan_approval] }

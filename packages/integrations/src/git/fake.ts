@@ -296,6 +296,25 @@
  *     `setMergeability({ mergeBlocker })` seeds a blocker, and resolving it clears nothing until a
  *     second seed does. `createMergeRequestNote` is a general note as GitLab lists one: its own
  *     discussion, `resolvable: false`, the body exactly as sent.
+ * 39. **Stricter — a merge needs every seed to agree** (S-28.15, TD-038 decision 4).
+ *     `mergeMergeRequest` refuses with the port's words before it merges: a merge request that is not
+ *     `opened` (`not_allowed`, GitLab's 405), a head that is not `expected_head_sha` (`head_moved`,
+ *     409), and — **stricter** than GitLab, which merges a merge request its own settings allow — any
+ *     seeded blocker, a draft or `mergeable` not `true` (`not_mergeable`, 422). It never merges
+ *     anything a seed did not make mergeable, and it records every request (`merges`) so a test can
+ *     assert the squash and branch-removal values sent and that a refused head was asked once. It
+ *     **is kinder** in one way: a merge is instant and never queued behind the provider's
+ *     *merge trains* or its pipeline, and it emits **no** `mr.merged` — a test that wants the signal
+ *     emits it (`emitMergeRequestEvent`), as GitLab's webhook would, or drops it on purpose.
+ *     `merge_options` answers `{ squash: false, remove_source_branch: false }` unless
+ *     `setMergeOptions` seeds another; GitLab answers what the project settings say.
+ * 40. **Kinder — a rebase is instant** (TD-038 amendment A). `rebaseMergeRequest` completes before
+ *     it answers (GitLab queues it and answers 202); `getMergeRequestRebase` is therefore never
+ *     `in_progress`. What it does is what `setRebaseOutcome` seeded: `clean` (the default — a new
+ *     head, the same files and commit count, the seeded blocker cleared), `changed` (a new head and
+ *     one more added line in the first file — a rebase that changed resolved lines) or `conflict`
+ *     (the head stays, `failed: true`, GitLab's `merge_error`). It records every request (`rebases`).
+ *     `countMergeRequestCommits` answers the seeded `commitCount` (1 by default).
  */
 import {
   type BranchPushProtection,
@@ -317,6 +336,7 @@ import {
   IntegrationUnsupportedError,
   type MergeBlocker,
   type MergedMergeRequest,
+  MergeRefusedError,
   type MergeRequest,
   type MergeRequestDraft,
   type MergeRequestListing,
@@ -488,6 +508,12 @@ interface StoredMergeRequest {
   has_conflicts: boolean | null;
   /** Divergence 38 (S-28.13): what `setMergeability` seeded; absent is "nothing blocks it". */
   merge_blocker?: MergeBlocker | null;
+  /** Divergence 39 (S-28.15): what `setMergeOptions` seeded; absent is no squash, no removal. */
+  merge_options?: { squash: boolean; remove_source_branch: boolean } | null;
+  /** Divergence 40 (TD-038 amendment A): what the next rebase does, and whether the last failed. */
+  rebase_outcome?: 'clean' | 'changed' | 'conflict';
+  rebase_failed?: boolean;
+  commit_count?: number;
   diff_stats: DiffStats | null;
   coverage_pct: number | null;
   labels: string[];
@@ -598,6 +624,16 @@ const deliveryBody = z.discriminatedUnion('event', [
   pipelineBody,
   branchMovedBody,
 ]);
+
+/** One `mergeMergeRequest` request the fake received (divergence 39). */
+export interface FakeMergeRecord {
+  readonly project: string;
+  readonly iid: number;
+  readonly expectedHeadSha: string;
+  readonly squash: boolean;
+  readonly removeSourceBranch: boolean;
+  readonly outcome: 'merged' | 'unauthorised' | 'not_allowed' | 'head_moved' | 'not_mergeable';
+}
 
 export interface FakeGitProvider extends GitProviderPort {
   readonly core: FakeCore;
@@ -736,6 +772,26 @@ export interface FakeGitProvider extends GitProviderPort {
   setProviderDefaultBranch(project: string, branch: string): void;
   /** Every commit `commitFiles` made, oldest first. */
   readonly commits: readonly FakeCommit[];
+  /**
+   * Every `mergeMergeRequest` request, oldest first, with how it ended (divergence 39) — refused
+   * ones included, so a test can count the calls a head was asked.
+   */
+  readonly merges: readonly FakeMergeRecord[];
+  /** Every `rebaseMergeRequest` request, oldest first (divergence 40). */
+  readonly rebases: readonly { readonly project: string; readonly iid: number }[];
+  /** Seeds what the next rebase of a merge request does, and its commit count (divergence 40). */
+  setRebaseOutcome(input: {
+    readonly project?: string;
+    readonly iid: number;
+    readonly outcome: 'clean' | 'changed' | 'conflict';
+    readonly commitCount?: number;
+  }): void;
+  /** Seeds the repository's merge settings as a merge request reads them (divergence 39). */
+  setMergeOptions(input: {
+    readonly project?: string;
+    readonly iid: number;
+    readonly options: { readonly squash: boolean; readonly remove_source_branch: boolean } | null;
+  }): void;
   /**
    * Every credential `mintCredential` issued, oldest first, with how many times it was revoked —
    * WP-76's "a count of revocations the fake provider recorded", read off the provider rather than
@@ -878,6 +934,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     draftPipelines: true,
     manualJobPlay: true,
     discussionResolution: true,
+    merge: true,
+    rebase: true,
     credentialMinting: true,
     ...options.capabilities,
   };
@@ -889,6 +947,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
   const credentials = new Map<string, StoredCredential>();
   const branches = new Map<string, StoredBranch>();
   const commits: FakeCommit[] = [];
+  const merges: FakeMergeRecord[] = [];
+  const rebases: { project: string; iid: number }[] = [];
   let shaCounter = 0x100;
   let discussionCounter = 0;
   let noteCounter = 0;
@@ -1066,6 +1126,13 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       mergeable: mr.mergeable,
       has_conflicts: mr.has_conflicts,
       ...(mr.merge_blocker == null ? {} : { merge_blocker: { ...mr.merge_blocker } }),
+      merge_options:
+        mr.merge_options === undefined
+          ? { squash: false, remove_source_branch: false }
+          : mr.merge_options === null
+            ? null
+            : { ...mr.merge_options },
+      merge_commit_sha: mr.merge_commit_sha,
       diff_stats: mr.diff_stats,
       coverage_pct: mr.coverage_pct,
       labels: [...mr.labels],
@@ -1662,6 +1729,106 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return toMergeRequest(requireMr('get_merge_request', mrRef));
     },
 
+    mergeMergeRequest: async (mrRef, request) => {
+      core.enter('merge_merge_request');
+      if (!capabilities.merge) {
+        throw new IntegrationUnsupportedError(PROVIDER, 'merging a merge request');
+      }
+      const mr = requireMr('merge_merge_request', mrRef);
+      const record = (outcome: FakeMergeRecord['outcome']): void => {
+        merges.push({
+          project: mr.project,
+          iid: mr.iid,
+          expectedHeadSha: request.expected_head_sha,
+          squash: request.squash,
+          removeSourceBranch: request.remove_source_branch,
+          outcome,
+        });
+      };
+      const refuse = (
+        status: 'not_allowed' | 'head_moved' | 'not_mergeable',
+        httpStatus: number,
+      ): never => {
+        record(status);
+        throw new MergeRefusedError(
+          PROVIDER,
+          status,
+          `merge request ${mr.project}!${mr.iid} was not merged (${status})`,
+          { httpStatus },
+        );
+      };
+      // Divergence 39: GitLab's documented refusals, in the order a caller can tell them apart.
+      if (mr.state !== 'opened') {
+        return refuse('not_allowed', 405);
+      }
+      if (mr.head_sha !== request.expected_head_sha) {
+        return refuse('head_moved', 409);
+      }
+      if (mr.draft || mr.merge_blocker != null || mr.mergeable !== true) {
+        return refuse('not_mergeable', 422);
+      }
+      const at = core.clock.now();
+      mr.state = 'merged';
+      mr.merged_at = at;
+      mr.updated_at = at;
+      mr.merge_commit_sha = nextSha();
+      record('merged');
+      return toMergeRequest(mr);
+    },
+
+    rebaseMergeRequest: async (mrRef) => {
+      core.enter('rebase_merge_request');
+      if (!capabilities.rebase) {
+        throw new IntegrationUnsupportedError(PROVIDER, 'rebasing a merge request');
+      }
+      const mr = requireMr('rebase_merge_request', mrRef);
+      rebases.push({ project: mr.project, iid: mr.iid });
+      if (mr.state !== 'opened') {
+        throw new RebaseRefusedError(
+          PROVIDER,
+          'cannot_push',
+          `merge request ${mr.project}!${mr.iid} is not open`,
+        );
+      }
+      const outcome = mr.rebase_outcome ?? 'clean';
+      mr.updated_at = core.clock.now();
+      if (outcome === 'conflict') {
+        mr.rebase_failed = true;
+        return;
+      }
+      mr.rebase_failed = false;
+      mr.head_sha = nextSha();
+      mr.merge_blocker = null;
+      if (outcome === 'changed') {
+        const [first, ...rest] = mr.files;
+        mr.files =
+          first === undefined
+            ? [
+                {
+                  new_path: 'rebased.txt',
+                  old_path: 'rebased.txt',
+                  diff: '@@ -0,0 +1 @@\n+changed by the rebase',
+                  new_file: true,
+                  renamed_file: false,
+                  deleted_file: false,
+                  omitted: false,
+                },
+              ]
+            : [{ ...first, diff: `${first.diff ?? ''}\n+changed by the rebase` }, ...rest];
+      }
+    },
+
+    getMergeRequestRebase: async (mrRef) => {
+      core.enter('get_merge_request_rebase');
+      const mr = requireMr('get_merge_request_rebase', mrRef);
+      return { in_progress: false, failed: mr.rebase_failed === true };
+    },
+
+    countMergeRequestCommits: async (mrRef) => {
+      core.enter('count_merge_request_commits');
+      return requireMr('count_merge_request_commits', mrRef).commit_count ?? 1;
+    },
+
     closeMergeRequest: async (mrRef) => {
       core.enter('close_merge_request');
       const mr = requireMr('close_merge_request', mrRef);
@@ -2156,6 +2323,27 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         deleted_file: file.deletedFile ?? false,
         omitted: file.omitted ?? false,
       }));
+    },
+
+    merges,
+    rebases,
+    setRebaseOutcome: (input) => {
+      const mr = findMr(input.project ?? [...projects.keys()][0] ?? '', input.iid);
+      if (mr === undefined) {
+        throw notFound(PROVIDER, 'seed', `merge request ${input.project}!${input.iid}`);
+      }
+      mr.rebase_outcome = input.outcome;
+      if (input.commitCount !== undefined) {
+        mr.commit_count = input.commitCount;
+      }
+    },
+
+    setMergeOptions: (input) => {
+      const mr = findMr(input.project ?? [...projects.keys()][0] ?? '', input.iid);
+      if (mr === undefined) {
+        throw notFound(PROVIDER, 'seed', `merge request ${input.project}!${input.iid}`);
+      }
+      mr.merge_options = input.options === null ? null : { ...input.options };
     },
 
     setDiffStats: (input) => {

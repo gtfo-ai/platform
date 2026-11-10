@@ -1122,7 +1122,6 @@ export const closeOwnThreads = async (
     ...(input.confirmed ?? []),
   ]);
   const handledAt = new Date(options.clock?.now() ?? Date.now()).toISOString();
-  const rows: ConversationHandledInput[] = [];
   let resolved = 0;
   for (const discussion of candidates) {
     if (!CONVERSATION_HANDLED_ID.test(discussion.id)) {
@@ -1154,13 +1153,15 @@ export const closeOwnThreads = async (
         writeContext,
       );
       resolved += 1;
-      // The ledger's `resolved` row is what tells a later reopen from a thread never closed.
+      // The ledger's `resolved` row is what tells a later reopen from a thread never closed —
+      // written right after this resolve (review of #155), so a later thread's failure that
+      // throws cannot leave a resolved thread without its row (a reopen then read as never closed).
       const row = handledRow(stored, '', handledAt, {
         source: 'mr_thread',
         threadId: discussion.id,
         lastNoteId: discussion.notes.at(-1)?.id ?? null,
       });
-      if (row !== null) rows.push({ ...row, kind: 'resolved' });
+      if (row !== null) await recordHandled(options, [{ ...row, kind: 'resolved' }]);
     } catch (error) {
       if (
         error instanceof IntegrationUnsupportedError ||
@@ -1176,7 +1177,6 @@ export const closeOwnThreads = async (
       throw error;
     }
   }
-  await recordHandled(options, rows);
   logger.info(
     { task_id: stored.task.id, candidates: candidates.length, resolved, reopened },
     'the platform closed its own review threads after the approval',

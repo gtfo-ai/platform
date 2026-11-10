@@ -14,6 +14,7 @@ import {
   hasMintedCredentialShape,
   IntegrationError,
   IntegrationUnsupportedError,
+  MergeRefusedError,
   noSecretsRedactor,
   renderConversationReply,
   renderFindingWith,
@@ -735,6 +736,95 @@ describe('closing a merge request (WP-59, backlog 51)', () => {
     await expect(raced.port.closeMergeRequest(mrRef())).rejects.toMatchObject({
       code: 'conflict',
     });
+  });
+});
+
+describe('merging a merge request (S-28.15, TD-038 decision 4)', () => {
+  const HEAD = '1111111111111111111111111111111111111111';
+
+  it('reads the repository’s own squash and branch-removal settings off the merge request', async () => {
+    const { port } = build({
+      [`GET /projects/${P}/merge_requests/7`]: {
+        status: 200,
+        body: mrBody({
+          squash_on_merge: true,
+          should_remove_source_branch: false,
+          force_remove_source_branch: true,
+        }),
+      },
+    });
+    expect((await port.getMergeRequest(mrRef())).merge_options).toEqual({
+      squash: true,
+      remove_source_branch: true,
+    });
+  });
+
+  it('answers no settings when GitLab does not say whether it squashes, so nothing is merged blind', async () => {
+    const { port } = build({
+      [`GET /projects/${P}/merge_requests/7`]: { status: 200, body: mrBody() },
+    });
+    expect((await port.getMergeRequest(mrRef())).merge_options).toBeNull();
+  });
+
+  it('PUTs …/merge with the expected head as sha and the settings passed back, nothing else', async () => {
+    const { port, calls } = build({
+      [`PUT /projects/${P}/merge_requests/7/merge`]: {
+        status: 200,
+        body: mrBody({
+          state: 'merged',
+          draft: false,
+          merge_commit_sha: '3333333333333333333333333333333333333333',
+        }),
+      },
+    });
+    const merged = await port.mergeMergeRequest(mrRef(), {
+      expected_head_sha: HEAD,
+      squash: false,
+      remove_source_branch: true,
+    });
+    expect(merged.state).toBe('merged');
+    expect(merged.merge_commit_sha).toBe('3333333333333333333333333333333333333333');
+    expect(calls).toHaveLength(1);
+    // No auto_merge, no commit message: the provider merges now, with the repository's template.
+    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({
+      sha: HEAD,
+      squash: false,
+      should_remove_source_branch: true,
+    });
+  });
+
+  it.each([
+    [401, 'unauthorised'],
+    [405, 'not_allowed'],
+    [409, 'head_moved'],
+    [422, 'not_mergeable'],
+  ] as const)('turns GitLab’s documented %i into the port’s refusal %s', async (status, word) => {
+    const { port } = build({
+      [`PUT /projects/${P}/merge_requests/7/merge`]: {
+        status,
+        body: { message: 'refused' },
+      },
+    });
+    const refused = port.mergeMergeRequest(mrRef(), {
+      expected_head_sha: HEAD,
+      squash: false,
+      remove_source_branch: false,
+    });
+    await expect(refused).rejects.toBeInstanceOf(MergeRefusedError);
+    await expect(refused).rejects.toMatchObject({ status: word, httpStatus: status });
+  });
+
+  it('leaves any other failure to the transport — a 500 is not a refusal', async () => {
+    const { port } = build({
+      [`PUT /projects/${P}/merge_requests/7/merge`]: { status: 500, body: { message: 'boom' } },
+    });
+    const failed = port.mergeMergeRequest(mrRef(), {
+      expected_head_sha: HEAD,
+      squash: false,
+      remove_source_branch: false,
+    });
+    await expect(failed).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(failed).rejects.not.toBeInstanceOf(MergeRefusedError);
   });
 });
 

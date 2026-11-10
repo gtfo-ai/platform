@@ -1382,6 +1382,50 @@ export interface TaskRepository {
   /** The task's last merge check, or `null` when none was read (no row, or claimed only). */
   readyMergeCheckOf(tx: Transaction, taskId: Id): Promise<ReadyMergeCheck | null>;
   /**
+   * Records who merges this task and what the platform last waited for (S-28.15, migration 0119,
+   * `task_merge_checks.merge_by`/`merge_wait`) — written by the merge check and the
+   * `platform_merge` duty. A `platform` row with no attempt for the reviewed head is due again in
+   * {@link TaskRepository.readyMergeCheckDue}, so a merge that waited (a person's words, a
+   * pipeline) or a lost wake-up is asked again. Creates the row when there is none.
+   */
+  recordMergeDecision(
+    tx: Transaction,
+    taskId: Id,
+    decision: { readonly mergeBy: 'person' | 'platform'; readonly wait: string | null },
+  ): Promise<void>;
+  /**
+   * Records the platform's merge attempt for one head (S-28.15, migration 0119, `task_merges`):
+   * an insert that does nothing when a row for `(task, head)` exists. Answers whether this call
+   * wrote it — one decisive call per task and reviewed commit (TD-038 decision 5).
+   */
+  recordMerge(tx: Transaction, merge: TaskMergeRecord): Promise<boolean>;
+  /** The platform's attempt for this task and head, or `null`. */
+  mergeFor(tx: Transaction, taskId: Id, headSha: string): Promise<TaskMergeRecord | null>;
+  /** The task's newest platform merge attempt (by `attempted_at`, then head), or `null`. */
+  latestMerge(tx: Transaction, taskId: Id): Promise<TaskMergeRecord | null>;
+  /** Every attempt of the task, newest first — the rebase bound counts them (amendment A). */
+  mergesOf(tx: Transaction, taskId: Id): Promise<readonly TaskMergeRecord[]>;
+  /**
+   * Settles a `rebased` row (TD-038 amendment A): its outcome, the port's word and the head the
+   * rebase produced, only while the row is still `rebased`. Answers whether it moved.
+   */
+  settleRebase(
+    tx: Transaction,
+    taskId: Id,
+    headSha: string,
+    settled: {
+      readonly outcome: 'rebase_conflict' | 'rebase_changed' | 'rebased';
+      readonly providerStatus: string | null;
+      readonly rebasedTo: string | null;
+    },
+  ): Promise<boolean>;
+  /**
+   * One more recovery pass found the task still at Ready after the platform merged `headSha`
+   * (TD-038 decision 6's lost `mr.merged`): `signal_passes + 1`, answered. `0` when no `merged` row
+   * exists for the head.
+   */
+  countMergeSignalPass(tx: Transaction, taskId: Id, headSha: string): Promise<number>;
+  /**
    * When `stage`'s attempt `attempt` was entered (`task_stages.entered_at`, the database's clock)
    * and whether it is still open — `null` when the attempt has no row (WP-136).
    *
@@ -1772,6 +1816,39 @@ export interface ReadyMergeCheck {
   readonly reason: MergeBlockerReason | null;
   readonly providerStatus: string | null;
   readonly unresolvedThreads: number | null;
+}
+
+/**
+ * The platform's merge attempt for one task and head (S-28.15, migration 0119, TD-038 decision 6
+ * and amendment A). `outcome` `merged`, `refused` (the provider's refusal, final for that head) or
+ * `failed` (three tries could not reach it) for a merge; `rebased` (asked, waiting for the new
+ * head), `rebase_refused`, `rebase_conflict` or `rebase_changed` for a rebase of that head.
+ * `providerStatus` is the port's word; `planDecision` the plan decision the merge rested on, with
+ * the approval row it was read from.
+ */
+export interface TaskMergeRecord {
+  readonly taskId: Id;
+  readonly headSha: string;
+  readonly outcome:
+    | 'merged'
+    | 'refused'
+    | 'failed'
+    | 'rebased'
+    | 'rebase_refused'
+    | 'rebase_conflict'
+    | 'rebase_changed';
+  readonly providerStatus: string | null;
+  readonly mergeCommitSha: string | null;
+  readonly planDecision: 'approved_by_person' | 'approved_by_platform' | 'not_required';
+  readonly planApprovalId: Id | null;
+  /** A rebase row: the change digest before the rebase, and the commit count (amendment A). */
+  readonly changeDigest: string | null;
+  readonly commitCount: number | null;
+  /** A rebase row: the head the rebase produced, once accepted or refused. */
+  readonly rebasedTo: string | null;
+  readonly attemptedAt: IsoDateTime;
+  /** Recovery passes that found the task still at Ready after a `merged` row (TD-038 decision 6). */
+  readonly signalPasses: number;
 }
 
 export interface StoredArtifact {

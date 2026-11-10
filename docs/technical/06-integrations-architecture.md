@@ -229,6 +229,33 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > binding's own **and** marked — the narrowing direction, so a note somebody else wrote with a marker
 > keeps the thread open.
 
+> **S-28.15 amendment (TD-038 and its amendment A): the platform may merge.** The port gains
+> `mergeMergeRequest(ref, { expected_head_sha, squash, remove_source_branch })` with capability
+> `merge`, `rebaseMergeRequest`, `getMergeRequestRebase` and `countMergeRequestCommits` with
+> capability `rebase`, and `MergeRequest.merge_options` / `merge_commit_sha`. GitLab: `PUT
+> …/merge_requests/:iid/merge` with `sha` (any other head is GitLab's own `409`), `squash` =
+> `squash_on_merge`, `should_remove_source_branch` = `should_remove_source_branch ||
+> force_remove_source_branch`, no `auto_merge`; `401`/`405`/`409`/`422` are `MergeRefusedError`
+> (`unauthorised`, `not_allowed`, `head_moved`, `not_mergeable`), everything else the transport's;
+> `PUT …/rebase` (`403`/`409` → `RebaseRefusedError`), progress read with
+> `include_rebase_in_progress`, the commit count off the first page of `…/commits`. With
+> `policies.merge.by: platform` the `pipeline.outbound` duty **`platform_merge`**
+> (`pipeline/platform-merge.ts`), enqueued by `ready_merge_check` on a "mergeable" read (or a rebase
+> as the only obstacle) and again by the recovery pass while the platform has no decisive attempt for
+> the reviewed head, re-reads everything outside any transaction and calls the merge through the
+> executor — idempotency key `platform_merge:<task>:<head>`, **one executor attempt**
+> (`MutatingActionRequest.singleAttempt`), so a lost answer is re-read before the job's next try
+> rather than sent again blind. One decisive attempt per (task, head) in `task_merges` (migration
+> 0119). The duty never moves the task; `mr.merged` does, and a merge whose signal never comes is
+> recorded through `recordNormalisedDelivery` by the recovery pass after ten minutes, three times,
+> then escalated. A rebase is accepted as the reviewed change only when the change digest
+> (`changeDigest`, `packages/domain/src/policies/merge.ts`) and the commit count are identical and the
+> CI gate's own verdict passes the new head's pipeline; the platform then writes `ready_head_sha =
+> ci_head_sha = H′` (the two existing narrow writers, in one transaction) and merges with `sha = H′`.
+> **Deviation, stated:** the merge's notification reuses the `task_completed` class (a refusal or
+> failure `escalation`), because `notifications.class` is a check constraint whose widening is a
+> contract migration (BACKLOG 1591).
+
 > **WP-187 amendment (backlog 549, M11): every note is mention-neutral.** A finding, a review summary,
 > a reply and a `needs_person` name are model text shaped by untrusted input (BD-022), and GitLab
 > notifies whoever a note names with `@name`, `@group` or `@all`. The neutralisation is the

@@ -14,7 +14,9 @@
 
 A ticket in your tracker becomes a task. The task walks a pipeline of stages, each run by a
 role-specialised Claude Code agent in its own container, and ends at a merge request a human reviews
-and merges — the platform never merges ([BD-007](decisions/business/BD-007-human-merges.md)). Along
+and merges — or, when the project's *Who merges* setting says so, one the platform merges itself once
+every check holds ([BD-007](decisions/business/BD-007-human-merges.md)'s 2026-11-10 amendment,
+[TD-038](decisions/technical/TD-038-platform-merge.md)). Along
 the way it asks questions, requests approvals, spends a budget you set, and writes what it learned
 back to the project's knowledge base as proposals you accept or reject.
 
@@ -505,7 +507,16 @@ positions, each said as what happens to a ticket:
 | **Observe** | Agents start no ticket. You can try them on past tickets; nothing reaches your repository. |
 | **Assist** | Agents write the spec and the plan for a ticket, then stop; a person writes the code. |
 | **Supervised** *(default)* | Agents deliver; you approve the plan of a large ticket, and the first 5 tasks get extra checks (the platform's *probation*). |
-| **Autonomous** | Agents deliver without asking, unless a change touches a sensitive area (a *risk class*). A person still merges. |
+| **Autonomous** | Agents deliver without asking, unless a change touches a sensitive area (a *risk class*). Who merges is its own setting below. |
+
+**Who merges** (below the low-risk plans) is a separate choice, and no dial position changes it:
+**A person** *(default)* — *"A person merges the merge request when it is ready; the platform tells
+you it is waiting."* — or **The platform** — *"The platform merges it once the reviews approved it,
+CI passed on that commit and GitLab says it can be merged, once its plan was approved or needed no
+approval."* The plan decision is the human checkpoint: probation and sensitive areas ask a person to
+approve the **plan**, and once the plan is decided the platform merges. Choosing one saves the
+project's configuration at once (it needs the administrator role). A repository's
+`.agentic/config.yml` may only choose *a person*.
 
 Choosing one and pressing **Save operating mode** writes the project's configuration; *Continue*
 opens once it has been saved once. Which commands the agents may run is not edited here — *Learn
@@ -1304,6 +1315,28 @@ request — or write in one to send the task back to the agent with that change.
 conflict, a pipeline that has not passed, missing approvals, a draft, a branch that must be rebased —
 each get their own sentence. The box clears itself once GitLab says the merge request can be merged:
 the platform checks again when a thread is resolved, and every ten minutes while the task waits.
+### Who merges, and the platform's merge
+
+At **Ready for merge** the task page says who merges it. With *a person*: *"A person merges: this
+project's setting."* With *the platform*, before it merges: *"Merging automatically when GitLab
+reports it mergeable — now: 2 threads are unresolved."* — the *now* is whatever still stops it: the
+provider's own reason, a person's comment from a moment ago (read first), a review that did not
+approve, the ticket closed or taken by a person, or the branch moved since the reviewed commit (then
+a person merges it, or **Send back**). The platform reads all of it again at the moment of merging
+and passes the reviewed commit to GitLab, so a push in between refuses the merge; it uses the
+repository's own merge method, squash and branch-removal settings, and never approves the merge
+request or changes a setting. When GitLab only wants a rebase (a fast-forward project), the platform
+asks GitLab to rebase it — at most three times while the task waits at Ready — and merges the rebased
+commit only when its added and removed lines and its number of commits are exactly the reviewed ones
+and its pipeline passed; a rebase that conflicts sends the task back to the rebase gate.
+
+Afterwards: *"Merged by the platform at 14:02, commit abc1234 — plan approved by Jana Nováková"* (or
+*plan approved by the platform as low-risk*, *no plan approval required*), and the task moves on when
+GitLab reports the merge, exactly as for a person's merge. A refused merge says why and what to do —
+*"The platform's merge was refused: GitLab said the branch moved (409) — merge it yourself or Send
+back."* — and is not tried again for that commit; if GitLab cannot be reached after three tries the
+page says so and the merge is left to a person. Each is announced once in the chat channel.
+
 ### QA, and sending a task back from QA or Ready
 
 When the project maps a *QA* status, a task created afterwards gets a human **QA** stage after the

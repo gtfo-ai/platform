@@ -1,0 +1,319 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/37",
+      "status": 200,
+      "body": {
+        "id": 155016037,
+        "iid": 37,
+        "project_id": 15513260,
+        "title": "fix the totals 37",
+        "description": "Requested by a human.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-06-02T08:00:00.000Z",
+        "updated_at": "2026-06-02T10:00:00.000Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/merge-37",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": false,
+        "work_in_progress": false,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "3737373737373737373737373737373737373737",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "squash": false,
+        "squash_on_merge": false,
+        "should_remove_source_branch": true,
+        "force_remove_source_branch": false,
+        "user_notes_count": 0,
+        "changes_count": "2",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/37",
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "3737373737373737373737373737373737373737",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a merge request\" example response with the iid, branch, sha and web_url changed to a merge request of its own, open and mergeable; squash_on_merge (\"If true, commits are squashed on merge\") false and should_remove_source_branch (\"If true, the source branch is removed after merge\") true, the two settings the platform passes back unchanged. S-28.15."
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/acme%2Fapi/merge_requests/38/merge",
+      "status": 409,
+      "body": {
+        "message": "SHA does not match HEAD of source branch"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented",
+        "note": "\"Merge a merge request\" status table: 409, \"SHA does not match HEAD of source branch\" — the provided sha does not match the source branch HEAD. The platform sends the reviewed head as sha, so a push since the review refuses the merge. S-28.15."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/38",
+      "status": 200,
+      "body": {
+        "id": 155016038,
+        "iid": 38,
+        "project_id": 15513260,
+        "title": "fix the totals 38",
+        "description": "Requested by a human.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-06-02T08:00:00.000Z",
+        "updated_at": "2026-06-02T10:00:00.000Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/merge-38",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": false,
+        "work_in_progress": false,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "3838383838383838383838383838383838383838",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "squash": false,
+        "squash_on_merge": false,
+        "should_remove_source_branch": true,
+        "force_remove_source_branch": false,
+        "user_notes_count": 0,
+        "changes_count": "2",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/38",
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "3838383838383838383838383838383838383838",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a merge request\" example response for a second merge request, still open after the refused merge: its head 3838… is the one a person pushed after the review. S-28.15."
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/acme%2Fapi/merge_requests/37/merge",
+      "status": 200,
+      "body": {
+        "id": 155016037,
+        "iid": 37,
+        "project_id": 15513260,
+        "title": "fix the totals 37",
+        "description": "Requested by a human.",
+        "state": "merged",
+        "imported": false,
+        "created_at": "2026-06-02T08:00:00.000Z",
+        "updated_at": "2026-06-02T10:00:00.000Z",
+        "merged_at": "2026-06-02T10:05:00.000Z",
+        "target_branch": "main",
+        "source_branch": "agentic/merge-37",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": false,
+        "work_in_progress": false,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "not_open",
+        "sha": "3737373737373737373737373737373737373737",
+        "merge_commit_sha": "7373737373737373737373737373737373737373",
+        "squash_commit_sha": null,
+        "squash": false,
+        "squash_on_merge": false,
+        "should_remove_source_branch": true,
+        "force_remove_source_branch": false,
+        "user_notes_count": 0,
+        "changes_count": "2",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/37",
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "3737373737373737373737373737373737373737",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "\"Merge a merge request\" (PUT /projects/:id/merge_requests/:merge_request_iid/merge with sha, squash and should_remove_source_branch): the page's response is the merge request object; here merge request 37 as read above, now state merged with merged_at and merge_commit_sha (\"If set, the SHA of the merge request commit. Returns null until merged\") filled in. S-28.15."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/39/commits?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": "3939393939393939393939393939393939393939",
+          "short_id": "39393939",
+          "title": "fix(totals): round once",
+          "message": "fix(totals): round once",
+          "author_name": "Agentic Bot",
+          "created_at": "2026-06-02T08:30:00.000Z",
+          "web_url": "https://gitlab.example.test/acme/api/-/commit/3939393939393939393939393939393939393939"
+        },
+        {
+          "id": "3838383838383838383838383838383838383839",
+          "short_id": "38383838",
+          "title": "test(totals): the boundary",
+          "message": "test(totals): the boundary",
+          "author_name": "Agentic Bot",
+          "created_at": "2026-06-02T08:30:00.000Z",
+          "web_url": "https://gitlab.example.test/acme/api/-/commit/3838383838383838383838383838383838383839"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "\"Get merge request commits\": the example response is a list of commit objects; here two commits of merge request 39, with the shas, titles and web_url changed to this corpus's. TD-038 amendment A counts them before and after a rebase."
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/acme%2Fapi/merge_requests/39/rebase",
+      "status": 202,
+      "body": {
+        "rebase_in_progress": true
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented",
+        "note": "\"Rebase a merge request\": PUT /projects/:id/merge_requests/:merge_request_iid/rebase, 202 when the rebase was enqueued, the example response {\"rebase_in_progress\": true}. No skip_ci is sent. TD-038 amendment A."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/39?include_rebase_in_progress=true",
+      "status": 200,
+      "body": {
+        "id": 155016039,
+        "iid": 39,
+        "project_id": 15513260,
+        "title": "fix the totals 37",
+        "description": "Requested by a human.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-06-02T08:00:00.000Z",
+        "updated_at": "2026-06-02T10:00:00.000Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/merge-39",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": false,
+        "work_in_progress": false,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "3939393939393939393939393939393939393939",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "squash": false,
+        "squash_on_merge": false,
+        "should_remove_source_branch": true,
+        "force_remove_source_branch": false,
+        "user_notes_count": 0,
+        "changes_count": "2",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/39",
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "3939393939393939393939393939393939393939",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        },
+        "rebase_in_progress": false,
+        "merge_error": null
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented-adapted",
+        "note": "\"Rebase a merge request\": progress is read with \"Retrieve a merge request\" and include_rebase_in_progress; a rebase that succeeded answers rebase_in_progress false with merge_error null. The merge request object is merge request 37's with the iid, branch, sha and web_url changed. TD-038 amendment A."
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/acme%2Fapi/merge_requests/40/rebase",
+      "status": 403,
+      "body": {
+        "message": "403 Forbidden - Cannot push to source branch"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-10",
+        "kind": "documented",
+        "note": "\"Rebase a merge request\" status table: 403, \"Cannot push to source branch\" — the user lacks permission to push to the source branch. TD-038 amendment A."
+      }
+    }
+  ]
+}

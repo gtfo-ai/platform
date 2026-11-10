@@ -126,7 +126,6 @@ import { materialisedAutonomySchema } from '@platform/contracts';
 import type { ConfigValues, TicketStatusPolicy } from '@platform/domain';
 import { resolveWipLimits, SHIPPED_TEMPLATES, withStatusMappingStatuses } from '@platform/domain';
 import type {
-  jobs as jobsAdapters,
   launcher as launcherAdapters,
   runner as runnerAdapters,
 } from '@platform/infrastructure';
@@ -138,6 +137,7 @@ import {
   eventing as eventingAdapters,
   humanTime as humanTimeAdapters,
   integrations as integrationAdapters,
+  jobs as jobsAdapters,
   knowledge as knowledgeAdapters,
   maintenance as maintenanceAdapters,
   notify as notifyAdapters,
@@ -1288,6 +1288,23 @@ export const composePipeline = async (
     // WP-77: where the `revoke_run_credential` duty re-validates — the store the recovery pass below
     // finds with, so the duty asks the pass's own question for its one address.
     runCredentials: runCredentialStore,
+    // S-28.15 (TD-038): the platform's merge — pg-boss's review-window read, and the webhook
+    // ingress's recorder for a lost `mr.merged`.
+    platformMerge: {
+      reviewWindowOpen: jobsAdapters.createPostgresReviewWindowProbe({
+        sql: options.pool,
+        jobsSchema: options.jobsSchema,
+      }).reviewWindowOpen,
+      recorder: {
+        inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
+        unitOfWork: options.eventing.unitOfWork,
+        mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({
+          sql: options.pool,
+        }),
+        ids,
+        clock: { now: nowIso },
+      },
+    },
     // WP-32: the notification outbox, and the zone the digest and quiet hours are read in. Both are
     // required by `PipelineRuntimeOptions` rather than optional, because a process that composed
     // the pipeline without them would run the notify band on nothing.

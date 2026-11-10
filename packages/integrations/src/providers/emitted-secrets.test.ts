@@ -354,6 +354,8 @@ const gitlabScript = (): Script => ({
   },
   [`POST /projects/${P}/merge_requests`]: { status: 201, body: gitlabMr() },
   [`PUT /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
+  // S-28.15: the merge answers the merge request, planted like every other.
+  [`PUT /projects/${P}/merge_requests/7/merge`]: { body: gitlabMr() },
   [`GET /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
   'POST /api/graphql': {
     body: {
@@ -571,6 +573,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   update_merge_request: 'updateMergeRequest',
   get_merge_request: 'getMergeRequest',
   close_merge_request: 'closeMergeRequest',
+  merge_merge_request: 'mergeMergeRequest',
   find_open_merge_request: 'findOpenMergeRequest',
   authenticated_user: 'authenticatedUser',
   project_member_access: 'projectMemberAccess',
@@ -682,6 +685,12 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     // every other merge request here; the diff-stats read answers three integers from GraphQL, which
     // can carry no credential — driven so the census holds, not because it has a plant to find.
     emitted.close_merge_request = await port.closeMergeRequest(ref);
+    // S-28.15: the platform's merge answers the provider's merge request object.
+    emitted.merge_merge_request = await port.mergeMergeRequest(ref, {
+      expected_head_sha: SHA,
+      squash: false,
+      remove_source_branch: true,
+    });
     emitted.get_merge_request_diff_stats = await port.getMergeRequestDiffStats(ref);
     // WP-138: the listing answers a merged merge request, which the open filter drops — driven so
     // the census holds; the other two answer planted provider text.

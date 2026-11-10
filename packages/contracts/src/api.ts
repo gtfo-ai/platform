@@ -84,6 +84,7 @@ import {
   questionRecordSchema,
   runRecordSchema,
   sha256HexSchema,
+  taskMergeSchema,
   taskOwnerViewSchema,
   taskRecordSchema,
 } from './records.js';
@@ -2450,6 +2451,12 @@ export const taskDetailResponseSchema = z.strictObject({
    * `ci_manual_not_run` is; `GET /api/tasks/:id` always sends it.
    */
   provider_sync: z.array(providerSyncSchema).optional(),
+  /**
+   * Who merges this task at Ready and what the platform waits for (S-28.15, TD-038 decision 7):
+   * {@link taskMergeSchema}; `null` when nothing was decided yet and the platform never tried.
+   * Optional on the wire as `provider_sync` is; `GET /api/tasks/:id` always sends it.
+   */
+  merge: taskMergeSchema.nullable().optional(),
   /**
    * Why a `queued` task waits, and what frees it (S-25.16): {@link queueWaitSchema}; `null` for
    * every other state, and for a reader that does not ask (an agent's `get_task_context`). Optional

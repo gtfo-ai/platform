@@ -115,6 +115,8 @@ import {
   type IntegrationRef,
   IntegrationUnsupportedError,
   type MergedMergeRequest,
+  type MergeRefusalStatus,
+  MergeRefusedError,
   type MergeRequest,
   type MergeRequestDraft,
   type MergeRequestListing,
@@ -167,6 +169,10 @@ import {
 import { gitlabMergeRequestTitle, gitlabNoteBody } from './mentions.js';
 import type { GitLabDiscussion, GitLabMergeRequest, gitlabAccessTokenSchema } from './schemas.js';
 import { gitLabDeliveryKey, verifyGitLabDelivery } from './webhook-verify.js';
+
+/** A merge commit GitLab published, or `null` — never a value the port's sha schema refuses. */
+const shaOrNull = (value: string | null | undefined): string | null =>
+  typeof value === 'string' && /^[0-9a-f]{7,64}$/.test(value) ? value : null;
 
 export interface GitLabProviderOptions {
   readonly integrationId: Id;
@@ -458,6 +464,12 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     // job"), available on every tier; whether this binding's account may is the job's own rule.
     manualJobPlay: true,
     discussionResolution: true,
+    // S-28.15: "Merge a merge request" is on every tier; whether this binding's account may merge
+    // to the target branch is the branch's own rule (*Allowed to merge*), answered 401 when not.
+    merge: true,
+    // TD-038 amendment A: "Rebase a merge request" — whether this account may push to the source
+    // branch is the branch's own rule, answered 403 when not.
+    rebase: true,
     credentialMinting: config.mint_credentials,
   };
 
@@ -582,6 +594,19 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       has_conflicts: mergeability.hasConflicts,
       // S-28.13 (M28 ruling R3b (3)): why GitLab would not merge it now, when it says so.
       ...(blocker === null ? {} : { merge_blocker: blocker }),
+      // S-28.15 (TD-038 decision 4): the repository's own squash and branch-removal settings, as
+      // GitLab applies them to this merge request; unknown (`null`) when it does not say whether
+      // it squashes, and the platform then does not merge.
+      merge_options:
+        typeof source.squash_on_merge === 'boolean'
+          ? {
+              squash: source.squash_on_merge,
+              remove_source_branch:
+                source.should_remove_source_branch === true ||
+                source.force_remove_source_branch === true,
+            }
+          : null,
+      merge_commit_sha: shaOrNull(source.merge_commit_sha),
       diff_stats: null,
       coverage_pct: source.head_pipeline?.coverage ?? null,
       labels: source.labels ?? [],
@@ -974,6 +999,64 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
      * between the read and the write — is caught on the answer: GitLab reports the state it has,
      * and a `merged` answer is the same refusal.
      */
+    /**
+     * S-28.15 (TD-038 decision 4) — `PUT …/merge` with the expected head as `sha`, so GitLab itself
+     * refuses a merge of any other head (*"SHA does not match HEAD of source branch"*, 409). The
+     * documented refusals become {@link MergeRefusedError} with the port's word; everything else
+     * is the transport's and is thrown as it came.
+     */
+    mergeMergeRequest: async (mrRef, request) => {
+      const project = projectOf(mrRef, 'merge_merge_request');
+      const answered = await client.mergeMergeRequest(project, mrRef.iid, {
+        sha: request.expected_head_sha,
+        squash: request.squash,
+        should_remove_source_branch: request.remove_source_branch,
+      });
+      if (answered.refused !== null) {
+        const status: MergeRefusalStatus =
+          answered.refused === 401
+            ? 'unauthorised'
+            : answered.refused === 405
+              ? 'not_allowed'
+              : answered.refused === 409
+                ? 'head_moved'
+                : 'not_mergeable';
+        throw new MergeRefusedError(
+          GITLAB_PROVIDER_ID,
+          status,
+          `merge request ${project}!${mrRef.iid} was not merged: GitLab answered ${answered.refused}`,
+          { httpStatus: answered.refused },
+        );
+      }
+      return toMergeRequest(project, answered.merged);
+    },
+
+    /** TD-038 amendment A — `PUT …/rebase`; the documented refusals become the port's words. */
+    rebaseMergeRequest: async (mrRef) => {
+      const project = projectOf(mrRef, 'rebase_merge_request');
+      const answered = await client.rebaseMergeRequest(project, mrRef.iid);
+      if (answered.refused !== null) {
+        throw new RebaseRefusedError(
+          GITLAB_PROVIDER_ID,
+          answered.refused === 403 ? 'cannot_push' : 'not_enqueued',
+          `merge request ${project}!${mrRef.iid} was not rebased: GitLab answered ${answered.refused}`,
+        );
+      }
+    },
+
+    /** TD-038 amendment A — `merge_error`'s text is provider text and is never answered. */
+    getMergeRequestRebase: async (mrRef) => {
+      const project = projectOf(mrRef, 'get_merge_request_rebase');
+      const read = await client.mergeRequestRebase(project, mrRef.iid);
+      return {
+        in_progress: read.rebase_in_progress === true,
+        failed: read.rebase_in_progress !== true && (read.merge_error ?? '') !== '',
+      };
+    },
+
+    countMergeRequestCommits: async (mrRef) =>
+      client.mergeRequestCommitCount(projectOf(mrRef, 'count_merge_request_commits'), mrRef.iid),
+
     closeMergeRequest: async (mrRef) => {
       const project = projectOf(mrRef, 'close_merge_request');
       const refuseMerged = (): never => {

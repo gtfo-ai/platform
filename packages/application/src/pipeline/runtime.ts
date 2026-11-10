@@ -82,6 +82,7 @@ import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outboun
 import { performOwedDuties } from './owed-duties.js';
 import { ownerSyncHandlers } from './owner-sync.js';
 import { ownerWriteBackHandlers } from './owner-write-back.js';
+import type { PlatformMergePorts } from './platform-merge.js';
 import { providerSignalHandlers } from './provider-signals.js';
 import { resolveOnMergeHandler } from './resolve-on-merge.js';
 import { reviewConversationHandlers } from './review-conversation.js';
@@ -230,6 +231,11 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    */
   readonly runCredentials?: UnrevokedRunCredentialStore;
   /**
+   * S-28.15 (TD-038): what the platform's merge needs from the composition root — pg-boss's
+   * review-window read and the inbound recorder. Absent, the platform merges nothing and says so.
+   */
+  readonly platformMerge?: PlatformMergePorts;
+  /**
    * TD-012 step 2 over the untrusted text this runtime's handlers **store** (WP-40 round 2).
    *
    * Today that is the epic split's queue — a model's proposed child tickets, written inside the
@@ -377,6 +383,7 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     shadow: options.shadow,
     // WP-77: the recovery revoke's re-validation. Absent, the duty refuses by name.
     ...(options.runCredentials === undefined ? {} : { runCredentials: options.runCredentials }),
+    ...(options.platformMerge === undefined ? {} : { platformMerge: options.platformMerge }),
   };
   // WP-34: the two shadow handlers and the `shadow_report` duty share one options object, because
   // they are the deciding and the calling halves of the same feature (WP-15d's shape).

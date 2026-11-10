@@ -386,6 +386,47 @@ export const providerSyncSchema = z.strictObject({
 export type ProviderSync = z.infer<typeof providerSyncSchema>;
 
 /**
+ * **Who merges this task, what the platform waits for, and its last attempt** (S-28.15, TD-038
+ * decision 7). `by` is who merges as last decided at Ready; `waiting_for` the first reason a
+ * person merges (`setting_person`, `provider_cannot_merge`, `shadow_mode`) or what the platform's
+ * merge waits for at the moment of merging (`person_words`, `provider_blocked`, `head_moved`,
+ * `needs_rebase`, `rebase_in_progress`, `rebase_bound`, …) — platform words the page names, never
+ * provider text; `last_attempt` the newest `task_merges` row, with the plan decision it rested on
+ * and — when a person approved the plan — their name.
+ */
+export const taskMergeAttemptSchema = z.strictObject({
+  head_sha: shaSchema,
+  outcome: z.enum([
+    'merged',
+    'refused',
+    'failed',
+    'rebased',
+    'rebase_refused',
+    'rebase_conflict',
+    'rebase_changed',
+  ]),
+  provider_status: z
+    .string()
+    .regex(/^[a-z0-9_]{1,64}$/)
+    .nullable(),
+  merge_commit_sha: shaSchema.nullable(),
+  plan_decision: z.enum(['approved_by_person', 'approved_by_platform', 'not_required']),
+  plan_approved_by: nonEmptyStringSchema.max(255).nullable(),
+  attempted_at: isoDateTimeSchema,
+});
+export type TaskMergeAttempt = z.infer<typeof taskMergeAttemptSchema>;
+
+export const taskMergeSchema = z.strictObject({
+  by: z.enum(['person', 'platform']),
+  waiting_for: z
+    .string()
+    .regex(/^[a-z_]{1,64}$/)
+    .nullable(),
+  last_attempt: taskMergeAttemptSchema.nullable(),
+});
+export type TaskMerge = z.infer<typeof taskMergeSchema>;
+
+/**
  * Cost and effort totals attached to `task.completed` / `task.cancelled`.
  *
  * `cost_usd` is the sum over the runs that **have** a figure; `is_estimate` says some of them were

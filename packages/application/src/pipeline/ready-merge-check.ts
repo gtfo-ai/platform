@@ -39,13 +39,66 @@
 import type { Id } from '@platform/contracts';
 import { reviewVerdictDataSchema } from '@platform/contracts';
 import { READY_FOR_MERGE_STAGE } from '@platform/domain';
+import type { MergeRequest } from '../ports/integrations/git-provider.js';
 import type { Jobs } from '../ports/jobs.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
-import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
-import { enqueueReviewCommentWindow, type PipelineOutboundData } from './jobs.js';
+import { READY_MERGE_RECHECK_MS } from '../recovery/ready-merge-check.js';
+import {
+  gitReads,
+  integrationsForProject,
+  noRunScopedSecrets,
+  type PipelineIntegrations,
+} from './integrations.js';
+import { enqueueOutbound, enqueueReviewCommentWindow, type PipelineOutboundData } from './jobs.js';
+import { type PlatformMergeOptions, recoverLostMergeSignal, whoMerges } from './platform-merge.js';
 import { closeOwnThreads, type ReviewConversationOptions } from './review-conversation.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ReadyMergeCheck, StoredTask } from './store.js';
+
+/**
+ * S-28.15 (TD-038): after the read, who merges this task is recorded for the page, and — with the
+ * platform merging and the provider's "mergeable" — the `platform_merge` duty is enqueued; with the
+ * setting at `person` nothing is enqueued at all. A merge request that reads merged while the task
+ * is still at Ready is a possibly lost `mr.merged` (`recoverLostMergeSignal`).
+ */
+const decideMerge = async (
+  merge: PlatformMergeOptions,
+  input: {
+    readonly stored: StoredTask & { readonly mr: NonNullable<StoredTask['mr']> };
+    readonly live: MergeRequest | null;
+    readonly check: ReadyMergeCheck;
+    readonly integrations: PipelineIntegrations;
+    readonly checkedAt: string;
+  },
+): Promise<void> => {
+  const { stored, live } = input;
+  if (live?.state === 'merged') {
+    await recoverLostMergeSignal(merge, {
+      stored,
+      live,
+      integrations: input.integrations,
+      staleBefore: Date.parse(input.checkedAt) - READY_MERGE_RECHECK_MS,
+    });
+    return;
+  }
+  const who = await whoMerges(merge, stored, input.integrations);
+  // A rebase the provider wants is the platform's to ask for (TD-038 amendment A): the duty decides.
+  const rebaseOnly = live?.state === 'opened' && live.merge_blocker?.reason === 'rebase';
+  await merge.unitOfWork.transaction(async (scope) =>
+    merge.store.tasks.recordMergeDecision(scope.tx, stored.task.id, {
+      mergeBy: who.by,
+      wait: who.reason,
+    }),
+  );
+  if (who.by === 'platform' && (input.check.mergeable === true || rebaseOnly)) {
+    await enqueueOutbound(merge.jobs, {
+      duty: 'platform_merge',
+      project_id: stored.task.projectId,
+      task_id: stored.task.id,
+      cause_event_id: stored.task.id,
+    });
+  }
+};
 
 /** What the duty did — for the tests and the log line. */
 export type ReadyMergeCheckOutcome =
@@ -62,6 +115,11 @@ export type ReadyMergeCheckOutcome =
 export const runReadyMergeCheck = async (
   options: ReviewConversationOptions & { readonly jobs: Jobs },
   data: Pick<PipelineOutboundData, 'task_id'>,
+  /**
+   * S-28.15 (TD-038): who merges and the platform's merge. Absent — a caller that only checks —
+   * records no merge decision and enqueues no merge.
+   */
+  merge?: PlatformMergeOptions,
 ): Promise<ReadyMergeCheckOutcome> => {
   const logger: Logger = options.logger ?? silentLogger;
   const taskId = data.task_id as Id | undefined;
@@ -162,6 +220,9 @@ export const runReadyMergeCheck = async (
   await options.unitOfWork.transaction(async (scope) =>
     options.store.tasks.recordReadyMergeCheck(scope.tx, stored.task.id, check),
   );
+  if (merge !== undefined) {
+    await decideMerge(merge, { stored: atReady, live, check, integrations, checkedAt });
+  }
   const outcome: ReadyMergeCheckOutcome =
     check.mergeable === true ? 'mergeable' : check.mergeable === false ? 'blocked' : 'unknown';
   logger.info(

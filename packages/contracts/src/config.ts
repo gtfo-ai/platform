@@ -347,6 +347,22 @@ export const knowledgeApplyPolicySchema = z.strictObject({
   proposal_above: unitIntervalSchema.optional(),
 });
 
+/**
+ * Who merges a task's merge request at Ready (S-28.15, BD-007's 2026-11-10 amendment, TD-038
+ * decision 1): `person` — today's behaviour and the default — or `platform`, which merges it once
+ * every check holds at that moment (`pipeline/platform-merge.ts`). Set on the project settings
+ * page; a repository file may say `person` and never `platform` (`repository-grades.ts`).
+ */
+export const MERGE_BY_VALUES = ['person', 'platform'] as const;
+export const mergeBySchema = z.enum(MERGE_BY_VALUES);
+export type MergeBy = z.infer<typeof mergeBySchema>;
+
+/** `policies.merge` — TD-038 decision 1. Absent and `{}` both read as `person`. */
+export const mergePolicyConfigSchema = z.strictObject({
+  by: mergeBySchema.optional(),
+});
+export type MergePolicyConfig = z.infer<typeof mergePolicyConfigSchema>;
+
 /** A pattern's source without its anchors, so two patterns can be composed into one. */
 const unanchored = (pattern: RegExp): string => pattern.source.replace(/^\^|\$$/g, '');
 
@@ -571,6 +587,11 @@ export const policiesConfigSchema = z
      * a repository file may only tighten it.
      */
     plan_approval_risk: planApprovalRiskConfigSchema.optional(),
+    /**
+     * Who merges at Ready (S-28.15, TD-038): `person` (the default) or `platform`. Not a dial
+     * preset field, so no dial move or upgrade lets the platform merge by itself.
+     */
+    merge: mergePolicyConfigSchema.optional(),
     risk_classes: z.record(slugSchema, riskClassSchema).optional(),
     /**
      * Named review checklists a risk class selects with `checklist:<name>` — product/19 §14's

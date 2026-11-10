@@ -438,6 +438,33 @@ describe('the low-risk plan rule a file may state (S-28.8)', () => {
   });
 });
 
+describe('who merges, as a file may state it (S-28.15, TD-038 decision 1)', () => {
+  it('is graded tighten-only', () => {
+    expect(REPOSITORY_KEY_GRADES['policies.merge']).toBe('tighten_only');
+  });
+
+  it('never applies platform from a file — over person settings, silent settings or platform settings — and reports it', () => {
+    for (const settings of [
+      { policies: { merge: { by: 'person' as const } } },
+      {},
+      { policies: { merge: { by: 'platform' as const } } },
+    ]) {
+      const read = tightenRepositoryLayer(settings, { policies: { merge: { by: 'platform' } } });
+      expect(read.values.policies?.merge).toBeUndefined();
+      expect(read.notApplied.map((item) => item.key)).toEqual(['policies.merge.by']);
+    }
+  });
+
+  it('applies person from a file over platform settings', () => {
+    const read = tightenRepositoryLayer(
+      { policies: { merge: { by: 'platform' } } },
+      { policies: { merge: { by: 'person' } } },
+    );
+    expect(read.values.policies?.merge).toEqual({ by: 'person' });
+    expect(read.notApplied).toEqual([]);
+  });
+});
+
 describe('the WIP limits a file may state', () => {
   it('applies a lower limit and keeps, and reports, a higher one', () => {
     const lowered = tightenRepositoryLayer(

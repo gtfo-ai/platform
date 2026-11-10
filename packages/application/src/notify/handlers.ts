@@ -53,6 +53,8 @@ export const NOTIFIED_EVENT_TYPES = [
   'budget.exhausted',
   // WP-43: posted with buttons now that a click can reach the platform (see `notify/duty.ts`).
   'task.approval.requested',
+  // S-28.15 (TD-038 decision 7): the platform's merge, announced once per task and commit.
+  'task.merge.attempted',
 ] as const satisfies readonly DomainEvent['type'][];
 
 interface Decided {
@@ -98,6 +100,28 @@ const completedDetail = (payload: TaskCompletedPayload): string => {
       ? `; excludes ${unmeasured} run${unmeasured === 1 ? '' : 's'} nobody measured.`
       : '.')
   );
+};
+
+type TaskMergeAttemptedPayload = Extract<DomainEvent, { type: 'task.merge.attempted' }>['payload'];
+
+/**
+ * The platform's merge in one line (S-28.15, TD-038 decision 7): what happened, why, what next —
+ * platform text and two shas, never provider text (the status word is the port's closed word).
+ */
+export const platformMergeDetail = (payload: TaskMergeAttemptedPayload): string => {
+  const head = payload.head_sha.slice(0, 7);
+  switch (payload.outcome) {
+    case 'merged':
+      return `Merged by the platform${
+        payload.merge_commit_sha === null ? '' : `, commit ${payload.merge_commit_sha.slice(0, 7)}`
+      } (reviewed commit ${head}). The task moves on when the provider reports the merge.`;
+    case 'refused':
+      return `The platform’s merge of commit ${head} was refused (${
+        payload.provider_status ?? 'refused'
+      }). Merge it yourself, or send the task back.`;
+    case 'failed':
+      return `The platform could not reach the git provider to merge commit ${head} after 3 tries. Merge it yourself, or send the task back.`;
+  }
 };
 
 type TaskCompletedPayload = Extract<DomainEvent, { type: 'task.completed' }>['payload'];
@@ -193,6 +217,17 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         // recorded subject, redacted and bounded there — and are never stored on this row.
         detail: APPROVAL_DETAIL[event.payload.approval.kind],
         approvalId: event.payload.approval.id,
+      };
+    case 'task.merge.attempted':
+      // S-28.15: no class of its own — `notifications.class` is held by a check constraint whose
+      // widening is a contract migration (TD-032), so a merge is announced as the delivery it is
+      // and a refused or failed one as the person's step it now is (BACKLOG 1591).
+      return {
+        notificationClass: event.payload.outcome === 'merged' ? 'task_completed' : 'escalation',
+        projectId: event.payload.project_id,
+        taskId: event.payload.task_id,
+        subject: null,
+        detail: platformMergeDetail(event.payload),
       };
     case 'budget.threshold.reached':
     case 'budget.exhausted': {

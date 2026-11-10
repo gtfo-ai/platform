@@ -216,6 +216,8 @@ const world = async (
     readonly atReady?: boolean;
     /** S-28.13: why the provider would not merge the merge request now (absent: nothing). */
     readonly mergeBlocker?: MergeBlocker | null;
+    /** Review of #155: the provider refuses to resolve this one discussion (a throw not caught). */
+    readonly failResolveOf?: string;
   } = {},
 ) => {
   const discussions: (Discussion & { individual?: boolean })[] = (options.discussions ?? []).map(
@@ -347,6 +349,9 @@ const world = async (
     resolveDiscussion: async (_ref: unknown, discussionId: string) => {
       if (options.resolveUnsupported === true) {
         throw new IntegrationUnsupportedError('fake-git', 'resolve_discussion');
+      }
+      if (options.failResolveOf === discussionId) {
+        throw new IntegrationError('forbidden', 'fake-git', `discussion ${discussionId}`);
       }
       const target = discussions.find((discussion) => discussion.id === discussionId);
       if (target === undefined) {
@@ -578,6 +583,9 @@ const world = async (
     /** S-28.13: what the last merge check recorded. */
     mergeCheck: () =>
       memory.transaction(async (scope) => store.tasks.readyMergeCheckOf(scope.tx, TASK)),
+    /** The handled ledger (M28 ruling R2), as the store holds it. */
+    handled: () =>
+      memory.transaction(async (scope) => store.tasks.conversationHandled(scope.tx, TASK)),
     discussions,
     comments,
     recorded,
@@ -1723,6 +1731,45 @@ describe('(S-28.13) Ready tells the truth about the provider (M28 ruling R3b (3)
     expect(w.recorded.resolved).toEqual(['nit-open']);
     expect(w.auditLog.entriesFor('resolve_discussion')).toHaveLength(writesBefore);
     expect(w.windowsArmed()).toBe(1);
+  });
+
+  /**
+   * Review of #155 (S-28.15 folds it in): each resolved thread's `resolved` row is written right
+   * after its resolve, so a later thread's refusal that throws leaves the first one's row — without
+   * it a person's later reopen of the first thread would read as a thread never closed.
+   */
+  it('keeps the handled row of a thread it resolved when a later resolve throws', async () => {
+    const w = await world({
+      atReady: true,
+      failResolveOf: 'nit-two',
+      discussions: [
+        {
+          id: 'nit-one',
+          resolvable: true,
+          resolved: false,
+          notes: [note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'n1')}\n**nit**`)],
+        },
+        {
+          id: 'nit-two',
+          resolvable: true,
+          resolved: false,
+          notes: [note(BOT, `${reviewFindingMarkerFor(TASK, 'old-run', 'n2')}\n**nit**`)],
+        },
+      ],
+      artifacts: [
+        reviewArtifact({
+          verdict: 'approve',
+          findings: [],
+          resolved_threads: ['nit-one', 'nit-two'],
+        }),
+      ],
+    });
+    await expect(w.readyCheck()).rejects.toThrow('nit-two');
+    expect(w.recorded.resolved).toEqual(['nit-one']);
+    const rows = await w.handled();
+    expect(rows.filter((row) => row.kind === 'resolved').map((row) => row.threadId)).toEqual([
+      'nit-one',
+    ]);
   });
 
   it('checks nothing for a task that is not at Ready', async () => {

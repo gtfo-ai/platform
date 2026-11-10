@@ -87,7 +87,8 @@ describe('Drizzle schema', () => {
     // `ticket_status_stops`, the status a reverse-sync stop acted on (migration 0115).
     // S-28.10 (migration 0116): plus `task_provider_sync`.
     // S-28.13 (migration 0118): plus `task_merge_checks`.
-    expect(tables.length).toBe(88);
+    // S-28.15 (migration 0119): plus `task_merges`.
+    expect(tables.length).toBe(89);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

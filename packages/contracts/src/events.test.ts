@@ -273,6 +273,16 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     mr,
     diff_stats: { files_changed: 3, insertions: 40, deletions: 12 },
   },
+  'task.merge.attempted': {
+    ...taskScoped,
+    mr,
+    head_sha: 'a'.repeat(40),
+    outcome: 'merged',
+    provider_status: null,
+    merge_commit_sha: 'b'.repeat(40),
+    plan_decision: 'approved_by_person',
+    plan_approval_id: uuid(23),
+  },
   'ticket.bug.traced': {
     ...projectScoped,
     ticket,

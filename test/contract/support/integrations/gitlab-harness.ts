@@ -224,6 +224,18 @@ export const gitlabReplayContext = (
     // that closes it) and merge request 22 merged, with no `PUT` — so a close attempted on it fails
     // on the missing fixture as well as on the adapter's refusal.
     close: { openIid: 21, mergedIid: 22 },
+    // S-28.15: `merge-request-merge.json` records merge request 37 open and mergeable (no squash,
+    // the branch removed), its merge's 200, and merge request 38's 409 for a stale sha with its
+    // read after; TD-038 amendment A: merge request 39's commits, rebase 202 and progress read,
+    // and merge request 40's 403.
+    merge: {
+      iid: 37,
+      headSha: '3737373737373737373737373737373737373737',
+      movedIid: 38,
+      staleHeadSha: 'f'.repeat(40),
+      options: { squash: false, remove_source_branch: true },
+    },
+    rebase: { iid: 39, refusedIid: 40, commits: 2 },
     // WP-59: `graphql.json` records one `diffStatsSummary` answer, for merge request 7.
     diffStats: {
       iid: MR_IID,

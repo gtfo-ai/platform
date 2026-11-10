@@ -225,6 +225,9 @@
         "plan_approval_risk": {
           "$ref": "#/$defs/anon_0b9bf594"
         },
+        "merge": {
+          "$ref": "#/$defs/anon_90a2287d"
+        },
         "risk_classes": {
           "$ref": "#/$defs/anon_2d7167fd"
         },
@@ -899,6 +902,19 @@
     },
     "anon_903202da": {
       "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_90a2287d": {
+      "type": "object",
+      "properties": {
+        "by": {
+          "type": "string",
+          "enum": [
+            "person",
+            "platform"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "anon_9d3d8175": {
       "type": "string",

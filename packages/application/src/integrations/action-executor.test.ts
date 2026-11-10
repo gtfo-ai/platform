@@ -1084,6 +1084,25 @@ describe('IntegrationActionExecutor', () => {
       expect(auditLog.entries[0]?.attempts).toBe(3);
     });
 
+    it('makes one call for a request that asks for a single attempt, even on a retryable failure (S-28.15)', async () => {
+      let attempts = 0;
+      await expect(
+        executor.execute(
+          addComment({
+            perform: async () => {
+              attempts += 1;
+              throw new IntegrationError('unavailable', INTEGRATION.provider, 'gateway timeout');
+            },
+            singleAttempt: true,
+          }),
+        ),
+      ).rejects.toThrow('gateway timeout');
+
+      expect(attempts).toBe(1);
+      expect(timer.sleeps).toEqual([]);
+      expect(auditLog.entries[0]?.status).toBe('failed');
+    });
+
     it('never retries an error the provider will answer the same way', async () => {
       await expect(
         executor.execute(

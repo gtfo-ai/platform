@@ -179,6 +179,25 @@ runGitProviderContract({
 
     // WP-59: one merge request to close and one already merged, which a close must refuse.
     const toClose = await openOn('agentic/to-close');
+    // S-28.15: a ready merge request to merge, and one whose head the suite names wrongly; and
+    // TD-038 amendment A's merge request to rebase. Marked ready: the fake merges no draft.
+    const toMerge = await openOn('agentic/to-merge');
+    const moved = await openOn('agentic/moved');
+    const toRebase = await openOn('agentic/to-rebase');
+    for (const ready of [toMerge, moved]) {
+      await port.updateMergeRequest(ready.ref, { draft: false });
+    }
+    port.setMergeOptions({
+      project: PROJECT,
+      iid: toMerge.ref.iid,
+      options: { squash: false, remove_source_branch: true },
+    });
+    port.setRebaseOutcome({
+      project: PROJECT,
+      iid: toRebase.ref.iid,
+      outcome: 'clean',
+      commitCount: 2,
+    });
     const merged = await openOn('agentic/merged');
     port.emitMergeRequestEvent({ event: 'mr.merged', project: PROJECT, iid: merged.ref.iid });
 
@@ -382,6 +401,15 @@ runGitProviderContract({
         fileCount: 3,
       },
       close: { openIid: toClose.ref.iid, mergedIid: merged.ref.iid },
+      merge: {
+        iid: toMerge.ref.iid,
+        headSha: toMerge.head_sha,
+        movedIid: moved.ref.iid,
+        staleHeadSha: 'f'.repeat(40),
+        options: { squash: false, remove_source_branch: true },
+      },
+      // The fake refuses a rebase of a merge request that is not open (divergence 40).
+      rebase: { iid: toRebase.ref.iid, refusedIid: merged.ref.iid, commits: 2 },
       // Divergence 17: every merge request this fake opens carries the same stats.
       diffStats: {
         iid: existing.ref.iid,

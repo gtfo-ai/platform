@@ -28,6 +28,7 @@ import {
   type ExternalIdentity,
   externalIdentitySchema,
   type InboundNormaliser,
+  IntegrationError,
   type IntegrationPort,
 } from './common.js';
 import {
@@ -109,6 +110,17 @@ export const mergeRequestSchema = z.strictObject({
    * conflict question the rebase gate asks; this is the question a person pressing *Merge* asks.
    */
   merge_blocker: mergeBlockerSchema.nullish(),
+  /**
+   * The repository's own merge settings as they apply to this merge request (S-28.15, TD-038
+   * decision 4): whether a merge squashes it and whether it removes the source branch — what a
+   * person pressing *Merge* gets. The platform passes them back unchanged and never chooses either;
+   * absent or `null` when the provider does not say, and the platform then does not merge.
+   */
+  merge_options: z
+    .strictObject({ squash: z.boolean(), remove_source_branch: z.boolean() })
+    .nullish(),
+  /** The merge commit, once merged (S-28.15); absent or `null` before, or when not published. */
+  merge_commit_sha: shaSchema.nullish(),
   diff_stats: diffStatsSchema.nullish(),
   coverage_pct: coveragePctSchema.nullish(),
   labels: z.array(nonEmptyStringSchema),
@@ -550,6 +562,69 @@ export interface MintedRunCredential extends MintedCredential {
  */
 export type CredentialRevocationAddress = Pick<MintedCredential, 'revokeId'>;
 
+/** What {@link GitProviderPort.mergeMergeRequest} is asked (S-28.15, TD-038 decision 4). */
+export interface MergeMergeRequestRequest {
+  /** The head the merge must find; any other head refuses the merge (`head_moved`). */
+  readonly expected_head_sha: string;
+  /** The repository's own setting, as `MergeRequest.merge_options` read it. */
+  readonly squash: boolean;
+  /** The repository's own setting, as `MergeRequest.merge_options` read it. */
+  readonly remove_source_branch: boolean;
+}
+
+/**
+ * The provider's refusal of a merge, in the port's words (S-28.15, TD-038 decision 4):
+ * `unauthorised` (the binding's account may not merge — GitLab 401), `not_allowed` (the merge
+ * request cannot be merged in its state — 405), `head_moved` (the head is not the expected one —
+ * 409), `not_mergeable` (the provider's own rules refused it — 422).
+ */
+export const MERGE_REFUSAL_STATUSES = [
+  'unauthorised',
+  'not_allowed',
+  'head_moved',
+  'not_mergeable',
+] as const;
+export type MergeRefusalStatus = (typeof MERGE_REFUSAL_STATUSES)[number];
+
+/** A merge the provider refused — final for that head; never retried (TD-038 decision 5). */
+export class MergeRefusedError extends IntegrationError {
+  readonly status: MergeRefusalStatus;
+  /** The provider's HTTP status, when it has one. */
+  readonly httpStatus: number | null;
+
+  constructor(
+    provider: string,
+    status: MergeRefusalStatus,
+    message: string,
+    options: { readonly httpStatus?: number | null; readonly cause?: unknown } = {},
+  ) {
+    super(
+      status === 'unauthorised'
+        ? 'unauthorised'
+        : status === 'head_moved'
+          ? 'conflict'
+          : 'invalid_request',
+      provider,
+      message,
+      { action: 'merge_merge_request', cause: options.cause },
+    );
+    this.status = status;
+    this.httpStatus = options.httpStatus ?? null;
+  }
+}
+
+/** The provider's refusal of a rebase (TD-038 amendment A): it may not push, or could not queue it. */
+export class RebaseRefusedError extends IntegrationError {
+  readonly status: 'cannot_push' | 'not_enqueued';
+
+  constructor(provider: string, status: 'cannot_push' | 'not_enqueued', message: string) {
+    super(status === 'cannot_push' ? 'forbidden' : 'conflict', provider, message, {
+      action: 'rebase_merge_request',
+    });
+    this.status = status;
+  }
+}
+
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
 export interface GitProviderCapabilities {
@@ -579,6 +654,18 @@ export interface GitProviderCapabilities {
   readonly manualJobPlay: boolean;
   /** Thread resolution API (`resolveDiscussion`). */
   readonly discussionResolution: boolean;
+  /**
+   * Whether the platform can merge a merge request through {@link GitProviderPort.mergeMergeRequest}
+   * (S-28.15, TD-038 decision 4). A provider that cannot answers `false`, and a person merges —
+   * said on the task page as `provider_cannot_merge`.
+   */
+  readonly merge: boolean;
+  /**
+   * Whether the platform can ask the provider to rebase a merge request
+   * ({@link GitProviderPort.rebaseMergeRequest}, TD-038 amendment A). `false`: a merge request the
+   * provider wants rebased is left to a person.
+   */
+  readonly rebase: boolean;
   /**
    * Credential minting — whether this binding can mint a short-lived per-run credential. `false`
    * means it cannot, and then a **writing run is refused** and a read-only run fetches anonymously;
@@ -815,6 +902,55 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * does not exist.
    */
   readonly closeMergeRequest: (ref: MergeRequestRefInput) => Promise<MergeRequest>;
+
+  /**
+   * Merges a merge request **only if its head is still `expected_head_sha`** (S-28.15, TD-038
+   * decision 4) — the reviewed, CI-gated commit, so a push in between refuses the merge.
+   *
+   * `squash` and `remove_source_branch` are the repository's own settings as
+   * {@link MergeRequest.merge_options} read them, passed back unchanged; the merge **method** is
+   * the project's and has no parameter. It never approves, never forces, never uses the provider's
+   * auto-merge and never changes a branch or project setting.
+   *
+   * **A refusal is final for that head** and is thrown as {@link MergeRefusedError} carrying the
+   * port's status word; any other failure is a transport failure (an ordinary
+   * `IntegrationError`), which the caller may retry after re-reading the merge request. A
+   * **mutation**: every call goes through `IntegrationActionExecutor`, so a shadow task never
+   * reaches it. Answers the merge request as the provider reports it after the merge.
+   *
+   * @throws {MergeRefusedError} when the provider refuses the merge.
+   * @throws {IntegrationUnsupportedError} when the capability `merge` is `false`.
+   */
+  readonly mergeMergeRequest: (
+    ref: MergeRequestRefInput,
+    request: MergeMergeRequestRequest,
+  ) => Promise<MergeRequest>;
+
+  /**
+   * Asks the provider to rebase the merge request onto its target (TD-038 amendment A). The
+   * provider does it **asynchronously**: this answers once the request is accepted, and
+   * {@link GitProviderPort.getMergeRequestRebase} reads its progress. Never skips CI. A mutation,
+   * through `IntegrationActionExecutor`.
+   *
+   * @throws {RebaseRefusedError} `cannot_push` (GitLab 403) or `not_enqueued` (409).
+   * @throws {IntegrationUnsupportedError} when the capability `rebase` is `false`.
+   */
+  readonly rebaseMergeRequest: (ref: MergeRequestRefInput) => Promise<void>;
+
+  /**
+   * Where the provider's rebase of a merge request stands (TD-038 amendment A): `in_progress` while
+   * it runs; `failed` when the last rebase could not be made (GitLab's `merge_error`, whose text is
+   * provider text and is not answered). A **read**.
+   */
+  readonly getMergeRequestRebase: (
+    ref: MergeRequestRefInput,
+  ) => Promise<{ readonly in_progress: boolean; readonly failed: boolean }>;
+
+  /**
+   * How many commits the merge request has, or `null` when the provider's first page is full and
+   * the count is therefore not known (TD-038 amendment A: a rebase keeps the count). A **read**.
+   */
+  readonly countMergeRequestCommits: (ref: MergeRequestRefInput) => Promise<number | null>;
 
   /**
    * The **open** merge request whose source is `sourceBranch` in `project`, or `null` when there is

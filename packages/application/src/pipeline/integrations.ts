@@ -66,6 +66,7 @@ import type {
   FileDiff,
   GitProviderPort,
   MergedMergeRequest,
+  MergeMergeRequestRequest,
   MergeRequest,
   MergeRequestListing,
   MergeRequestRefInput,
@@ -678,6 +679,8 @@ const mutate = async <T>(
   shadowResult: () => T,
   describeResult: (result: T) => JsonObject | null,
   idempotency?: IdempotencyPlan<T>,
+  /** S-28.15: one provider call, never retried by the executor (TD-038 decision 5). */
+  singleAttempt?: true,
 ): Promise<T> => {
   assertOutsideTransaction(`the provider mutation "${action}"`);
   const outcome = await integrations.executor.execute<T>({
@@ -692,6 +695,7 @@ const mutate = async <T>(
     shadowResult,
     describeResult,
     ...(idempotency === undefined ? {} : { idempotency }),
+    ...(singleAttempt === undefined ? {} : { singleAttempt }),
   });
   return outcome.result;
 };
@@ -783,6 +787,46 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       { project: git.project, iid: ref.iid, limit },
       context,
       async () => git.port.getMergeRequestDiff(addressed(git, ref), { limit }),
+    );
+  },
+
+  /**
+   * Where the provider's rebase of a merge request stands (TD-038 amendment A). A **read**.
+   */
+  mergeRequestRebase: async (
+    ref: MergeRequestRefInput,
+    context: CallContext,
+  ): Promise<{ readonly in_progress: boolean; readonly failed: boolean } | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'get_merge_request_rebase',
+      { project: git.project, iid: ref.iid },
+      context,
+      async () => git.port.getMergeRequestRebase(addressed(git, ref)),
+    );
+  },
+
+  /** How many commits the merge request has, or `null` when unknown (TD-038 amendment A). */
+  mergeRequestCommitCount: async (
+    ref: MergeRequestRefInput,
+    context: CallContext,
+  ): Promise<number | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'count_merge_request_commits',
+      { project: git.project, iid: ref.iid },
+      context,
+      async () => git.port.countMergeRequestCommits(addressed(git, ref)),
     );
   },
 
@@ -2143,6 +2187,88 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
       (result) => (result === null ? null : { iid: result.ref.iid, state: result.state }),
       replayable<MergeRequest>(input.idempotencyKey),
     );
+  },
+
+  /**
+   * **Merges the merge request, pinned to the reviewed head** (S-28.15, TD-038 decisions 4–5) — the
+   * platform's most outward act, so every property is stated:
+   *
+   *  - a **mutation**: a shadow task makes no call and gets `null`;
+   *  - **idempotent** on the caller's key (`platform_merge:<task>:<head>`): a replayed job after
+   *    the provider answered replays the stored answer and makes no second call;
+   *  - **one attempt** (`singleAttempt`): the executor does not retry a transport failure, because
+   *    a merge whose answer was lost must be re-read before it is asked again — the job's three
+   *    tries do that;
+   *  - the head is passed as `expected_head_sha`, so the provider refuses any other head.
+   */
+  merge: async (
+    input: {
+      readonly ref: MergeRequestRefInput;
+      readonly request: MergeMergeRequestRequest;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MergeRequest | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'merge_merge_request',
+      {
+        project: git.project,
+        iid: input.ref.iid,
+        expected_head_sha: input.request.expected_head_sha,
+        squash: input.request.squash,
+        remove_source_branch: input.request.remove_source_branch,
+      },
+      context,
+      async () => git.port.mergeMergeRequest(addressed(git, input.ref), input.request),
+      () => null as unknown as MergeRequest,
+      (result) =>
+        result === null
+          ? null
+          : {
+              iid: result.ref.iid,
+              state: result.state,
+              merge_commit_sha: result.merge_commit_sha ?? null,
+            },
+      replayable<MergeRequest>(input.idempotencyKey),
+      true,
+    );
+  },
+
+  /**
+   * **Asks the provider to rebase the merge request** (TD-038 amendment A) — a mutation (a shadow
+   * task makes no call and gets `false`), idempotent on the caller's key
+   * (`platform_rebase:<task>:<head before>`), one executor attempt. Answers `true` when asked.
+   */
+  rebase: async (
+    input: { readonly ref: MergeRequestRefInput; readonly idempotencyKey: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<boolean> => {
+    const git = integrations.git;
+    if (git === null) {
+      return false;
+    }
+    const asked = await mutate(
+      integrations,
+      git.ref,
+      'rebase_merge_request',
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () => {
+        await git.port.rebaseMergeRequest(addressed(git, input.ref));
+        return { asked: true };
+      },
+      () => ({ asked: false }),
+      (result) => ({ asked: result.asked }),
+      replayable<{ asked: boolean }>(input.idempotencyKey),
+      true,
+    );
+    return asked.asked;
   },
 
   /**

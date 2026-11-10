@@ -375,7 +375,13 @@ export interface PipelineOutboundData {
      * threads when the Reviewer approved, then read whether the provider would merge the merge
      * request now and record it for the task page (`ready-merge-check.ts`).
      */
-    | 'ready_merge_check';
+    | 'ready_merge_check'
+    /**
+     * S-28.15 (BD-007's 2026-11-10 amendment, TD-038): with `policies.merge.by: platform`, merge
+     * the task's merge request pinned to its reviewed head once every check holds at that moment —
+     * enqueued by `ready_merge_check` when it read "mergeable" (`platform-merge.ts`).
+     */
+    | 'platform_merge';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;

@@ -18,9 +18,11 @@ import type {
   WebhookDelivery,
 } from '@platform/application';
 import {
+  MergeRefusedError,
   mergeRequestListingSchema,
   mergeRequestPollPlanSchema,
   mergeRequestSchema,
+  RebaseRefusedError,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -208,6 +210,23 @@ export interface GitProviderContractContext {
    * replay harness serves the note's POST and the re-read without colliding with another case.
    */
   readonly mergeRequestNote: { readonly iid: number };
+  /**
+   * S-28.15 (TD-038 decision 4): `iid` is open, ready and mergeable at `headSha`, with the
+   * repository's merge settings `options`; `movedIid` is open with a head that is not
+   * `staleHeadSha`, so a merge pinned to it is refused `head_moved` and merges nothing.
+   */
+  readonly merge: {
+    readonly iid: number;
+    readonly headSha: string;
+    readonly movedIid: number;
+    readonly staleHeadSha: string;
+    readonly options: { readonly squash: boolean; readonly remove_source_branch: boolean };
+  };
+  /**
+   * TD-038 amendment A: `iid` is open and the provider accepts its rebase, with `commits` commits;
+   * the provider refuses a rebase of `refusedIid` (`cannot_push`).
+   */
+  readonly rebase: { readonly iid: number; readonly refusedIid: number; readonly commits: number };
   /**
    * WP-138: the developer's `open_mr` adopts an existing open merge request only when it is the
    * platform's own. `openBranch` has exactly one open merge request (`openIid`), opened by the
@@ -1074,6 +1093,74 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         expect(note.notes).toHaveLength(1);
         expect(note.notes[0]?.body.startsWith(body)).toBe(true);
         expect(note.notes[0]?.path ?? null).toBeNull();
+      });
+
+      /**
+       * S-28.15 (TD-038 decision 4): a merge is pinned to the expected head — any other head is
+       * refused `head_moved` and merges nothing — and the repository's own settings are read off
+       * the merge request. A provider that cannot merge refuses with `unsupported_capability`.
+       */
+      it('merges only the expected head, with the repository’s own merge settings (S-28.15)', async () => {
+        const target = await port.getMergeRequest(mrRef(context.merge.iid));
+        expect(target.merge_options).toEqual(context.merge.options);
+        if (port.capabilities().merge !== true) {
+          await expectIntegrationError(
+            () =>
+              port.mergeMergeRequest(mrRef(context.merge.iid), {
+                expected_head_sha: context.merge.headSha,
+                ...context.merge.options,
+              }),
+            'unsupported_capability',
+          );
+          return;
+        }
+        const refused = await port
+          .mergeMergeRequest(mrRef(context.merge.movedIid), {
+            expected_head_sha: context.merge.staleHeadSha,
+            squash: false,
+            remove_source_branch: false,
+          })
+          .then(
+            () => null,
+            (error: unknown) => error,
+          );
+        expect(refused).toBeInstanceOf(MergeRefusedError);
+        expect((refused as MergeRefusedError).status).toBe('head_moved');
+        expect((await port.getMergeRequest(mrRef(context.merge.movedIid))).state).toBe('opened');
+        const merged = await port.mergeMergeRequest(mrRef(context.merge.iid), {
+          expected_head_sha: context.merge.headSha,
+          ...context.merge.options,
+        });
+        expect(merged.state).toBe('merged');
+        expect(merged.merge_commit_sha ?? null).toMatch(/^[0-9a-f]{7,64}$/);
+      });
+
+      /**
+       * TD-038 amendment A: the provider is asked to rebase, its progress is read, the commit count
+       * is answered; a rebase the provider will not make is refused with the port's word.
+       */
+      it('asks for a rebase, reads its progress and the commit count, and refuses one it cannot make', async () => {
+        if (port.capabilities().rebase !== true) {
+          await expectIntegrationError(
+            () => port.rebaseMergeRequest(mrRef(context.rebase.iid)),
+            'unsupported_capability',
+          );
+          return;
+        }
+        expect(await port.countMergeRequestCommits(mrRef(context.rebase.iid))).toBe(
+          context.rebase.commits,
+        );
+        await port.rebaseMergeRequest(mrRef(context.rebase.iid));
+        expect(await port.getMergeRequestRebase(mrRef(context.rebase.iid))).toEqual({
+          in_progress: false,
+          failed: false,
+        });
+        const refused = await port.rebaseMergeRequest(mrRef(context.rebase.refusedIid)).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(refused).toBeInstanceOf(RebaseRefusedError);
+        expect((refused as RebaseRefusedError).status).toBe('cannot_push');
       });
 
       /** Half an anchor is one no provider can place: refuse it rather than post it unanchored. */

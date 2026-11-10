@@ -28,7 +28,10 @@
  *    Whatever the file tried to remove or raise is **reported**. `policies.plan_approval_risk` (S-28.8,
  *    the M28 ruling) may only ask more: the file may switch the low-risk rule off but never on, lower
  *    `max_risk` and `max_size`, raise `min_confidence`, and add to `always_ask`
- *    (`tightenPlanApprovalRisk`).
+ *    (`tightenPlanApprovalRisk`). `policies.merge` (S-28.15, TD-038 decision 1) may say `person` and
+ *    never `platform`: a `platform` in the file is dropped and reported, whatever the settings say,
+ *    because merging into the default branch is the most outward act the platform has and the file
+ *    is written by the agent whose merge request would be merged.
  *  - **not applied** — dropped and **reported** in the reading's `not_applied`: the dial and every
  *    key that overrides one of its policies (`AUTONOMY_POLICY_OVERRIDE_KEYS`, Q78 — a test holds the
  *    two lists together), the other policies whose loosening turns a check off (the dependency
@@ -108,6 +111,7 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'policies.drift_without_direction': 'not_applied',
   'policies.protected_paths': 'tighten_only',
   'policies.plan_approval_risk': 'tighten_only',
+  'policies.merge': 'tighten_only',
   'policies.risk_classes': 'tighten_only',
   'policies.review_checklists': 'tighten_only',
   'policies.reviewers': 'tighten_only',
@@ -249,6 +253,9 @@ const MANUAL_IGNORE_REASON = `${LOOSENING_REASON}; ignore takes a manual job out
 /** Why a file's `required_manual_jobs: []` is not applied (S-27.2). Platform text. */
 const REQUIRED_NONE_REASON = `${LOOSENING_REASON}; \`[]\` lets the CI gate pass a pipeline whose manual test jobs nobody started, and the repository file is written by the agent whose merge request the gate judges — only the project settings may say it`;
 
+/** Why a file's `policies.merge.by: platform` is not applied (S-28.15). Platform text. */
+export const MERGE_PLATFORM_REASON = `${LOOSENING_REASON}; only the project settings may let the platform merge a merge request — the repository file is written by the agent whose change would be merged, so it may say person and never platform`;
+
 const droppedNote = (key: string, kept: readonly string[]): RepositoryConfigNotApplied => ({
   key,
   reason: `${LOOSENING_REASON}; still in force: ${kept
@@ -310,6 +317,12 @@ export const tightenRepositoryLayer = (
         reason: `${LOOSENING_REASON}; a repository file may make the low-risk rule ask more, never let more plans go ahead without a person — the project settings' value is still in force`,
       });
     }
+  }
+
+  if (policies.merge?.by === 'platform') {
+    // S-28.15 (TD-038 decision 1): only the project settings may let the platform merge.
+    Reflect.deleteProperty(next, 'merge');
+    notApplied.push({ key: 'policies.merge.by', reason: MERGE_PLATFORM_REASON });
   }
 
   if (policies.reviewers !== undefined) {

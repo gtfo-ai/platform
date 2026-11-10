@@ -872,7 +872,36 @@ export const taskMergeChecks = pgTable('task_merge_checks', {
   reason: text('reason'),
   providerStatus: text('provider_status'),
   unresolvedThreads: integer('unresolved_threads'),
+  // S-28.15 (migration 0119): who merges, and what the platform last waited for.
+  mergeBy: text('merge_by'),
+  mergeWait: text('merge_wait'),
 });
+
+/**
+ * S-28.15's merge attempts (migration 0119, `pipeline/platform-merge.ts`): one row per task and
+ * reviewed head — merged, refused or failed — and the plan decision the merge rested on. The
+ * migration's header carries the reasoning.
+ */
+export const taskMerges = pgTable(
+  'task_merges',
+  {
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    headSha: text('head_sha').notNull(),
+    outcome: text('outcome').notNull(),
+    providerStatus: text('provider_status'),
+    mergeCommitSha: text('merge_commit_sha'),
+    planDecision: text('plan_decision').notNull(),
+    planApprovalId: uuid('plan_approval_id'),
+    changeDigest: text('change_digest'),
+    commitCount: integer('commit_count'),
+    rebasedTo: text('rebased_to'),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull(),
+    signalPasses: integer('signal_passes').notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.taskId, table.headSha] })],
+);
 
 /**
  * The ask-the-task thread (WP-31, migration 0024).

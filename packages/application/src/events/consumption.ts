@@ -365,6 +365,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // a job redelivered after its append committed cannot count one merge twice, which an additive
   // counter folded one event at a time could not guarantee.
   'task.mr.measured': 'unconsumed',
+  // S-28.15 (TD-038 decision 6): the platform's merge attempt, announced once by the notify band
+  // (210: `task_completed` for a merge, `escalation` for a refusal or a failure). It moves nothing: the task leaves Ready only through `mr.merged`.
+  'task.merge.attempted': 'handled',
   // WP-145, PROGRESS backlog 437: the record that the task followed its ticket's move to a new key.
   // **An audit entry, not a step** — the key was rewritten in the same transaction by the handler
   // that appended it, so nothing is left for a consumer to do.

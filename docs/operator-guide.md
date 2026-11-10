@@ -931,6 +931,17 @@ platform retries the start as every provider call. A trigger job (one that start
 is never started by the platform. Every start is an `integration_actions` row with the action
 `play_job`.
 
+**The platform merges (S-28.15, TD-038).** A project whose administrator sets *Who merges* to *the
+platform* (`policies.merge.by: platform`, project settings only — a repository file may only say
+`person`) has the platform merge a task's merge request at Ready once every check holds at that
+moment. The GitLab integration's account must then be in **Allowed to merge** on the target branch
+(GitLab answers `401` otherwise, and a person merges); on a fast-forward or semi-linear project it
+may ask GitLab to rebase the merge request, which needs push rights on the `agentic/*` branch
+(`403` otherwise). Each merge is one `merge_merge_request` and each rebase one
+`rebase_merge_request` row in `integration_actions`, and each attempt a row of `task_merges`
+(migration 0119). The platform never approves, never sets auto-merge and never changes a project or
+branch setting; the default is *a person*, so an upgrade changes nothing.
+
 ### The webhook URL
 
 For a provider with an inbound half, an integration's **Setup guide** tab (its page under

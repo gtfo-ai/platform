@@ -354,6 +354,13 @@ export interface MutatingActionRequest<TResult> extends BaseActionRequest<TResul
   /** The evidence recorded in the audit row (BD-003). Must contain no secret. */
   describeResult(result: TResult): JsonObject | null;
   /**
+   * **One provider call, never retried here** (S-28.15, TD-038 decision 5). Absent for every
+   * request but the platform's merge: a merge whose answer was lost (a 502 after GitLab merged) must
+   * not be sent again blind — the caller's job re-reads the merge request before its next try, so
+   * the retry schedule is the job's three tries and not this executor's.
+   */
+  readonly singleAttempt?: true;
+  /**
    * **The run-credential carve-out of shadow mode** — Q98 (a), WP-76. Absent for every other request.
    *
    * A shadow run still needs its checkout, and a private repository's mirror fetch needs a
@@ -1125,7 +1132,10 @@ export const createIntegrationActionExecutor = (
       } catch (error) {
         lease.release();
         const charged = chargeExtraRequests(request, limiter, reentrant, logger);
-        const delay = reentrant ? null : retryDelayMs(error, attempt);
+        const delay =
+          reentrant || (request.mutating && request.singleAttempt === true)
+            ? null
+            : retryDelayMs(error, attempt);
         if (delay === null) {
           // 4 — Audit before the throw: an action nobody recorded is an action nobody can audit.
           const durationMs = options.timer.now() - startedAt;

@@ -133,6 +133,15 @@ export const gitlabMergeRequestSchema = z.object({
   created_at: z.string().nullish(),
   closed_at: z.string().nullish(),
   merge_commit_sha: z.string().nullish(),
+  /**
+   * S-28.15 (TD-038 decision 4): the repository's own merge settings as they apply to this merge
+   * request — *"If `true`, commits are squashed on merge"*, *"If `true`, the source branch is
+   * removed after merge"*, *"If `true`, the project settings force the deletion of the source
+   * branch after merge"* (§ "Retrieve a merge request", read 2026-11-10).
+   */
+  squash_on_merge: z.boolean().nullish(),
+  should_remove_source_branch: z.boolean().nullish(),
+  force_remove_source_branch: z.boolean().nullish(),
   changes_count: z.string().nullish(),
   user_notes_count: z.int().nullish(),
   web_url: z.string(),

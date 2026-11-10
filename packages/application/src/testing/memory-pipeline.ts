@@ -114,6 +114,7 @@ import type {
   SupersededMergeRequest,
   SupersededMergeRequestOutcome,
   TaskDutyLeaseRepository,
+  TaskMergeRecord,
   TaskRepository,
 } from '../pipeline/store.js';
 import {
@@ -481,7 +482,37 @@ export const createMemoryPipelineStore = (
   /** S-28.5 review: the status each task's last reverse-sync stop acted on. */
   const ticketStatusStops = new Map<Id, string>();
   /** S-28.13 (migration 0118): each task's merge check — its claim and what was read. */
-  const mergeChecks = new Map<Id, { claimedAt: string; check: ReadyMergeCheck | null }>();
+  const mergeChecks = new Map<
+    Id,
+    {
+      claimedAt: string;
+      check: ReadyMergeCheck | null;
+      /** S-28.15 (migration 0119): who merges, and what the platform last waited for. */
+      mergeBy?: 'person' | 'platform' | null;
+      mergeWait?: string | null;
+    }
+  >();
+  /** S-28.15 (migration 0119): the platform's merge attempts, `task#head` → the record. */
+  const taskMerges = new Map<string, TaskMergeRecord>();
+  const mergeRowDue = (stored: StoredTask, stale: number): boolean => {
+    const row = mergeChecks.get(stored.task.id);
+    if (row === undefined || !(Date.parse(row.claimedAt) < stale)) {
+      return false;
+    }
+    const attempts = [...taskMerges.values()].filter((merge) => merge.taskId === stored.task.id);
+    if (
+      attempts.some((merge) => merge.outcome === 'merged' && Date.parse(merge.attemptedAt) < stale)
+    ) {
+      return true;
+    }
+    return (
+      row.mergeBy === 'platform' &&
+      stored.readyHeadSha !== null &&
+      !attempts.some(
+        (merge) => merge.headSha === stored.readyHeadSha && merge.outcome !== 'rebased',
+      )
+    );
+  };
   const backfillOf = (taskId: Id): OwnerBackfillState =>
     ownerBackfills.get(taskId) ?? NO_OWNER_BACKFILL;
   const backfillClaimable = (
@@ -1469,8 +1500,11 @@ export const createMemoryPipelineStore = (
       const stale = Date.parse(query.staleBefore);
       const due = (taskId: Id): boolean => {
         const row = mergeChecks.get(taskId);
+        const stored = tasks.get(taskId);
         return (
-          row === undefined || (row.check?.mergeable !== true && Date.parse(row.claimedAt) < stale)
+          row === undefined ||
+          (row.check?.mergeable !== true && Date.parse(row.claimedAt) < stale) ||
+          (stored !== undefined && mergeRowDue(stored, stale))
         );
       };
       return [...tasks.values()]
@@ -1494,7 +1528,12 @@ export const createMemoryPipelineStore = (
         mergeChecks.set(taskId, { claimedAt: at, check: null });
         return true;
       }
-      if (row.check?.mergeable === true || Date.parse(row.claimedAt) >= Date.parse(staleBefore)) {
+      const stored = tasks.get(taskId);
+      const stale = Date.parse(staleBefore);
+      const due =
+        (row.check?.mergeable !== true && Date.parse(row.claimedAt) < stale) ||
+        (stored !== undefined && mergeRowDue(stored, stale));
+      if (!due) {
         return false;
       }
       mergeChecks.set(taskId, { ...row, claimedAt: at });
@@ -1503,9 +1542,67 @@ export const createMemoryPipelineStore = (
     recordReadyMergeCheck: async (_tx, taskId, check) => {
       const row = mergeChecks.get(taskId);
       mergeChecks.set(taskId, {
+        ...row,
         claimedAt: row?.claimedAt ?? check.checkedAt,
         check: { ...check },
       });
+    },
+    // S-28.15: the SQL's upsert of the two decision columns, and `task_merges`.
+    recordMergeDecision: async (_tx, taskId, decision) => {
+      const row = mergeChecks.get(taskId);
+      mergeChecks.set(taskId, {
+        claimedAt: row?.claimedAt ?? new Date().toISOString(),
+        check: row?.check ?? null,
+        mergeBy: decision.mergeBy,
+        mergeWait: decision.wait,
+      });
+    },
+    recordMerge: async (_tx, merge) => {
+      const key = `${merge.taskId}#${merge.headSha}`;
+      if (!tasks.has(merge.taskId) || taskMerges.has(key)) return false;
+      taskMerges.set(key, { ...merge });
+      return true;
+    },
+    mergeFor: async (_tx, taskId, headSha) => {
+      const merge = taskMerges.get(`${taskId}#${headSha}`);
+      return merge === undefined ? null : { ...merge };
+    },
+    latestMerge: async (_tx, taskId) => {
+      const latest = [...taskMerges.values()]
+        .filter((merge) => merge.taskId === taskId)
+        .sort(
+          (a, b) =>
+            b.attemptedAt.localeCompare(a.attemptedAt) || b.headSha.localeCompare(a.headSha),
+        )[0];
+      return latest === undefined ? null : { ...latest };
+    },
+    mergesOf: async (_tx, taskId) =>
+      [...taskMerges.values()]
+        .filter((merge) => merge.taskId === taskId)
+        .sort(
+          (a, b) =>
+            b.attemptedAt.localeCompare(a.attemptedAt) || b.headSha.localeCompare(a.headSha),
+        )
+        .map((merge) => ({ ...merge })),
+    settleRebase: async (_tx, taskId, headSha, settled) => {
+      const key = `${taskId}#${headSha}`;
+      const merge = taskMerges.get(key);
+      if (merge === undefined || merge.outcome !== 'rebased') return false;
+      taskMerges.set(key, {
+        ...merge,
+        outcome: settled.outcome,
+        providerStatus: settled.providerStatus,
+        rebasedTo: settled.rebasedTo,
+      });
+      return true;
+    },
+    countMergeSignalPass: async (_tx, taskId, headSha) => {
+      const key = `${taskId}#${headSha}`;
+      const merge = taskMerges.get(key);
+      if (merge === undefined || merge.outcome !== 'merged') return 0;
+      const next = { ...merge, signalPasses: merge.signalPasses + 1 };
+      taskMerges.set(key, next);
+      return next.signalPasses;
     },
     readyMergeCheckOf: async (_tx, taskId) => {
       const check = mergeChecks.get(taskId)?.check ?? null;

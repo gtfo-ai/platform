@@ -37,6 +37,7 @@ import type {
   StoredRun,
   StoredTask,
   TaskDutyLeaseRepository,
+  TaskMergeRecord,
   TaskRepository,
   Transaction,
 } from '@platform/application';
@@ -314,6 +315,57 @@ const pipelineDialOf = (row: TaskRow): TaskPipelineDial | null => {
  * (S-25.16) orders the queue as this store does.
  */
 const priorityRank = priorityRankOf;
+
+/**
+ * When a task at Ready whose merge check is stale is due again (S-28.13, S-28.15) — over `c`
+ * (`task_merge_checks`) and `t` (`tasks`), `stale` the placeholder of the stale-before instant:
+ * a check that did not read "mergeable"; a task the **platform** merges with no decisive attempt
+ * for its reviewed head (a merge that waited, a rebase in flight, or a lost wake-up); and a task the platform merged that is
+ * still at Ready past the window (TD-038 decision 6's lost `mr.merged`).
+ */
+const mergeCheckDueAgain = (stale: string): string => `c.mergeable is distinct from true
+  or (c.merge_by = 'platform' and t.ready_head_sha is not null
+      and not exists (select 1 from task_merges m
+                       where m.task_id = t.id and m.head_sha = t.ready_head_sha
+                         and m.outcome <> 'rebased'))
+  or exists (select 1 from task_merges m
+              where m.task_id = t.id and m.outcome = 'merged' and m.attempted_at < ${stale})`;
+
+interface TaskMergeRow {
+  task_id: string;
+  head_sha: string;
+  outcome: TaskMergeRecord['outcome'];
+  provider_status: string | null;
+  merge_commit_sha: string | null;
+  plan_decision: TaskMergeRecord['planDecision'];
+  plan_approval_id: string | null;
+  change_digest: string | null;
+  commit_count: number | null;
+  rebased_to: string | null;
+  attempted_at: string;
+  signal_passes: number;
+}
+
+const TASK_MERGE_SELECT = `select task_id, head_sha, outcome, provider_status, merge_commit_sha,
+       plan_decision, plan_approval_id, change_digest, commit_count, rebased_to,
+       to_char(attempted_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as attempted_at,
+       signal_passes
+  from task_merges`;
+
+const toTaskMerge = (row: TaskMergeRow): TaskMergeRecord => ({
+  taskId: row.task_id as Id,
+  headSha: row.head_sha,
+  outcome: row.outcome,
+  providerStatus: row.provider_status,
+  mergeCommitSha: row.merge_commit_sha,
+  planDecision: row.plan_decision,
+  planApprovalId: (row.plan_approval_id ?? null) as Id | null,
+  changeDigest: row.change_digest,
+  commitCount: row.commit_count,
+  rebasedTo: row.rebased_to,
+  attemptedAt: row.attempted_at as IsoDateTime,
+  signalPasses: row.signal_passes,
+});
 
 export interface PostgresPipelineStoreOptions {
   /**
@@ -1648,7 +1700,7 @@ export const createPostgresPipelineStore = (
             and t.mode = 'normal'
             and t.mr_ref is not null
             and (c.task_id is null
-                 or (c.mergeable is distinct from true and c.claimed_at < $1))
+                 or (c.claimed_at < $1 and (${mergeCheckDueAgain('$1')})))
           order by t.updated_at desc, t.id
           limit $2`,
         [query.staleBefore, query.limit],
@@ -1657,12 +1709,24 @@ export const createPostgresPipelineStore = (
     },
 
     claimReadyMergeCheck: async (tx, taskId, at, staleBefore) => {
-      const { rows } = await sqlOf(tx).query(
+      // A first claim inserts; a later one moves a claim that is due again (S-28.15: the
+      // predicate reads the task and its merge attempts, so it is an update joined to the task).
+      const inserted = await sqlOf(tx).query(
         `insert into task_merge_checks (task_id, claimed_at) values ($1, $2)
-           on conflict (task_id) do update set claimed_at = excluded.claimed_at
-             where task_merge_checks.mergeable is distinct from true
-               and task_merge_checks.claimed_at < $3
+           on conflict (task_id) do nothing
            returning task_id`,
+        [taskId, at],
+      );
+      if (inserted.rows.length > 0) {
+        return true;
+      }
+      const { rows } = await sqlOf(tx).query(
+        `update task_merge_checks c set claimed_at = $2
+           from tasks t
+          where c.task_id = $1 and t.id = c.task_id
+            and c.claimed_at < $3
+            and (${mergeCheckDueAgain('$3')})
+          returning c.task_id`,
         [taskId, at, staleBefore],
       );
       return rows.length > 0;
@@ -1686,6 +1750,85 @@ export const createPostgresPipelineStore = (
           check.unresolvedThreads,
         ],
       );
+    },
+
+    recordMergeDecision: async (tx, taskId, decision) => {
+      await sqlOf(tx).query(
+        `insert into task_merge_checks (task_id, claimed_at, merge_by, merge_wait)
+         values ($1, now(), $2, $3)
+         on conflict (task_id) do update
+            set merge_by = excluded.merge_by, merge_wait = excluded.merge_wait`,
+        [taskId, decision.mergeBy, decision.wait],
+      );
+    },
+
+    recordMerge: async (tx, merge) => {
+      const { rows } = await sqlOf(tx).query(
+        `insert into task_merges
+           (task_id, head_sha, outcome, provider_status, merge_commit_sha, plan_decision,
+            plan_approval_id, change_digest, commit_count, rebased_to, attempted_at, signal_passes)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         on conflict (task_id, head_sha) do nothing
+         returning task_id`,
+        [
+          merge.taskId,
+          merge.headSha,
+          merge.outcome,
+          merge.providerStatus,
+          merge.mergeCommitSha,
+          merge.planDecision,
+          merge.planApprovalId,
+          merge.changeDigest,
+          merge.commitCount,
+          merge.rebasedTo,
+          merge.attemptedAt,
+          merge.signalPasses,
+        ],
+      );
+      return rows.length > 0;
+    },
+
+    mergeFor: async (tx, taskId, headSha) => {
+      const { rows } = await sqlOf(tx).query<TaskMergeRow>(
+        `${TASK_MERGE_SELECT} where task_id = $1 and head_sha = $2`,
+        [taskId, headSha],
+      );
+      return rows[0] === undefined ? null : toTaskMerge(rows[0]);
+    },
+
+    latestMerge: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<TaskMergeRow>(
+        `${TASK_MERGE_SELECT} where task_id = $1 order by attempted_at desc, head_sha desc limit 1`,
+        [taskId],
+      );
+      return rows[0] === undefined ? null : toTaskMerge(rows[0]);
+    },
+
+    mergesOf: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<TaskMergeRow>(
+        `${TASK_MERGE_SELECT} where task_id = $1 order by attempted_at desc, head_sha desc`,
+        [taskId],
+      );
+      return rows.map(toTaskMerge);
+    },
+
+    settleRebase: async (tx, taskId, headSha, settled) => {
+      const result = await sqlOf(tx).query(
+        `update task_merges set outcome = $3, provider_status = $4, rebased_to = $5
+          where task_id = $1 and head_sha = $2 and outcome = 'rebased'`,
+        [taskId, headSha, settled.outcome, settled.providerStatus, settled.rebasedTo],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    countMergeSignalPass: async (tx, taskId, headSha) => {
+      const { rows } = await sqlOf(tx).query<{ signal_passes: number }>(
+        `update task_merges set signal_passes = signal_passes + 1
+          where task_id = $1 and head_sha = $2 and outcome = 'merged'
+          returning signal_passes`,
+        [taskId, headSha],
+      );
+      return rows[0]?.signal_passes ?? 0;
     },
 
     readyMergeCheckOf: async (tx, taskId) => {

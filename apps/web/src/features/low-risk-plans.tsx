@@ -73,7 +73,7 @@ export const LOW_RISK_EXAMPLES = [
 
 /** What the rule leaves alone, said where it is switched on. */
 export const LOW_RISK_UNCHANGED =
-  'Unchanged either way: a plan that touches a sensitive area, and the plans of this project’s first tasks, always wait for you; a person still merges.';
+  'Unchanged either way: a plan that touches a sensitive area, and the plans of this project’s first tasks, always wait for you. Who merges a ready merge request is its own setting below.';
 
 /** Said in both states: the rule only waives asks (TD-037 decision 4). */
 export const LOW_RISK_NEVER_ADDS =

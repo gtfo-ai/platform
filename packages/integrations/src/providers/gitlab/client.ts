@@ -49,6 +49,20 @@ export interface CreateMergeRequestBody {
   readonly remove_source_branch: boolean;
 }
 
+/**
+ * § "Merge a merge request" (S-28.15): the three attributes the platform sends. No `auto_merge`
+ * (the provider would merge later, past the platform's fresh read — TD-038 "Rejected"), no commit
+ * message (the repository's own template stands).
+ */
+export interface MergeMergeRequestBody {
+  readonly sha: string;
+  readonly squash: boolean;
+  readonly should_remove_source_branch: boolean;
+}
+
+/** The merge endpoint's documented refusals: 401, 405, 409, 422 (read 2026-11-10). */
+export const MERGE_REFUSAL_HTTP_STATUSES = [401, 405, 409, 422] as const;
+
 export interface UpdateMergeRequestBody {
   readonly title?: string;
   readonly description?: string;
@@ -177,6 +191,38 @@ export interface GitLabClient {
   ): Promise<z.output<typeof gitlabMergeRequestSchema>>;
   /** § "Retrieve a merge request". */
   mergeRequest(project: string, iid: number): Promise<z.output<typeof gitlabMergeRequestSchema>>;
+  /**
+   * § "Merge a merge request" — `PUT …/merge_requests/:iid/merge` with `sha`, `squash` and
+   * `should_remove_source_branch` (S-28.15, TD-038 decision 4, read 2026-11-10). The four statuses
+   * the page documents as the merge's own refusals — 401, 405, 409, 422 — are **answered** rather
+   * than thrown, so the adapter can name them; every other failure throws as the transport's.
+   */
+  mergeMergeRequest(
+    project: string,
+    iid: number,
+    body: MergeMergeRequestBody,
+  ): Promise<
+    | { readonly refused: null; readonly merged: z.output<typeof gitlabMergeRequestSchema> }
+    | { readonly refused: 401 | 405 | 409 | 422; readonly merged: null }
+  >;
+  /**
+   * § "Rebase a merge request" — `PUT …/merge_requests/:iid/rebase`, no `skip_ci` (TD-038
+   * amendment A, read 2026-11-10). 202 when queued; the documented refusals 403 (*cannot push*) and
+   * 409 (*failed to enqueue*) are answered rather than thrown.
+   */
+  rebaseMergeRequest(project: string, iid: number): Promise<{ readonly refused: 403 | 409 | null }>;
+  /**
+   * § "Retrieve a merge request" with `include_rebase_in_progress=true`: `rebase_in_progress` and
+   * `merge_error` (*"Rebase failed. Please rebase locally"*).
+   */
+  mergeRequestRebase(
+    project: string,
+    iid: number,
+  ): Promise<{ readonly rebase_in_progress: boolean | null; readonly merge_error: string | null }>;
+  /**
+   * § "Get merge request commits" — the first page of 100; the count is unknown when it is full.
+   */
+  mergeRequestCommitCount(project: string, iid: number): Promise<number | null>;
   /**
    * <https://docs.gitlab.com/api/graphql/reference/> — `MergeRequest.diffStatsSummary`, the one
    * documented surface that carries insertion and deletion counts (WP-59, retrieved 2026-09-26).
@@ -540,6 +586,72 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           action: 'update_merge_request',
         }),
       ),
+
+    mergeMergeRequest: async (project, iid, body) => {
+      const response = await http.request({
+        method: 'PUT',
+        path: `${mrPath(project, iid)}/merge`,
+        json: body,
+        action: 'merge_merge_request',
+        answerStatuses: [...MERGE_REFUSAL_HTTP_STATUSES],
+      });
+      const status = response?.status;
+      if (status === 401 || status === 405 || status === 409 || status === 422) {
+        return { refused: status, merged: null };
+      }
+      return {
+        refused: null,
+        merged: parse(gitlabMergeRequestSchema, response?.body ?? null, 'merge_merge_request'),
+      };
+    },
+
+    rebaseMergeRequest: async (project, iid) => {
+      const response = await http.request({
+        method: 'PUT',
+        path: `${mrPath(project, iid)}/rebase`,
+        json: {},
+        action: 'rebase_merge_request',
+        answerStatuses: [403, 409],
+      });
+      const status = response?.status;
+      return { refused: status === 403 || status === 409 ? status : null };
+    },
+
+    mergeRequestRebase: async (project, iid) => {
+      const read = parse(
+        z.object({
+          rebase_in_progress: z.boolean().nullish(),
+          merge_error: z.string().nullish(),
+        }),
+        (
+          await http.request({
+            method: 'GET',
+            path: `${mrPath(project, iid)}?include_rebase_in_progress=true`,
+            action: 'get_merge_request_rebase',
+          })
+        )?.body ?? null,
+        'get_merge_request_rebase',
+      );
+      return {
+        rebase_in_progress: read.rebase_in_progress ?? null,
+        merge_error: read.merge_error ?? null,
+      };
+    },
+
+    mergeRequestCommitCount: async (project, iid) => {
+      const page = parse(
+        z.array(z.object({ id: z.string() })),
+        (
+          await http.request({
+            method: 'GET',
+            path: `${mrPath(project, iid)}/commits?per_page=100&page=1`,
+            action: 'count_merge_request_commits',
+          })
+        )?.body ?? null,
+        'count_merge_request_commits',
+      );
+      return page.length >= 100 ? null : page.length;
+    },
 
     closeMergeRequest: async (project, iid) =>
       required(

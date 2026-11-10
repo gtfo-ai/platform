@@ -160,8 +160,16 @@ What polling does not see, so you can choose knowingly:
 
 **Settings → Repository → Protected branches**, protect your default branch (`main`, `develop`,
 `dev` — the one the project's **Default branch** setting names) with **Allowed to merge:
-Maintainers** and **Allowed to push and merge: No one**, so merging stays a person's act and nobody
-pushes to it directly.
+Maintainers** and **Allowed to push and merge: No one**, so nobody pushes to it directly.
+
+**If the project lets the platform merge** (*Who merges: the platform*, TD-038), the binding's
+token user must be in **Allowed to merge** on that branch — Maintainers is enough for a Maintainer
+token. Without it GitLab answers the merge with `401`, the task page says *the platform's account
+may not merge here (401)*, and a person merges. The platform passes the reviewed commit as `sha`,
+uses the project's own merge method, squash and *Delete source branch* settings, never sets
+auto-merge and never changes a setting. On a fast-forward or semi-linear project it may also ask
+GitLab to **rebase** the merge request (*Rebase a merge request*), which needs the token user to be
+allowed to push to the `agentic/*` source branch; a `403` there leaves the rebase to a person.
 
 This is a prerequisite, not a suggestion. A GitLab access token carries scopes and a role but
 **no branch scoping**, so the platform's `push:agentic/*` constraint is enforced by the credential

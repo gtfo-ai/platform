@@ -90,6 +90,7 @@ import type {
   TaskEscalation,
   TaskListItem,
   TaskManualPause,
+  TaskMerge,
   TaskRecord,
   TaskStageOutcome,
   TaskStageState,
@@ -117,6 +118,7 @@ import {
   runStoppedReasonSchema,
   storedTicketClaimSchema,
   taskConversationSeenSchema,
+  taskMergeSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
@@ -2441,6 +2443,8 @@ export const findTaskDetail = async (
     ci_manual_started: ciManualStartedOf(stageRows),
     // S-28.10: what is out of sync with the provider, if anything — nothing for a finished task.
     provider_sync: [...(await providerSyncFor(database, taskId, task.state))],
+    // S-28.15 (TD-038 decision 7): who merges, what the platform waits for, its last attempt.
+    merge: await mergeStatusFor(database, taskId, task.state),
     queue_wait: queueWaits.get(task.id) ?? null,
     manual_pause: manualPause,
     conversation_seen: conversationSeen,
@@ -2591,6 +2595,73 @@ const mergeBlockedFor = async (
     }
     return parsed.data;
   });
+};
+
+/**
+ * **Who merges, and the platform's merge** (S-28.15, TD-038 decision 7): the decision the merge
+ * check and the `platform_merge` duty recorded on `task_merge_checks` (`merge_by`, `merge_wait`,
+ * migration 0119) — served at `ready_for_merge` only — and the newest `task_merges` row with the
+ * name of the person who approved the plan it rested on. `null` when neither says anything. Every
+ * value is held by the tables' checks; a row that does not parse is refused by name.
+ */
+export const mergeStatusFor = async (
+  database: Database,
+  taskId: string,
+  state: string,
+): Promise<TaskMerge | null> => {
+  const { rows: decided } = await database.execute<{
+    merge_by: string | null;
+    merge_wait: string | null;
+  }>(sql`select merge_by, merge_wait from task_merge_checks where task_id = ${taskId}::uuid`);
+  const { rows: attempts } = await database.execute<{
+    head_sha: string;
+    outcome: string;
+    provider_status: string | null;
+    merge_commit_sha: string | null;
+    plan_decision: string;
+    plan_approved_by: string | null;
+    attempted_at: string;
+  }>(sql`
+    select m.head_sha, m.outcome, m.provider_status, m.merge_commit_sha, m.plan_decision,
+           case when m.plan_decision = 'approved_by_person' then u.name end as plan_approved_by,
+           to_char(m.attempted_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as attempted_at
+      from task_merges m
+      left join approvals a on a.id = m.plan_approval_id
+      left join users u on u.id = a.decided_by_user_id
+     where m.task_id = ${taskId}::uuid
+     order by m.attempted_at desc, m.head_sha desc
+     limit 1`);
+  const row = decided[0];
+  const atReady = state === 'ready_for_merge';
+  const by = atReady ? (row?.merge_by ?? null) : null;
+  const last = attempts[0] ?? null;
+  if (by === null && last === null) {
+    return null;
+  }
+  const parsed = taskMergeSchema.safeParse({
+    // A task past Ready keeps its last attempt; who merged it is then the attempt's word.
+    by: by ?? 'platform',
+    waiting_for: atReady ? (row?.merge_wait ?? null) : null,
+    last_attempt:
+      last === null
+        ? null
+        : {
+            head_sha: last.head_sha,
+            outcome: last.outcome,
+            provider_status: last.provider_status,
+            merge_commit_sha: last.merge_commit_sha,
+            plan_decision: last.plan_decision,
+            plan_approved_by: last.plan_approved_by,
+            attempted_at: last.attempted_at,
+          },
+  });
+  if (!parsed.success) {
+    throw new UnprojectableRowError(
+      `task_merges (${taskId})`,
+      'it does not parse as the published merge shape',
+    );
+  }
+  return parsed.data;
 };
 
 /**

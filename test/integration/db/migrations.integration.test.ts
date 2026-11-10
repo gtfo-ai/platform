@@ -141,6 +141,8 @@ const EXPECTED_TABLES = [
   'task_duty_leases',
   // S-28.13 (migration 0118): whether the provider would merge a task's merge request now.
   'task_merge_checks',
+  // S-28.15 (migration 0119): the platform's merge attempt per task and reviewed head.
+  'task_merges',
   // S-28.10 (migration 0116): a task's ticket status or merge request out of sync, while it is.
   'task_provider_sync',
   'task_stages',
@@ -350,6 +352,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('task_duty_leases', 'read_write', null),
       // S-28.13 (migration 0118): upserted by the duty, claimed by the recovery pass.
       row('task_merge_checks', 'read_write', null),
+      // S-28.15 (migration 0119): inserted once per head, its signal passes counted by recovery.
+      row('task_merges', 'read_write', null),
       // S-28.10 (migration 0116): upserted on a failure, deleted when the subject is in sync again.
       row('task_provider_sync', 'read_write', null),
       // WP-40 (migration 0033): the epic-split queue. `read_write` because a row is written once by

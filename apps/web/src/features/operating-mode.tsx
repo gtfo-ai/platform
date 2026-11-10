@@ -81,6 +81,7 @@ import { actorName, humanActionWords } from '../ui/words/human-actions.js';
 import { AUTONOMY_LEVEL_LABEL, BUDGET_WINDOW_LABEL } from '../ui/words/settings.js';
 import { LowRiskPlans } from './low-risk-plans.js';
 import { useStepActionTone } from './step-action-tone.js';
+import { WhoMerges } from './who-merges.js';
 
 /**
  * The configuration a binding already carries, by integration id (WP-32).
@@ -124,7 +125,7 @@ export const AUTONOMY_CHOICES = [
   {
     level: 'autonomous',
     label: 'Autonomous',
-    hint: 'Agents deliver without asking, unless a change touches a sensitive area. A person still merges.',
+    hint: 'Agents deliver without asking, unless a change touches a sensitive area. Who merges is its own setting below.',
   },
 ] as const satisfies readonly {
   level: 'observe' | 'assist' | 'supervised' | 'autonomous';
@@ -1308,6 +1309,8 @@ export const OperatingMode = ({
   <div className="flex flex-col gap-3">
     <AutonomyDial projectId={projectId} />
     <LowRiskPlans projectId={projectId} />
+    {/* S-28.15 (TD-038): who merges a ready merge request — a person by default. */}
+    <WhoMerges projectId={projectId} />
     <FeatureToggles projectId={projectId} />
     <RiskClasses projectId={projectId} />
     {budgets}

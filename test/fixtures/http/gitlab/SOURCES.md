@@ -628,3 +628,31 @@ the project set to `run` in `pipeline.ci.manual_jobs`, so the fixture is three p
   list: what the `403` stands for, and what the operator guide tells an administrator to grant the
   platform's account. The page does not mention trigger jobs being played through this endpoint, and
   the platform never plays one (the M28 ruling).
+
+## Pages read for S-28.15 — `merge-request-merge.json`
+
+Retrieved **2026-11-10**, without a GitLab instance; nothing was recorded. S-28.15 (TD-038) lets the
+platform merge a task's merge request, pinned to the reviewed head, with the repository's own merge
+settings.
+
+- `https://docs.gitlab.com/api/merge_requests/` § "Merge a merge request" —
+  `PUT /projects/:id/merge_requests/:merge_request_iid/merge`; `sha`: *"If present, this SHA must
+  match the HEAD of the source branch"*; `squash`: *"If true, squash all commits into a single commit
+  on merge"*; `should_remove_source_branch`: *"If true, removes the source branch"*; `auto_merge`
+  (*"the merge request merges when checks pass"*) is never sent. The status table — 401 *the user
+  lacks permission to accept the merge request*, 405 *the merge request cannot be merged*, 409 *"SHA
+  does not match HEAD of source branch"*, 422 *"Branch cannot be merged"* — is the adapter's refusal
+  table; the `409` is `documented`. The merge's `200` answer is the merge request object, so it is
+  `documented-adapted` from § "Retrieve a merge request".
+- The same page, § "Retrieve a merge request" — `squash_on_merge` (*"If true, commits are squashed
+  on merge"*), `should_remove_source_branch` (*"If true, the source branch is removed after merge"*),
+  `force_remove_source_branch` (*"If true, the project settings force the deletion of the source
+  branch after merge"*) and `merge_commit_sha` (*"Returns null until merged"*): what the platform
+  reads and passes back. The page's own example does not carry `squash_on_merge`; it is in the
+  attribute table, so the two reads are `documented-adapted`.
+- The same page, § "Rebase a merge request" (TD-038 amendment A) — `PUT …/merge_requests/:iid/rebase`,
+  `202` with `{"rebase_in_progress": true}` when enqueued (`documented`); progress read with
+  `include_rebase_in_progress`, a success answering `rebase_in_progress: false`, `merge_error: null`
+  (`documented-adapted`, on merge request 37's object); `403` *"Cannot push to source branch"*
+  (`documented`). § "Get merge request commits" — the list of commit objects the commit count reads
+  (`documented-adapted`).

@@ -77,6 +77,7 @@ import {
 import { underReviewConversationLease } from './owed-duties.js';
 import { runOwnerSync } from './owner-sync.js';
 import { runTicketOwnerAssign } from './owner-write-back.js';
+import { type PlatformMergePorts, runPlatformMerge } from './platform-merge.js';
 import { runReadyHeadCheck } from './ready-head.js';
 import { runReadyMergeCheck } from './ready-merge-check.js';
 import { runResolveOnMerge } from './resolve-on-merge.js';
@@ -107,6 +108,11 @@ export interface PipelineOutboundOptions
   readonly unitOfWork: UnitOfWork;
   /** `APP_BASE_URL` — the link an ask's mirrored comment points back at. */
   readonly baseUrl: string;
+  /**
+   * S-28.15 (TD-038): the review-window probe and the inbound recorder the platform's merge needs.
+   * Absent, the `platform_merge` duty merges nothing and logs why.
+   */
+  readonly platformMerge?: PlatformMergePorts;
 }
 
 /**
@@ -368,8 +374,12 @@ const dispatchOutbound =
       // mergeability recorded — under the same lease, because it resolves review threads too.
       case 'ready_merge_check':
         await underReviewConversationLease(options, data, async () => {
-          await runReadyMergeCheck(options, data);
+          await runReadyMergeCheck(options, data, options);
         });
+        return;
+      // S-28.15 (TD-038): the platform's merge, pinned to the reviewed head, re-validated on fire.
+      case 'platform_merge':
+        await runPlatformMerge(options, data, job);
         return;
       default:
         logger.warn(

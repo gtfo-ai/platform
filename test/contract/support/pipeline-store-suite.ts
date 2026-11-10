@@ -611,6 +611,123 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await due(later)).toEqual([]);
       });
 
+      /**
+       * S-28.15 (TD-038 decisions 5–6, amendment A): one decisive attempt per task and head; a
+       * rebase row settles once; signal passes count only on a `merged` row; and a task the
+       * platform merges with no decisive attempt for its reviewed head is due again.
+       */
+      it('records one merge attempt per head, settles a rebase once, counts signal passes, and re-asks a platform merge that waited (S-28.15)', async () => {
+        const head = 'b'.repeat(40);
+        const stored = task(
+          {
+            mr: {
+              provider: 'fake-git',
+              project_path: 'acme/api',
+              iid: 41,
+              url: 'https://git.example.test/acme/api/-/merge_requests/41',
+              branch: 'agentic/acme-41',
+              head_sha: head,
+            },
+          },
+          'ACME-MERGE-41',
+        );
+        await store.tasks.insert(tx, stored);
+        const loaded = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+        await store.tasks.save(tx, {
+          ...loaded,
+          task: {
+            ...loaded.task,
+            state: 'ready_for_merge',
+            currentStage: 'ready_for_merge' as Slug,
+          },
+        });
+        await store.tasks.saveReadyHead(tx, stored.task.id, head);
+        const at = '2026-06-02T09:00:00.000Z' as IsoDateTime;
+        const later = '2026-06-02T09:20:00.000Z' as IsoDateTime;
+        const due = async (staleBefore: IsoDateTime) =>
+          (await store.tasks.readyMergeCheckDue(tx, { staleBefore, limit: 10_000 }))
+            .map((row) => row.taskId)
+            .includes(stored.task.id);
+        // Mergeable, claimed: not due — until the platform is the one merging with no attempt.
+        expect(await store.tasks.claimReadyMergeCheck(tx, stored.task.id, at, at)).toBe(true);
+        await store.tasks.recordReadyMergeCheck(tx, stored.task.id, {
+          checkedAt: at,
+          mergeable: true,
+          reason: null,
+          providerStatus: null,
+          unresolvedThreads: null,
+        });
+        await store.tasks.recordMergeDecision(tx, stored.task.id, {
+          mergeBy: 'person',
+          wait: null,
+        });
+        expect(await due(later)).toBe(false);
+        await store.tasks.recordMergeDecision(tx, stored.task.id, {
+          mergeBy: 'platform',
+          wait: 'person_words',
+        });
+        expect(await due(later)).toBe(true);
+        expect(await store.tasks.claimReadyMergeCheck(tx, stored.task.id, later, later)).toBe(true);
+        const attempt = {
+          taskId: stored.task.id,
+          headSha: head,
+          outcome: 'rebased' as const,
+          providerStatus: null,
+          mergeCommitSha: null,
+          planDecision: 'not_required' as const,
+          planApprovalId: null,
+          changeDigest: 'a'.repeat(64),
+          commitCount: 2,
+          rebasedTo: null,
+          attemptedAt: at,
+          signalPasses: 0,
+        };
+        expect(await store.tasks.recordMerge(tx, attempt)).toBe(true);
+        expect(await store.tasks.recordMerge(tx, { ...attempt, outcome: 'merged' })).toBe(false);
+        expect((await store.tasks.mergeFor(tx, stored.task.id, head))?.outcome).toBe('rebased');
+        // A rebase in flight is not decisive: still due.
+        expect(await due('2026-06-02T09:40:00.000Z' as IsoDateTime)).toBe(true);
+        expect(
+          await store.tasks.settleRebase(tx, stored.task.id, head, {
+            outcome: 'rebase_changed',
+            providerStatus: 'digest_changed',
+            rebasedTo: 'c'.repeat(40),
+          }),
+        ).toBe(true);
+        expect(
+          await store.tasks.settleRebase(tx, stored.task.id, head, {
+            outcome: 'rebase_conflict',
+            providerStatus: null,
+            rebasedTo: null,
+          }),
+        ).toBe(false);
+        expect(await store.tasks.mergeFor(tx, stored.task.id, head)).toMatchObject({
+          outcome: 'rebase_changed',
+          providerStatus: 'digest_changed',
+          rebasedTo: 'c'.repeat(40),
+          changeDigest: 'a'.repeat(64),
+          commitCount: 2,
+        });
+        expect(await store.tasks.countMergeSignalPass(tx, stored.task.id, head)).toBe(0);
+        const merged = 'e'.repeat(40);
+        await store.tasks.recordMerge(tx, {
+          ...attempt,
+          headSha: merged,
+          outcome: 'merged',
+          mergeCommitSha: 'd'.repeat(40),
+          changeDigest: null,
+          commitCount: null,
+          attemptedAt: later,
+        });
+        expect(await store.tasks.countMergeSignalPass(tx, stored.task.id, merged)).toBe(1);
+        expect(await store.tasks.countMergeSignalPass(tx, stored.task.id, merged)).toBe(2);
+        expect((await store.tasks.latestMerge(tx, stored.task.id))?.headSha).toBe(merged);
+        expect((await store.tasks.mergesOf(tx, stored.task.id)).map((m) => m.headSha)).toEqual([
+          merged,
+          head,
+        ]);
+      });
+
       it('records the status a reverse-sync stop acted on, and replaces it (S-28.5 review)', async () => {
         const stored = task({}, 'ACME-STOP-1');
         await store.tasks.insert(tx, stored);

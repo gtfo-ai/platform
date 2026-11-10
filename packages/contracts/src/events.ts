@@ -731,6 +731,36 @@ export const taskMergeRequestMeasuredEvent = defineEvent('task.mr.measured', {
 });
 
 /**
+ * **The platform tried to merge a task's merge request** (S-28.15, BD-007's 2026-11-10 amendment,
+ * TD-038 decision 6) — appended once per task and reviewed commit, by the `platform_merge` duty,
+ * with the system actor, on the **project** stream (it decides nothing about the task, as
+ * `task.mr.measured` does not; `task_id` names which task).
+ *
+ * It decides nothing: the task leaves Ready only through `mr.merged` (webhook or poll), the one path
+ * a person's merge takes too. `outcome` is `merged`, `refused` (the provider answered 401, 405, 409
+ * or 422 — the merge is left to a person for this commit) or `failed` (three tries could not reach
+ * the provider). `provider_status` is the port's word for a refusal (`head_moved`, `not_allowed`,
+ * `not_mergeable`, `unauthorised`) or the transport's; `plan_decision` names the plan decision the
+ * merge rests on (TD-038 decision 2: the plan approval is the human checkpoint) — approved by a
+ * person, approved by the platform as low-risk, or no approval required — with its approval row.
+ * The notify band announces it once to the task's people.
+ */
+export const taskMergeAttemptedEvent = defineEvent('task.merge.attempted', {
+  ...taskScoped,
+  mr: mergeRequestRefSchema,
+  head_sha: shaSchema,
+  outcome: z.enum(['merged', 'refused', 'failed']),
+  provider_status: z
+    .string()
+    .regex(/^[a-z0-9_]{1,64}$/)
+    .nullable(),
+  merge_commit_sha: shaSchema.nullable(),
+  plan_decision: z.enum(['approved_by_person', 'approved_by_platform', 'not_required']),
+  /** The plan approval the decision was read from; `null` when none was asked. */
+  plan_approval_id: idSchema.nullable(),
+});
+
+/**
  * A ticket the project calls a **bug**, and the merge request its own links say it is about —
  * product/16's defect-escape rate, **Q87** (WP-61, PROGRESS backlog 114).
  *
@@ -1309,6 +1339,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskTicketRekeyedEvent,
   taskOwnerChangedEvent,
   taskMergeRequestMeasuredEvent,
+  taskMergeAttemptedEvent,
   ticketBugTracedEvent,
   taskBreakdownDecidedEvent,
   runCreatedEvent,

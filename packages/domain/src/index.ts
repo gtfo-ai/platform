@@ -75,6 +75,7 @@ export * from './policies/coverage.js';
 export * from './policies/dependencies.js';
 export * from './policies/epic-split.js';
 export * from './policies/iteration-limits.js';
+export * from './policies/merge.js';
 export * from './policies/notifications.js';
 export * from './policies/path-patterns.js';
 export * from './policies/plan-risk.js';

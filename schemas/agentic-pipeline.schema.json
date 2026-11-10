@@ -156,6 +156,7 @@
         "task.ticket.rekeyed",
         "task.owner.changed",
         "task.mr.measured",
+        "task.merge.attempted",
         "ticket.bug.traced",
         "task.breakdown.decided",
         "run.created",

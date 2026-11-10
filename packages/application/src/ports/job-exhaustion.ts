@@ -45,8 +45,8 @@
  *    effect, or what is lost is a notification (rule 20). The workpad, the status and
  *    `notify.digest` are the ruling's examples.
  *
- * `pipeline.outbound` carries forty-two duties of all three shapes since S-28.13's `ready_merge_check`
- * (forty-one at S-28.5's `ticket_status_recheck`, forty at S-26.3's `ticket_owner_assign`; this sentence said thirty-two through three additions, thirty-seven past two more, and
+ * `pipeline.outbound` carries forty-three duties of all three shapes since S-28.15's `platform_merge`
+ * (forty-two at S-28.13's `ready_merge_check`, forty-one at S-28.5's `ticket_status_recheck`, forty at S-26.3's `ticket_owner_assign`; this sentence said thirty-two through three additions, thirty-seven past two more, and
  * thirty-nine at S-26.1's `owner_sync`), so it is the one queue whose
  * shape is **`per_duty`**: {@link OUTBOUND_DUTY_EXHAUSTION} declares each, and it is typed as a
  * record over the duty union, so a duty added to `OutboundJobData` without a row fails the build.
@@ -393,6 +393,10 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   ready_merge_check: {
     shape: 'notification_shaped',
     why: 'closes the platform’s own review threads after an approval and records whether the provider would merge the merge request now (S-28.13); a lost check leaves the threads and the task page as they were until the recovery pass, which checks a task at Ready with no record once and a blocked one again ten minutes after its claim',
+  },
+  platform_merge: {
+    shape: 'notification_shaped',
+    why: 'TD-038 decision 5 names this duty bound-and-tell, which the duty does itself rather than through a shape of its own: a transport failure throws into the queue’s three tries, each try re-reading the merge request first, and the last try records a failed attempt in task_merges and appends task.merge.attempted, which tells the task’s people — the task stays at ready_for_merge, a person’s stage, and is not escalated; a refusal is recorded at once and never retried. A lost wake-up (a last try that expires) is asked again by the recovery pass’s ready_merge_check row ten minutes later, because a task the platform merges with no attempt for its reviewed head is due there (S-28.15)',
   },
   approval_refused: {
     shape: 'notification_shaped',
