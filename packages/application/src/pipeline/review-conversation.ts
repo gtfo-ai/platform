@@ -738,7 +738,14 @@ const handledUpTo = (discussion: Discussion | undefined, before: string | null):
     discussion.notes
       .filter((note) => {
         const at = Date.parse(note.created_at);
-        return !note.system && !Number.isNaN(at) && at <= bound;
+        // The platform's own replies are never what a run answered: counting one would move the
+        // row's last note on every replay and write a new row each time.
+        return (
+          !note.system &&
+          !note.body.trimStart().startsWith('<!-- agentic:reply:') &&
+          !Number.isNaN(at) &&
+          at <= bound
+        );
       })
       .at(-1)?.id ?? null
   );

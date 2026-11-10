@@ -2470,7 +2470,7 @@ export const escalationFor = async (
 export const conversationSeenFor = async (
   database: Database,
   task: { readonly id: string; readonly currentStage: string | null },
-): Promise<readonly TaskConversationSeen[]> => {
+): Promise<TaskConversationSeen[]> => {
   if (task.currentStage !== 'qa' && task.currentStage !== 'ready_for_merge') {
     return [];
   }

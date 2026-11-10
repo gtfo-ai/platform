@@ -967,11 +967,12 @@ describe('(4) resolving after a re-review', () => {
     expect(ledger.map((row) => [row.source, row.threadId, row.kind])).toEqual([
       ['mr_thread', 'finding-thread', 'resolved'],
     ]);
-    await w.resolve();
-    expect(await ledgerOf(w)).toEqual(ledger);
     expect(
       w.recorded.logs.filter((entry) => entry.message.includes('is not its own finding thread')),
     ).toHaveLength(1);
+    await w.resolve();
+    expect(await ledgerOf(w)).toEqual(ledger);
+    expect(w.recorded.resolved).toEqual(['finding-thread']);
   });
 
   it('resolves neither another task’s finding thread nor a person’s thread that copies the marker', async () => {
