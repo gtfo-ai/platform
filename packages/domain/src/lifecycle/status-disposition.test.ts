@@ -243,6 +243,7 @@ describe('ticketStatusStopDecision — the reverse sync (M28 ruling 4, S-28.5)',
     ticketStatusStopDecision({
       state: 'active',
       humanStage: false,
+      merged: false,
       disposition: 'closed',
       onTicketClosed: 'stop',
       mayAmend: true,
@@ -282,6 +283,11 @@ describe('ticketStatusStopDecision — the reverse sync (M28 ruling 4, S-28.5)',
       expect(stop({ state })).toEqual({ kind: 'none' });
     }
     expect(stop({ state: 'ready_for_merge', humanStage: true })).toEqual({ kind: 'none' });
+    // A merged task escalated at `retrospective` waits in needs_human; the merge closed its ticket.
+    expect(stop({ state: 'needs_human', merged: true })).toEqual({ kind: 'none' });
+    expect(stop({ state: 'active', merged: true, disposition: 'hands_off' })).toEqual({
+      kind: 'none',
+    });
     expect(stop({ disposition: 'startable' })).toEqual({ kind: 'none' });
     expect(stop({ disposition: 'not_ready' })).toEqual({ kind: 'none' });
     expect(stop({ onTicketClosed: 'ignore' })).toEqual({ kind: 'none' });

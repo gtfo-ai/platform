@@ -31,11 +31,17 @@
  * transaction that re-loads the task. A ticket it cannot read stops nothing. The one-off **sweep**
  * (`recovery/ticket-status-sweep.ts`) enqueues the same duty for every live task once.
  */
-import type { DomainEvent, Id } from '@platform/contracts';
+import {
+  type DomainEvent,
+  type Id,
+  type IsoDateTime,
+  lifecycleStatusKey,
+} from '@platform/contracts';
 import {
   amendEscalation,
   cancelTask,
   compilePipeline,
+  isMergedTask,
   isTerminalTaskState,
   MERGED_GATE_STAGE,
   QA_STAGE_ID,
@@ -47,9 +53,11 @@ import {
   withStatusMappingStatuses,
 } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
+import { TransactionOpenError } from '../events/open-transaction.js';
 import { JOB_QUEUES, type Jobs } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
+import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { OutboundJobData, PipelineOutboundData } from './jobs.js';
 import { closeStageOffer } from './offer-withdrawal.js';
 import { PIPELINE_ACTOR, type PipelineStore, type StoredTask } from './store.js';
@@ -206,6 +214,42 @@ export const runTicketStatusRecheck = async (
     return;
   }
   const disposition = ticketStatusDisposition(read.status, read.statusCategory, policy, true);
+  if (disposition !== 'closed' && disposition !== 'hands_off') {
+    return;
+  }
+  /**
+   * **A merge request merged by hand closed the ticket** (S-28.5 review ruling 4): a task back at a
+   * gate whose merge request a person merged gets its ticket moved to Done before `mr.merged`
+   * arrives, and `needs_human` has no edge to `merged`. So before a `closed` stop the merge request
+   * is read (outside every transaction, through the executor); merged means the task's own delivery
+   * closed the ticket and the merge path owns the ending. A read that fails stops nothing.
+   */
+  if (disposition === 'closed' && loaded.mr !== null && !isMergedTask(loaded.task)) {
+    let mergedByHand = true;
+    try {
+      const integrations = await integrationsForProject(
+        options.integrations,
+        loaded.task.projectId,
+        noRunScopedSecrets(),
+      );
+      const live = await gitReads(integrations).mergeRequest(loaded.mr, {
+        projectId: loaded.task.projectId,
+        taskId,
+      });
+      mergedByHand = live?.state === 'merged';
+    } catch (error) {
+      if (error instanceof TransactionOpenError) {
+        throw error;
+      }
+      logger.warn(
+        { task_id: taskId, err: error },
+        'the merge request could not be read, so a finished ticket does not stop its task now; the next signal asks again',
+      );
+    }
+    if (mergedByHand) {
+      return;
+    }
+  }
   const mayAmend = data.status_moved === true || data.ticket_status_sweep === true;
   const outcome = await inTaskTransaction(
     options,
@@ -216,8 +260,22 @@ export const runTicketStatusRecheck = async (
       if (stored === null) {
         return null;
       }
+      /**
+       * **A stop acts once per status** (S-28.5 review finding 3): a wake-up that is not a status
+       * change — a polled edit (`changed_fields: []`, the platform's own comment echo included) or
+       * the sweep — stops the task again only when the status differs from the one its last stop
+       * acted on, so a person who resumed it while the ticket stays closed is not stopped by every
+       * later edit. A `ticket.status.changed` is a move and decides afresh.
+       */
+      if (data.status_moved !== true) {
+        const actedOn = await options.store.tasks.ticketStatusStopOf(scope.tx, taskId);
+        if (actedOn !== null && lifecycleStatusKey(actedOn) === lifecycleStatusKey(read.status)) {
+          return { kind: 'none' } as const;
+        }
+      }
       const decision = ticketStatusStopDecision({
         state: stored.task.state,
+        merged: isMergedTask(stored.task),
         humanStage: HUMAN_STAGES.includes(stored.task.currentStage ?? ''),
         disposition,
         onTicketClosed: policy.onTicketClosed,
@@ -235,6 +293,12 @@ export const runTicketStatusRecheck = async (
         movedAt: data.moved_at ?? null,
       });
       await applyStop(options, scope, stored, decision, brief);
+      await options.store.tasks.recordTicketStatusStop(
+        scope.tx,
+        taskId,
+        read.status,
+        options.clock.now() as IsoDateTime,
+      );
       return decision;
     },
   );

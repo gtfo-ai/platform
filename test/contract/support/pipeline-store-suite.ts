@@ -530,6 +530,17 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await due()).toEqual([]);
       });
 
+      it('records the status a reverse-sync stop acted on, and replaces it (S-28.5 review)', async () => {
+        const stored = task({}, 'ACME-STOP-1');
+        await store.tasks.insert(tx, stored);
+        const at = '2026-06-02T09:00:00.000Z' as IsoDateTime;
+        expect(await store.tasks.ticketStatusStopOf(tx, stored.task.id)).toBeNull();
+        await store.tasks.recordTicketStatusStop(tx, stored.task.id, 'Released', at);
+        expect(await store.tasks.ticketStatusStopOf(tx, stored.task.id)).toBe('Released');
+        await store.tasks.recordTicketStatusStop(tx, stored.task.id, 'Review', at);
+        expect(await store.tasks.ticketStatusStopOf(tx, stored.task.id)).toBe('Review');
+      });
+
       /**
        * WP-79: the insert names `requested_by_user_id`. Until then the PostgreSQL statement did not,
        * so WP-67's three writers (discovery, a shadow batch, a bootstrap's chunk tasks) wrote the

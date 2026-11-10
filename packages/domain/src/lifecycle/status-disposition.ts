@@ -286,6 +286,13 @@ export type TicketStatusStop =
 export const ticketStatusStopDecision = (input: {
   readonly state: string;
   readonly humanStage: boolean;
+  /**
+   * The task's merge request was merged (`isMergedTask` — it entered `merged_gate`), or the caller
+   * read it merged: its ticket was closed by the task's own delivery, so nothing is stopped
+   * (S-28.5 review: a merged task escalated at `retrospective` is `needs_human`, and the merge moved
+   * its ticket to Done).
+   */
+  readonly merged: boolean;
   readonly disposition: TicketStatusDisposition;
   readonly onTicketClosed: 'stop' | 'ignore';
   /** A `needs_human` task's escalation may be amended: the caller saw the status move (or sweeps). */
@@ -294,6 +301,7 @@ export const ticketStatusStopDecision = (input: {
   const { state, disposition } = input;
   if (
     ['done', 'cancelled', 'merged', 'retro'].includes(state) ||
+    input.merged ||
     input.humanStage ||
     (disposition !== 'closed' && disposition !== 'hands_off') ||
     (disposition === 'closed' && input.onTicketClosed === 'ignore')
