@@ -76,7 +76,13 @@ const withFiles = (...paths: string[]): ImplementationPlanData => ({
 
 describe('planRiskFacts — what the platform reads off a plan', () => {
   it('finds nothing in a one-file text fix', () => {
-    expect(factsOf(PLAN)).toEqual({ riskClasses: [], factors: [], size: 'S', files: 1 });
+    expect(factsOf(PLAN)).toEqual({
+      riskClasses: [],
+      factors: [],
+      size: 'S',
+      files: 1,
+      listed: 'listed',
+    });
   });
 
   it.each([
@@ -134,9 +140,51 @@ describe('planRiskFacts — what the platform reads off a plan', () => {
   });
 
   it('has no facts and no size for a missing plan', () => {
-    expect(factsOf(null)).toEqual({ riskClasses: [], factors: [], size: null, files: 0 });
+    expect(factsOf(null)).toEqual({
+      riskClasses: [],
+      factors: [],
+      size: null,
+      files: 0,
+      listed: 'none',
+    });
+  });
+
+  it('says when the plan lists no file, or a pattern instead of files', () => {
+    expect(factsOf(withFiles()).listed).toBe('none');
+    expect(factsOf(withFiles('src/**/*.ts')).listed).toBe('pattern');
+    expect(factsOf(withFiles('src/a.ts', 'src/b?.ts')).listed).toBe('pattern');
+    expect(factsOf(withFiles('src/a.ts')).listed).toBe('listed');
   });
 });
+
+const assessments = fc.record({
+  confidence: fc.constantFrom(...planConfidenceSchema.options),
+  risk_level: fc.constantFrom(...planRiskLevelSchema.options),
+  risk_factors: fc.subarray([...PLAN_RISK_FACTORS]),
+  reasons: fc.array(fc.constant('a reason'), { maxLength: 3 }),
+  open_questions: fc.array(fc.constant('a question'), { maxLength: 3 }),
+});
+const policies = fc.record({
+  enabled: fc.constant(true),
+  maxRisk: fc.constantFrom('low' as const, 'medium' as const),
+  minConfidence: fc.constantFrom('high' as const, 'medium' as const),
+  maxSize: fc.constantFrom(...sizeSchema.options),
+  alwaysAsk: fc.subarray([...RISK_FACTORS]),
+});
+const factsArbitrary: fc.Arbitrary<PlanRiskFacts> = fc.record({
+  riskClasses: fc.subarray(['auth', 'payments']),
+  factors: fc.subarray([...RISK_FACTORS]),
+  size: fc.option(fc.constantFrom(...sizeSchema.options), { nil: null }),
+  files: fc.nat({ max: 30 }),
+  listed: fc.constantFrom('listed' as const, 'none' as const, 'pattern' as const),
+});
+const PLATFORM_CODES = new Set(['risk_class', 'size_above', 'size_unknown', 'files_not_listed']);
+const platformPart = (reasons: readonly { code: string; source?: string }[]) =>
+  reasons.filter(
+    (reason) =>
+      PLATFORM_CODES.has(reason.code) ||
+      (reason.code === 'risk_factor' && reason.source === 'platform'),
+  );
 
 describe('planApprovalDecision — the rule alone', () => {
   it('lets a clean, small, sure plan go ahead and says what it saw', () => {
@@ -209,34 +257,6 @@ describe('planApprovalDecision — the rule alone', () => {
     expect(planApprovalDecision(relaxed, factsOf(testsOnly), CLEAN).kind).toBe('auto');
   });
 
-  const assessments = fc.record({
-    confidence: fc.constantFrom(...planConfidenceSchema.options),
-    risk_level: fc.constantFrom(...planRiskLevelSchema.options),
-    risk_factors: fc.subarray([...PLAN_RISK_FACTORS]),
-    reasons: fc.array(fc.constant('a reason'), { maxLength: 3 }),
-    open_questions: fc.array(fc.constant('a question'), { maxLength: 3 }),
-  });
-  const policies = fc.record({
-    enabled: fc.constant(true),
-    maxRisk: fc.constantFrom('low' as const, 'medium' as const),
-    minConfidence: fc.constantFrom('high' as const, 'medium' as const),
-    maxSize: fc.constantFrom(...sizeSchema.options),
-    alwaysAsk: fc.subarray([...RISK_FACTORS]),
-  });
-  const factsArbitrary: fc.Arbitrary<PlanRiskFacts> = fc.record({
-    riskClasses: fc.subarray(['auth', 'payments']),
-    factors: fc.subarray([...RISK_FACTORS]),
-    size: fc.option(fc.constantFrom(...sizeSchema.options), { nil: null }),
-    files: fc.nat({ max: 30 }),
-  });
-  const PLATFORM_CODES = new Set(['risk_class', 'size_above']);
-  const platformPart = (reasons: readonly { code: string; source?: string }[]) =>
-    reasons.filter(
-      (reason) =>
-        PLATFORM_CODES.has(reason.code) ||
-        (reason.code === 'risk_factor' && reason.source === 'platform'),
-    );
-
   it(
     'never lets an assessment remove an ask a platform fact raised (M28 ruling 4)',
     () => {
@@ -288,25 +308,112 @@ describe('planApprovalOutcome — the whole gate', () => {
     });
   });
 
-  it('still waits for probation and a risk class the dial asks for, with one class list', () => {
-    const outcome = planApprovalOutcome(
-      dialInput('above_size', {
-        preset: { ...AUTONOMY_PRESETS.supervised, probation: true, probationTasks: 5 },
-        tasksCompleted: 1,
-        riskClassesRequiringApproval: ['auth'],
+  it('waits for probation or a risk class exactly as the dial does, the rule not consulted', () => {
+    const input = dialInput('always', {
+      preset: {
+        ...AUTONOMY_PRESETS.supervised,
+        planApproval: 'always',
+        probation: true,
+        probationTasks: 5,
+      },
+      tasksCompleted: 1,
+      riskClassesRequiringApproval: ['auth'],
+    });
+    expect(planApprovalOutcome(input, risk())).toEqual({
+      kind: 'ask',
+      reasons: planApprovalReasons(input),
+    });
+  });
+
+  it('never asks about a plan the dial lets through (BD-006: the rule only asks less)', () => {
+    // An M plan under an L threshold: nothing to ask with the rule off, so nothing with it on —
+    // even with no assessment and a migration in it.
+    const small = dialInput('above_size', { size: 'M' });
+    expect(
+      planApprovalOutcome(small, {
+        policy: ON,
+        facts: factsOf(withFiles('db/migrations/1.sql')),
+        assessment: null,
       }),
-      { ...risk(), facts: { ...factsOf(PLAN), riskClasses: ['auth', 'money'] } },
-    );
+    ).toEqual({ kind: 'none' });
+  });
+
+  it('waits with the dial’s reason and the rule’s when the rule finds a risk', () => {
+    const outcome = planApprovalOutcome(dialInput('always'), {
+      policy: ON,
+      facts: factsOf(withFiles('src/**/*.ts')),
+      assessment: CLEAN,
+    });
     expect(outcome).toEqual({
       kind: 'ask',
       reasons: [
-        { code: 'risk_class', classes: ['auth', 'money'] },
-        { code: 'probation', completed: 1, of: 5 },
+        { code: 'policy_always', source: 'dial' },
+        { code: 'files_not_listed', why: 'pattern' },
       ],
     });
   });
 
-  it('changes nothing under `never`: there is no policy branch to replace', () => {
+  it(
+    'only ever asks less than the dial, over every input (TD-037 decision 4)',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom('never', 'above_size', 'always') as fc.Arbitrary<PlanApprovalPolicy>,
+          fc.option(fc.constantFrom(...sizeSchema.options), { nil: null }),
+          fc.option(fc.constantFrom(...sizeSchema.options), { nil: null }),
+          fc.boolean(),
+          fc.nat({ max: 8 }),
+          fc.subarray(['auth', 'payments']),
+          policies,
+          factsArbitrary,
+          fc.option(assessments, { nil: null }),
+          (
+            planApproval,
+            threshold,
+            size,
+            probation,
+            completed,
+            classes,
+            policy,
+            facts,
+            assessment,
+          ) => {
+            const input: PlanApprovalInput = {
+              preset: {
+                ...AUTONOMY_PRESETS.supervised,
+                planApproval,
+                planApprovalSizeThreshold: threshold,
+                probation,
+                probationTasks: 5,
+              },
+              size,
+              tasksCompleted: completed,
+              riskClassesRequiringApproval: classes,
+            };
+            const off = planApprovalReasons(input);
+            const on = planApprovalOutcome(input, { policy, facts, assessment });
+            if (off.length === 0) {
+              expect(on).toEqual({ kind: 'none' });
+            }
+            if (on.kind === 'auto') {
+              expect(off.length).toBeGreaterThan(0);
+              expect(
+                off.every((reason) => ['size_at_or_above', 'policy_always'].includes(reason.code)),
+              ).toBe(true);
+            }
+            if (on.kind === 'ask') {
+              for (const reason of off.filter((entry) => entry.code !== 'risk_class')) {
+                expect(on.reasons).toContainEqual(reason);
+              }
+            }
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  it('changes nothing under `never`: the dial asked nothing to waive', () => {
     expect(planApprovalOutcome(dialInput('never'), risk(ON, null))).toEqual({ kind: 'none' });
   });
 

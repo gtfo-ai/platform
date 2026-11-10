@@ -14,9 +14,10 @@
  *     add asks, and so can the assessment**: no assessment value removes an ask a fact raised
  *     (`plan-risk.test.ts` holds that as a property), and a plan with no assessment waits.
  *  3. {@link planApprovalOutcome} — the whole plan gate: the dial's rules
- *     ({@link planApprovalReasons}) with, when the rule is on, its **policy** branch replaced by the
- *     decision. Risk classes and probation are asked exactly as before; `enabled: false` is today's
- *     gate (a property too).
+ *     ({@link planApprovalReasons}), and — only when the rule is on and the dial asked for its
+ *     **policy** reasons alone — the decision, which may waive them. The rule can only ever ask
+ *     less than the dial (TD-037 decision 4): a plan the dial lets through is untouched, and risk
+ *     classes and probation wait as before (properties in `plan-risk.test.ts`).
  *
  * ## What the facts cannot see (M28 ruling 6, stated)
  *
@@ -26,7 +27,7 @@
  * below are conventions (a `migrations/` directory, a `.github/` tree) and **over-report** on
  * purpose: a false match costs one approval, a missed one costs nothing that was not already the
  * plan's to declare. The check that the real diff stayed inside what the plan declared is filed
- * (BACKLOG 1552). The project's readiness level is **not** a fact on this build: the gate does not
+ * (BACKLOG 1562). The project's readiness level is **not** a fact on this build: the gate does not
  * read it, and a fact the decision never sees would be decoration.
  */
 import type {
@@ -110,7 +111,16 @@ export interface PlanRiskFacts {
   readonly factors: readonly RiskFactor[];
   readonly size: Size | null;
   readonly files: number;
+  /**
+   * Whether the plan names the files it changes one by one: `none` (an empty list, or no plan) and
+   * `pattern` (a glob or wildcard among them) leave the facts nothing exact to read, so such a plan
+   * cannot go ahead without a person (review of #136).
+   */
+  readonly listed: 'listed' | 'none' | 'pattern';
 }
+
+/** A path that is a pattern rather than a file: glob and wildcard characters. */
+const PATTERN_CHARACTERS = /[*?[\]{}]/;
 
 export interface PlanRiskFactsInput {
   /** The plan, parsed; `null` when there is none or it does not read as a plan. */
@@ -125,7 +135,7 @@ export interface PlanRiskFactsInput {
 export const planRiskFacts = (input: PlanRiskFactsInput): PlanRiskFacts => {
   const plan = input.plan;
   if (plan === null) {
-    return { riskClasses: [], factors: [], size: null, files: 0 };
+    return { riskClasses: [], factors: [], size: null, files: 0, listed: 'none' };
   }
   const paths = plan.files_to_change.map((file) => file.path);
   const declaredProtected = plan.protected_path_changes.map((change) => change.path);
@@ -173,6 +183,12 @@ export const planRiskFacts = (input: PlanRiskFactsInput): PlanRiskFacts => {
     factors: RISK_FACTORS.filter((factor) => found.has(factor)),
     size: plan.estimated_size,
     files: paths.length,
+    listed:
+      paths.length === 0
+        ? 'none'
+        : paths.some((path) => PATTERN_CHARACTERS.test(path))
+          ? 'pattern'
+          : 'listed',
   };
 };
 
@@ -207,10 +223,15 @@ export const planApprovalDecision = (
   if (platformFactors.length > 0) {
     asks.push({ code: 'risk_factor', factors: platformFactors, source: 'platform' });
   }
-  if (facts.size !== null && SIZE_ORDER.indexOf(facts.size) > SIZE_ORDER.indexOf(policy.maxSize)) {
+  if (facts.listed !== 'listed') {
+    asks.push({ code: 'files_not_listed', why: facts.listed });
+  }
+  if (facts.size === null) {
+    asks.push({ code: 'size_unknown' });
+  } else if (SIZE_ORDER.indexOf(facts.size) > SIZE_ORDER.indexOf(policy.maxSize)) {
     asks.push({ code: 'size_above', size: facts.size, maximum: policy.maxSize });
   }
-  if (assessment === null || facts.size === null) {
+  if (assessment === null) {
     asks.push({ code: 'assessment_missing' });
     return { kind: 'ask', reasons: asks };
   }
@@ -241,7 +262,7 @@ export const planApprovalDecision = (
   if (assessment.open_questions.length > 0) {
     asks.push({ code: 'open_questions', count: assessment.open_questions.length });
   }
-  if (asks.length > 0) {
+  if (asks.length > 0 || facts.size === null) {
     return { kind: 'ask', reasons: asks };
   }
   return {
@@ -284,38 +305,46 @@ const mergeRiskClasses = (reasons: readonly PlanApprovalReason[]): PlanApprovalR
   return merged;
 };
 
+/** The dial's own policy reasons — the only ones the low-risk rule may waive (TD-037 decision 4). */
+const POLICY_REASON_CODES: ReadonlySet<PlanApprovalReason['code']> = new Set([
+  'size_at_or_above',
+  'policy_always',
+]);
+
 /**
- * The whole plan gate (M28 ruling 1). The rule applies when it is **on** and the dial's policy is
- * `above_size` or `always` — it replaces that branch and nothing else. Under `never` there is
- * nothing to replace and nothing changes (a plan never waited for size there). Probation and the
- * risk-class rule are asked as before, and either one makes the plan wait whatever the rule says.
+ * The whole plan gate (TD-037 decision 4, BD-006's 2026-11-10 amendment): the rule can **only ever
+ * ask less** than the dial does. It is consulted only when it is on **and** the dial asked, for
+ * policy reasons alone (`size_at_or_above`, `policy_always`): a plan the dial lets through is let
+ * through exactly as with the rule off (no row, no wait), and a `risk_class` or `probation` reason
+ * waits exactly as with the rule off. Then the plan goes ahead when nothing the rule checks asks;
+ * otherwise it waits with the dial's reasons and the rule's, so the card says what held it.
  */
 export const planApprovalOutcome = (
   input: PlanApprovalInput,
   risk: PlanRiskInput | null,
 ): PlanApprovalOutcome => {
-  if (risk === null || !risk.policy.enabled || input.preset.planApproval === 'never') {
-    const reasons = planApprovalReasons(input);
-    return reasons.length === 0 ? { kind: 'none' } : { kind: 'ask', reasons };
+  const dial = planApprovalReasons(input);
+  if (dial.length === 0) {
+    return { kind: 'none' };
   }
-  const dial = planApprovalReasons({
-    ...input,
-    preset: { ...input.preset, planApproval: 'never' },
-  });
+  if (
+    risk === null ||
+    !risk.policy.enabled ||
+    !dial.every((reason) => POLICY_REASON_CODES.has(reason.code))
+  ) {
+    return { kind: 'ask', reasons: dial };
+  }
   const decided = planApprovalDecision(risk.policy, risk.facts, risk.assessment);
-  if (dial.length === 0 && decided.kind === 'auto') {
+  if (decided.kind === 'auto') {
     return decided;
   }
-  return {
-    kind: 'ask',
-    reasons: mergeRiskClasses([...dial, ...(decided.kind === 'ask' ? decided.reasons : [])]),
-  };
+  return { kind: 'ask', reasons: mergeRiskClasses([...dial, ...decided.reasons]) };
 };
 
 /**
  * The repository file's `policies.plan_approval_risk`, **only ever tighter** than the settings'
  * (M28 ruling 1, `repository-grades.ts`). Each key moves toward *ask more*: the file may turn the
- * rule off, never on; lower `max_risk` and `max_size`; raise `min_confidence`; and add to
+ * rule off (which only ever restores the dial's asks, {@link planApprovalOutcome}), never on; lower `max_risk` and `max_size`; raise `min_confidence`; and add to
  * `always_ask` (a union). What it tried to loosen is answered by name in `loosened`, and the value
  * in force there is the settings' (or the default).
  */

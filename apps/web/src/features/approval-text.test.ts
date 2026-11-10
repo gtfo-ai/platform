@@ -30,6 +30,9 @@ const SAMPLES: readonly ApprovalReason[] = [
   { code: 'size_above', size: 'L', maximum: 'M' },
   { code: 'open_questions', count: 1 },
   { code: 'assessment_missing' },
+  { code: 'files_not_listed', why: 'none' },
+  { code: 'files_not_listed', why: 'pattern' },
+  { code: 'size_unknown' },
   { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'S', files: 2 },
 ];
 

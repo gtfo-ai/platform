@@ -1093,7 +1093,7 @@ const planPaths = (data: unknown): readonly string[] => {
  * is reachable only from a harness.
  *
  * **S-28.8 — low-risk plans go ahead** (the M28 ruling amending BD-006). A project that switches on
- * `policies.plan_approval_risk` has the dial's `above_size`/`always` branch replaced by the rule in
+ * `policies.plan_approval_risk` may have an ask the dial made for `above_size`/`always` alone waived by the rule in
  * `packages/domain/src/policies/plan-risk.ts`: the platform's facts and the Architect's
  * self-assessment, either of which can only add a reason to wait. When neither asks (and neither
  * does probation nor a risk class), the gate writes the approval **already approved** —
@@ -1204,8 +1204,8 @@ const planApprovalGate = async (
   };
   /**
    * S-28.8 (the M28 ruling amending BD-006): the project's opt-in low-risk rule. Read only when it
-   * is on — a project that never set it pays no extra query — and then it replaces the dial's
-   * policy branch alone (`planApprovalOutcome`). The plan is parsed here, so a stored plan that does
+   * is on — a project that never set it pays no extra query — and then it may only waive an ask
+   * the dial made for its policy reasons alone (`planApprovalOutcome`, TD-037 decision 4). The plan is parsed here, so a stored plan that does
    * not read as one has no self-assessment and waits (fail closed).
    */
   const riskPolicy = planApprovalRiskPolicyOf(settings.config.policies?.plan_approval_risk);

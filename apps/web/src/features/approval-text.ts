@@ -168,6 +168,23 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
         section: 'policies',
         link: LOW_RISK_LINK,
       };
+    case 'files_not_listed':
+      return {
+        why:
+          reason.why === 'none'
+            ? 'The plan does not list the files it changes, so the platform cannot check them.'
+            : 'The plan names its files with a pattern rather than one by one, so the platform cannot check them.',
+        stop: 'A plan that lists every file it changes can go ahead under Low-risk plans; this one always waits.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
+    case 'size_unknown':
+      return {
+        why: 'The plan’s size could not be read, so it cannot go ahead without you.',
+        stop: 'A plan with a size can go ahead under Low-risk plans; this one always waits.',
+        section: 'policies',
+        link: LOW_RISK_LINK,
+      };
     case 'low_risk_auto':
       return {
         why: `The plan went ahead without approval: ${reason.risk_level} risk, ${reason.confidence} confidence, size ${reason.size}, ${reason.files === 1 ? '1 file' : `${reason.files} files`}.`,

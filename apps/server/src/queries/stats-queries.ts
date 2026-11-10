@@ -167,7 +167,8 @@ const number = (value: unknown): number =>
   value === null || value === undefined ? 0 : Number(value);
 
 /**
- * Tasks started in the range, and whether a human had to do anything about each.
+ * Tasks started in the range, and whether a human had to do anything about each. A plan approval
+ * the low-risk rule decided itself (`approvals.auto_decided`, S-28.8) is not a human's act.
  *
  * **The template filter is the honest half of the merge rate.** `tasks.mode` separates a shadow
  * task; it does not separate a *discovery*, review-only, ticket-lint, history-bootstrap or
@@ -187,7 +188,8 @@ const startedTasks = async (
     select ${civilDay('t.created_at', bounds)} as started_day,
            (
              exists (select 1 from questions q where q.task_id = t.id and q.answered_at is not null)
-             or exists (select 1 from approvals a where a.task_id = t.id and a.decided_at is not null)
+             or exists (select 1 from approvals a where a.task_id = t.id and a.decided_at is not null
+                        and not a.auto_decided)
              or exists (select 1 from task_stages s where s.task_id = t.id and s.state = 'returned')
              or t.state = 'needs_human'
            ) as intervened

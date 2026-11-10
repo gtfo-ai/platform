@@ -394,6 +394,9 @@ export const approvalPolicySourceSchema = z.enum(['dial', 'stage_override']);
  * - `size_above` — the plan's size is above the largest size the rule lets go ahead;
  * - `open_questions` — the Architect left questions open;
  * - `assessment_missing` — the plan carries no self-assessment, so the rule cannot let it go;
+ * - `files_not_listed` — the plan lists no file (`none`) or a glob/wildcard (`pattern`), so the
+ *   platform has nothing exact to read its facts from;
+ * - `size_unknown` — the plan's size could not be read;
  * - `low_risk_auto` — **the one reason that is not a reason to wait**: the plan went ahead without a
  *   person, and this is what the rule saw. It is stored only on an approval the platform approved
  *   itself (`approvals.auto_decided`), and alone.
@@ -449,6 +452,13 @@ export const approvalReasonSchema = z.discriminatedUnion('code', [
   }),
   z.strictObject({
     code: z.literal('assessment_missing'),
+  }),
+  z.strictObject({
+    code: z.literal('files_not_listed'),
+    why: z.enum(['none', 'pattern']),
+  }),
+  z.strictObject({
+    code: z.literal('size_unknown'),
   }),
   z.strictObject({
     code: z.literal('low_risk_auto'),
