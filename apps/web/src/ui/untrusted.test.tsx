@@ -67,6 +67,17 @@ describe('UntrustedText', () => {
     expect(container.textContent).toContain('javascript:alert(1)');
   });
 
+  it('shows where a bare URL with userinfo or an xn-- host really goes, and nothing for a plain one', () => {
+    const { container } = render(
+      <UntrustedText value="a https://good.example@evil.example/x b https://xn--pple-43d.example/ c https://plain.example/" />,
+    );
+    expect(container.querySelectorAll('a')).toHaveLength(3);
+    expect([...container.querySelectorAll('[data-link-host]')].map((s) => s.textContent)).toEqual([
+      ' (evil.example)',
+      ' (xn--pple-43d.example)',
+    ]);
+  });
+
   it('never produces an anchor whose href is not http(s)', () => {
     for (const value of [
       'javascript:alert(1)',

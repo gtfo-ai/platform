@@ -95,6 +95,21 @@ describe('UntrustedProse', () => {
   });
 
   it.each([
+    ['userinfo', 'https://good.example@evil.example/x', ' (evil.example)'],
+    ['an xn-- host', 'https://xn--pple-43d.example/login', ' (xn--pple-43d.example)'],
+  ])('shows the host beside a URL that misleads by itself (%s), label or not', (_n, url, host) => {
+    const { container } = render(
+      <UntrustedProse value={`[${url}](${url}) and <${url}> and ${url}`} />,
+    );
+    expect(container.querySelectorAll('a')).toHaveLength(3);
+    expect([...container.querySelectorAll('[data-link-host]')].map((s) => s.textContent)).toEqual([
+      host,
+      host,
+      host,
+    ]);
+  });
+
+  it.each([
     '[x](javascript:alert(1))',
     '[x](JaVaScRiPt:alert(1))',
     '[x](data:text/html,<script>alert(1)</script>)',

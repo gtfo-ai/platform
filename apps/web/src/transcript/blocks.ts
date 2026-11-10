@@ -73,6 +73,17 @@ export interface UserBlock extends BlockBase {
   readonly text: string;
 }
 
+/**
+ * A tool result whose call was never delivered (S-28.9 review): raw tool or shell output, so it is
+ * rendered verbatim (`CodeText`) and never read as markdown — a `#` line or a `src/**` glob in
+ * output is not a heading or emphasis.
+ */
+export interface ToolOutputBlock extends BlockBase {
+  readonly kind: 'tool_output';
+  readonly text: string;
+  readonly isError: boolean;
+}
+
 export interface HookBlock extends BlockBase {
   readonly kind: 'hook';
   readonly hook: string;
@@ -127,6 +138,7 @@ export type TranscriptBlock =
   | ThinkingBlock
   | ToolBlock
   | UserBlock
+  | ToolOutputBlock
   | HookBlock
   | SteerBlock
   | CompactionBlock
@@ -280,11 +292,12 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
             }
             // A result whose call was never delivered: show it rather than swallow it.
             target.push({
-              kind: 'user',
+              kind: 'tool_output',
               id: `${event.seq}:${index}`,
               seq: event.seq,
               at: event.created_at,
               text: item.content,
+              isError: item.is_error,
             });
             return;
           }

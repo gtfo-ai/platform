@@ -669,6 +669,25 @@ export const inlineText = (nodes: readonly Inline[]): string =>
     })
     .join('');
 
-/** A string's words with inline markdown taken off — for a one-line preview inside a control. */
+/** A line's block markers — quote `>`, heading `#`, bullet or number — up to its words. */
+const BLOCK_PREFIX = /^ {0,3}(?:> ?|#{1,6}(?=[ \t]|$)[ \t]*|[-*+][ \t]+|\d{1,9}[.)][ \t]+)/u;
+
+const stripBlockMarkers = (line: string): string => {
+  let rest = line;
+  // Bounded: each pass removes at least one character of a prefix, and nesting is capped.
+  for (let pass = 0; pass < MAX_BLOCK_DEPTH; pass += 1) {
+    const match = BLOCK_PREFIX.exec(rest);
+    if (match === null || match[0] === '') break;
+    rest = rest.slice(match[0].length);
+  }
+  return rest;
+};
+
+/**
+ * A string's words with markdown taken off — for a one-line preview inside a control: each line's
+ * block markers (`# `, `- `, `1) `, `> `) and the inline marks.
+ */
 export const markdownToPlainText = (value: string): string =>
-  inlineText(parseInlineMarkdown(value));
+  inlineText(
+    parseInlineMarkdown(sanitiseUntrusted(value).split('\n').map(stripBlockMarkers).join('\n')),
+  );

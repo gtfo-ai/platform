@@ -144,6 +144,23 @@ export const safeHref = (candidate: string): string | null => {
 };
 
 /**
+ * The host of an http(s) URL **when the URL itself can mislead a reader** (S-28.9 review), else
+ * `null`: a URL with userinfo (`https://good.example@evil.example` goes to `evil.example`) or a host
+ * with an internationalised label (`xn--…`, a look-alike of a familiar name once displayed). The
+ * renderers show this host beside such a link even when its label is the URL itself.
+ */
+export const deceptiveHost = (resolved: string): string | null => {
+  let url: URL;
+  try {
+    url = new URL(resolved);
+  } catch {
+    return null;
+  }
+  const internationalised = url.hostname.split('.').some((label) => label.startsWith('xn--'));
+  return url.username !== '' || url.password !== '' || internationalised ? url.host : null;
+};
+
+/**
  * Splits sanitised text into plain runs and links.
  *
  * Markdown link syntax is **not** interpreted *here*: this is the reading of a plain line. A

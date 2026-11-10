@@ -42,6 +42,7 @@ export const blockText = (block: TranscriptBlock): string => {
     case 'thinking':
       return block.text;
     case 'user':
+    case 'tool_output':
       return block.text;
     case 'tool':
       return [block.toolName, JSON.stringify(block.input), block.result?.content ?? '']
@@ -255,6 +256,15 @@ const BlockView = ({
         <LogRow kind="user" label="User">
           <div className="w-full">
             <UntrustedProse value={block.text} />
+          </div>
+        </LogRow>
+      );
+    case 'tool_output':
+      // Machine output, not prose: verbatim, never parsed as markdown (S-28.9 review).
+      return (
+        <LogRow kind="tool_output" label={block.isError ? 'Tool output (error)' : 'Tool output'}>
+          <div className="w-full">
+            <CodeText value={block.text} />
           </div>
         </LogRow>
       );

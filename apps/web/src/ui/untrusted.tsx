@@ -25,7 +25,13 @@ import {
   type Ref,
   useState,
 } from 'react';
-import { safeHref, sanitiseUntrusted, segmentInline, stripAnsi } from './untrusted-text.js';
+import {
+  deceptiveHost,
+  safeHref,
+  sanitiseUntrusted,
+  segmentInline,
+  stripAnsi,
+} from './untrusted-text.js';
 
 export interface UntrustedProps {
   readonly value: string;
@@ -275,23 +281,30 @@ type WithoutMarkupProps<T> = {
  */
 export const UntrustedText = ({ value, className }: UntrustedProps): ReactElement => (
   <span className={className}>
-    {segmentInline(value).map((segment, index) =>
-      segment.kind === 'text' ? (
+    {segmentInline(value).map((segment, index) => {
+      if (segment.kind === 'text') {
         // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional and never reordered.
-        <span key={index}>{segment.value}</span>
-      ) : (
-        <a
-          // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional and never reordered.
-          key={index}
-          href={segment.href}
-          target="_blank"
-          rel="noopener noreferrer nofollow"
-          className="text-accent underline underline-offset-2"
-        >
-          {segment.label}
-        </a>
-      ),
-    )}
+        return <span key={index}>{segment.value}</span>;
+      }
+      // A URL that misleads by itself (userinfo, an `xn--` host) says where it really goes.
+      const host = deceptiveHost(segment.href);
+      return (
+        // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional and never reordered.
+        <span key={index}>
+          <a
+            href={segment.href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            className="text-accent underline underline-offset-2"
+          >
+            {segment.label}
+          </a>
+          {host === null ? null : (
+            <span className="text-fg-muted" data-link-host="">{` (${host})`}</span>
+          )}
+        </span>
+      );
+    })}
   </span>
 );
 
@@ -404,8 +417,10 @@ export const NumberedCode = ({ value, className }: UntrustedProps): ReactElement
  * The objection `segmentInline`'s docblock recorded against markdown links — *a label can disagree
  * with where the link goes* — is answered on screen rather than by refusing the syntax: when the
  * label is not the URL (or its host), the destination's host is shown beside it, as the parser
- * normalised it (`new URL().host`, so an internationalised host reads as its `xn--` form). A label
- * that spoofs another URL therefore reads `https://gitlab.com/x (evil.example)`.
+ * normalised it (`new URL().host`). A label that spoofs another URL therefore reads
+ * `https://gitlab.com/x (evil.example)`. The host is shown **even when the label is the URL** if the
+ * URL can mislead by itself (`deceptiveHost`): userinfo (`https://good.example@evil.example`) or an
+ * internationalised `xn--` host, which a browser may display as a look-alike of a familiar name.
  *
  * A URL {@link safeHref} refuses is not a link and not a struck-through label: it is the **literal
  * source** — `[click me](javascript:…)` as those characters — with the reason in the `title`.
@@ -437,9 +452,10 @@ export const MarkdownLink = ({
   const destination = new URL(resolved).host;
   const label = labelText.trim().toLowerCase();
   const labelIsTheUrl =
-    label === url.trim().toLowerCase() ||
-    label === resolved.toLowerCase() ||
-    label === destination.toLowerCase();
+    deceptiveHost(resolved) === null &&
+    (label === url.trim().toLowerCase() ||
+      label === resolved.toLowerCase() ||
+      label === destination.toLowerCase());
   return (
     <>
       <a

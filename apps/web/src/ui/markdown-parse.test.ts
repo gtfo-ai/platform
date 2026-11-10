@@ -234,6 +234,14 @@ describe('plain text', () => {
     );
     expect(inlineText([])).toBe('');
   });
+
+  it('takes a line’s block markers off too: heading, list and quote (review of #135)', () => {
+    expect(markdownToPlainText('# Which **budget**?')).toBe('Which budget?');
+    expect(markdownToPlainText('1) **Three** keeps it fast')).toBe('Three keeps it fast');
+    expect(markdownToPlainText('> - quoted point')).toBe('quoted point');
+    // Not a marker: no space after it.
+    expect(markdownToPlainText('#hashtag and **bold**')).toBe('#hashtag and bold');
+  });
 });
 
 /** A small markdown alphabet, so a random string is dense in syntax rather than in letters. */

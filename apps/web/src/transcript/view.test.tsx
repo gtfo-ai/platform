@@ -137,6 +137,19 @@ describe('TranscriptView', () => {
     expect(streaming?.textContent).toContain('Now **writ');
   });
 
+  // Review of #135: a result whose call never arrived is machine output — verbatim, never markdown.
+  it('renders an orphan tool result verbatim, never as markdown', () => {
+    const output = '# not a heading\n  src/**/*.ts\n**not bold**';
+    const { container } = render(
+      <TranscriptView
+        blocks={[{ kind: 'tool_output', id: 'o', seq: 1, at: AT, text: output, isError: false }]}
+      />,
+    );
+    const row = container.querySelector('[data-block-kind="tool_output"]');
+    expect(row?.querySelector('pre code')?.textContent).toBe(output);
+    expect(row?.querySelector('h3,h4,strong,em')).toBeNull();
+  });
+
   // S-23.22: the end row says why in the run page's words, never the SDK's raw reason.
   it.each([
     ['error_max_turns', 'Ended because: Ran out of turns'],

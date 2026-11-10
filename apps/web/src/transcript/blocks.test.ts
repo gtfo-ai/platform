@@ -97,7 +97,14 @@ describe('toBlocks', () => {
   it('shows a tool result whose call was never delivered rather than swallowing it', () => {
     const blocks = toBlocks([toolResult(2, 'toolu_missing', 'orphaned output')]);
     expect(blocks).toEqual([
-      { kind: 'user', id: '2:0', seq: 2, at: envelope.created_at, text: 'orphaned output' },
+      {
+        kind: 'tool_output',
+        id: '2:0',
+        seq: 2,
+        at: envelope.created_at,
+        text: 'orphaned output',
+        isError: false,
+      },
     ]);
   });
 
