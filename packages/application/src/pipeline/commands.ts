@@ -890,8 +890,8 @@ export class TaskBudgetNotRaisedError extends Error {
  * **A raise that cannot help** (S-28.1, M28 ruling 2): the task's next run would still not fit
  * under the new cap — `spent + held + the stage's run budget` is above it — so the resume after it
  * would pause the task again two seconds later and open nothing but a confusing attempt. AUT-6655's
- * owner raised 50 → 51 → 52 → 53 → 54 against a minimum of 50.99 + 40 reserve-worth of headroom
- * that none of them met. A 409 at the route, carrying the minimum and its parts.
+ * owner raised 50 → 51 → 52 → 53 → 54, each accepted and each paused again, with nothing on the page
+ * naming the minimum. A 409 at the route, carrying the minimum and its parts.
  */
 export class TaskBudgetRaiseInsufficientError extends Error {
   override readonly name = 'TaskBudgetRaiseInsufficientError';
