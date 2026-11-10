@@ -1071,7 +1071,7 @@ export const workerRunReleaseRequestSchema = z
     /**
      * S-28.12: why the machine could not provision the workspace — the classified cause and the
      * launcher error's first line, redacted by the worker. With `provision_failed` only; the core
-     * holds the worker's `workspace_unavailable` blocker until its next claim. Optional, so an older
+     * holds the worker's `workspace_unavailable` blocker and a cool-down (instead of excluding it from the offer) until a run's `spawn`. Optional, so an older
      * worker's release is unchanged; an older core refuses the key (strict), and the worker then
      * releases without it.
      */

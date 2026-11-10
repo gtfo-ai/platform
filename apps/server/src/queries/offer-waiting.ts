@@ -37,6 +37,8 @@ import {
   type OfferWaitingReason,
   orderClaimBlockers,
   type WorkerClaimBlocker,
+  type WorkspaceUnavailableCause,
+  workspaceUnavailableCauseSchema,
 } from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES,
@@ -64,8 +66,10 @@ export interface WaitingMachineFacts {
   readonly hold: 'paused' | 'draining' | null;
   /** A usage limit's pause still ahead. */
   readonly usagePaused: boolean;
-  /** S-28.12: it could not provision a run's workspace and has not claimed since. Absent is no. */
+  /** S-28.12: it could not provision a run's workspace and has not started a run since. */
   readonly workspaceUnavailable?: boolean;
+  /** S-28.12: the recorded cause, when {@link workspaceUnavailable}. */
+  readonly workspaceCause?: WorkspaceUnavailableCause | null;
   readonly heldDigests: readonly string[];
   readonly lastSeenAt: string | null;
 }
@@ -184,6 +188,8 @@ interface PersonWaiting {
   readonly reason: OfferWaitingReason;
   readonly blockers: readonly WorkerClaimBlocker[];
   readonly lastSeenAt: string | null;
+  /** S-28.12: the first chosen machine's recorded workspace cause, when it has one. */
+  readonly workspaceCause?: WorkspaceUnavailableCause | null;
 }
 
 const personWaitingOf = (facts: OfferWaitingFacts): PersonWaiting | null => {
@@ -213,6 +219,9 @@ const personWaitingOf = (facts: OfferWaitingFacts): PersonWaiting | null => {
     reason,
     blockers: orderClaimBlockers(chosen.flatMap((entry) => entry.waiting.blockers)),
     lastSeenAt: reason === 'owner_worker_offline' ? (seen.at(-1) ?? null) : null,
+    workspaceCause:
+      chosen.find((entry) => entry.waiting.blockers.includes('workspace_unavailable'))?.machine
+        .workspaceCause ?? null,
   };
 };
 
@@ -230,6 +239,11 @@ export const offerWaitingOf = (facts: OfferWaitingFacts): OfferWaiting => {
     last_seen_at: reason === 'owner_worker_offline' ? (waiting?.lastSeenAt ?? null) : null,
     assignee_name: reason === 'assignee_not_linked' ? facts.assigneeName : null,
     blockers: reason === 'owner_worker_cannot_take' ? [...(waiting?.blockers ?? [])] : [],
+    ...(reason === 'owner_worker_cannot_take' &&
+    waiting?.blockers.includes('workspace_unavailable') === true &&
+    (waiting.workspaceCause ?? null) !== null
+      ? { workspace_cause: waiting.workspaceCause as WorkspaceUnavailableCause }
+      : {}),
   };
 };
 
@@ -300,6 +314,7 @@ const PERSON_MACHINES = `coalesce((
                                    limit 1) end,
            'usage_paused', (pw.paused_until is not null and pw.paused_until > now()),
            'workspace_unavailable', pw.workspace_unavailable_at is not null,
+           'workspace_cause', pw.workspace_unavailable_cause,
            'held', pw.image_digests,
            'last_seen_at', pw.last_seen_at) order by pw.id)
     from workers pw
@@ -316,6 +331,7 @@ interface MachineRow {
   readonly hold_via: string | null;
   readonly usage_paused: boolean;
   readonly workspace_unavailable?: boolean;
+  readonly workspace_cause?: string | null;
   readonly held: unknown;
   readonly last_seen_at: string | null;
 }
@@ -344,6 +360,10 @@ const machineFactsOf = (row: MachineRow): WaitingMachineFacts => ({
   hold: holdOf(row.manually_paused === true, row.hold_via ?? null),
   usagePaused: row.usage_paused === true,
   workspaceUnavailable: row.workspace_unavailable === true,
+  workspaceCause:
+    row.workspace_unavailable === true
+      ? (workspaceUnavailableCauseSchema.safeParse(row.workspace_cause).data ?? 'unknown')
+      : null,
   heldDigests: Array.isArray(row.held)
     ? row.held.filter((digest): digest is string => typeof digest === 'string')
     : [],

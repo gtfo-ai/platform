@@ -4,7 +4,7 @@
  * with the brief *no claimant took this run* — through the stranded pass's table — while an offer a
  * claim took first, or one not yet expired, is left alone.
  */
-import type { DomainEvent, Id } from '@platform/contracts';
+import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { askTaskCommand } from '../ask/commands.js';
@@ -14,6 +14,7 @@ import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline
 import {
   OFFER_TIMEOUT_REASON,
   type OfferTimeoutRecoverySite,
+  offerTimeoutBrief,
   recoverExpiredOffers,
   rerouteUnroutedOffers,
 } from './offer-timeout.js';
@@ -339,5 +340,29 @@ describe('an offer written before WP-278 is routed from its project’s setting 
     expect(report).toContainEqual({ site: 'run_offer_reroute', found: 1, reEnqueued: 1, ended: 0 });
     // Routed first, so the timeout row sees a fresh expiry rather than nothing.
     expect(report).toContainEqual({ site: 'run_offer_timeout', found: 0, reEnqueued: 0, ended: 0 });
+  });
+});
+
+describe('the offer timeout’s brief names a machine that cannot start runs (S-28.12)', () => {
+  const at = {
+    offeredAt: '2026-11-10T04:40:00.000Z' as IsoDateTime,
+    expiresAt: '2026-11-11T04:40:00.000Z' as IsoDateTime,
+  };
+
+  it('says no claimant took it when no machine handed it back for a workspace failure', () => {
+    expect(offerTimeoutBrief({ ...at, blockedMachine: null })).toMatch(
+      /^no claimant took this run: /,
+    );
+    expect(offerTimeoutBrief({ ...at, blockedMachine: null })).not.toContain('cannot start runs');
+  });
+
+  it('names the machine and the cause in words when one did', () => {
+    const brief = offerTimeoutBrief({
+      ...at,
+      blockedMachine: { name: 'jan-mbp', cause: 'docker_networks_exhausted' },
+    });
+    expect(brief).toContain('The machine that last took it, jan-mbp, cannot start runs');
+    expect(brief).toContain('no free network ranges');
+    expect(brief).toContain('press Try again on its page');
   });
 });

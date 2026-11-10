@@ -77,6 +77,7 @@ import {
   runPackageSchema,
   WORKER_API_PREFIX,
   WORKER_CLAIM_HOLD_MS,
+  WORKER_CLAIMS_WORKSPACE_RETRY_QUERY,
   WORKER_HEARTBEAT_HOLD_MS,
   WORKER_PATHS,
   WORKER_PROTOCOL_CLAIM_POLICY,
@@ -84,6 +85,8 @@ import {
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
+  WORKSPACE_COOL_DOWN_MS,
+  WORKSPACE_UNAVAILABLE_DETAIL_MAX_CHARS,
   type WorkerUpgradeRequiredBody,
   workerClaimRequestSchema,
   workerFinishRequestSchema,
@@ -105,6 +108,18 @@ import {
   workerUpgradeRequiredBodySchema,
 } from '@platform/contracts';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+
+/** S-28.12: the platform's own pattern rules over a worker-sent workspace error line. */
+const WORKSPACE_DETAIL_REDACTOR = redactionAdapters.patternRedactor();
+
+/** The `?workspace_retry=1` of a retry claim (S-28.12) — read by name, ignored otherwise. */
+const WORKSPACE_RETRY = new URLSearchParams(WORKER_CLAIMS_WORKSPACE_RETRY_QUERY);
+const asksWorkspaceRetry = (request: FastifyRequest): boolean => {
+  const query = request.query as Record<string, unknown> | undefined;
+  return [...WORKSPACE_RETRY].every(([key, value]) => query?.[key] === value);
+};
+
+import { redaction as redactionAdapters } from '@platform/infrastructure';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { HttpError } from '../../errors.js';
@@ -608,7 +623,7 @@ export const registerWorkerProtocolRoutes = async (
       schema: {
         summary: 'Claim an eligible run offer — held up to 25 s (TD-031 §§2, 8, 9)',
         description:
-          'Worker credential. The one claim, with the worker’s eligibility checked in its statement (TD-031 §8: a project member at `member`+, not revoked, not paused, not excluded, the offer’s images held, the project’s run credential `minted`), the run token minted and stored hashed, the git credential minted after the claim commits. `200` with the run package, or `204` when nothing was claimable within the hold. A `paused` worker is answered `204` at once (TD-031 §11). `503 digests_unresolved` while the core cannot name its images (WP-281).',
+          'Worker credential. The one claim, with the worker’s eligibility checked in its statement (TD-031 §8: a project member at `member`+, not revoked, not paused, not excluded, the offer’s images held, the project’s run credential `minted`), the run token minted and stored hashed, the git credential minted after the claim commits. `200` with the run package, or `204` when nothing was claimable within the hold. A `paused` worker is answered `204` at once (TD-031 §11). `503 digests_unresolved` while the core cannot name its images (WP-281). S-28.12: a worker in a workspace failure’s cool-down is not eligible until it passes; `?workspace_retry=1` (its retry, or its owner’s *Try again*) lifts it, and the recorded cause stays until a run’s CLI is asked for.',
         tags: ['worker'],
         body: workerClaimRequestSchema,
         response: {
@@ -626,15 +641,16 @@ export const registerWorkerProtocolRoutes = async (
       if (release === null) {
         throw unresolved();
       }
-      // S-28.12: a claim is the worker saying it can start runs again — its retry, or its owner's
-      // *Try again* — so a recorded provisioning failure is cleared.
-      if ((row.workspaceUnavailable ?? null) !== null) {
-        await options.store.setWorkspaceUnavailable({ workerId, value: null });
-      }
       // The owner's hold (WP-292) answers at once, as a worker's own `paused` does: the claim's
       // eligibility would refuse it anyway, and holding the request would only keep a slot busy.
       if (request.body.paused || row.manuallyPausedAt !== null) {
         return reply.code(204).send(null);
+      }
+      // S-28.12: a worker whose workspace failed retries — by its backoff or its owner's *Try
+      // again* — with `?workspace_retry=1`: the cool-down is lifted so this claim may take a run
+      // (the probe). The cause stays on its row until a run's CLI is asked for (`spawn`).
+      if (asksWorkspaceRetry(request) && (row.workspaceUnavailable?.until ?? null) !== null) {
+        await options.store.retryWorkspace(workerId);
       }
       const presence = presenceOf(reply);
       const deadline = Date.now() + claimHoldMs;
@@ -799,7 +815,7 @@ export const registerWorkerProtocolRoutes = async (
       schema: {
         summary: 'Hand a claimed run back unspent, before its CLI spawn marker (TD-031 §6)',
         description:
-          'Run token. Only while the run is `starting` and its CLI spawn marker is unwritten: the offer `claimed → open` (epoch kept), the lease cleared, the run `starting → created`, `run.offer.released`, the worker excluded for `usage_limited` and `provision_failed`, the minted credential revoked; nothing charged. S-28.12: `workspace {cause, detail}` (with `provision_failed` only) records why the machine could not provision a workspace — its Workers row carries the `workspace_unavailable` blocker until its next claim clears it. A repeat answers `204` again. `409 run_started` once the marker is written — a started run ends through `finish`; `409 lease_lost` for another claim or an ended run (WP-281).',
+          'Run token. Only while the run is `starting` and its CLI spawn marker is unwritten: the offer `claimed → open` (epoch kept), the lease cleared, the run `starting → created`, `run.offer.released`, the worker excluded for `usage_limited` and `provision_failed`, the minted credential revoked; nothing charged. S-28.12: `workspace {cause, detail}` (with `provision_failed` only) records why the machine could not provision a workspace and a cool-down the claim refuses it until (lifted by `claims?workspace_retry=1`) — and, instead of the exclusion, keeps it eligible for this offer; its Workers row carries the `workspace_unavailable` blocker until a run’s `spawn` clears it. A repeat answers `204` again. `409 run_started` once the marker is written — a started run ends through `finish`; `409 lease_lost` for another claim or an ended run (WP-281).',
         tags: ['worker'],
         params: runParamsSchema,
         body: workerRunReleaseRequestSchema,
@@ -809,20 +825,37 @@ export const registerWorkerProtocolRoutes = async (
     async (request, reply) => {
       const runId = request.params.id as Id;
       const subject = runHolder(request);
+      const workspace = request.body.workspace;
       const result = await remote.release({
         runId,
         workerId: subject.workerId,
         epoch: request.body.epoch,
         reason: request.body.reason,
         now: isoNow(now),
+        // S-28.12: a workspace failure's hand-back keeps the worker eligible for this offer — the
+        // cool-down below keeps it off instead, so a lone machine, once repaired, runs its own task.
+        ...(workspace === undefined ? {} : { exclude: false }),
       });
-      // S-28.12: the machine could not provision the workspace — its row says why until its next
-      // claim. Recorded for a performed release or a repeat; a refused one changed nothing.
-      const workspace = request.body.workspace;
+      // S-28.12: the machine could not provision the workspace — its row says why, and the claim
+      // refuses it until the cool-down passes or it retries. Recorded for a performed release or a
+      // repeat; a refused one changed nothing. The worker's `detail` is redacted again here, by the
+      // platform's own pattern rules, before it is stored.
       if (workspace !== undefined && (result === 'released' || result === 'already_released')) {
+        const at = now();
         await options.store.setWorkspaceUnavailable({
           workerId: subject.workerId,
-          value: { cause: workspace.cause, detail: workspace.detail, at: now() },
+          value: {
+            cause: workspace.cause,
+            detail:
+              workspace.detail === null
+                ? null
+                : WORKSPACE_DETAIL_REDACTOR.redactText(workspace.detail).value.slice(
+                    0,
+                    WORKSPACE_UNAVAILABLE_DETAIL_MAX_CHARS,
+                  ),
+            at,
+            until: new Date(at.getTime() + WORKSPACE_COOL_DOWN_MS),
+          },
         });
       }
       if (result === 'run_started') {
@@ -872,6 +905,9 @@ export const registerWorkerProtocolRoutes = async (
           `run ${runId} recorded no context pack, so run.started cannot be written; finish it as not_started`,
         );
       }
+      // S-28.12: the CLI being asked for proves this machine provisions workspaces again — the
+      // recorded cause, if any, is cleared.
+      await options.store.setWorkspaceUnavailable({ workerId: subject.workerId, value: null });
       return { started_at: answer.startedAt };
     },
   );

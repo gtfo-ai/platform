@@ -26,7 +26,7 @@
  */
 import type { OfferWaiting, WorkerClaimBlocker } from '@platform/contracts';
 import { Fragment, type ReactElement } from 'react';
-import { wordInSentence } from '../ui/humanize.js';
+import { WORKSPACE_CAUSE_SHORT, wordInSentence } from '../ui/humanize.js';
 import { formatAgo } from '../ui/relative-time.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
@@ -166,6 +166,13 @@ export const waitingLong = (
     case 'owner_worker_cannot_take': {
       const kind = cannotTakeKind(waiting.blockers);
       const [first] = waiting.blockers;
+      if (first === 'workspace_unavailable' && waiting.workspace_cause !== undefined) {
+        // S-28.12: which machine, and why it cannot start runs.
+        return [
+          ...forMachine,
+          `It can’t start runs: ${WORKSPACE_CAUSE_SHORT[waiting.workspace_cause]}. It tries again by itself; its owner can press Try again on its page once it is fixed.`,
+        ];
+      }
       return [
         ...forMachine,
         kind === 'other' && first !== undefined

@@ -57,6 +57,8 @@ export const workers = pgTable('workers', {
   workspaceUnavailableAt: timestamp('workspace_unavailable_at', { withTimezone: true }),
   workspaceUnavailableCause: text('workspace_unavailable_cause'),
   workspaceUnavailableDetail: text('workspace_unavailable_detail'),
+  /** S-28.12: the cool-down — the claim refuses the worker until it passes (lifted by its retry). */
+  workspaceUnavailableUntil: timestamp('workspace_unavailable_until', { withTimezone: true }),
 });
 
 /** A device-flow code pair, both halves stored hashed (RFC 8628's shape, TD-031 §10c). */

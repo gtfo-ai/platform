@@ -41,6 +41,7 @@ import type {
   RunOfferKind,
   RunStatus,
 } from '@platform/contracts';
+import { workspaceUnavailableCauseSchema } from '@platform/contracts';
 import { ACTIVE_RUN_STATUSES } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
@@ -123,7 +124,8 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
  * - the worker is not revoked, its user may act (backlog 714: here, in the statement that commits the
  *   claim) and its **effective** project role — the higher of its organisation role and a project
  *   membership, `rbac.ts`'s rule (backlog 886) — is `member` or above, and it is not paused — neither by a usage
- *   limit (`paused_until`) nor by its owner (`manually_paused_at`, WP-292);
+ *   limit (`paused_until`) nor by its owner (`manually_paused_at`, WP-292) — nor in the cool-down a
+ *   workspace failure's hand-back set (`workspace_unavailable_until`, S-28.12);
  * - `now ≥ workers_from`, or the worker's user is the offer's assignee inside its head start — a
  *   `null` `workers_from` is *never* (`server_only`, and an offer written before WP-278);
  * - the project's run credential is `minted`, or — WP-282, decision 5, Q124 (a) — a git binding whose
@@ -149,6 +151,8 @@ export const workerEligibleSql = (p: {
               and ${USER_MAY_ACT_SQL}
               and (w.paused_until is null or w.paused_until <= ${p.now}::timestamptz)
               and w.manually_paused_at is null
+              and (w.workspace_unavailable_until is null
+                   or w.workspace_unavailable_until <= ${p.now}::timestamptz)
               and ${userMayRunInProjectSql('w.user_id', 'o.project_id')}
               and (o.workers_from <= ${p.now}::timestamptz
                    or (o.assignee_user_id = w.user_id and ${p.now}::timestamptz < o.assignee_until)))
@@ -785,11 +789,20 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       kind: RunOfferKind;
       offered_at: Date;
       expires_at: Date;
+      blocked_name: string | null;
+      blocked_cause: string | null;
     }>(
-      `select run_id, task_id, project_id, kind, offered_at, expires_at
-         from run_offers
-        where state = 'open' and expires_at <= $1::timestamptz
-        order by expires_at, id
+      // S-28.12: the machine that last handed the run back for a workspace failure and still
+      // cannot provision one — what the escalation's brief names.
+      `select o.run_id, o.task_id, o.project_id, o.kind, o.offered_at, o.expires_at,
+              bw.name as blocked_name, bw.workspace_unavailable_cause as blocked_cause
+         from run_offers o
+         left join workers bw
+           on bw.id = o.worker_id
+          and o.release_reason = 'provision_failed'
+          and bw.workspace_unavailable_at is not null
+        where o.state = 'open' and o.expires_at <= $1::timestamptz
+        order by o.expires_at, o.id
         limit $2`,
       [input.now, input.limit],
     );
@@ -800,6 +813,13 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       kind: row.kind,
       offeredAt: iso(row.offered_at) as IsoDateTime,
       expiresAt: iso(row.expires_at) as IsoDateTime,
+      blockedMachine:
+        row.blocked_name === null
+          ? null
+          : {
+              name: row.blocked_name,
+              cause: workspaceUnavailableCauseSchema.safeParse(row.blocked_cause).data ?? 'unknown',
+            },
     }));
   },
   unroutedOpen: async (tx, limit) => {

@@ -34,6 +34,7 @@ import {
   runPackageSchema,
   WORKER_API_PREFIX,
   WORKER_CLAIM_SCOPE_TAKERS_QUERY,
+  WORKER_CLAIMS_WORKSPACE_RETRY_QUERY,
   WORKER_OFFERS_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
@@ -168,7 +169,13 @@ export interface CoreClient {
     body: unknown,
   ): Promise<z.output<typeof workerHandshakeResponseSchema>>;
   /** `null` is `204`: nothing was claimable within the hold. */
-  claim(credential: string, body: unknown, signal?: AbortSignal): Promise<RunPackage | null>;
+  claim(
+    credential: string,
+    body: unknown,
+    signal?: AbortSignal,
+    /** S-28.12: a retry after a workspace failure — `?workspace_retry=1` lifts the core's cool-down. */
+    workspaceRetry?: boolean,
+  ): Promise<RunPackage | null>;
   /** The owner's hold on claiming (WP-292, protocol 2): `{ paused }`, a state assertion. */
   manualPause(
     credential: string,
@@ -387,13 +394,14 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         { verb: WORKER_PATHS.handshake, bearer: credential, body, runScoped: false },
         workerHandshakeResponseSchema,
       ),
-    claim: async (credential, body, signal) => {
+    claim: async (credential, body, signal, workspaceRetry = false) => {
       const answer = await call({
         verb: WORKER_PATHS.claims,
         bearer: credential,
         body,
         runScoped: false,
         ...(signal === undefined ? {} : { signal }),
+        ...(workspaceRetry ? { query: WORKER_CLAIMS_WORKSPACE_RETRY_QUERY } : {}),
       });
       if (answer.status === 204) return null;
       if (answer.status === 200) {

@@ -44,7 +44,7 @@
  * operator command. Its `expires_at` counts from the re-route, so the offer timeout's day starts
  * when a claimant could first see it rather than escalating the task the moment it is routed.
  */
-import type { IsoDateTime } from '@platform/contracts';
+import type { IsoDateTime, WorkspaceUnavailableCause } from '@platform/contracts';
 import { RUN_OFFERS_TOPIC, routeNewOffer } from '../pipeline/offers.js';
 import type {
   ExecutionRoutingRepository,
@@ -67,9 +67,24 @@ export const OFFER_TIMEOUT_REASON = 'offer_timeout';
 
 /** The escalation's brief (TD-031 decision 1: *no claimant took this run*), naming when it expired. */
 export const offerTimeoutBrief = (
-  offer: Pick<ExpiredRunOffer, 'offeredAt' | 'expiresAt'>,
-): string =>
-  `no claimant took this run: it was offered at ${offer.offeredAt} and nobody claimed it before its offer timeout at ${offer.expiresAt}. Check where this project's runs may execute (project settings, Execution) — a workers-only project needs a connected worker, a server-only project a server runner`;
+  offer: Pick<ExpiredRunOffer, 'offeredAt' | 'expiresAt' | 'blockedMachine'>,
+): string => {
+  const machine = offer.blockedMachine ?? null;
+  // S-28.12: a machine that handed the run back because it cannot start runs is named, with why.
+  return machine === null
+    ? `no claimant took this run: it was offered at ${offer.offeredAt} and nobody claimed it before its offer timeout at ${offer.expiresAt}. Check where this project's runs may execute (project settings, Execution) — a workers-only project needs a connected worker, a server-only project a server runner`
+    : `no claimant took this run: it was offered at ${offer.offeredAt} and nobody claimed it before its offer timeout at ${offer.expiresAt}. The machine that last took it, ${machine.name.slice(0, 200)}, cannot start runs: ${WORKSPACE_CAUSE_BRIEF[machine.cause]}. Fix it on that computer and press Try again on its page, or connect another worker; then retry the task`;
+};
+
+/** S-28.12: a workspace failure's cause in the brief's words. */
+const WORKSPACE_CAUSE_BRIEF: Readonly<Record<WorkspaceUnavailableCause, string>> = {
+  docker_networks_exhausted:
+    'Docker on it has no free network ranges (docker network prune removes the unused ones)',
+  docker_unreachable: 'Docker on it is not answering',
+  image_missing: 'a run image could not be found or downloaded on it',
+  disk_full: 'it is out of disk space',
+  unknown: 'a run’s workspace could not be created on it (its Workers row has the error)',
+};
 
 export interface OfferTimeoutRecoverySite {
   readonly store: Pick<RunOfferRepository, 'expiredOpen'>;

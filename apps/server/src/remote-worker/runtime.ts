@@ -958,6 +958,9 @@ export const startRemoteWorker = async (
             paused: false,
           },
           claimAbort.signal,
+          // S-28.12: while its workspace is unavailable, every claim is a retry — the core lifts
+          // the cool-down it set at the hand-back, so this claim may take the probe run.
+          workspaceBlock !== null,
         );
         claimInFlight = claiming.then(
           () => undefined,

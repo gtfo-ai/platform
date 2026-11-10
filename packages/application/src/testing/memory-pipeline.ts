@@ -419,6 +419,8 @@ export interface MemoryRemoteWorker {
   readonly pausedUntil: IsoDateTime | null;
   /** The owner's hold from the worker's local page (WP-292); absent reads as not held. */
   readonly manuallyPaused?: boolean;
+  /** S-28.12: a workspace failure's cool-down (`workspace_unavailable_until`); absent is none. */
+  readonly workspaceUnavailableUntil?: IsoDateTime | null;
   /**
    * The worker's claim scope (WP-293): `null`/absent every project, otherwise those projects — a
    * conjunct of an automatic claim, ignored by a pick. A legacy `[]` narrows nothing and makes an
@@ -2155,6 +2157,8 @@ export const createMemoryPipelineStore = (
       return false;
     }
     if (known.manuallyPaused === true) return false;
+    const coolDown = known.workspaceUnavailableUntil ?? null;
+    if (coolDown !== null && Date.parse(coolDown) > Date.parse(claim.now)) return false;
     if (!known.memberOf(candidate.projectId)) return false;
     const remote = remoteOf(candidate.runId);
     if (remote.excluded.includes(worker.workerId)) return false;

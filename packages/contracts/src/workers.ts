@@ -180,7 +180,7 @@ export const workerSummarySchema = z.strictObject({
   /**
    * S-28.12: the machine could not provision a run's workspace — the classified cause, the launcher
    * error's first line (the worker's redaction; untrusted text) and since when — from its `release
-   * provision_failed` until its next claim. Its claim blockers then include `workspace_unavailable`.
+   * provision_failed` until a run's CLI is asked for (`spawn`). Its claim blockers then include `workspace_unavailable`.
    * Optional on the wire for the SPA's fixtures; this build's server always sends it.
    */
   workspace_unavailable: workspaceUnavailableSchema.nullable().optional(),

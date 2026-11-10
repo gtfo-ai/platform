@@ -2219,8 +2219,10 @@ spent and nothing is escalated), and stops taking work. Its row turns red — *C
 can't start runs on this computer — Docker has no free network ranges* — with what to do under
 *Why?* and the error itself under *Details*; its own page says the same with **Try again**. It also
 tries again by itself after 1, 5 and then every 15 minutes, and the first run it starts clears it.
-A task whose only machine is in this state waits with *Waiting for Jan's machine … it can't start
-runs on this computer*.
+A task whose only machine is in this state waits for it — *Waiting for Jan's machine. It can't start
+runs: Docker has no free network ranges.* — and runs on it once it is fixed and **Try again** is
+pressed; if nobody does before the offer times out, the task stops naming the machine and the
+cause.
 
 **Workers** lists the machines registered to run agent stages for this platform — yours, or every
 one if you are an administrator. **Add a worker** at the top opens the wizard below, and **Approve a

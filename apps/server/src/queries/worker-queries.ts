@@ -146,6 +146,8 @@ export interface WorkerListRow {
     readonly cause: WorkspaceUnavailableCause;
     readonly detail: string | null;
     readonly since: Date;
+    /** The cool-down: the claim refuses the worker until it passes; `null` once lifted. */
+    readonly until: Date | null;
   } | null;
   /**
    * Open offers its eligibility and scope admit now and its policy refuses (S-26.4) — read by
@@ -389,8 +391,9 @@ export interface WorkerStore {
    */
   policySkippedOffers(workerId: string, coreDigests: RunImageDigests): Promise<number | null>;
   /**
-   * S-28.12: records why the machine cannot provision a workspace (its `release provision_failed`),
-   * or clears it (`null`, its next claim) — a write only when something changes.
+   * S-28.12: records why the machine cannot provision a workspace and its cool-down (its `release
+   * provision_failed`), or clears the record (`null`: a run's CLI was asked for — it provisions
+   * again). The first instant is kept across repeats; a clear writes only a set row.
    */
   setWorkspaceUnavailable(input: {
     readonly workerId: string;
@@ -398,8 +401,14 @@ export interface WorkerStore {
       readonly cause: WorkspaceUnavailableCause;
       readonly detail: string | null;
       readonly at: Date;
+      readonly until: Date;
     } | null;
   }): Promise<void>;
+  /**
+   * S-28.12: lifts the cool-down (its retry claim, `?workspace_retry=1`) and keeps the cause — the
+   * row still says why until a run's CLI is asked for.
+   */
+  retryWorkspace(workerId: string): Promise<void>;
   /**
    * **A usage limit's pause** (`POST pause`, WP-285, TD-031 decision 11): `paused_until`,
    * `paused_reason = 'usage_limited'` and whether the instant is the default pause. A repeat stores
@@ -566,6 +575,7 @@ type WorkerRowSql = {
   workspace_unavailable_at?: Date | null;
   workspace_unavailable_cause?: string | null;
   workspace_unavailable_detail?: string | null;
+  workspace_unavailable_until?: Date | null;
   concurrency: number;
   running: { run_id: string; task_id: string; project_id: string }[];
 };
@@ -712,6 +722,7 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
             'unknown',
           detail: row.workspace_unavailable_detail ?? null,
           since: at(row.workspace_unavailable_at) as Date,
+          until: at(row.workspace_unavailable_until ?? null),
         },
   ...(row.policy_skipped_offers === undefined
     ? {}
@@ -1147,7 +1158,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       await database.execute(sql`
         update workers
            set workspace_unavailable_at = null, workspace_unavailable_cause = null,
-               workspace_unavailable_detail = null
+               workspace_unavailable_detail = null, workspace_unavailable_until = null
          where id = ${workerId} and workspace_unavailable_at is not null`);
       return;
     }
@@ -1155,8 +1166,15 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       update workers
          set workspace_unavailable_at = coalesce(workspace_unavailable_at, ${value.at}),
              workspace_unavailable_cause = ${value.cause},
-             workspace_unavailable_detail = ${value.detail}
+             workspace_unavailable_detail = ${value.detail},
+             workspace_unavailable_until = ${value.until}
        where id = ${workerId}`);
+  },
+
+  async retryWorkspace(workerId) {
+    await database.execute(sql`
+      update workers set workspace_unavailable_until = null
+       where id = ${workerId} and workspace_unavailable_until is not null`);
   },
 
   async organisationTimezone() {

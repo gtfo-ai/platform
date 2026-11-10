@@ -122,6 +122,13 @@ describe('the worker’s half', () => {
     [{ launcherAnswered: false, heldDigests: [] }, ['launcher_unreachable']],
     [{ heldDigests: [] }, ['images_missing']],
     [{ heldDigests: [OLD, EGRESS] }, ['images_outdated']],
+    // S-28.12: a workspace failure, beside — never instead of — what the launcher says.
+    [{ workspaceUnavailable: true }, ['workspace_unavailable']],
+    [{ workspaceUnavailable: true, heldDigests: [] }, ['workspace_unavailable', 'images_missing']],
+    [
+      { workspaceUnavailable: true, launcherAnswered: false, heldDigests: [] },
+      ['launcher_unreachable', 'workspace_unavailable'],
+    ],
   ] as const)('names %j', (change, expected) => {
     expect(localClaimBlockersOf({ ...connected, ...change })).toEqual(expected);
   });

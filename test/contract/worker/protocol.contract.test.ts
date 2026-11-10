@@ -49,6 +49,7 @@ import {
   type UserRole,
   WORKER_API_PREFIX,
   WORKER_CLAIM_SCOPE_TAKERS_QUERY,
+  WORKER_CLAIMS_WORKSPACE_RETRY_QUERY,
   WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_OFFERS_QUERY,
   WORKER_PATHS,
@@ -273,6 +274,11 @@ const world = async (
           usable: row.state === 'active' && store.userMayAct(row.userId),
           pausedUntil: row.pausedUntil === null ? null : (row.pausedUntil.toISOString() as never),
           manuallyPaused: row.manuallyPausedAt !== null,
+          // S-28.12: a workspace failure's cool-down, from the same row.
+          workspaceUnavailableUntil:
+            row.workspaceUnavailable?.until == null
+              ? null
+              : (row.workspaceUnavailable.until.toISOString() as never),
           memberOf: (projectId) => projectId === PROJECT,
           // WP-293: the claim scope, from the same row.
           claimProjectIds: row.claimProjects === null ? null : row.claimProjects.map((p) => p.id),
@@ -1199,53 +1205,73 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(`${started.statusCode} ${started.json().error?.code}`).toBe('409 run_started');
   });
 
-  /**
-   * S-28.12, the AUT-6861 scenario (Autix, 2026-11-10): Alice's machine cannot provision a
-   * workspace (Docker out of network ranges). It hands the run back with the cause — no attempt
-   * spent, no `finish`, the task not escalated — and Bob's healthy machine takes the same run, while
-   * Alice's is kept off that offer. Her Workers row says why until her machine claims again.
-   */
-  it('release provision_failed with its cause: the healthy machine runs it, nothing escalates, the row says why until the next claim', async () => {
-    const w = await world();
-    const pkg = await claimAsAlice(w);
-    const released = await post(w, WORKER_PATHS.runRelease, w.runId, pkg.runToken, {
-      epoch: 1,
+  const claimAs = (w: World, credential: string, query = '') =>
+    w.app.inject({
+      method: 'POST',
+      url: `${url(WORKER_PATHS.claims)}${query}`,
+      headers: bearer(credential),
+      payload: bodies(1)[WORKER_PATHS.claims],
+    });
+  const handBack = (w: World, runToken: string, epoch: number) =>
+    post(w, WORKER_PATHS.runRelease, w.runId, runToken, {
+      epoch,
       reason: 'provision_failed',
       workspace: {
         cause: 'docker_networks_exhausted',
         detail:
-          'Docker engine answered 400: all predefined address pools have been fully subnetted',
+          'Docker engine answered 400: all predefined address pools have been fully subnetted glpat-FAKE000000000000000',
       },
     });
-    expect(released.statusCode).toBe(204);
-    const aliceRow = async () =>
-      (await w.store.listWorkers(null)).find((row) => row.id === w.alice.workerId);
-    expect((await aliceRow())?.workspaceUnavailable).toMatchObject({
-      cause: 'docker_networks_exhausted',
-      detail: 'Docker engine answered 400: all predefined address pools have been fully subnetted',
-    });
-    // The offer is open again with Alice's machine excluded, and the run was never finished.
+
+  /**
+   * S-28.12, the AUT-6861 scenario (Autix, 2026-11-10): Alice's machine cannot provision a
+   * workspace (Docker out of network ranges). It hands the run back with the cause — no attempt
+   * spent, no `finish`, the task not escalated — and Bob's healthy machine takes the same run.
+   */
+  it('release provision_failed with its cause: the healthy machine runs it, nothing escalates, the row says why', async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    expect((await handBack(w, pkg.runToken, 1)).statusCode).toBe(204);
+    const row = (await w.store.listWorkers(null)).find((one) => one.id === w.alice.workerId);
+    expect(row?.workspaceUnavailable).toMatchObject({ cause: 'docker_networks_exhausted' });
+    // The core's own redactor ran over the worker's words before they were stored.
+    expect(row?.workspaceUnavailable?.detail).not.toContain('glpat-FAKE');
     expect(w.harness.store.offerRows()[0]?.state).toBe('open');
     expect(w.harness.types()).not.toContain('run.failed');
     expect(w.harness.types()).not.toContain('task.escalated');
-    // Bob's healthy machine takes the same run.
-    const bobs = await w.app.inject({
-      method: 'POST',
-      url: url(WORKER_PATHS.claims),
-      headers: bearer(w.bob.credential),
-      payload: bodies(1)[WORKER_PATHS.claims],
-    });
+    const bobs = await claimAs(w, w.bob.credential);
     expect(bobs.statusCode).toBe(200);
     expect(runPackageSchema.parse(bobs.json()).runId).toBe(w.runId);
-    // Alice's next claim (her retry) is admitted to ask — and clears the recorded cause.
-    const again = await w.app.inject({
-      method: 'POST',
-      url: url(WORKER_PATHS.claims),
-      headers: bearer(w.alice.credential),
-      payload: bodies(1)[WORKER_PATHS.claims],
-    });
-    expect(again.statusCode).toBe(204);
-    expect((await aliceRow())?.workspaceUnavailable ?? null).toBeNull();
+  });
+
+  /**
+   * The review of #152: with Alice's machine **alone**, a permanent per-offer exclusion kept her
+   * repaired machine off her own task until the offer timed out. Now: hand back → a cool-down (a
+   * plain claim is refused, and the row is blocked) → *Try again* (`?workspace_retry=1`) → the
+   * SAME run is claimed and its CLI asked for → the record clears.
+   */
+  it('a lone machine, repaired, runs the same run after Try again — the cool-down, never an exclusion', async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    expect((await handBack(w, pkg.runToken, 1)).statusCode).toBe(204);
+    const blocked = async () =>
+      (await w.store.listWorkers(null)).find((one) => one.id === w.alice.workerId)
+        ?.workspaceUnavailable ?? null;
+    // In the cool-down: a plain claim takes nothing, and the record stands.
+    expect((await claimAs(w, w.alice.credential)).statusCode).toBe(204);
+    expect(await blocked()).not.toBeNull();
+    // *Try again*: the same run, claimed by the same machine.
+    const again = await claimAs(w, w.alice.credential, `?${WORKER_CLAIMS_WORKSPACE_RETRY_QUERY}`);
+    expect(again.statusCode).toBe(200);
+    const repaired = runPackageSchema.parse(again.json());
+    expect(repaired.runId).toBe(w.runId);
+    // Claimed is not proof: the cause stays until the CLI is asked for.
+    expect(await blocked()).toMatchObject({ cause: 'docker_networks_exhausted', until: null });
+    expect(
+      (await post(w, WORKER_PATHS.spawn, w.runId, repaired.runToken, { epoch: repaired.epoch }))
+        .statusCode,
+    ).toBe(200);
+    expect(await blocked()).toBeNull();
   });
 
   it('refuses a workspace cause on any release but provision_failed (S-28.12)', async () => {

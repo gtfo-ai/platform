@@ -815,11 +815,18 @@ produced for the machine's own person.
 launcher error's first line as the worker redacted it, ≤ 500). The worker sends it when a start fails
 before its CLI is asked for and `workspaceFaultOf` reads the failure as the machine's (never an
 `invalid_spec`, never a helper's own failure); an older core answers `400` to the key and the worker
-releases again without it. The release keeps the worker off that offer, re-opens it and spends no
-attempt; the core records the cause on `workers.workspace_unavailable_*` (migration 0117) and clears it
-at the worker's next claim. `GET /api/workers` carries `workspace_unavailable {cause, detail, since}` and
-the claim blocker `workspace_unavailable`; the worker's local state carries the same with `retry_at`;
-the waiting read counts it among `owner_worker_cannot_take`'s blockers.
+releases again without it. The release re-opens the offer and spends no attempt, and — unlike
+`provision_failed` without the cause — does **not** exclude the worker from it: the core records the
+cause and a **cool-down** on `workers.workspace_unavailable_*` (migration 0117; the detail redacted
+again by the core's pattern rules), and the claim's eligibility (`workerEligibleSql`) refuses the
+worker until `workspace_unavailable_until` passes, so a broken machine cannot re-claim at once while a
+lone, repaired one can still run its own task. The worker's retry claim — its backoff, or its owner's
+*Try again* — sends `claims?workspace_retry=1` (`WORKER_CLAIMS_WORKSPACE_RETRY_QUERY`), which lifts the
+cool-down; the record is cleared at `spawn` (a run's CLI asked for proves the machine provisions), never
+by a claim. `GET /api/workers` carries `workspace_unavailable {cause, detail, since}` and the claim
+blocker `workspace_unavailable`; the worker's local state carries the same with `retry_at`; the waiting
+read counts it among `owner_worker_cannot_take`'s blockers with `workspace_cause`; and an offer that times
+out after such a hand-back escalates with a brief naming the machine and the cause.
 
 **Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8). The task record (`GET /api/tasks/:id`'s
 `task` and every item of `GET /api/projects/:id/tasks`) and every `GET /api/org/agents` item carry

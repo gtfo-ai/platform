@@ -28,6 +28,21 @@ export const WORKSPACE_UNAVAILABLE_CAUSES = [
 export const workspaceUnavailableCauseSchema = z.enum(WORKSPACE_UNAVAILABLE_CAUSES);
 export type WorkspaceUnavailableCause = z.infer<typeof workspaceUnavailableCauseSchema>;
 
+/**
+ * The query a worker adds to its `claims` while its workspace is unavailable — its retry, or its
+ * owner's *Try again* (S-28.12): the core lifts the cool-down it set at the hand-back, so this
+ * claim may take a run (the probe); the recorded cause stays until a run's CLI is asked for. An
+ * older core ignores a query it does not read.
+ */
+export const WORKER_CLAIMS_WORKSPACE_RETRY_QUERY = 'workspace_retry=1';
+
+/**
+ * How long the core keeps a worker that handed a run back for a workspace failure off every offer
+ * (S-28.12) unless it retries first — the worker's own first wait, so an immediate re-claim is
+ * refused server-side too.
+ */
+export const WORKSPACE_COOL_DOWN_MS = 60_000;
+
 /** The longest first line of the launcher's error a worker sends and a screen shows. */
 export const WORKSPACE_UNAVAILABLE_DETAIL_MAX_CHARS = 500;
 

@@ -74,18 +74,21 @@ describe('a machine’s blockers → its reason (the mapping, pinned)', () => {
     usage_limited: 'owner_worker_cannot_take',
     images_missing: 'owner_worker_cannot_take',
     images_outdated: 'owner_worker_cannot_take',
+    // S-28.12: a core-known blocker since the hand-back records it.
+    workspace_unavailable: 'owner_worker_cannot_take',
   };
 
   it.each(WORKER_CLAIM_BLOCKERS)('%s alone', (blocker) => {
     const waiting = reasonOfBlockers([blocker]);
     expect(waiting.reason).toBe(MAPPING[blocker]);
-    // Only the six core-known blockers that are not a reason of their own are carried.
+    // Only the seven core-known blockers that are not a reason of their own are carried.
     expect(waiting.blockers).toEqual(CANNOT_TAKE_BLOCKERS.has(blocker) ? [blocker] : []);
   });
 
-  it('carries exactly the six, and never a local-only blocker', () => {
+  it('carries exactly the seven, and never a local-only blocker', () => {
     expect([...CANNOT_TAKE_BLOCKERS].sort()).toEqual(
       [
+        'workspace_unavailable',
         'images_outdated',
         'images_missing',
         'protocol_outdated',
@@ -258,5 +261,33 @@ describe('keys only (S-26.5 criterion 4)', () => {
         blockers: ['its images are old'],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('a machine that cannot start runs (S-28.12)', () => {
+  it('waits for the owner’s machine, naming the blocker and the recorded cause', () => {
+    expect(
+      offerWaitingOf(
+        facts({
+          person: ALICE,
+          machines: [
+            machine({ workspaceUnavailable: true, workspaceCause: 'docker_networks_exhausted' }),
+          ],
+        }),
+      ),
+    ).toEqual({
+      reason: 'owner_worker_cannot_take',
+      user: { user_id: ALICE.userId, name: 'Alice' },
+      last_seen_at: null,
+      assignee_name: null,
+      blockers: ['workspace_unavailable'],
+      workspace_cause: 'docker_networks_exhausted',
+    });
+  });
+
+  it('says no cause for any other blocker', () => {
+    expect(
+      offerWaitingOf(facts({ person: ALICE, machines: [machine({ usagePaused: true })] })),
+    ).not.toHaveProperty('workspace_cause');
   });
 });

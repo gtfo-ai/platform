@@ -68,6 +68,7 @@ import type {
   TicketSnapshot,
   TokenUsage,
   WorkpadRef,
+  WorkspaceUnavailableCause,
 } from '@platform/contracts';
 import type {
   Approval,
@@ -2151,6 +2152,15 @@ export interface ExpiredRunOffer {
   readonly kind: RunOfferKind;
   readonly offeredAt: IsoDateTime;
   readonly expiresAt: IsoDateTime;
+  /**
+   * S-28.12: the machine that last handed this run back because it could not provision its
+   * workspace, and still cannot (its record stands) — its name (its owner's text) and the cause.
+   * Absent or `null`: none, or a store that does not know.
+   */
+  readonly blockedMachine?: {
+    readonly name: string;
+    readonly cause: WorkspaceUnavailableCause;
+  } | null;
 }
 
 /** One claim (TD-031 §2): who claims, under which owner, until when. */

@@ -130,8 +130,8 @@ export const localClaimBlockersOf = (facts: LocalWorkerClaimFacts): WorkerClaimB
   if (facts.draining) blockers.push('draining');
   else if (facts.manuallyPaused) blockers.push('paused');
   if (facts.usagePaused) blockers.push('usage_limited');
-  if (facts.launcherAnswered === false) blockers.push('launcher_unreachable');
   if (facts.workspaceUnavailable === true) blockers.push('workspace_unavailable');
+  if (facts.launcherAnswered === false) blockers.push('launcher_unreachable');
   else if (facts.launcherAnswered === true) {
     blockers.push(...imageBlockers(facts.heldDigests, facts.coreDigests));
   }

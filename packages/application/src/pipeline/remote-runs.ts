@@ -342,6 +342,13 @@ export interface RemoteRuns {
     readonly epoch: number;
     readonly reason: RunReleaseReason;
     readonly now: IsoDateTime;
+    /**
+     * S-28.12: `false` keeps the releasing worker eligible for this offer even for a reason that
+     * would exclude it — a workspace failure's hand-back, whose keeping-off is a cool-down on the
+     * worker instead (a permanent per-offer exclusion kept a lone, repaired machine off its own
+     * task). Absent: the reason decides (`usage_limited`, `provision_failed` exclude).
+     */
+    readonly exclude?: boolean;
   }): Promise<'released' | 'already_released' | 'run_started' | 'lease_lost'>;
   spawn(input: {
     readonly runId: Id;
@@ -502,7 +509,8 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
         epoch: input.epoch,
         owner,
         reason: input.reason,
-        excludeWorkerId: EXCLUDING_RELEASES.includes(input.reason) ? input.workerId : null,
+        excludeWorkerId:
+          (input.exclude ?? EXCLUDING_RELEASES.includes(input.reason)) ? input.workerId : null,
         now: input.now,
       });
       if (released.kind !== 'released') {

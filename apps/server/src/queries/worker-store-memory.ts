@@ -510,7 +510,13 @@ export const createMemoryWorkerStore = (
         cause: value.cause,
         detail: value.detail,
         since: workspace.get(workerId)?.since ?? value.at,
+        until: value.until,
       });
+    },
+
+    async retryWorkspace(workerId) {
+      const known = workspace.get(workerId);
+      if (known !== undefined) workspace.set(workerId, { ...known, until: null });
     },
 
     async policySkippedOffers(workerId) {

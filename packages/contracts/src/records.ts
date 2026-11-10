@@ -62,6 +62,7 @@ import {
   riskFactorSchema,
 } from './plan-risk.js';
 import { workerClaimBlockersSchema } from './worker-claim-blockers.js';
+import { workspaceUnavailableCauseSchema } from './workspace-unavailable.js';
 
 /**
  * Opaque JSON, used only where the platform stores a payload it does not own: redacted
@@ -994,6 +995,11 @@ export const offerWaitingSchema = z.strictObject({
   last_seen_at: isoDateTimeSchema.nullable(),
   assignee_name: z.string().max(TICKET_ASSIGNEE_NAME_MAX_CHARS).nullable(),
   blockers: workerClaimBlockersSchema,
+  /**
+   * S-28.12: with the `workspace_unavailable` blocker, why that machine cannot start runs — the
+   * classified cause its hand-back recorded. Absent otherwise.
+   */
+  workspace_cause: workspaceUnavailableCauseSchema.optional(),
 });
 export type OfferWaiting = z.infer<typeof offerWaitingSchema>;
 
