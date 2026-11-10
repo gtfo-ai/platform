@@ -66,6 +66,7 @@ import {
   answerQuestion,
   type CommandContext,
   DEFAULT_TASK_BUDGET_USD,
+  type DecideApprovalInput,
   decideApproval,
   IllegalTransitionError,
   PermissionDeniedError,
@@ -315,7 +316,12 @@ export const createInboundDecisionApplier = (
     }
     try {
       const reason = text(payload.reason);
-      const decisionInput = { decision, userId, role, ...(reason === null ? {} : { reason }) };
+      const decisionInput: DecideApprovalInput = {
+        decision,
+        userId,
+        role,
+        ...(reason === null ? {} : { reason }),
+      };
       const context = contextFor(approval.taskId, draft.actor);
       // The aggregate first, as a dry run: a refused decision raises no cap (S-28.16) — a refusal
       // here is returned, not thrown, so the delivery's transaction still commits.
