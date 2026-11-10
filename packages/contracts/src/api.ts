@@ -1921,6 +1921,12 @@ export const manualJobsSeenResponseSchema = z.strictObject({
     .max(MAX_JOB_NAMES_SEEN),
   heads_read: z.int().nonnegative(),
   heads_unread: z.int().nonnegative(),
+  /**
+   * Whether the **caller** may save a choice — `project.settings.write` over their effective role,
+   * the gate of `PUT …/config` that writes it. A maintainer reads the list and the card, and an
+   * administrator saves. A fact about the caller, like `can_change_limits`.
+   */
+  can_save: z.boolean().default(false),
 });
 export type ManualJobsSeenResponse = z.infer<typeof manualJobsSeenResponseSchema>;
 

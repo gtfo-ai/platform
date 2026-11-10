@@ -48,7 +48,7 @@ export interface RecentTaskHead {
 }
 
 export type ManualJobsSeenAnswer =
-  | { readonly status: 'ok'; readonly seen: ManualJobsSeenResponse }
+  | { readonly status: 'ok'; readonly seen: Omit<ManualJobsSeenResponse, 'can_save'> }
   | { readonly status: 'no_binding' }
   | { readonly status: 'unavailable'; readonly reason: string };
 
@@ -70,7 +70,7 @@ export const manualJobsSeenOf = (
   pipelines: readonly Pick<PipelineStatus, 'jobs'>[],
   unread: number,
   redact: (text: string) => string,
-): ManualJobsSeenResponse => {
+): Omit<ManualJobsSeenResponse, 'can_save'> => {
   const byName = new Map<string, ManualJobsSeenResponse['jobs'][number]>();
   const names = new Set<string>();
   for (const pipeline of pipelines) {
@@ -182,7 +182,10 @@ export const createManualJobsSeenReader = (options: {
         // A refusal is not cached: the next open asks again.
         return answer;
       }
-      cache.set(projectId, { at: now(), answer });
+      // Only an answer is kept: a project with no git binding may be bound a moment later.
+      if (answer.status === 'ok') {
+        cache.set(projectId, { at: now(), answer });
+      }
       return answer;
     },
   };

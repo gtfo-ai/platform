@@ -20,10 +20,11 @@ import {
   manualJobsSeenResponseSchema,
   type UserRole,
 } from '@platform/contracts';
+import { can } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
-import { requirePermission } from '../auth/rbac.js';
+import { effectiveRole, requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ManualJobsSeenAnswer } from '../manual-jobs-seen.js';
 
@@ -90,7 +91,16 @@ export const registerProjectCiJobsRoutes = async (
       if (answer.status === 'unavailable') {
         throw new HttpError(503, 'manual_jobs_unavailable', answer.reason);
       }
-      return answer.seen;
+      // The card's Save is an administrator's (`PUT …/config`): say so rather than answer a 403.
+      const actor = request.actor;
+      const role =
+        actor === undefined
+          ? undefined
+          : effectiveRole(actor.role, await options.projectRole(projectId, actor.userId));
+      return {
+        ...answer.seen,
+        can_save: role !== undefined && can(role, 'project.settings.write'),
+      };
     },
   );
 };

@@ -198,6 +198,7 @@ export const GateWaitNotice = ({
   projectKey,
   nowMs,
   started = null,
+  chosen,
 }: {
   readonly wait: GateWait;
   /** The merge request's provider id (`gitlab`), for "in GitLab". */
@@ -210,6 +211,8 @@ export const GateWaitNotice = ({
    * (`ci_manual_started`); the lines for this pipeline are said under the wait.
    */
   readonly started?: CiManualStarted | null;
+  /** S-28.7: the job names the project already chose for, which are not offered again. */
+  readonly chosen?: ReadonlySet<string>;
 }): ReactElement => {
   const here = (started ?? []).filter((entry) => entry.pipeline_id === wait.pipeline_id);
   const lines =
@@ -224,6 +227,7 @@ export const GateWaitNotice = ({
     // S-28.7: a person is waited for at a job the platform did not start — offer to change that.
     const startedByPlatform =
       wait.held_job !== null && here.some((entry) => entry.name === wait.held_job);
+    const chosenAlready = wait.held_job !== null && chosen?.has(wait.held_job) === true;
     return (
       <div data-gate-wait="held" className="flex flex-col gap-1">
         <p data-gate-wait-sentence="">
@@ -234,7 +238,7 @@ export const GateWaitNotice = ({
         <p className="text-xs text-fg-muted" data-gate-wait-time="">
           <PipelineName wait={wait} capital /> · {gateWaitTime(wait, nowMs)}.
         </p>
-        {projectKey !== null && !startedByPlatform ? (
+        {projectKey !== null && !startedByPlatform && !chosenAlready ? (
           <StartNextTime projectKey={projectKey} />
         ) : null}
         {wait.draft ? <DraftNote projectKey={projectKey} /> : null}
