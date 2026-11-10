@@ -113,6 +113,16 @@ export const jiraCloudConfigSchema = z
         });
       }
     }
+    // S-28.4: `pickup_status` always starts work, so it cannot also mean a ticket is finished.
+    for (const [index, name] of (lifecycle.closed ?? []).entries()) {
+      if (lifecycleStatusKey(name) === pickupKey) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['lifecycle', 'closed', index],
+          message: `closed[${index}] names the status pickup_status names; the status work is picked up from cannot also mean a ticket is finished`,
+        });
+      }
+    }
     for (const [index, name] of (lifecycle.returned ?? []).entries()) {
       if (lifecycleStatusKey(name) === pickupKey) {
         ctx.addIssue({

@@ -26,6 +26,7 @@
  */
 import type { TicketLifecycle, TicketStatusCategory } from '@platform/contracts';
 import { LIFECYCLE_SINGLE_SLOTS, lifecycleStatusKey } from '@platform/contracts';
+import { lifecycleMapsAnySlot } from './claim.js';
 
 /** A binding's status policy, as every door reads it. */
 export interface TicketStatusPolicy {
@@ -68,6 +69,29 @@ export const ticketStatusPolicyOf = (
           ...(block.returned ?? []),
         ],
 });
+
+/**
+ * **The legacy `status_mapping` writes count as the platform's own** (S-28.4 review finding 1): a
+ * block that maps no slot does not supersede `status_mapping` (TD-029 decision 3), so the status
+ * mapping handler moves the ticket — into an In Progress status, or a Done one — and the claim's
+ * pre-read, the reverse sync and the sweep must not read that move as a person's. Adds the
+ * mapping's target statuses to `platformStatuses` exactly when no slot is mapped; idempotent.
+ */
+export const withStatusMappingStatuses = (
+  policy: TicketStatusPolicy,
+  block: TicketLifecycle | null | undefined,
+  statusMapping: Readonly<Record<string, string>> | null | undefined,
+): TicketStatusPolicy => {
+  if (lifecycleMapsAnySlot(block) || statusMapping === null || statusMapping === undefined) {
+    return policy;
+  }
+  const extra = Object.values(statusMapping).filter(
+    (name) => !listHas(policy.platformStatuses, name),
+  );
+  return extra.length === 0
+    ? policy
+    : { ...policy, platformStatuses: [...policy.platformStatuses, ...extra] };
+};
 
 /** The policy of a binding that declares nothing: the category defaults, no `pickup_status`. */
 export const DEFAULT_TICKET_STATUS_POLICY: TicketStatusPolicy = ticketStatusPolicyOf(null, null);
@@ -197,8 +221,17 @@ export const claimStatusDecision = (input: {
   readonly category: TicketStatusCategory | null;
   readonly policy: TicketStatusPolicy;
   readonly first: boolean;
+  /**
+   * The claim was made for a person's explicit instruction — a *Rework*, a resume, a return to a
+   * stage, a hand-back (S-28.4 review ruling (a)): where the ticket sits does not override it, so
+   * nothing is refused; the caller may say a closed status as a notice.
+   */
+  readonly humanCommanded?: boolean;
 }): ClaimStatusDecision => {
   const { status, category, policy, first } = input;
+  if (input.humanCommanded === true) {
+    return { kind: 'proceed' };
+  }
   const disposition = ticketStatusDisposition(status, category, policy, true);
   if (disposition === 'closed') {
     return policy.onTicketClosed === 'ignore'

@@ -100,6 +100,8 @@ import {
   type TicketStatusPolicy,
   ticketClaimIsFirst,
   ticketClaimNeeded,
+  ticketStatusDisposition,
+  withStatusMappingStatuses,
 } from '@platform/domain';
 import { TransactionOpenError } from '../events/open-transaction.js';
 import { IntegrationError } from '../ports/integrations/common.js';
@@ -191,6 +193,15 @@ export const ensureTicketClaim = async (
    * re-claim can no longer land between the release's check and its `unassign` and be undone by it.
    * The release then reads the claim released, and the claim below is a first one (amendment (c)).
    */
+  /**
+   * **A claim a person commanded skips the status check** (S-28.4 review ruling (a)): a *Rework*
+   * (its claim is stale `rework`), and every re-entry of a stage — a resume, a return to a stage, a
+   * hand-back — which enters an attempt above 1. Only the first, automatic admission of a task
+   * (every stage at most once) is held to where the ticket sits.
+   */
+  const humanCommanded =
+    read.claim?.stale_cause === 'rework' ||
+    Object.values(task.stageAttempts).some((attempt) => attempt > 1);
   let claimNow = read.claim;
   if (
     claimNow?.stale === true &&
@@ -237,7 +248,15 @@ export const ensureTicketClaim = async (
       lifecycle,
       request,
       first,
-      settings.ticketStatusPolicy ?? null,
+      settings.ticketStatusPolicy === null || settings.ticketStatusPolicy === undefined
+        ? null
+        : // Finding 1: the legacy `status_mapping`'s writes are the platform's own, too.
+          withStatusMappingStatuses(
+            settings.ticketStatusPolicy,
+            lifecycle.slots,
+            settings.config.status_mapping,
+          ),
+      humanCommanded,
     );
   } catch (error) {
     if (
@@ -362,6 +381,7 @@ const claim = async (
   request: TicketClaimRequest,
   first: boolean,
   statusPolicy: TicketStatusPolicy | null,
+  humanCommanded: boolean,
 ): Promise<ClaimAttempt> => {
   const { task } = stored;
   const context = { projectId: task.projectId, taskId: task.id };
@@ -417,7 +437,19 @@ const claim = async (
       category: before.status_category ?? null,
       policy: statusPolicy,
       first,
+      humanCommanded,
     });
+    if (
+      humanCommanded &&
+      ticketStatusDisposition(before.status, before.status_category ?? null, statusPolicy, true) ===
+        'closed'
+    ) {
+      // A notice, never a refusal: a person asked for this run.
+      (options.logger ?? silentLogger).info(
+        { task_id: task.id, stage: request.stage },
+        'the ticket is in a finished status, but a person asked for this run, so it starts',
+      );
+    }
     if (verdict.kind === 'refuse') {
       return {
         self,

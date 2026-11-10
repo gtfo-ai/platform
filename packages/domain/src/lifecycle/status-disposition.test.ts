@@ -15,6 +15,7 @@ import {
   intakeStatusDecision,
   ticketStatusDisposition,
   ticketStatusPolicyOf,
+  withStatusMappingStatuses,
 } from './status-disposition.js';
 
 const DEFAULTS = DEFAULT_TICKET_STATUS_POLICY;
@@ -190,5 +191,48 @@ describe('lifecycleClaims and the status policy keys (M28 ruling 1)', () => {
     expect(lifecycleClaims({ start_from: ['To Do'], claim: false, in_progress: 'Doing' })).toBe(
       false,
     );
+  });
+});
+
+describe('the S-28.4 review rulings', () => {
+  it('a claim a person commanded is never refused, closed or not (ruling (a))', () => {
+    for (const [status, category] of [
+      ['Released', 'done'],
+      ['Review', 'in_progress'],
+    ] as const) {
+      expect(
+        claimStatusDecision({
+          status,
+          category,
+          policy: DEFAULTS,
+          first: true,
+          humanCommanded: true,
+        }),
+      ).toEqual({ kind: 'proceed' });
+    }
+  });
+
+  it('counts status_mapping targets as the platform’s own only when no slot is mapped (finding 1)', () => {
+    const unslotted = withStatusMappingStatuses(
+      ticketStatusPolicyOf(null, { assign_owner: true }),
+      { assign_owner: true },
+      { implementation: 'In Progress', merged: 'Shipped' },
+    );
+    expect(
+      claimStatusDecision({
+        status: 'In Progress',
+        category: 'in_progress',
+        policy: unslotted,
+        first: true,
+      }),
+    ).toEqual({ kind: 'proceed' });
+    // A Done-category mapping target does not read as a person closing the ticket.
+    expect(ticketStatusDisposition('Shipped', 'done', unslotted, true)).toBe('not_ready');
+    const slotted = { in_progress: 'Doing' };
+    expect(
+      withStatusMappingStatuses(ticketStatusPolicyOf(null, slotted), slotted, {
+        implementation: 'In Progress',
+      }).platformStatuses,
+    ).toEqual(['Doing']);
   });
 });

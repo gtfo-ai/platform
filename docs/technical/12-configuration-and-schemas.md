@@ -274,6 +274,14 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 > (`apps/server/src/ticket-lifecycle.ts`), so the two cannot disagree; the warning beside the key is
 > the screen's, drawn from that field (WP-182).
 >
+> **The status policy** (S-28.4, TD-029 amendment B): the block also takes `start_from`, `closed` and
+> `on_ticket_closed` (defaults: the tracker's To Do / Done categories, `stop`), and applies to every
+> task-management binding, block or not. What counts as startable, closed, **hands-off** or neither is
+> one pure function, `ticketStatusDisposition` (`packages/domain/src/lifecycle/status-disposition.ts`):
+> hands-off is a status of the In Progress category that is neither startable nor closed and — for a
+> ticket the platform holds — not one the platform itself writes (a slot, `returned`, or, when no slot
+> is mapped, a `status_mapping` target).
+>
 > **New settings key `human_returns.acknowledgements`** (a list of at most 50 words, each 1–40
 > characters). It **adds** words in a project's own language to the shipped acknowledgement vocabulary
 > (TD-029 decision 8). It is graded **not applied** when it comes from the repository file, because a

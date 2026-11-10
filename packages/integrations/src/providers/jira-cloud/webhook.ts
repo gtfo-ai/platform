@@ -486,6 +486,35 @@ export const createJiraInboundNormaliser = (
     return category === null || category === 'todo';
   };
 
+  /**
+   * **A labelled ticket that enters a startable status is a match** (S-28.4 review ruling (b)): on a
+   * webhook-only binding a ticket labelled while it waited (*Idea*) would otherwise never be
+   * announced when a person readies it. Only a **decided** answer counts — the destination is a
+   * `start_from` name, or the issue's status (which must be the destination) carries the To Do
+   * category — so a delivery that cannot say announces nothing new.
+   */
+  const entersStartableStatus = (
+    issue: NonNullable<JiraWebhookEnvelope['issue']>,
+    envelope: JiraWebhookEnvelope,
+  ): boolean => {
+    const startable = options.startable;
+    const change = statusChangeOf(envelope);
+    if (startable === undefined || change === null || change.to.length === 0) {
+      return false;
+    }
+    if (startable.kind === 'statuses') {
+      return startable.statuses.some(
+        (status) => lifecycleStatusKey(status) === lifecycleStatusKey(change.to),
+      );
+    }
+    const name = issue.fields.status?.name;
+    return (
+      name !== undefined &&
+      lifecycleStatusKey(name) === lifecycleStatusKey(change.to) &&
+      statusCategoryOf(issue.fields.status) === 'todo'
+    );
+  };
+
   const pickupRuleHit = (
     issue: NonNullable<JiraWebhookEnvelope['issue']>,
     envelope: JiraWebhookEnvelope,
@@ -499,7 +528,9 @@ export const createJiraInboundNormaliser = (
       const added = labelsAddedBy(envelope).includes(pickup.label);
       return ((created && has) || added) && inStartableStatus(issue)
         ? `label = "${pickup.label}"`
-        : null;
+        : has && entersStartableStatus(issue, envelope)
+          ? `label = "${pickup.label}"`
+          : null;
     }
     const status = statusChangeOf(envelope);
     const nowIn = issue.fields.status?.name === pickup.status;

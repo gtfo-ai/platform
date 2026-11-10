@@ -123,7 +123,7 @@ import type {
 } from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
 import type { ConfigValues, TicketStatusPolicy } from '@platform/domain';
-import { resolveWipLimits, SHIPPED_TEMPLATES } from '@platform/domain';
+import { resolveWipLimits, SHIPPED_TEMPLATES, withStatusMappingStatuses } from '@platform/domain';
 import type {
   jobs as jobsAdapters,
   launcher as launcherAdapters,
@@ -790,8 +790,16 @@ export const createProjectSettingsPort = (
       // caller's connection like the rest — the handlers that decide a lifecycle moment ask here.
       ticketLifecycle,
       // S-28.4 (M28 ruling 1): which statuses start work and which mean a person finished the
-      // ticket — defaults included for a binding with no block, read off the same rows.
-      ticketStatusPolicy,
+      // ticket — defaults included for a binding with no block, read off the same rows; with the
+      // legacy `status_mapping`'s targets counted as the platform's own when no slot is mapped.
+      ticketStatusPolicy:
+        ticketStatusPolicy === null
+          ? null
+          : withStatusMappingStatuses(
+              ticketStatusPolicy,
+              ticketLifecycle?.slots,
+              layered.values.status_mapping,
+            ),
       // WP-142: the stored branch is the one answer every pipeline reader takes.
       defaultBranch: row.default_branch,
       templates: SHIPPED_TEMPLATES,

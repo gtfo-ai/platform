@@ -605,7 +605,7 @@ const PolicyPreview = ({
         <>
           {' '}
           <NameList names={preview.finished} /> are never started
-          {draft.stopOnClosed ? ' and stop a task.' : '.'}
+          {draft.stopOnClosed ? ', and stop a task that has not started its first run yet.' : '.'}
         </>
       )}
     </p>

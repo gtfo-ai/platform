@@ -204,7 +204,6 @@ describe('POST /api/projects/:project_id/tasks (WP-122)', () => {
     ['task_exists', '409 ticket_has_task'],
     ['ticket_not_found', '404 ticket_not_found'],
     ['outside_binding_scope', '409 ticket_outside_binding_scope'],
-    ['ticket_not_startable', '409 ticket_status_not_startable'],
     ['ticket_unreadable', '502 ticket_unreadable'],
   ] as const)(
     'answers the %s refusal as %s, records nothing and gives the key back',
@@ -227,6 +226,14 @@ describe('POST /api/projects/:project_id/tasks (WP-122)', () => {
       expect(audits).toHaveLength(1);
     },
   );
+
+  // S-28.4: outside the table above, whose source a citation reader bounds at 400 characters.
+  it('answers a ticket whose status does not start work as 409 ticket_status_not_startable', async () => {
+    world.throws = new ManualStartRefusedError('ticket_not_startable', 'refused: status', null);
+    const refused = await post({ ticket_key: 'ACME-7' }, { 'idempotency-key': 'start-1' });
+    expect(verdict(refused)).toBe('409 ticket_status_not_startable');
+    expect(audits).toHaveLength(0);
+  });
 
   it('maps every refusal the command can raise', () => {
     // A reason added to the application without a status here is a 500; this holds the table whole.

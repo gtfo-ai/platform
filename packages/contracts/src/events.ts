@@ -313,6 +313,23 @@ export const ticketIntakeSkippedEvent = defineEvent('ticket.intake.skipped', {
   ticket: ticketRefSchema,
   reason: ticketIntakeSkipReasonSchema,
   status: nonEmptyStringSchema.max(255).optional(),
+}).superRefine((event, ctx) => {
+  // `status` says which status was not startable: required for that reason, and nothing else's.
+  const { reason, status } = event.payload;
+  if (reason === 'status_not_startable' && status === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['payload', 'status'],
+      message: 'a status_not_startable skip names the status',
+    });
+  }
+  if (reason !== 'status_not_startable' && status !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['payload', 'status'],
+      message: 'only a status_not_startable skip names a status',
+    });
+  }
 });
 
 // ── Task lifecycle ───────────────────────────────────────────────────────────
