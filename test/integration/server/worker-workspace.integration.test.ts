@@ -23,8 +23,8 @@ beforeAll(async () => {
     "insert into users (email, name, role) values ('ws@example.test', 'Jan', 'member') returning id",
   );
   const worker = await pool.query<{ id: string }>(
-    `insert into workers (user_id, name, credential_hash)
-     values ($1, 'jan-mbp', repeat('a', 64)) returning id`,
+    `insert into workers (id, user_id, name, credential_hash)
+     values (gen_random_uuid(), $1, 'jan-mbp', repeat('a', 64)) returning id`,
     [user.rows[0]?.id],
   );
   workerId = worker.rows[0]?.id as string;
