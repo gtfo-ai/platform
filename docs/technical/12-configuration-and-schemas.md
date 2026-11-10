@@ -180,7 +180,7 @@ policies:
   drift_without_direction: disabled
   protected_paths: ["tests/**", ".gitlab-ci.yml", ".agentic/**", ".claude/**", "CLAUDE.md"]
   plan_approval_risk:            # S-28.8: let a low-risk plan go ahead without a person; off by default.
-    enabled: false               # when true it replaces the dial's above_size/always rule (risk classes and probation still ask)
+    enabled: false               # when true it may waive an ask the dial made for size or 'every plan' only (never adds one; risk classes and probation still ask)
     max_risk: low                # low | medium — the agent's own risk level a plan may have
     min_confidence: high         # high | medium — the agent's own confidence a plan needs
     max_size: M                  # S | M | L | XL

@@ -128,6 +128,12 @@ export const approvalReasonWords = (reason: ApprovalReason): string => {
         : `The agent left ${reason.count} questions open in the plan.`;
     case 'assessment_missing':
       return 'The plan does not say how sure the agent is or how risky it is, so this project’s low-risk rule cannot let it go ahead without approval.';
+    case 'files_not_listed':
+      return reason.why === 'none'
+        ? 'The plan does not list the files it changes, so the platform cannot check them.'
+        : 'The plan names its files with a pattern rather than one by one, so the platform cannot check them.';
+    case 'size_unknown':
+      return 'The plan’s size could not be read, so it cannot go ahead without approval.';
     case 'low_risk_auto':
       return `The plan went ahead without approval: ${reason.risk_level} risk, ${reason.confidence} confidence, size ${reason.size}, ${reason.files === 1 ? '1 file' : `${reason.files} files`}.`;
   }

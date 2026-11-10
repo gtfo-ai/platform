@@ -1995,9 +1995,11 @@ describe('plan approval (product/04 S2, BD-006)', () => {
  * costing `c` gives this task an estimate of exactly `c`. That is what makes the threshold cases
  * below readable, and it is asserted once rather than assumed.
  */
-describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulings 1–5)', () => {
+describe('low-risk plans go ahead, the rest wait for a person (S-28.8, TD-037)', () => {
+  // An L plan, which the harness's dial (above_size at L) asks about: the rule may waive that ask.
+  const LARGE = { ...PLAN, estimated_size: 'L' };
   const ASSESSED = {
-    ...PLAN,
+    ...LARGE,
     self_assessment: {
       confidence: 'high',
       risk_level: 'low',
@@ -2006,7 +2008,9 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulin
       open_questions: [],
     },
   };
-  const withRule = (plan: object, rule: PlanApprovalRiskConfig = { enabled: true }) =>
+  const RULE: PlanApprovalRiskConfig = { enabled: true, max_size: 'L' };
+  const DIAL_ASKED = { code: 'size_at_or_above', size: 'L', threshold: 'L', source: 'dial' };
+  const withRule = (plan: object, rule: PlanApprovalRiskConfig = RULE) =>
     harnessWith({
       runs: { ...happyRuns(), architecture: completedRun(plan) },
       settings: { config: { policies: { plan_approval_risk: rule } } },
@@ -2021,7 +2025,7 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulin
       }),
     );
 
-  it('lets a low-risk, sure plan go ahead, and records an approved row nobody decided', async () => {
+  it('waives the dial’s size ask for a low-risk, sure plan, with an approved row nobody decided', async () => {
     const harness = withRule(ASSESSED);
     await harness.publish([ticketMatched()]);
 
@@ -2037,7 +2041,7 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulin
     expect(stored?.approval.decidedByUserId).toBeNull();
     expect(stored?.subjectArtifactId).toBe(plan?.id);
     expect(stored?.reasons).toEqual([
-      { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'M', files: 1 },
+      { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'L', files: 1 },
     ]);
     // The audit is the ordinary decided event, with no decider.
     const decided = harness
@@ -2049,14 +2053,33 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulin
     expect(decided.payload).toMatchObject({ decision: 'approved', decided_by_user_id: null });
   });
 
-  it('waits when the plan carries no self-assessment, and says so', async () => {
+  it('the same plan waits for a person with the rule off (the control)', async () => {
+    const harness = withRule(ASSESSED, { enabled: false });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+    const stored = await planApprovalOf(harness);
+    expect(stored?.autoDecided).toBe(false);
+    expect(stored?.reasons).toEqual([DIAL_ASKED]);
+  });
+
+  it('never asks about a plan the dial lets through, with no assessment and the rule on', async () => {
+    // An M plan under the dial's L threshold: no ask with the rule off, so none with it on, and no
+    // row — the rule only ever asks less (BD-006's 2026-11-10 amendment, TD-037 decision 4).
     const harness = withRule(PLAN);
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(await planApprovalOf(harness)).toBeNull();
+    expect(harness.types()).not.toContain('task.approval.decided');
+  });
+
+  it('waits when the plan carries no self-assessment, and says so beside the dial’s reason', async () => {
+    const harness = withRule(LARGE);
     await harness.publish([ticketMatched()]);
     expect(taskOf(harness).task.state).toBe('waiting_approval');
     const stored = await planApprovalOf(harness);
     expect(stored?.autoDecided).toBe(false);
     expect(stored?.approval.status).toBe('pending');
-    expect(stored?.reasons).toEqual([{ code: 'assessment_missing' }]);
+    expect(stored?.reasons).toEqual([DIAL_ASKED, { code: 'assessment_missing' }]);
   });
 
   it('waits for a migration the platform found, though the plan calls itself low-risk', async () => {
@@ -2067,6 +2090,7 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulin
     await harness.publish([ticketMatched()]);
     expect(taskOf(harness).task.state).toBe('waiting_approval');
     expect((await planApprovalOf(harness))?.reasons).toEqual([
+      DIAL_ASKED,
       { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
     ]);
   });
@@ -2082,19 +2106,10 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8, M28 rulin
     });
     await harness.publish([ticketMatched()]);
     expect((await planApprovalOf(harness))?.reasons).toEqual([
+      DIAL_ASKED,
       { code: 'confidence_below', confidence: 'medium', minimum: 'high' },
       { code: 'open_questions', count: 1 },
     ]);
-  });
-
-  it('changes nothing while the rule is off: the same plan goes ahead with no approval row', async () => {
-    // The pre-S-28.8 gate on the harness's dial (above_size at L): an M plan is not asked about,
-    // and no row is written — the rule's own row is what tells the two apart (rule 10).
-    const harness = withRule(ASSESSED, { enabled: false });
-    await harness.publish([ticketMatched()]);
-    expect(taskOf(harness).task.state).toBe('ready_for_merge');
-    expect(await planApprovalOf(harness)).toBeNull();
-    expect(harness.types()).not.toContain('task.approval.decided');
   });
 });
 

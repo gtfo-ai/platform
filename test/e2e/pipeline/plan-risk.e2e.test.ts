@@ -2,8 +2,8 @@
  * **Low-risk plans go ahead, the rest wait for a person** — S-28.8 (the M28 ruling amending
  * BD-006), on a real `apps/server` instance with the fake model.
  *
- * The project switches on `policies.plan_approval_risk` (and turns probation off, so the rule is
- * the only thing deciding). Two walks of the same feature ticket:
+ * The project switches on `policies.plan_approval_risk` up to size L (and turns probation off), and
+ * the Architect writes an L plan, which the dial asks about (above_size at L). Two walks of the same feature ticket:
  *
  * - the Architect's plan says *low risk, high confidence*, touches one ordinary file: the task goes
  *   on to `ready_for_merge` with **no** `task.approval.requested`, and its plan approval is a row
@@ -60,6 +60,7 @@ const assessedScenarios = (withMigration: boolean) => (world: SeededWorld) => {
     architecture: {
       structuredOutput: {
         ...plan,
+        estimated_size: 'L',
         ...(withMigration
           ? {
               files_to_change: [
@@ -74,7 +75,10 @@ const assessedScenarios = (withMigration: boolean) => (world: SeededWorld) => {
   };
 };
 
-const CONFIG = { policies: { probation_tasks: 0, plan_approval_risk: { enabled: true } } };
+// The dial asks about an L plan (above_size at L); the rule may waive that ask up to L.
+const CONFIG = {
+  policies: { probation_tasks: 0, plan_approval_risk: { enabled: true, max_size: 'L' } },
+};
 
 interface ApprovalRow extends Record<string, unknown> {
   readonly status: string;
@@ -109,7 +113,7 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8)', () => {
       decided_by_user_id: null,
     });
     expect(rows[0]?.reasons).toEqual([
-      { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'M', files: 1 },
+      { code: 'low_risk_auto', confidence: 'high', risk_level: 'low', size: 'L', files: 1 },
     ]);
     const requested = await pipeline.query<{ count: string }>(
       `select count(*)::text as count from events
@@ -139,8 +143,10 @@ describe('low-risk plans go ahead, the rest wait for a person (S-28.8)', () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ status: 'pending', auto_decided: false });
-    expect(rows[0]?.reasons).toEqual([
-      { code: 'risk_factor', factors: ['schema_migration'], source: 'platform' },
-    ]);
+    expect(rows[0]?.reasons).toContainEqual({
+      code: 'risk_factor',
+      factors: ['schema_migration'],
+      source: 'platform',
+    });
   });
 });

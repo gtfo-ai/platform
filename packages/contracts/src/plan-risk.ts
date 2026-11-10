@@ -80,8 +80,9 @@ export const planConfidenceMinimumSchema = z.enum(['high', 'medium']);
  * `PLAN_APPROVAL_RISK_DEFAULTS` in `@platform/domain`: `enabled: false`, `max_risk: low`,
  * `min_confidence: high`, `max_size: M`, and `always_ask` every factor.
  *
- * When on it replaces only the dial's plan-approval **policy** (`above_size` / `always`); a risk
- * class, probation and a shadow task are decided as before. A repository file may only tighten it
+ * When on it may only waive an ask the dial made for its plan-approval **policy** alone
+ * (`above_size` / `always`) — it never adds one (TD-037 decision 4); a risk class, probation and a
+ * shadow task are decided as before. A repository file may only tighten it
  * (`repository-grades.ts`).
  */
 export const planApprovalRiskConfigSchema = z.strictObject({
