@@ -27,6 +27,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
   ciManualNotRunOf,
+  conversationSeenFor,
   gateWaitOf,
   lastGateWaitOf,
   latestProgressOfRow,
@@ -506,5 +507,67 @@ describe('ci_manual_not_run on the task detail (S-27.2, TD-036 decision 5)', () 
     expect(() => ciManualNotRunOf([row({ ciManualNotRun: { ...NOT_RUN, jobs: [] } })])).toThrow(
       /ci_manual_not_run/,
     );
+  });
+});
+
+/**
+ * S-28.2 (M28 ruling R1): the task read's `conversation_seen` — the handled ledger's *seen* rows at
+ * the current human stage. The SQL itself is the e2e tier's; this holds the stage guard (no query
+ * away from a human stage) and the parse (a row outside the shape is left out, never invented).
+ */
+describe('conversation_seen on the task detail (S-28.2)', () => {
+  const TASK = '00000000-0000-4000-8000-000000002802';
+  const stub = (rows: readonly Record<string, unknown>[]) => {
+    const calls: unknown[] = [];
+    const database = {
+      execute: async (query: unknown) => {
+        calls.push(query);
+        return { rows };
+      },
+    } as unknown as Parameters<typeof conversationSeenFor>[0];
+    return { database, calls };
+  };
+
+  it('reads nothing away from qa and ready_for_merge', async () => {
+    for (const stage of ['implementation', 'code_review', null]) {
+      const { database, calls } = stub([]);
+      expect(await conversationSeenFor(database, { id: TASK, currentStage: stage })).toEqual([]);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it('serves the seen rows at a human stage, and leaves out a row outside the shape', async () => {
+    const { database, calls } = stub([
+      {
+        source: 'ticket_comment',
+        author: 'Petr',
+        written_ms: Date.parse('2026-11-10T10:43:00.000Z'),
+        seen_ms: Date.parse('2026-11-10T10:45:00.000Z'),
+      },
+      {
+        source: 'mr_note',
+        author: null,
+        written_ms: null,
+        seen_ms: Date.parse('2026-11-10T10:44:00.000Z'),
+      },
+      {
+        source: 'invented',
+        author: 'x',
+        written_ms: null,
+        seen_ms: Date.parse('2026-11-10T10:44:00.000Z'),
+      },
+    ]);
+    expect(
+      await conversationSeenFor(database, { id: TASK, currentStage: 'ready_for_merge' }),
+    ).toEqual([
+      {
+        source: 'ticket_comment',
+        author: 'Petr',
+        written_at: '2026-11-10T10:43:00.000Z',
+        seen_at: '2026-11-10T10:45:00.000Z',
+      },
+      { source: 'mr_note', author: null, written_at: null, seen_at: '2026-11-10T10:44:00.000Z' },
+    ]);
+    expect(calls).toHaveLength(1);
   });
 });

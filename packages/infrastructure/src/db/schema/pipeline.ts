@@ -328,9 +328,32 @@ export const taskStages = pgTable('task_stages', {
   entryTicketStatus: text('entry_ticket_status'),
   /** Whether the window saw the ticket at the `qa` slot during this entry (amendment (b), 0089). */
   ticketSeenAtQa: boolean('ticket_seen_at_qa').notNull().default(false),
+  /**
+   * When the window first saw the ticket move forward during this entry (migration 0111, M28 ruling
+   * R1: forward wins over return). Written once (`coalesce`) by `observeTicketForward`.
+   */
+  ticketForwardSeenAt: timestamp('ticket_forward_seen_at', { withTimezone: true }),
   /** Convergence detection's stable key; nothing else writes it (WP-15, migration 0012). */
   signature: text('signature'),
   causedByEventId: uuid('caused_by_event_id'),
+});
+
+/**
+ * The handled ledger (migration 0111, M28 ruling R2): conversation items the platform answered,
+ * resolved, or read and did not treat as a change request. Inserted only, idempotent on
+ * `(task_id, source, thread_id, kind, last_note_id)` with `nulls not distinct`.
+ */
+export const taskConversationHandled = pgTable('task_conversation_handled', {
+  id: uuid('id').primaryKey(),
+  taskId: uuid('task_id').notNull(),
+  source: text('source').$type<'mr_thread' | 'mr_note' | 'ticket_comment'>().notNull(),
+  threadId: text('thread_id').notNull(),
+  lastNoteId: text('last_note_id'),
+  runId: uuid('run_id'),
+  kind: text('kind').$type<'seen' | 'answered' | 'resolved'>().notNull(),
+  author: text('author'),
+  writtenAt: timestamp('written_at', { withTimezone: true }),
+  handledAt: timestamp('handled_at', { withTimezone: true }).notNull(),
 });
 
 export const runs = pgTable('runs', {

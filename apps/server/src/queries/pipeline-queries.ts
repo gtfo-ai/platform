@@ -82,6 +82,7 @@ import type {
   RunStatus,
   RunStoppedReason,
   TaskConflict,
+  TaskConversationSeen,
   TaskDetailRecord,
   TaskDetailResponse,
   TaskEscalation,
@@ -101,6 +102,7 @@ import {
   contextPackRecordSchema,
   MAX_INBOX_ESCALATED,
   MAX_RUN_COMMANDS,
+  MAX_TASK_CONVERSATION_SEEN,
   MAX_TASK_PAUSE_REASON_CHARS,
   MAX_TASK_STOP_RECORDED_CHARS,
   pausedBudgetScopeSchema,
@@ -109,6 +111,7 @@ import {
   runStartFailureSchema,
   runStoppedReasonSchema,
   storedTicketClaimSchema,
+  taskConversationSeenSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
@@ -2341,6 +2344,8 @@ export const findTaskDetail = async (
     task,
     pausedReasons.get(task.id)?.reason ?? null,
   );
+  // S-28.2: the words at the current human stage that were not treated as a change request.
+  const conversationSeen = await conversationSeenFor(database, task);
 
   const setbackRows = stageRows.map(setbackRowOf);
   return {
@@ -2364,6 +2369,7 @@ export const findTaskDetail = async (
     ci_manual_not_run: ciManualNotRunOf(stageRows),
     queue_wait: queueWaits.get(task.id) ?? null,
     manual_pause: manualPause,
+    conversation_seen: conversationSeen,
     // S-25.11: the returns and the stop, off the same rows.
     returns: returnsOf(setbackRows, compiledPipelineOf(task)),
     stop: stopOf(task, setbackRows),
@@ -2454,6 +2460,53 @@ export const escalationFor = async (
  * command's own redacted text (`pipeline/commands.ts`'s
  * `auditedReason`), cut here at {@link MAX_TASK_PAUSE_REASON_CHARS}. No row: `null`, never a guess.
  */
+/**
+ * **Seen, not a change request** (S-28.2, M28 ruling R1): the handled ledger's `seen` rows for the
+ * task's current human stage (`qa`, `ready_for_merge`), recorded since its latest entry into that
+ * stage, newest first, at most {@link MAX_TASK_CONVERSATION_SEEN}. `[]` at every other stage — a
+ * word the window read at an earlier visit was either answered by the run it returned, or belongs
+ * to a stage the task has left. The author is stored redacted and bounded; it is rendered as text.
+ */
+export const conversationSeenFor = async (
+  database: Database,
+  task: { readonly id: string; readonly currentStage: string | null },
+): Promise<readonly TaskConversationSeen[]> => {
+  if (task.currentStage !== 'qa' && task.currentStage !== 'ready_for_merge') {
+    return [];
+  }
+  const { rows } = await database.execute<{
+    source: string;
+    author: string | null;
+    written_ms: unknown;
+    seen_ms: unknown;
+  }>(sql`
+    with entry as (
+      select max(s.entered_at) as entered_at
+        from task_stages s
+       where s.task_id = ${task.id}::uuid and s.stage = ${task.currentStage}
+    )
+    select h.source, h.author,
+           (extract(epoch from h.written_at) * 1000)::float8 as written_ms,
+           (extract(epoch from h.handled_at) * 1000)::float8 as seen_ms
+      from task_conversation_handled h, entry
+     where h.task_id = ${task.id}::uuid
+       and h.kind = 'seen'
+       and entry.entered_at is not null
+       and h.handled_at >= entry.entered_at
+     order by h.handled_at desc, h.id desc
+     limit ${MAX_TASK_CONVERSATION_SEEN}`);
+  return rows.flatMap((row): TaskConversationSeen[] => {
+    const parsed = taskConversationSeenSchema.safeParse({
+      source: row.source,
+      author: row.author,
+      written_at: row.written_ms === null ? null : new Date(Number(row.written_ms)).toISOString(),
+      seen_at: new Date(Number(row.seen_ms)).toISOString(),
+    });
+    // A row outside the published shape is left out rather than invented into one.
+    return parsed.success ? [parsed.data] : [];
+  });
+};
+
 export const manualPauseFor = async (
   database: Database,
   task: { readonly id: string; readonly state: string },

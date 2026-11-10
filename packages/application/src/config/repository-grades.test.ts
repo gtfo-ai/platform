@@ -90,7 +90,7 @@ describe('the keys a file may not apply', () => {
     expect(values).toEqual({ status_mapping: { done: 'Finished' } });
     expect(notApplied).toHaveLength(1);
     expect(notApplied[0]?.key).toBe('human_returns');
-    expect(notApplied[0]?.reason).toMatch(/acknowledgement vocabulary/);
+    expect(notApplied[0]?.reason).toMatch(/no longer read/);
   });
 
   it('drops probation_tasks, auto_apply, the dial and a feature switch, and reports each', () => {

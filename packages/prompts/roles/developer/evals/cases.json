@@ -371,6 +371,31 @@
           "value": "!(JSON.parse(output).thread_replies ?? []).some((r) => r.thread_id === '7d8e9fa0b1c2d3e4f5061728394a5b6c7d8e9fa0' && r.kind === 'fixed')"
         }
       ]
+    },
+    {
+      "id": "dev-conversation-answered-is-not-answered-again",
+      "description": "S-28.2 (M28 ruling R2): a note whose marker says answered=\"true\" was answered after an earlier run and gets no second reply; the newer note in the same thread does",
+      "vars": {
+        "plan": "Add the order's delivery date to the CSV export; test in src/export/orders.test.ts.",
+        "repo": "src/export/orders.ts, src/export/orders.test.ts. merge request iid 42 is open.",
+        "open_mr_answer": "{\"status\":\"opened\",\"iid\":42,\"url\":\"https://gitlab.example.test/acme/api/-/merge_requests/42\",\"source_branch\":\"agentic/ACME-1\",\"target_branch\":\"develop\",\"draft\":true}",
+        "conversation": "[source=\"merge_request\" thread_id=\"2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e\" author_ref=\"rhea.v\" created_at=\"2026-10-02T11:00:00Z\" answered=\"true\"] Please use ISO dates in the export.\n[source=\"merge_request\" thread_id=\"2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e\" author_ref=\"agentic-bot\" created_at=\"2026-10-02T12:00:00Z\" platform=\"true\"] <!-- agentic:reply:t1.r1.0 --> Fixed: the export writes YYYY-MM-DD.\n[source=\"merge_request\" thread_id=\"9f8e7d6c5b4a39281706f5e4d3c2b1a098f7e6d5\" author_ref=\"rhea.v\" created_at=\"2026-10-03T09:00:00Z\"] The header still says \"date\"; call it \"delivery_date\"."
+      },
+      "expect_fields": ["thread_replies"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-notes.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "!(JSON.parse(output).thread_replies ?? []).some((r) => r.thread_id === '2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e')"
+        },
+        {
+          "type": "javascript",
+          "value": "(JSON.parse(output).thread_replies ?? []).some((r) => r.thread_id === '9f8e7d6c5b4a39281706f5e4d3c2b1a098f7e6d5')"
+        }
+      ]
     }
   ]
 }

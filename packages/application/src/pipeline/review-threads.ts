@@ -18,8 +18,10 @@
  *
  * {@link isOpenReviewThread} — resolvable, not resolved, and at least one note a person wrote — is
  * still the predicate of the Checks panel's *"review threads open/resolved"*
- * ({@link reviewThreadCounts}). It is **not** the return trigger any more (WP-178 (d)): a general
- * note is no thread in the panel's sense and is a word that returns the task.
+ * ({@link reviewThreadCounts}). WP-178 (d) made every general note and ticket comment a word that
+ * returns the task; **M28 ruling R1 (S-28.2) narrowed it back**: a person's note in an unresolved
+ * resolvable discussion, or a return status, returns the task, and a general note or a ticket
+ * comment is recorded as *seen, not a change request* in the handled ledger instead.
  *
  * ## The words are untrusted, and every rule of the agent half applies to them
  *
@@ -151,6 +153,11 @@ export interface WindowWord extends HumanWord {
   /** A diff note's file. */
   readonly path?: string | null;
   readonly line?: number | null;
+  /**
+   * Who wrote it, as the provider displays them — provider text, for the ledger's *seen* row and
+   * the task page's notice only (M28 ruling R1); redacted and bounded where it is stored.
+   */
+  readonly author?: string | null;
 }
 
 /**
@@ -163,7 +170,9 @@ export interface WindowWord extends HumanWord {
  * (PROGRESS § "Architect ruling (M10 head, session 15)", measurement 1).
  *
  * A **diff** discussion — one whose notes carry a file (`path`) — gives `mr_diff` words, every
- * other discussion `mr_note` words. A discussion the provider reports **resolved** gives none:
+ * other discussion `mr_note` words. Each word carries its discussion's `resolvable`, id and note id:
+ * since M28 ruling R1 only a note in an unresolved **resolvable** discussion returns the task, and
+ * the handled ledger (R2) keys on the ids. A discussion the provider reports **resolved** gives none:
  * BD-007's *"a human resolved the threads inside the window"* is kept, because the batching window
  * is unchanged (BD-031's amendment to BD-007) and a person who resolves their own thread has
  * answered it. A general note is never resolved, so this costs ruling 4 (c) nothing. System and
@@ -186,6 +195,12 @@ export const mergeRequestWords = (discussions: readonly Discussion[]): readonly 
         text: note.body,
         at: note.created_at,
         system: note.system,
+        // M28 ruling R1 (b): only a note in a discussion that can be resolved — and is not, which
+        // the `continue` above has already decided — returns the task.
+        resolvable: discussion.resolvable,
+        threadId: discussion.id,
+        noteId: note.id,
+        author: note.author.display_name ?? note.author.external_id,
         thread: seen[form],
         reply: position > 0,
         path: note.path ?? null,
@@ -206,6 +221,10 @@ export const ticketCommentWords = (comments: readonly TicketComment[]): readonly
     text: comment.body,
     at: comment.created_at,
     markerId: comment.marker_id ?? null,
+    // M28 ruling R2: a comment is its own thread in the handled ledger.
+    threadId: comment.id,
+    noteId: comment.id,
+    author: comment.author.display_name ?? comment.author.external_id,
     thread: index + 1,
     reply: false,
   }));

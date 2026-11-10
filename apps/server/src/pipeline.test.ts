@@ -133,9 +133,11 @@ describe('the project settings port', () => {
    * WP-178 criterion (11): `human_returns.acknowledgements` saved through the settings write
    * (`PUT /api/projects/:id/config`, the `projects.config` column) reaches the pipeline as
    * `config.human_returns`, where the human-return window reads it (`jobs.ts`). Until WP-178 the
-   * key was accepted and read by nothing.
+   * key was accepted and read by nothing — and since M28 ruling R1 (S-28.2) it is again: a comment
+   * never returns a task, so the window reads no acknowledgement word. The key still parses, so a
+   * project that saved it keeps a valid configuration.
    */
-  it('reads human_returns.acknowledgements off the project row, for the human-return window', async () => {
+  it('still parses human_returns.acknowledgements off the project row (no reader since M28)', async () => {
     const settings = await createProjectSettingsPort(
       poolOf([{ config: { version: 1, human_returns: { acknowledgements: ['díky', 'super'] } } }]),
     ).forProject('00000000-0000-4000-8000-0000000000b1' as never);

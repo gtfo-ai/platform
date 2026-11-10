@@ -1,56 +1,58 @@
 /**
  * The human-return decision — TD-029 decisions 6, 7 and 9 as one pure function (BD-031, WP-174
- * ruling (e), technical/02's M10-head amendment, product/04 S6c and S7).
+ * ruling (e), technical/02's M10-head amendment, product/04 S6c and S7), **as amended by M28 ruling
+ * R1** (S-28.2, which replaces TD-029 decision 8's acknowledgement rule).
  *
  * The human-return window (WP-178) fires and re-reads three things: the ticket's status, the merge
  * request's discussions and the ticket's comments. It hands them here with the task's current
- * stage, the binding's lifecycle slots, the horizon and the project's added acknowledgement words,
- * and gets one of three answers:
+ * stage, the binding's lifecycle slots, the horizon, the **handled ledger** (M28 ruling R2) and the
+ * instant a forward status move was first seen, and gets one of three answers:
  *
- *  - **`return {forms}`** — a person's word returns the task to Implementation. The interpreter
- *    signal is `mr.review.comment` for every form (decision 7); the forms are what
+ *  - **`return {forms}`** — a person's explicit signal returns the task to Implementation. The
+ *    interpreter signal is `mr.review.comment` for every form (decision 7); the forms are what
  *    `task.human_return` records, with the counts and the status that event's invariants ask for.
  *  - **`pass`** — only at `qa`: the ticket left the `qa` status for a status that is not a return
- *    status, and no person's word asks for anything (decision 9). The interpreter signal is
- *    `ticket.status.changed`.
+ *    status (decision 9). The interpreter signal is `ticket.status.changed`.
  *  - **`none`** — nothing to do.
+ *
+ * Every answer carries `seen`: the person's words this firing read that did **not** return the
+ * task and are not handled yet — what the window records in the ledger as *seen, not a change
+ * request*, so the task page can say so and offer the person the button (M28 ruling R1).
  *
  * The rules, in the order they are applied:
  *
  *  1. **Only a human stage returns** (`qa`, `ready_for_merge`). At an agent stage nothing returns;
- *     the words reach the next run through the conversation block instead (decision 7). A status
- *     signal at an agent stage — including the echo of the platform's own `in_progress` — is
- *     therefore `none` here.
+ *     the words reach the next run through the conversation block instead (decision 7).
  *  2. **Whose word is it** (decision 6): never by author. A provider system note belongs to nobody.
  *     A note on the merge request is the platform's when it **opens** with a platform marker
- *     (`<!-- agentic:<kind>:<id> -->`, {@link isPlatformMergeRequestNote}, which the application's
- *     `isPlatformNote` delegates to since WP-178); a ticket comment is the platform's when the
- *     provider reports a `marker_id` or its body **opens with** one of `PLATFORM_COMMENT_MARKERS`
- *     (`opensWithPlatformCommentMarker`, the ask classifier's rule since WP-178 — until then both
- *     asked *anywhere in the body*, which silenced a person who quoted a platform comment). Every
- *     other word is a person's.
+ *     (`<!-- agentic:<kind>:<id> -->`, {@link isPlatformMergeRequestNote}); a ticket comment is the
+ *     platform's when the provider reports a `marker_id` or its body **opens with** one of
+ *     `PLATFORM_COMMENT_MARKERS`. Every other word is a person's.
  *  3. **Only words newer than the horizon count** — the start of the task's latest `implementation`
- *     run (decision 7). A word whose timestamp cannot be read counts: the failure direction is the
- *     one decision 8 chose, an extra run rather than a lost request.
- *  4. **An acknowledgement does not count** ({@link isAcknowledgement}, decision 8).
- *  5. **The status returns** when it is one of `returned`, or the `in_progress` or `pick_up_from`
+ *     run (decision 7). A word whose timestamp cannot be read counts.
+ *  4. **A handled word does not count** (M28 ruling R2): a word in a thread or comment the ledger
+ *     records as answered, resolved or seen — up to the note the ledger names (`lastNoteId`), or,
+ *     when it names none the window can find, written no later than the row — is old business. A
+ *     person's **newer** note in the same thread counts again.
+ *  5. **Only an explicit signal returns** (M28 ruling R1, language-independent): a person's note in
+ *     an **unresolved, resolvable** merge-request discussion (`resolvable: true` on the word — a
+ *     review thread is a change request by the provider's own semantics), or the **status** form.
+ *     A ticket comment and a non-resolvable merge-request note never return the task, whatever they
+ *     say — until M28 any of them that was not a short English acknowledgement did (TD-029 decision
+ *     8), which sent AUT-6655 back to Implementation twice on a long Czech *QA: OK*.
+ *  6. **The status returns** when it is one of `returned`, or the `in_progress` or `pick_up_from`
  *     status, compared by {@link lifecycleStatusKey} — **and differs from the status the ticket had
- *     at the human stage's entry** (`entryStatus`, TD-029 decision 7's WP-178 review amendment (a)):
- *     every slot is optional, so a project that maps `in_progress` but not `approved` reaches a
- *     human stage with the ticket still at a status this rule counts, and before the amendment every
- *     firing — an acknowledgement included — returned it until `human_rounds` was spent. A ticket
- *     comment that is an `@agentic ask` is not a word that returns the task (amendment (c), Q119).
- *  6. Any form returns → `return`. Otherwise, at `qa`, a status that is mapped, readable, not the
+ *     at the human stage's entry** (`entryStatus`, TD-029 decision 7's WP-178 review amendment (a)).
+ *  7. **Forward wins over return** (M28 ruling R1): when the ticket's status moved **forward** since
+ *     the stage was entered — it differs from the entry status and is not a return status
+ *     ({@link isForwardMove}) — no word written no later than the instant the window first saw that
+ *     move (`forwardSeenAt`) returns the task. A note written after it still does. (Until M28 the
+ *     opposite held: return won over pass.)
+ *  8. Any form returns → `return`. Otherwise, at `qa`, a status that is mapped, readable, not the
  *     `qa` status and not a return status → `pass` — **and only when the ticket has been seen
- *     leaving the `qa` status**: a recorded change out of it (`leftQa`, WP-178 criterion (14)), or an
- *     entry status at the `qa` slot or a sighting of it since (`entryStatus`/`seenAtQa`, amendment
- *     (b), which is how a binding that only polls passes): TD-029 decision 9's pass is the
- *     ticket *leaving* `qa`, and a task can enter `qa` with its ticket still at the `approved` or
- *     `in_review` status (a `qa` lifecycle write that failed, decision 4), where the current status
- *     alone would read as a pass that no person made. Otherwise `none`.
- *
- * Return wins over pass: a ticket moved on while somebody also wrote "rename X" is returned, which
- * is the recoverable direction.
+ *     leaving the `qa` status**: a recorded change out of it (`leftQa`, WP-178 criterion (14)), or
+ *     an entry status at the `qa` slot or a sighting of it since (`entryStatus`/`seenAtQa`,
+ *     amendment (b)). Otherwise `none`.
  */
 import {
   humanReturnFormSchema,
@@ -61,7 +63,6 @@ import {
 } from '@platform/contracts';
 import { opensWithAskTrigger, opensWithPlatformCommentMarker } from '../ask/ask.js';
 import { QA_STAGE_ID } from '../pipeline/templates.js';
-import { isAcknowledgement } from './acknowledgement.js';
 
 /** The forms a person's word at a human stage takes (`task.human_return`'s `forms`). */
 export type HumanReturnForm = (typeof humanReturnFormSchema.options)[number];
@@ -71,6 +72,13 @@ export type HumanReturnStage = (typeof humanReturnStageSchema.options)[number];
 
 /** The forms a word arrives in: everything but `status`, which is the ticket's field. */
 export type HumanWordForm = Exclude<HumanReturnForm, 'status'>;
+
+/**
+ * Where a handled item lives — `task_conversation_handled.source` (M28 ruling R2): a resolvable
+ * merge-request discussion, a merge-request discussion that cannot be resolved (a general note),
+ * or a ticket comment.
+ */
+export type ConversationHandledSource = 'mr_thread' | 'mr_note' | 'ticket_comment';
 
 /** One note or comment, as the window read it. Every field but `form` is provider data. */
 export interface HumanWord {
@@ -83,6 +91,25 @@ export interface HumanWord {
   readonly system?: boolean;
   /** A ticket comment's platform marker, when the provider reports one (`CommentRef.marker_id`). */
   readonly markerId?: string | null;
+  /**
+   * A merge-request word only: its discussion can be resolved and is not (M28 ruling R1 (b)). The
+   * one shape of note that returns a task. Absent is `false`.
+   */
+  readonly resolvable?: boolean;
+  /** The discussion's id, or the ticket comment's own id — what the ledger keys on. */
+  readonly threadId?: string | null;
+  /** The note's id (a ticket comment's is its own id) — what the ledger's `lastNoteId` names. */
+  readonly noteId?: string | null;
+}
+
+/** One ledger row, as the decision reads it (M28 ruling R2, `task_conversation_handled`). */
+export interface HandledThread {
+  readonly source: ConversationHandledSource;
+  readonly threadId: string;
+  /** The newest note the platform had handled in that thread, or `null` when it named none. */
+  readonly lastNoteId: string | null;
+  /** When the platform handled it (ISO 8601). */
+  readonly handledAt: string;
 }
 
 /** The binding's slots, with `pick_up_from` — the binding's `pickup_status` — beside them. */
@@ -91,17 +118,24 @@ export interface HumanReturnSlots {
   readonly pickUpFrom: string | null;
 }
 
-export interface HumanReturnInput {
+export interface HumanReturnInput<TWord extends HumanWord = HumanWord> {
   /** The task's current stage. */
   readonly stage: Slug;
   readonly slots: HumanReturnSlots;
   /** The ticket's status now, or `null` when it could not be read. Provider text. */
   readonly status: string | null;
-  readonly words: readonly HumanWord[];
+  /** Merge-request words in the provider's order within each discussion, then ticket comments. */
+  readonly words: readonly TWord[];
   /** The start of the task's latest `implementation` run (ISO 8601), or `null` when there is none. */
   readonly horizon: string | null;
-  /** The project's `human_returns.acknowledgements`; `[]` when none is configured. */
-  readonly extraAcks: readonly string[];
+  /** The task's handled ledger (M28 ruling R2); `[]` when nothing was handled. */
+  readonly handled: readonly HandledThread[];
+  /**
+   * When the window first saw the ticket's current **forward** move during this entry (rule 7),
+   * or `null` when it recorded none. Read only while {@link isForwardMove} holds; `null` then
+   * means *this firing*, so every word it read is no later than the move.
+   */
+  readonly forwardSeenAt: string | null;
   /**
    * Where the ticket went when it was last seen **leaving the `qa` status** — the `to` of the newest
    * `ticket.status.changed` recorded for the task after its latest entry into `qa` whose `from` is
@@ -114,8 +148,8 @@ export interface HumanReturnInput {
    * The ticket's status **at the human stage's entry** — the first status the window recorded after
    * the task entered `qa` or `ready_for_merge` (TD-029 decision 7's WP-178 review amendment (a)) —
    * or `null` when none was recorded. Provider text. The status form returns the task only when the
-   * current status is a return status **and differs from this one**: a ticket left where it was when
-   * the stage began never returns the task by its status. `null` returns nothing by status.
+   * current status is a return status **and differs from this one**. `null` returns nothing by
+   * status, and moves nothing forward.
    */
   readonly entryStatus: string | null;
   /**
@@ -126,7 +160,7 @@ export interface HumanReturnInput {
   readonly seenAtQa: boolean;
 }
 
-export type HumanReturnDecision =
+export type HumanReturnDecision<TWord extends HumanWord = HumanWord> =
   | {
       readonly kind: 'return';
       readonly from: HumanReturnStage;
@@ -136,9 +170,11 @@ export type HumanReturnDecision =
       readonly counts: Readonly<Record<HumanWordForm, number>>;
       /** The ticket's status when the status returned the task, else `null`. */
       readonly status: string | null;
+      /** Always empty: a return quotes every word in its feedback, and the horizon moves on. */
+      readonly seen: readonly TWord[];
     }
-  | { readonly kind: 'pass'; readonly status: string }
-  | { readonly kind: 'none' };
+  | { readonly kind: 'pass'; readonly status: string; readonly seen: readonly TWord[] }
+  | { readonly kind: 'none'; readonly seen: readonly TWord[] };
 
 /**
  * The markers the platform writes into a note it posts on a merge request — the conflict warning's
@@ -171,9 +207,9 @@ const isNewerThan = (at: string, horizon: string | null): boolean => {
 };
 
 /**
- * Every person's word newer than the horizon: rules 2 and 3, acknowledgements included — what the
- * window's feedback quotes (decision 7: *"every person's word newer than the horizon"*). Generic, so
- * a caller's own fields on a word survive the filter.
+ * Every person's word newer than the horizon: rules 2 and 3 — what the window's feedback quotes
+ * (decision 7: *"every person's word newer than the horizon"*). Generic, so a caller's own fields
+ * on a word survive the filter.
  */
 export const personsWordsSince = <TWord extends HumanWord>(
   words: readonly TWord[],
@@ -183,23 +219,54 @@ export const personsWordsSince = <TWord extends HumanWord>(
     (word) => word.system !== true && !isPlatformWord(word) && isNewerThan(word.at, horizon),
   );
 
-/**
- * The person's words that ask for something: rules 2–4 — and, since WP-178's review (TD-029
- * decision 7's amendment (c), Q119), not a ticket comment that is an `@agentic ask`: ask-the-task
- * answers it, and a question about the work is not a request to change it.
- */
-export const contributingWords = <TWord extends HumanWord>(
-  words: readonly TWord[],
-  horizon: string | null,
-  extraAcks: readonly string[],
-): readonly TWord[] =>
-  personsWordsSince(words, horizon).filter(
-    (word) =>
-      !isAcknowledgement(word.text, extraAcks) &&
-      !(word.form === 'ticket_comment' && opensWithAskTrigger(word.text)),
-  );
+/** The ledger source a word belongs to (M28 ruling R2). */
+export const handledSourceOf = (word: HumanWord): ConversationHandledSource =>
+  word.form === 'ticket_comment'
+    ? 'ticket_comment'
+    : word.resolvable === true
+      ? 'mr_thread'
+      : 'mr_note';
 
-/** The statuses that return a task (rule 5), as comparison keys. */
+const threadKey = (source: ConversationHandledSource, threadId: string): string =>
+  `${source}\u0000${threadId}`;
+
+/**
+ * The words the ledger already handled (rule 4): per handled thread, every word up to and including
+ * the note the row names — by the words' own order, which is the provider's within a discussion —
+ * or, when the row names no note the window read, every word written no later than the row. A
+ * word with no thread id is never handled.
+ */
+export const handledWords = <TWord extends HumanWord>(
+  words: readonly TWord[],
+  handled: readonly HandledThread[],
+): ReadonlySet<TWord> => {
+  const rows = new Map<string, HandledThread[]>();
+  for (const row of handled) {
+    const key = threadKey(row.source, row.threadId);
+    rows.set(key, [...(rows.get(key) ?? []), row]);
+  }
+  const out = new Set<TWord>();
+  const byThread = new Map<string, TWord[]>();
+  for (const word of words) {
+    if (typeof word.threadId !== 'string') continue;
+    const key = threadKey(handledSourceOf(word), word.threadId);
+    if (!rows.has(key)) continue;
+    byThread.set(key, [...(byThread.get(key) ?? []), word]);
+  }
+  for (const [key, thread] of byThread) {
+    for (const row of rows.get(key) ?? []) {
+      const upTo =
+        row.lastNoteId === null ? -1 : thread.findIndex((word) => word.noteId === row.lastNoteId);
+      thread.forEach((word, index) => {
+        const covered = upTo >= 0 ? index <= upTo : !isNewerThan(word.at, row.handledAt);
+        if (covered) out.add(word);
+      });
+    }
+  }
+  return out;
+};
+
+/** The statuses that return a task (rule 6), as comparison keys. */
 const returnStatusKeys = (slots: HumanReturnSlots): ReadonlySet<string> =>
   new Set(
     [...(slots.lifecycle.returned ?? []), slots.lifecycle.in_progress, slots.pickUpFrom]
@@ -207,7 +274,43 @@ const returnStatusKeys = (slots: HumanReturnSlots): ReadonlySet<string> =>
       .map(lifecycleStatusKey),
   );
 
-const isPass = (input: HumanReturnInput, returnsByStatus: boolean): boolean => {
+/**
+ * Rule 7: the ticket's status moved **forward** since the human stage began — readable, different
+ * from the entry status, and not a return status (the `approved` or `done` slot, or any status the
+ * lifecycle does not map as a return). An unknown entry moves nothing.
+ */
+export const isForwardMove = (input: {
+  readonly slots: HumanReturnSlots;
+  readonly status: string | null;
+  readonly entryStatus: string | null;
+}): boolean =>
+  input.status !== null &&
+  input.entryStatus !== null &&
+  lifecycleStatusKey(input.status) !== lifecycleStatusKey(input.entryStatus) &&
+  !returnStatusKeys(input.slots).has(lifecycleStatusKey(input.status));
+
+/**
+ * The words that return the task (rules 4, 5 and 7, over the candidates of rules 2 and 3): in an
+ * unresolved resolvable merge-request discussion, and — while the status has moved forward —
+ * written after the window first saw that move. A ticket comment never returns a task (rule 5); an
+ * `@agentic ask` comment (amendment (c), Q119) is one, so it never did either. A word whose instant
+ * cannot be read is not after the move: forward wins (rule 7).
+ */
+const returningWords = <TWord extends HumanWord>(
+  candidates: readonly TWord[],
+  input: HumanReturnInput<TWord>,
+): readonly TWord[] => {
+  const forward = isForwardMove(input);
+  const since = input.forwardSeenAt === null ? Number.NaN : Date.parse(input.forwardSeenAt);
+  return candidates.filter(
+    (word) =>
+      word.form !== 'ticket_comment' &&
+      word.resolvable === true &&
+      (!forward || Date.parse(word.at) > since),
+  );
+};
+
+const isPass = (input: HumanReturnInput<HumanWord>, returnsByStatus: boolean): boolean => {
   const qa = input.slots.lifecycle.qa;
   if (
     input.stage !== QA_STAGE_ID ||
@@ -237,19 +340,25 @@ const isPass = (input: HumanReturnInput, returnsByStatus: boolean): boolean => {
  * The status form (amendment (a)): the current status is a return status **and is not the status
  * the ticket had when the human stage began** — a change, never a state.
  */
-const returnsByStatusOf = (input: HumanReturnInput): boolean =>
+const returnsByStatusOf = (input: HumanReturnInput<HumanWord>): boolean =>
   input.status !== null &&
   input.entryStatus !== null &&
   returnStatusKeys(input.slots).has(lifecycleStatusKey(input.status)) &&
   lifecycleStatusKey(input.status) !== lifecycleStatusKey(input.entryStatus);
 
-/** TD-029's human-return decision. Pure and total. */
-export const humanReturnDecision = (input: HumanReturnInput): HumanReturnDecision => {
+/** TD-029's human-return decision, as M28 ruling R1 amends it. Pure and total. */
+export const humanReturnDecision = <TWord extends HumanWord>(
+  input: HumanReturnInput<TWord>,
+): HumanReturnDecision<TWord> => {
   const stage = humanReturnStageSchema.safeParse(input.stage);
   if (!stage.success) {
-    return { kind: 'none' };
+    return { kind: 'none', seen: [] };
   }
-  const words = contributingWords(input.words, input.horizon, input.extraAcks);
+  const handled = handledWords(input.words, input.handled);
+  const candidates = personsWordsSince(input.words, input.horizon).filter(
+    (word) => !handled.has(word),
+  );
+  const words = returningWords(candidates, input);
   const counts: Record<HumanWordForm, number> = { mr_diff: 0, mr_note: 0, ticket_comment: 0 };
   for (const word of words) {
     counts[word.form] += 1;
@@ -265,9 +374,16 @@ export const humanReturnDecision = (input: HumanReturnInput): HumanReturnDecisio
       forms,
       counts,
       status: returnsByStatus ? input.status : null,
+      seen: [],
     };
   }
+  // Every candidate is a word that did not return the task: seen, not a change request — except an
+  // `@agentic ask`, which ask-the-task answers (amendment (c), Q119): it was a question, and the
+  // task page has nothing to say about it.
+  const seen = candidates.filter(
+    (word) => !(word.form === 'ticket_comment' && opensWithAskTrigger(word.text)),
+  );
   return isPass(input, returnsByStatus) && input.status !== null
-    ? { kind: 'pass', status: input.status }
-    : { kind: 'none' };
+    ? { kind: 'pass', status: input.status, seen }
+    : { kind: 'none', seen };
 };

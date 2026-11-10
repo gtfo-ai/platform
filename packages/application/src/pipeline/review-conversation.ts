@@ -108,7 +108,12 @@ import {
 } from './review-notes.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { PipelineSagaOptions } from './saga.js';
-import type { StoredArtifact, StoredTask } from './store.js';
+import {
+  CONVERSATION_HANDLED_ID,
+  type ConversationHandledInput,
+  type StoredArtifact,
+  type StoredTask,
+} from './store.js';
 
 /**
  * What the three duties read of their wake-up: which duty, which task, which artifact. Narrower
@@ -126,6 +131,11 @@ export type ConversationDutyData = Pick<
 export interface ReviewConversationOptions
   extends Pick<PipelineSagaOptions, 'store' | 'integrations' | 'logger'> {
   readonly unitOfWork: UnitOfWork;
+  /**
+   * The platform's clock, for the handled ledger's `handled_at` (M28 ruling R2). Absent, the
+   * process clock.
+   */
+  readonly clock?: { readonly now: () => string };
 }
 
 // ── The handler: decide ─────────────────────────────────────────────────────
@@ -542,6 +552,9 @@ export const runConversationReplies = async (
   const redactor = integrations.git?.redactor ?? integrations.taskManagement?.redactor ?? null;
 
   let asked = 0;
+  /** M28 ruling R2: what this duty answered, recorded once the replies are on the provider. */
+  const answered: ConversationHandledInput[] = [];
+  const handledAt = new Date(options.clock?.now() ?? Date.now()).toISOString();
   for (const [index, entry] of replies.entries()) {
     const markerId = conversationReplyMarkerId(stored.task.id, runId, index);
     const idempotencyKey = conversationReplyIdempotencyKeyFor(stored.task.id, runId, index);
@@ -553,24 +566,38 @@ export const runConversationReplies = async (
         person: entry.person ?? null,
       });
     if (known.has(entry.thread_id)) {
+      const discussion = discussions.find((candidate) => candidate.id === entry.thread_id);
+      const handled = handledRow(stored, runId, handledAt, {
+        source: discussion?.resolvable === true ? 'mr_thread' : 'mr_note',
+        threadId: entry.thread_id,
+        lastNoteId: lastPersonNoteId(discussion),
+      });
       const marker = conversationReplyNoteMarker(stored.task.id, runId, index);
       if (replyIsOnTheMergeRequest(discussions, marker, self)) {
         logger.debug(
           { task_id: stored.task.id, reply: index },
           'reply already on the merge request',
         );
+        if (handled !== null) answered.push(handled);
         continue;
       }
       await reviewWrites(integrations).reply(
         { ref: stored.mr, discussionId: entry.thread_id, markdown: body(marker), idempotencyKey },
         writeContext,
       );
+      if (handled !== null) answered.push(handled);
       asked += 1;
       continue;
     }
     if (comments.some((comment) => comment.id === entry.thread_id)) {
+      const handled = handledRow(stored, runId, handledAt, {
+        source: 'ticket_comment',
+        threadId: entry.thread_id,
+        lastNoteId: entry.thread_id,
+      });
       if (replyIsOnTheTicket(comments, markerId, ticketSelf)) {
         logger.debug({ task_id: stored.task.id, reply: index }, 'reply already on the ticket');
+        if (handled !== null) answered.push(handled);
         continue;
       }
       await ticketWrites(integrations).replyComment(stored.task.ticket, body(markerId), {
@@ -578,6 +605,7 @@ export const runConversationReplies = async (
         idempotencyKey,
         markerId,
       });
+      if (handled !== null) answered.push(handled);
       asked += 1;
       continue;
     }
@@ -586,8 +614,9 @@ export const runConversationReplies = async (
       'reply dropped: its thread is neither a discussion on the merge request nor a comment on the ticket',
     );
   }
+  const recorded = await recordHandled(options, answered);
   logger.info(
-    { task_id: stored.task.id, run_id: runId, replies: replies.length, asked },
+    { task_id: stored.task.id, run_id: runId, replies: replies.length, asked, recorded },
     'conversation replies posted',
   );
 };
@@ -633,6 +662,8 @@ export const runReviewThreadsResolve = async (
   const self = await reads.self(readContext);
   const prefix = reviewFindingMarkerPrefixFor(stored.task.id);
   let resolved = 0;
+  const resolvedRows: ConversationHandledInput[] = [];
+  const handledAt = new Date(options.clock?.now() ?? Date.now()).toISOString();
   for (const id of named) {
     const discussion = discussions.find((candidate) => candidate.id === id);
     const first = discussion?.notes[0];
@@ -656,13 +687,82 @@ export const runReviewThreadsResolve = async (
       { ref: stored.mr, discussionId: discussion.id },
       { ...readContext, mode: stored.task.mode },
     );
+    const handled = handledRow(subject.stored, subject.runId, handledAt, {
+      source: 'mr_thread',
+      threadId: discussion.id,
+      lastNoteId: discussion.notes.at(-1)?.id ?? null,
+    });
+    if (handled !== null) resolvedRows.push({ ...handled, kind: 'resolved' });
     resolved += 1;
   }
+  const recorded = await recordHandled(options, resolvedRows);
   logger.info(
-    { task_id: stored.task.id, named: named.length, resolved },
+    { task_id: stored.task.id, named: named.length, resolved, recorded },
     'review threads resolved after the re-review',
   );
 };
+
+// ── The handled ledger (M28 ruling R2) ──────────────────────────────────────
+
+/**
+ * The newest note a **person** wrote in a discussion — what the platform's answer handled, so a
+ * person's later note in the same thread is new business. `null` when the discussion is unknown or
+ * holds no person's note (the ledger then falls back to the row's instant).
+ */
+const lastPersonNoteId = (discussion: Discussion | undefined): string | null =>
+  discussion?.notes.filter((note) => !note.system && !isPlatformMergeRequestNote(note.body)).at(-1)
+    ?.id ?? null;
+
+/**
+ * One ledger row for an item the platform answered — or `null` when the task is in **shadow** mode
+ * (the reply was a `would_have` row, so nothing was answered on the provider) or an id is outside
+ * the ledger's shape (skipped rather than cut: a cut id is another item's id).
+ */
+const handledRow = (
+  stored: DutySubject['stored'],
+  runId: string,
+  handledAt: string,
+  item: {
+    readonly source: ConversationHandledInput['source'];
+    readonly threadId: string;
+    readonly lastNoteId: string | null;
+  },
+): ConversationHandledInput | null => {
+  if (
+    stored.task.mode !== 'normal' ||
+    !CONVERSATION_HANDLED_ID.test(item.threadId) ||
+    (item.lastNoteId !== null && !CONVERSATION_HANDLED_ID.test(item.lastNoteId))
+  ) {
+    return null;
+  }
+  return {
+    taskId: stored.task.id,
+    source: item.source,
+    threadId: item.threadId,
+    lastNoteId: item.lastNoteId,
+    runId: UUID.test(runId) ? (runId as Id) : null,
+    kind: 'answered',
+    author: null,
+    writtenAt: null,
+    handledAt,
+  };
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Records the rows in a transaction of its own, after the provider calls — so a row says the
+ * answer is on the provider. Idempotent (`on conflict do nothing`): a replayed duty adds nothing.
+ */
+const recordHandled = async (
+  options: ReviewConversationOptions,
+  rows: readonly ConversationHandledInput[],
+): Promise<number> =>
+  rows.length === 0
+    ? 0
+    : options.unitOfWork.transaction(async (scope) =>
+        options.store.tasks.recordConversationHandled(scope.tx, rows),
+      );
 
 /** The handler this module registers, for the runtime to spread. */
 export const reviewConversationHandlers = (

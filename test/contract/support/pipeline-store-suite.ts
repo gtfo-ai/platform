@@ -5247,6 +5247,93 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       expect(await observe('Finished', false, 2)).toBeNull();
     });
 
+    /** M28 ruling R1 (migration 0111): the first sighting of a forward move is written once. */
+    it('records the first forward sighting of a human stage entry once (M28 R1)', async () => {
+      const stored = task();
+      await store.tasks.insert(tx, stored);
+      const taskId = stored.task.id;
+      await store.tasks.recordStageEntered(tx, {
+        taskId,
+        stage: 'ready_for_merge' as Slug,
+        attempt: 1,
+        causedByEventId: null,
+      });
+      const observe = (at: string, attempt = 1) =>
+        store.tasks.observeTicketForward(tx, {
+          taskId,
+          stage: 'ready_for_merge' as Slug,
+          attempt,
+          at,
+        });
+      expect(await observe('2026-11-10T10:00:00.000Z')).toBe('2026-11-10T10:00:00.000Z');
+      expect(await observe('2026-11-10T11:00:00.000Z')).toBe('2026-11-10T10:00:00.000Z');
+      expect(await observe('2026-11-10T11:00:00.000Z', 2)).toBeNull();
+    });
+
+    /** M28 ruling R2 (migration 0111): the handled ledger is idempotent and read newest first. */
+    it('records the handled ledger once per (source, thread, kind, last note), newest first (M28 R2)', async () => {
+      const stored = task();
+      await store.tasks.insert(tx, stored);
+      const taskId = stored.task.id;
+      const row = {
+        taskId,
+        source: 'mr_thread' as const,
+        threadId: 'abc123',
+        lastNoteId: '17',
+        runId: null,
+        kind: 'answered' as const,
+        author: null,
+        writtenAt: null,
+        handledAt: '2026-11-10T10:00:00.000Z',
+      };
+      expect(await store.tasks.recordConversationHandled(tx, [row])).toBe(1);
+      // A replay adds nothing; a newer note in the same thread, or a null note twice, is one row each.
+      expect(
+        await store.tasks.recordConversationHandled(tx, [
+          { ...row, handledAt: '2026-11-10T10:05:00.000Z' },
+        ]),
+      ).toBe(0);
+      expect(
+        await store.tasks.recordConversationHandled(tx, [
+          {
+            ...row,
+            source: 'ticket_comment',
+            threadId: '10001',
+            lastNoteId: null,
+            kind: 'seen',
+            author: 'Petr',
+            writtenAt: '2026-11-10T10:43:00.000Z',
+            handledAt: '2026-11-10T11:00:00.000Z',
+          },
+        ]),
+      ).toBe(1);
+      expect(
+        await store.tasks.recordConversationHandled(tx, [
+          {
+            ...row,
+            source: 'ticket_comment',
+            threadId: '10001',
+            lastNoteId: null,
+            kind: 'seen',
+            author: 'Petr',
+            writtenAt: '2026-11-10T10:43:00.000Z',
+            handledAt: '2026-11-10T11:30:00.000Z',
+          },
+        ]),
+      ).toBe(0);
+      const read = await store.tasks.conversationHandled(tx, taskId);
+      expect(read.map((entry) => [entry.source, entry.threadId, entry.kind])).toEqual([
+        ['ticket_comment', '10001', 'seen'],
+        ['mr_thread', 'abc123', 'answered'],
+      ]);
+      expect(read[0]).toMatchObject({
+        author: 'Petr',
+        writtenAt: '2026-11-10T10:43:00.000Z',
+        handledAt: '2026-11-10T11:00:00.000Z',
+        lastNoteId: null,
+      });
+    });
+
     describe('the ticket status changes since a stage entry (WP-178)', () => {
       const ticketEvent = (key: string, from: string, to: string, id: string | null = null) => ({
         project_id: projectId,

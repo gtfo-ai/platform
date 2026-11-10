@@ -1157,21 +1157,33 @@ QA status for a status that is not a return; the task then goes on to Ready for 
 merge request during QA ends it too, and a move of the default branch sends the task back through the
 rebase gate. With no *QA* status mapped, the task goes from the rebase gate straight to Ready.
 
-At **QA** and at **Ready for merge**, any of three things a person does returns the task to the
-Developer:
+#### How to send a task back
 
+At **QA** and at **Ready for merge**, a task goes back to the Developer only when a person says so in
+one of three explicit ways, whatever language they write in:
+
+- **an open review thread on the merge request** — a comment on a diff line, or a thread started on
+  the merge request that GitLab lets you resolve. An unresolved thread is a change request by
+  GitLab's own meaning; resolve it yourself if it was only a remark;
 - **a status** — moving the ticket to one of the *Returned* statuses, or back to *In progress* or
   *Pick up from*;
-- **a ticket comment**;
-- **a merge-request note** — a comment on a diff line or a general note, including one GitLab does
-  not let you resolve.
+- **the task page's *Send back to Implementation…*** (the return dialog, with your reason).
 
-They are collected for two minutes from the first one and sent back as one return, carrying every
-person's word since the last implementation run; the Developer is told to read the conversation, and
-asks a question if a status change alone leaves it nothing to fix. A pure acknowledgement — *thanks*,
-*LGTM* and the like — does **not** return the task (the project's configuration can add words in its
-own language, `human_returns.acknowledgements`), and nothing the platform itself wrote ever does. Each
-return spends one of the human rounds, as review comments at Ready always have.
+**A ticket comment, or a merge-request comment that cannot be resolved, never sends the task back**
+on its own. The platform still reads it: the task page says *"Petr commented on the ticket 5 m ago —
+not treated as a change request"*, with **Open** (where the comment is) and **Send back to
+Implementation…** for anyone who may return the task, and the next agent run reads it in the
+conversation. **Moving the ticket forward wins**: when the ticket moves to a status that is not a
+return status (the *Approved* or *Done* status, say) in the same go as a comment or a thread, nothing
+written before that move returns the task — a QA person who writes *"QA: OK"* and moves the ticket to
+*Ready for Merge* is not sent back to Implementation. A thread opened after the move still is.
+
+Words that do return the task are collected for two minutes from the first one and sent back as one
+return, carrying every person's word since the last implementation run; the Developer is told to read
+the conversation, and asks a question if a status change alone leaves it nothing to fix. Nothing the
+platform itself wrote ever returns a task, and a thread the platform has already answered or resolved
+does not return it again unless somebody writes in it again. Each return spends one of the human
+rounds, as review comments at Ready always have.
 
 ### The conversation on the merge request
 

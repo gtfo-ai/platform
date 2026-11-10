@@ -58,11 +58,13 @@ export const ROLE_PROMPT_DIGESTS = {
     '6': '2fb8c7327217fe080b4255b4f45e8fe9b9bbbf11b275aaa2cffd66cf1c7d8994',
     '7': 'ff00c9782153b35580d87557383c826d7a680a5a5c00fdfbedca442c9c571b72',
     '8': 'fbded4316218ae25a07626762f2d1e16a9f7eb23a928a5c6c6999c5b0890a891',
+    '9': '737f1d97aeb55525a18ffbfec35189ea05e65286f9abebdfd8cbfd6586ed5fa4',
   },
   reviewer: {
     '4': 'dfeab32f0cc79abc01ee1a3e255a2c31f9c29bbb22777cd56e9a67703d8aebcd',
     '5': '2f1ca8473ddbb2b0bc8c2ce2aca2ac71cb0f31c4f6ec393ab8d5b167ab143cf6',
     '6': 'f0ccc9eb927e6188296724f18e3a5826f33d08eb7af456c168376b2b4b783a2a',
+    '7': 'd8e459f931a01139ae9da3f3e33501bae439b7bd1eba3b1759a3d05c0bd1b364',
   },
   acceptance_tester: {
     '1': 'd6d761759c67667e2c091a6fd8207bab0877cea17687d641135f065554541f20',

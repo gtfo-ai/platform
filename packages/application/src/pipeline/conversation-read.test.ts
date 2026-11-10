@@ -50,6 +50,7 @@ import {
 import { staticPipelineIntegrations } from './integrations.js';
 import { createStageRunPlanner, PLATFORM_TOOLS_BY_ROLE, SKILLS_BY_ROLE } from './planner.js';
 import type { StageRunRequest } from './stage-executor.js';
+import type { ConversationHandledRow } from './store.js';
 
 const PROJECT = '00000000-0000-4000-8000-00000000f1c7' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000c2' as Id;
@@ -663,5 +664,86 @@ describe('review round 1', () => {
     expect(plan.spec.platformTools).not.toContain('get_conversation');
     // The blocks still reach the prompt: the conversation is read for the prompt, not the tool.
     expect(blocksOf(plan.spec.userPrompt, 'conversation').length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * M28 ruling R2: the handled ledger marks what the platform already answered or resolved, so an
+ * agent stops treating old threads as open. A *seen* row answers nothing; a person's newer note in
+ * an answered thread is open again; the provider's own `resolved` marks the thread too.
+ */
+describe('answered and resolved, from the handled ledger (M28 R2)', () => {
+  const redactor = exactSecretRedactor([]);
+  const row = (overrides: Partial<ConversationHandledRow>): ConversationHandledRow => ({
+    taskId: '00000000-0000-4000-8000-0000000002a1' as Id,
+    source: 'mr_thread',
+    threadId: THREAD_DIFF,
+    lastNoteId: '501',
+    runId: null,
+    kind: 'answered',
+    author: null,
+    writtenAt: null,
+    handledAt: '2026-10-05T00:00:00.000Z',
+    ...overrides,
+  });
+  const marks = (conversation: ReturnType<typeof conversationFrom>) =>
+    (conversation?.entries ?? []).map((entry) => [
+      entry.source === 'mr' ? entry.threadId : entry.commentId,
+      entry.answered === true,
+      entry.resolved === true,
+    ]);
+
+  it('marks an answered thread and comment, and nothing a seen row names', () => {
+    const page: CommentPage = {
+      comments: [comment('10007', 'acc-7', 'Jane', 'QA OK', '2026-10-04T09:00:00.000Z')],
+      total: 1,
+    };
+    const conversation = conversationFrom({
+      discussions: { items: discussions(), redactor },
+      comments: { page, redactor },
+      handled: [
+        row({}),
+        row({ source: 'ticket_comment', threadId: '10007', lastNoteId: '10007', kind: 'seen' }),
+      ],
+    });
+    expect(marks(conversation)).toEqual([
+      [THREAD_DIFF, true, false],
+      [THREAD_BOT, false, false],
+      ['10007', false, false],
+    ]);
+  });
+
+  it('marks a resolved thread, by the ledger or by the provider, and opens a newer person note again', () => {
+    const items = discussions();
+    const [diff] = items;
+    if (diff === undefined) throw new Error('fixture');
+    const newer = { ...diff.notes[0], id: '599', created_at: '2026-10-06T00:00:00.000Z' };
+    const conversation = conversationFrom({
+      discussions: {
+        items: [
+          { ...diff, notes: [...diff.notes, newer] } as Discussion,
+          { ...(items[1] as Discussion), resolved: true },
+        ],
+        redactor,
+      },
+      comments: null,
+      handled: [row({ kind: 'resolved' })],
+    });
+    expect(marks(conversation)).toEqual([
+      [THREAD_DIFF, true, true],
+      [THREAD_BOT, false, true],
+      [THREAD_DIFF, false, true],
+    ]);
+  });
+
+  it('marks nothing with no ledger, so an entry reads as it did before', () => {
+    const conversation = conversationFrom({
+      discussions: { items: discussions(), redactor },
+      comments: null,
+    });
+    for (const entry of conversation?.entries ?? []) {
+      expect(entry).not.toHaveProperty('answered');
+      expect(entry).not.toHaveProperty('resolved');
+    }
   });
 });

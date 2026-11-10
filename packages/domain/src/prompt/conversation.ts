@@ -6,7 +6,9 @@
  *
  * Every entry says *where* it was written (`source`), *which* thread or comment it is (`thread_id`
  * or `comment_id`), *who* wrote it (`author_ref`), *whether the platform did* (`platform`), *when*
- * (`created_at`) and, for a note on a diff, *where in the change* (`path_ref`, `line`). The ids are
+ * (`created_at`) and, for a note on a diff, *where in the change* (`path_ref`, `line`) — and, since
+ * M28 ruling R2, whether the platform already **answered** it (`answered="true"`) and whether its
+ * thread is **resolved** (`resolved="true"`), so an agent stops treating old threads as open. The ids are
  * what a Developer's `thread_replies` and a Reviewer's `resolved_threads` must quote back, and
  * `platform` is a claim about the platform's own behaviour, which technical/07 requires to be
  * unforgeable. A separator line inside one shared body would be forgeable by the note above it — a
@@ -91,6 +93,17 @@ interface ConversationEntryBase {
   readonly line: number | null;
   /** The note's text — redacted and bounded by the caller, emitted byte-identical. Untrusted. */
   readonly body: string;
+  /**
+   * The platform already answered this note (M28 ruling R2: the handled ledger names it). A
+   * platform boolean, rendered as `answered="true"` on the marker; absent or `false` renders
+   * nothing, so an entry nothing handled reads exactly as before.
+   */
+  readonly answered?: boolean;
+  /**
+   * The note's thread is resolved — on the provider, or by the platform (M28 ruling R2). A platform
+   * boolean, rendered as `resolved="true"`; absent or `false` renders nothing.
+   */
+  readonly resolved?: boolean;
 }
 
 /** A merge-request note: every note belongs to a discussion (WP-173), named by `threadId`. */
@@ -204,6 +217,10 @@ const entryAttributes = (entry: PromptConversationEntry): RenderableEntry | null
       platform: entry.platform ? 'true' : 'false',
       created_at: createdAt,
       ...(entry.line === null ? {} : { line: entry.line }),
+      // M28 ruling R2: platform text, never provider text — the caller decides each from the
+      // handled ledger and the provider's own `resolved` flag.
+      ...(entry.answered === true ? { answered: 'true' } : {}),
+      ...(entry.resolved === true ? { resolved: 'true' } : {}),
     },
     at: Date.parse(entry.createdAt),
     authorRef,

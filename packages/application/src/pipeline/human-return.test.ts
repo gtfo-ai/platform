@@ -395,6 +395,20 @@ const generalNote = (harness: PipelineHarness, body: string, at?: string): Discu
   notes: [note(harness, body, at === undefined ? {} : { at })],
 });
 
+/** A thread on the merge request itself that can be resolved — GitLab's *Start a thread*. */
+const generalThread = (harness: PipelineHarness, body: string): Discussion => ({
+  id: `t-${nextId()}`,
+  resolvable: true,
+  resolved: false,
+  notes: [note(harness, body)],
+});
+
+/** The handled ledger the window wrote (M28 ruling R2). */
+const ledgerOf = async (harness: PipelineHarness) =>
+  harness.memory.transaction(async (scope) =>
+    harness.store.tasks.conversationHandled(scope.tx, taskOf(harness).task.id),
+  );
+
 const diffNote = (harness: PipelineHarness, body: string): Discussion => ({
   id: `d-${nextId()}`,
   resolvable: true,
@@ -477,107 +491,123 @@ const feedbackBlock = (harness: PipelineHarness): string | undefined => {
 
 // ── (1) every form returns, at both human stages ───────────────────────────
 
-describe.each(HUMAN_STAGES)('(1) at %s, each form a person uses returns the task', (stage) => {
-  it('a general note with resolvable: false — the shape of the product owner’s example', async () => {
-    const waiting = await waitingAt(stage);
-    later(waiting.harness);
-    waiting.discussions.push(
-      generalNote(waiting.harness, 'The totals row is still off by one on the second page.'),
-    );
-    await fire(waiting.harness, noteArrived(waiting.harness, 'The totals row is still off'));
+describe.each(HUMAN_STAGES)(
+  '(1) at %s, each explicit signal returns the task (M28 R1)',
+  (stage) => {
+    it('a person’s note in a general thread that can be resolved', async () => {
+      const waiting = await waitingAt(stage);
+      later(waiting.harness);
+      waiting.discussions.push(
+        generalThread(waiting.harness, 'The totals row is still off by one on the second page.'),
+      );
+      await fire(waiting.harness, noteArrived(waiting.harness, 'The totals row is still off'));
 
-    expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
-    expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
-      from_stage: stage,
-      forms: ['mr_note'],
-      counts: { mr_diff: 0, mr_note: 1, ticket_comment: 0 },
-      status: null,
+      expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
+      expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
+        from_stage: stage,
+        forms: ['mr_note'],
+        counts: { mr_diff: 0, mr_note: 1, ticket_comment: 0 },
+        status: null,
+      });
+      expect(feedbackBlock(waiting.harness)).toContain(
+        '[mr note 1] — The totals row is still off by one on the second page.',
+      );
+      // It came back round: re-claimed, re-run, and waiting at the stage again.
+      expect(at(waiting.harness)).toEqual(
+        stage === 'qa' ? ['active', 'qa'] : ['ready_for_merge', 'ready_for_merge'],
+      );
+      expect(taskOf(waiting.harness).task.iterationCounters.human_rounds).toBe(1);
     });
-    expect(feedbackBlock(waiting.harness)).toContain(
-      '[mr note 1] — The totals row is still off by one on the second page.',
-    );
-    // It came back round: re-claimed, re-run, and waiting at the stage again.
-    expect(at(waiting.harness)).toEqual(
-      stage === 'qa' ? ['active', 'qa'] : ['ready_for_merge', 'ready_for_merge'],
-    );
-    expect(taskOf(waiting.harness).task.iterationCounters.human_rounds).toBe(1);
-  });
 
-  it('a note on a diff discussion', async () => {
-    const waiting = await waitingAt(stage);
-    later(waiting.harness);
-    waiting.discussions.push(diffNote(waiting.harness, 'Use cents here, not floats.'));
-    await fire(waiting.harness, noteArrived(waiting.harness, 'Use cents here'));
+    it('a note on a diff discussion', async () => {
+      const waiting = await waitingAt(stage);
+      later(waiting.harness);
+      waiting.discussions.push(diffNote(waiting.harness, 'Use cents here, not floats.'));
+      await fire(waiting.harness, noteArrived(waiting.harness, 'Use cents here'));
 
-    expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
-    expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload.forms).toEqual(['mr_diff']);
-    expect(feedbackBlock(waiting.harness)).toContain(
-      '[mr thread 1] src/totals.ts:12 — Use cents here, not floats.',
-    );
-  });
-
-  it('a ticket comment', async () => {
-    const waiting = await waitingAt(stage);
-    later(waiting.harness);
-    await fire(
-      waiting.harness,
-      commentArrived(waiting, 'Tested on the staging invoice: the footer is empty.'),
-    );
-
-    expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
-    expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
-      forms: ['ticket_comment'],
-      counts: { mr_diff: 0, mr_note: 0, ticket_comment: 1 },
+      expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
+      expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload.forms).toEqual(['mr_diff']);
+      expect(feedbackBlock(waiting.harness)).toContain(
+        '[mr thread 1] src/totals.ts:12 — Use cents here, not floats.',
+      );
     });
-    expect(feedbackBlock(waiting.harness)).toContain(
-      '[ticket comment 1] — Tested on the staging invoice: the footer is empty.',
-    );
-  });
 
-  it('a status change to a returned status, whose feedback is platform text pointing to get_conversation', async () => {
-    const waiting = await waitingAt(stage);
-    later(waiting.harness);
-    await fire(waiting.harness, statusMoved(waiting, 'Sent back'));
+    it('a status change to a returned status, whose feedback is platform text pointing to get_conversation', async () => {
+      const waiting = await waitingAt(stage);
+      later(waiting.harness);
+      await fire(waiting.harness, statusMoved(waiting, 'Sent back'));
 
-    expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
-    expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
-      forms: ['status'],
-      status: 'Sent back',
+      expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
+      expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
+        forms: ['status'],
+        status: 'Sent back',
+      });
+      const block = feedbackBlock(waiting.harness) ?? '';
+      expect(block).toContain('[status] The ticket was moved to "Sent back"');
+      expect(block).toContain('get_conversation');
+      // The return re-claimed the ticket and moved it to `in_progress` again (BD-031 ruling 4).
+      expect(waiting.ticket.state.assignee).toBe(SELF_ID);
     });
-    const block = feedbackBlock(waiting.harness) ?? '';
-    expect(block).toContain('[status] The ticket was moved to "Sent back"');
-    expect(block).toContain('get_conversation');
-    // The return re-claimed the ticket and moved it to `in_progress` again (BD-031 ruling 4).
-    expect(waiting.ticket.state.assignee).toBe(SELF_ID);
-  });
 
-  it('a status change back to the in_progress status', async () => {
-    const waiting = await waitingAt(stage);
-    later(waiting.harness);
-    await fire(waiting.harness, statusMoved(waiting, 'Doing'));
+    it('a status change back to the in_progress status', async () => {
+      const waiting = await waitingAt(stage);
+      later(waiting.harness);
+      await fire(waiting.harness, statusMoved(waiting, 'Doing'));
 
-    expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
-    expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
-      forms: ['status'],
-      status: 'Doing',
+      expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
+      expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
+        forms: ['status'],
+        status: 'Doing',
+      });
     });
-  });
-});
+  },
+);
 
 // ── (2)–(4) what does not return ────────────────────────────────────────────
 
 describe.each(HUMAN_STAGES)('at %s, what does not return the task', (stage) => {
-  it('(2) acknowledgements alone, and the thread counts are still recorded', async () => {
+  /**
+   * M28 ruling R1 (AUT-6655): a ticket comment and a general note that cannot be resolved are not
+   * change requests, whatever they say and in whatever language — they are recorded as *seen*, and
+   * the thread counts are still recorded.
+   */
+  it('(2) a ticket comment and a general note alone — recorded as seen, and the counts still recorded', async () => {
     const waiting = await waitingAt(stage);
     later(waiting.harness);
-    waiting.discussions.push(generalNote(waiting.harness, 'LGTM 👍'));
-    waiting.discussions.push(diffNote(waiting.harness, 'thanks!'));
-    await waiting.harness.publish([commentArrived(waiting, 'Looks good, thank you')]);
-    await fire(waiting.harness, noteArrived(waiting.harness, 'LGTM'));
+    waiting.discussions.push(
+      generalNote(waiting.harness, 'Prosím ještě přejmenovat sloupec v patičce.'),
+    );
+    await waiting.harness.publish([
+      commentArrived(
+        waiting,
+        'QA – MR !8: OK. Otestováno na stagingu, vše funguje podle zadání, můžete mergovat.',
+      ),
+    ]);
+    await fire(waiting.harness, noteArrived(waiting.harness, 'Prosím'));
 
     expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
     expect(eventsOf(waiting.harness, 'task.human_return')).toHaveLength(0);
-    expect(taskOf(waiting.harness).reviewThreads).toMatchObject({ open: 1, resolved: 0 });
+    expect(taskOf(waiting.harness).reviewThreads).toMatchObject({ open: 0, resolved: 0 });
+    const ledger = await ledgerOf(waiting.harness);
+    expect(ledger.map((row) => [row.source, row.kind]).sort()).toEqual([
+      ['mr_note', 'seen'],
+      ['ticket_comment', 'seen'],
+    ]);
+    const comment = ledger.find((row) => row.source === 'ticket_comment');
+    expect(comment).toMatchObject({ threadId: 'c-1', lastNoteId: 'c-1', author: 'jane' });
+  });
+
+  /** M28 ruling R2: a second firing over the same words records nothing new and returns nothing. */
+  it('(2) a replayed window adds no ledger row', async () => {
+    const waiting = await waitingAt(stage);
+    later(waiting.harness);
+    await fire(waiting.harness, commentArrived(waiting, 'Otestováno, OK.'));
+    const first = await ledgerOf(waiting.harness);
+    expect(first).toHaveLength(1);
+    later(waiting.harness);
+    await fire(waiting.harness, noteArrived(waiting.harness, 'nothing new'));
+    expect(await ledgerOf(waiting.harness)).toEqual(first);
+    expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
   });
 
   it('(3) a note that opens with a platform marker, and ticket comments the platform wrote', async () => {
@@ -619,7 +649,7 @@ describe.each(HUMAN_STAGES)('at %s, what does not return the task', (stage) => {
   it('(8) a second firing after the return does nothing', async () => {
     const waiting = await waitingAt(stage);
     later(waiting.harness);
-    waiting.discussions.push(generalNote(waiting.harness, 'One more change, please.'));
+    waiting.discussions.push(generalThread(waiting.harness, 'One more change, please.'));
     await waiting.harness.publish([noteArrived(waiting.harness, 'One more change')]);
     await waiting.harness.publish([noteArrived(waiting.harness, 'One more change')]);
     const windows = waiting.harness.jobs.enqueued.filter(
@@ -636,18 +666,58 @@ describe.each(HUMAN_STAGES)('at %s, what does not return the task', (stage) => {
 
   /**
    * (15) A person who quotes a whole platform comment while asking for a change is a person: the
-   * marker counts at the start only (TD-029 decision 6).
+   * marker counts at the start only (TD-029 decision 6) — so the comment is recorded as the
+   * person's *seen* word; since M28 ruling R1 a ticket comment returns nothing.
    */
-  it('(15) — but a person’s comment quoting a platform comment does return it', async () => {
+  it('(15) — a person’s comment quoting a platform comment is the person’s, and recorded as seen', async () => {
     const waiting = await waitingAt(stage);
     later(waiting.harness);
     const quoted = `> agentic:ask:00000000-0000-4000-8000-0000000000d1\n> **Asked and answered**\n> It sums the model.\n\nplease rename X`;
     await fire(waiting.harness, commentArrived(waiting, quoted));
 
-    expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
-    expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload.forms).toEqual([
+    expect(returnsFrom(waiting.harness, stage)).toHaveLength(0);
+    expect((await ledgerOf(waiting.harness)).map((row) => row.kind)).toEqual(['seen']);
+  });
+});
+
+// ── M28 ruling R1: forward wins over return ─────────────────────────────────
+
+describe.each(HUMAN_STAGES)('at %s, a forward status move wins over a word (M28 R1)', (stage) => {
+  const DONE = {
+    ...lifecycle(stage === 'qa'),
+    slots: { ...lifecycle(stage === 'qa').slots, done: 'Ready for Merge' },
+  };
+
+  /** AUT-6655: a QA comment and the ticket moved to the done slot in the same delivery. */
+  it('a comment and an open thread written before the move return nothing', async () => {
+    const waiting = await waitingAt(stage, { lifecycle: DONE });
+    later(waiting.harness);
+    waiting.discussions.push(generalThread(waiting.harness, 'nit: a blank line'));
+    await waiting.harness.publish([commentArrived(waiting, 'QA – MR !8: OK')]);
+    await fire(waiting.harness, statusMoved(waiting, 'Ready for Merge'));
+
+    expect(returnsFrom(waiting.harness, stage)).toHaveLength(0);
+    expect(eventsOf(waiting.harness, 'task.human_return')).toHaveLength(0);
+    expect((await ledgerOf(waiting.harness)).map((row) => row.source).sort()).toEqual([
+      'mr_thread',
       'ticket_comment',
     ]);
+  });
+
+  it('a thread a person opens after the move was first seen still returns the task', async () => {
+    const waiting = await waitingAt(stage, { lifecycle: DONE });
+    later(waiting.harness);
+    await fire(waiting.harness, statusMoved(waiting, 'Ready for Merge'));
+    if (stage === 'qa') {
+      // At qa the forward move is the pass: the task is at ready_for_merge now, and its own entry
+      // records a fresh entry status there.
+      expect(at(waiting.harness)).toEqual(['ready_for_merge', 'ready_for_merge']);
+      return;
+    }
+    later(waiting.harness);
+    waiting.discussions.push(generalThread(waiting.harness, 'Found a bug in the footer.'));
+    await fire(waiting.harness, noteArrived(waiting.harness, 'Found a bug'));
+    expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
   });
 });
 
@@ -661,7 +731,7 @@ describe('(4) a note written while the agent’s review stages ran', () => {
         // After the implementation run started, before the task reached `qa`: its webhook arrived
         // while the task was at an agent stage and armed nothing.
         later(harness);
-        discussions.push(generalNote(harness, 'While you are at it, the header too.'));
+        discussions.push(generalThread(harness, 'While you are at it, the header too.'));
         later(harness);
       },
     });
@@ -892,20 +962,21 @@ describe('(7) the feedback', () => {
     });
     later(waiting.harness);
     waiting.discussions.push(diffNote(waiting.harness, `do not log ${SECRET} here`));
-    waiting.discussions.push(generalNote(waiting.harness, 'x'.repeat(MAX_REVIEW_FEEDBACK_CHARS)));
+    waiting.discussions.push(generalThread(waiting.harness, 'x'.repeat(MAX_REVIEW_FEEDBACK_CHARS)));
     await waiting.harness.publish([commentArrived(waiting, 'The footer is empty.')]);
     await fire(waiting.harness, statusMoved(waiting, 'Sent back'));
 
+    // The ticket comment is quoted in the feedback (every person's word is), but since M28 ruling
+    // R1 it is not a form that returned the task.
     expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload.forms).toEqual([
       'status',
       'mr_diff',
       'mr_note',
-      'ticket_comment',
     ]);
     const returned = returnsFrom(waiting.harness, 'qa')[0]?.payload.reason ?? '';
     const lines = returned.split('\n');
     expect(lines[0]).toBe(
-      'A person returned the task at qa: the ticket’s status, a note on a diff discussion, a general note on the merge request, a ticket comment.',
+      'A person returned the task at qa: the ticket’s status, a note on a diff discussion, a general note on the merge request.',
     );
     expect(lines[1]).toMatch(/^\[status\] /);
     expect(lines[2]).toBe(
@@ -919,23 +990,23 @@ describe('(7) the feedback', () => {
   });
 });
 
-// ── (11) the project's own acknowledgement words ────────────────────────────
+// ── (11) language-independent: the thread is the signal, never the words ────
 
-describe.each(HUMAN_STAGES)('(11) at %s, a word added through the settings write', (stage) => {
-  it('stops a note made only of that word from returning the task', async () => {
+describe.each(HUMAN_STAGES)('(11) at %s, the words never decide (M28 R1)', (stage) => {
+  it('a Czech thank-you in a general note returns nothing, even with the old setting saved', async () => {
     const waiting = await waitingAt(stage, {
       harness: { settings: { config: { human_returns: { acknowledgements: ['díky'] } } } },
     });
     later(waiting.harness);
-    waiting.discussions.push(generalNote(waiting.harness, 'Díky!'));
+    waiting.discussions.push(generalNote(waiting.harness, 'Díky! Ještě prosím přejmenovat X.'));
     await fire(waiting.harness, noteArrived(waiting.harness, 'Díky!'));
     expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
   });
 
-  it('— and without it, the same note returns the task (the shipped vocabulary is English)', async () => {
+  it('— and the same words in a thread that can be resolved return the task', async () => {
     const waiting = await waitingAt(stage);
     later(waiting.harness);
-    waiting.discussions.push(generalNote(waiting.harness, 'Díky!'));
+    waiting.discussions.push(generalThread(waiting.harness, 'Díky!'));
     await fire(waiting.harness, noteArrived(waiting.harness, 'Díky!'));
     expect(returnsFrom(waiting.harness, stage)).toHaveLength(1);
   });
@@ -944,7 +1015,7 @@ describe.each(HUMAN_STAGES)('(11) at %s, a word added through the settings write
 // ── (12) the record's invariant ─────────────────────────────────────────────
 
 describe('(12) task.human_return is written to its payload invariant', () => {
-  it('a status return whose only newer note is an acknowledgement records forms [status] and mr_note 0', async () => {
+  it('a status return whose only newer note is a general note records forms [status] and mr_note 0', async () => {
     const waiting = await waitingAt('ready_for_merge');
     later(waiting.harness);
     waiting.discussions.push(generalNote(waiting.harness, 'thanks!'));
@@ -1250,7 +1321,7 @@ describe('(e) a second visit to the human stage records a fresh entry', () => {
     expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
     // …and a note returns the task. The re-claim moves the ticket to `Doing` on the way back.
     later(waiting.harness);
-    waiting.discussions.push(generalNote(waiting.harness, 'Please rename the totals helper.'));
+    waiting.discussions.push(generalThread(waiting.harness, 'Please rename the totals helper.'));
     await fire(waiting.harness, noteArrived(waiting.harness, 'Please rename'));
     expect(returnsFrom(waiting.harness, 'ready_for_merge')).toHaveLength(1);
     expect(at(waiting.harness)).toEqual(['ready_for_merge', 'ready_for_merge']);
@@ -1278,14 +1349,17 @@ describe('(e) a second visit to the human stage records a fresh entry', () => {
  * `reviewCommentHandler`, the first two cases wait and return nothing.
  */
 describe('(9) entering a human stage arms the window (WP-179)', () => {
-  /** A person's general note, written once while the agent's review stages ran. */
-  const writtenDuringReview = (body: string) => {
+  /** A person's general thread (or `make`'s shape), written once while the review stages ran. */
+  const writtenDuringReview = (
+    body: string,
+    make: (harness: PipelineHarness, body: string) => Discussion = generalThread,
+  ) => {
     let wrote = false;
     return (harness: PipelineHarness, discussions: Discussion[]) => {
       if (wrote) return;
       wrote = true;
       later(harness);
-      discussions.push(generalNote(harness, body));
+      discussions.push(make(harness, body));
       later(harness);
     };
   };
@@ -1341,11 +1415,11 @@ describe('(9) entering a human stage arms the window (WP-179)', () => {
   });
 
   it.each(HUMAN_STAGES)(
-    'at %s, an entry with no new word, or only an acknowledgement, returns nothing and records the counts and the entry status',
+    'at %s, an entry with no new word, or only a general note, returns nothing and records the counts and the entry status',
     async (stage) => {
       for (const ack of [null, 'LGTM 👍']) {
         const waiting = await waitingAt(stage, {
-          ...(ack === null ? {} : { onCiCheck: writtenDuringReview(ack) }),
+          ...(ack === null ? {} : { onCiCheck: writtenDuringReview(ack, generalNote) }),
         });
         await entryFires(waiting.harness);
 
@@ -1367,7 +1441,7 @@ describe('(9) entering a human stage arms the window (WP-179)', () => {
     const waiting = await waitingAt('ready_for_merge');
     const { harness } = waiting;
     later(harness);
-    waiting.discussions.push(generalNote(harness, 'Rename the helper, please.'));
+    waiting.discussions.push(generalThread(harness, 'Rename the helper, please.'));
     await harness.publish([noteArrived(harness, 'Rename the helper')]);
 
     // Both ask for the same `stately` slot: the queue, the key, and a start inside the same delay.
@@ -1435,7 +1509,7 @@ describe('the review conversation through the pipeline (WP-179)', () => {
     );
     harness.script('code_review', completed({ ...REVIEW, resolved_threads: ['gone-thread'] }));
     later(harness);
-    waiting.discussions.push(generalNote(harness, 'One more change, please.'));
+    waiting.discussions.push(generalThread(harness, 'One more change, please.'));
     await fire(harness, noteArrived(harness, 'One more change'));
 
     expect(dutiesOf(harness).map((data) => data.duty)).toEqual([
