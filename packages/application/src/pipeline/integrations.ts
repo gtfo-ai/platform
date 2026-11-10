@@ -2323,13 +2323,19 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
   },
 
   /**
-   * Resolves a discussion (WP-179, TD-029 decision 10) — only ever one of the Reviewer's own finding
-   * threads, which the caller has checked by marker. A mutation **without** an idempotency key: the
-   * port's resolve is idempotent (an already-resolved thread succeeds and changes nothing), and the
-   * caller skips a thread it read as resolved.
+   * Resolves a discussion (WP-179, TD-029 decision 10) — one of the Reviewer's own finding threads,
+   * which the caller has checked by marker, or, since S-28.3 (M28 ruling R3), a person's thread the
+   * Developer's reply says was fixed or documented. The port's resolve is idempotent (an
+   * already-resolved thread succeeds and changes nothing), and the caller skips a thread it read as
+   * resolved; R3's caller also passes an idempotency key (`conversation_resolve:<task>:<run>:<n>`),
+   * so a replayed duty replays rather than calls.
    */
   resolve: async (
-    input: { readonly ref: MergeRequestRefInput; readonly discussionId: string },
+    input: {
+      readonly ref: MergeRequestRefInput;
+      readonly discussionId: string;
+      readonly idempotencyKey?: string;
+    },
     context: CallContext & { readonly mode: TaskMode },
   ): Promise<Discussion | null> => {
     const git = integrations.git;
@@ -2346,6 +2352,7 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
       () => null as unknown as Discussion,
       (result) =>
         result === null ? null : { discussion_id: result.id, resolved: result.resolved },
+      input.idempotencyKey === undefined ? undefined : replayable<Discussion>(input.idempotencyKey),
     );
   },
 });

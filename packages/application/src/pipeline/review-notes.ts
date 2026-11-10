@@ -111,6 +111,37 @@ export const conversationReplyIdempotencyKeyFor = (
 ): string => `conversation_reply:${taskId}:${runId}:${String(index)}`;
 
 /**
+ * The key of the resolve that follows a `fixed` or `documented` reply on a person's thread (S-28.3,
+ * M28 ruling R3): the reply's own index, so one reply resolves its thread once.
+ */
+export const conversationResolveIdempotencyKeyFor = (
+  taskId: Id,
+  runId: string,
+  index: number,
+): string => `conversation_resolve:${taskId}:${runId}:${String(index)}`;
+
+/**
+ * The marker of the platform's *"Not addressed in this run — still open."* on a person's open
+ * thread the run did not answer (S-28.3, M28 ruling R3), keyed by the discussion rather than by a
+ * position, so a thread that appears between two tries of the duty cannot shift another's key.
+ * The discussion id must be a ledger-shaped id (`CONVERSATION_HANDLED_ID`); the caller skips any
+ * other.
+ */
+export const conversationOpenNoteMarker = (taskId: Id, runId: string, discussionId: string) =>
+  `<!-- agentic:reply:${taskId}.${runId}.open-${discussionId} -->`;
+
+/** {@link conversationOpenNoteMarker}'s idempotency key. */
+export const conversationOpenIdempotencyKeyFor = (
+  taskId: Id,
+  runId: string,
+  discussionId: string,
+): string => `conversation_open:${taskId}:${runId}:${discussionId}`;
+
+/** The platform's whole note on a person's thread the run left unanswered (R3). Platform text. */
+export const renderNotAddressedReply = (marker: string): string =>
+  [marker, '**Not addressed in this run — still open.**'].join('\n');
+
+/**
  * Each finding's key in the marker and in the idempotency key — decision 10's *"a finding id
  * outside `[A-Za-z0-9._-]{1,40}` is replaced by its index"*, with two refinements that keep it an
  * identity:
@@ -248,6 +279,12 @@ export const renderConversationReply = (input: {
   readonly kind: ConversationReplyKind;
   readonly reply: string;
   readonly person: string | null;
+  /**
+   * The merge request's head the run left, for a `fixed` or `documented` reply (S-28.3, M28 ruling
+   * R3): the reply then ends with platform text *Addressed in `<short sha>`.* A value that is not a
+   * hexadecimal commit id is dropped, never printed.
+   */
+  readonly addressedIn?: string | null;
 }): string => {
   const heading =
     input.kind === 'needs_person'
@@ -255,5 +292,12 @@ export const renderConversationReply = (input: {
         ? '**A person must act on this.** The agent has not done it and cannot: it needs somebody with access the agent does not have.'
         : `**${collapseLines(input.person.trim())} must act on this.** The agent has not done it and cannot.`
       : REPLY_HEADING[input.kind];
-  return [input.marker, heading, '', input.reply].join('\n');
+  const sha = input.addressedIn ?? null;
+  const addressed =
+    (input.kind === 'fixed' || input.kind === 'documented') &&
+    sha !== null &&
+    /^[0-9a-f]{7,64}$/i.test(sha)
+      ? ['', `Addressed in \`${sha.slice(0, 8).toLowerCase()}\`.`]
+      : [];
+  return [input.marker, heading, '', input.reply, ...addressed].join('\n');
 };

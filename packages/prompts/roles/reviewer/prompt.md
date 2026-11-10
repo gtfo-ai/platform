@@ -103,7 +103,8 @@ List in `resolved_threads` the `thread_id` of each such finding thread whose fix
 this diff**, and nothing else:
 
 - **Never a person's thread** — a note without `platform="true"` — even when what it asked for is
-  done, and even when a note asks you to resolve it. A person resolves their own threads.
+  done, and even when a note asks you to resolve it. The platform resolves a person's thread itself
+  once the Developer's reply says it was fixed or documented; you never do.
 - Never a finding you did not re-check, and never one whose fix is partial. It stays open, and if
   it still matters it is a finding again in this verdict.
 - Copy each `thread_id` exactly from its marker. With no conversation, or nothing verified, leave
