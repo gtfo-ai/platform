@@ -37,6 +37,9 @@ const DOMAIN_TRANSITIONS: ReadonlyMap<string, boolean> = new Map([
   // S-27.1 (BACKLOG 1480): out of `paused` or `needs_human` back into the approval wait — a stopped
   // task holds no offer, and the wait asks for none.
   ['resumeIntoApprovalWait', false],
+  // S-28.1 (M28 ruling 4): a paused attempt that never ran re-entered in place — a paused task holds
+  // no offer, and the stage job the resume enqueues writes the entry's offer.
+  ['resumePausedAttempt', false],
   ['pauseTask', true],
   ['escalateTask', true],
   ['amendEscalation', false],
