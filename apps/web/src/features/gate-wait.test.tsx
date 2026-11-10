@@ -309,3 +309,105 @@ describe('a wait that ended with no answer', () => {
     );
   });
 });
+
+/**
+ * S-28.7 (TD-036's 2026-11-10 amendment decisions 5 and 6): under the wait, what the platform did
+ * about the jobs the project set to run; and, for a person's job it did not start, the way to have
+ * it start that job next time.
+ */
+describe('the jobs the platform started (S-28.7)', () => {
+  const entry = (
+    jobId: string,
+    name: string,
+    outcome: 'started' | 'refused' | 'unsupported',
+    pipelineId = '41',
+  ) => ({
+    job_id: jobId,
+    pipeline_id: pipelineId,
+    name,
+    url: `https://git.example.invalid/acme/api/-/jobs/${jobId}`,
+    at: '2026-11-07T10:05:00.000Z',
+    outcome,
+  });
+
+  it('says started, refused and unsupported in plain words, for this pipeline only', () => {
+    render(
+      <GateWaitNotice
+        wait={running()}
+        provider="gitlab"
+        projectKey={null}
+        nowMs={NOW}
+        started={[
+          entry('1', 'build_composer', 'started'),
+          entry('2', 'codeception', 'refused'),
+          entry('3', 'crawler-test', 'unsupported'),
+          entry('4', 'older-pipeline-job', 'started', '40'),
+        ]}
+      />,
+    );
+    const lines = [...document.querySelectorAll('[data-ci-manual-started] li')].map(
+      (line) => line.textContent,
+    );
+    expect(lines).toEqual([
+      'Started build_composer for you — waiting for its result.',
+      'Could not start codeception: the platform’s GitLab account may not run it. Start it in GitLab, or give the account permission. Open job',
+      'Could not start crawler-test: this GitLab connection cannot start manual jobs. Start it in GitLab. Open job',
+    ]);
+    expect(screen.getAllByRole('link', { name: 'Open job' })[0]?.getAttribute('href')).toBe(
+      'https://git.example.invalid/acme/api/-/jobs/2',
+    );
+  });
+
+  it('renders a hostile job name as text', () => {
+    render(
+      <GateWaitNotice
+        wait={running()}
+        provider="gitlab"
+        projectKey={null}
+        nowMs={NOW}
+        started={[entry('1', HOSTILE, 'started')]}
+      />,
+    );
+    expect(document.querySelector('[data-ci-manual-started] img')).toBeNull();
+    expect(text('[data-ci-manual-started]')).toContain(HOSTILE);
+  });
+
+  const routed = async (started: Parameters<typeof GateWaitNotice>[0]['started']) => {
+    const root = createRootRoute({ component: () => <Outlet /> });
+    const page = createRoute({
+      getParentRoute: () => root,
+      path: '/',
+      component: () => (
+        <GateWaitNotice
+          wait={held({ held_job: 'crawler-test' })}
+          provider="gitlab"
+          projectKey="ACME"
+          nowMs={NOW}
+          started={started}
+        />
+      ),
+    });
+    const settings = createRoute({
+      getParentRoute: () => root,
+      path: '/projects/$key/settings/$section',
+      component: () => <h1>Settings</h1>,
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([page, settings]),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    });
+    render(<RouterProvider router={router} />);
+    await screen.findByText(/CI is waiting for someone to start/);
+  };
+
+  it('links the Manual CI jobs card when a person must start a job the platform did not start', async () => {
+    await routed([]);
+    const link = screen.getByRole('link', { name: 'Have the platform start it next time' });
+    expect(link.getAttribute('href')).toBe('/projects/ACME/settings/policies#manual-ci-jobs');
+  });
+
+  it('does not offer it for a job the platform tried to start', async () => {
+    await routed([entry('3', 'crawler-test', 'refused')]);
+    expect(screen.queryByRole('link', { name: 'Have the platform start it next time' })).toBeNull();
+  });
+});

@@ -58,6 +58,8 @@ export const queryKeys = {
    * keyed by the tracker binding's integration when one is named, so another tracker bound on the
    * same page is a different answer rather than a cached one. Without it, the prefix of all of them.
    */
+  /** S-28.7: the manual CI jobs seen in the project's recent task pipelines. */
+  manualJobsSeen: (id: string) => ['project', id, 'ci-manual-jobs'] as const,
   ticketStatuses: (id: string, integrationId?: string) =>
     integrationId === undefined
       ? (['project', id, 'ticket-statuses'] as const)

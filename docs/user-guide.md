@@ -1136,7 +1136,28 @@ only when the rule would wait on a manual job. At **Ready for merge**, a task wh
 still shows as blocked says so — on the task page and in the ticket's workpad: *"GitLab shows
 pipeline n, the latest for this commit, as blocked at the manual job sentry-release-commit. If this
 project requires pipelines to succeed, GitLab won't merge it until sentry-release-commit has run:
-start it on GitLab."* The platform never says the merge request can be merged. The waiting
+start it on GitLab."* The platform never says the merge request can be merged.
+**The platform can start the manual jobs you choose** (S-28.7). On the project's **Rules & limits**,
+the **Manual CI jobs** card lists the manual jobs seen in the project's recent task pipelines — with
+their stage, whether each blocks the pipeline or is optional, and a hint when one looks like a
+deployment — and gives each three choices: *Start it automatically* (the platform starts it when the
+pipeline holds it, and its result counts: if it fails, CI fails, even when the job is allowed to
+fail), *Wait for a person* (CI waits until someone starts it in GitLab), and *Don't run, don't wait*
+(never started, never counted). A job you have not chosen for is never started, and CI waits for it
+only when it is a test job. You can type a job's name before any pipeline has shown it; a name no
+recent pipeline has is marked *never seen in a pipeline*, so a typo does not go unnoticed. A job that
+starts another pipeline (a trigger job) cannot be started by the platform — a person starts it.
+Only the project settings can start a job or stop counting one; the repository's settings file may
+only add *Wait for a person*, and the card says what it asked for and was not applied. On a project
+whose CI holds jobs while the merge request is a draft — Autix holds `build_composer`, then
+`codeception` once it has run — choosing *Start it automatically* lets each task's CI run through
+both waves without anyone pressing a button. While CI waits, the task page says what the platform
+did: *Started build_composer for you — waiting for its result.*; *Could not start codeception: the
+platform's GitLab account may not run it. Start it in GitLab, or give the account permission.* (your
+administrator can grant it, see the operator guide); and, when it waits on a person for a job you
+have not chosen for, *Have the platform start it next time* opens the card. The CI check says the
+same afterwards, and names each held job that was left alone: *nette-tester is manual and not set to
+run — not run, not counted.* The waiting
 described next applies to a required job. A held job is
 *Needs you* at once: on the task page, on the board — its card says *CI held · start the job* and
 sits under *Needs you* — and as a row of the Inbox and of Home's *Needs you* (*CI waits for someone

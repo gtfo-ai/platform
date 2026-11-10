@@ -42,6 +42,7 @@ import {
   kbHealthResponseSchema,
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
+  manualJobsSeenResponseSchema,
   orgAuditResponseSchema,
   orgModelsResponseSchema,
   orgSettingsResponseSchema,
@@ -2299,6 +2300,31 @@ export const ownerCandidates = ownerCandidatesResponseSchema.parse({
  * `GET /api/projects/:id/ticket-statuses` (WP-182): the tracker's statuses, **invented** for this
  * corpus (BD-031 ruling 1: no status name is assumed anywhere but a fixture).
  */
+/** S-28.7: the manual CI jobs the Rules & limits card offers a choice for — Autix's shape. */
+export const manualJobsSeen = manualJobsSeenResponseSchema.parse({
+  jobs: [
+    {
+      name: 'build_composer',
+      stage: 'build-deps',
+      blocking: true,
+      trigger: false,
+      deploy_like: false,
+      seen_in: 3,
+    },
+    {
+      name: 'nette-tester',
+      stage: 'test_optional',
+      blocking: false,
+      trigger: false,
+      deploy_like: false,
+      seen_in: 3,
+    },
+  ],
+  names_seen: ['build_composer', 'codeception', 'nette-tester', 'phpstan'],
+  heads_read: 3,
+  heads_unread: 0,
+});
+
 export const ticketStatuses = ticketStatusesResponseSchema.parse({
   items: [
     { id: '10001', name: 'Doing', category: 'in_progress', raw_category: 'indeterminate' },

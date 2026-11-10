@@ -907,6 +907,21 @@ at **Integrations → the provider → Setup guide**, and they are the same file
 
 This guide does not repeat them.
 
+**Manual CI jobs the platform starts (S-28.7).** A project may tell the platform to start some of
+the CI jobs its pipeline holds until somebody starts them (*Rules & limits → Manual CI jobs*, the key
+`pipeline.ci.manual_jobs`, project settings only). The platform starts such a job with the GitLab
+integration's own token, through GitLab's *Run a job* API (`POST /projects/:id/jobs/:job_id/play`),
+so that token's account needs the `api` scope — the integration already has it — **and the right to
+run the job**: GitLab lets an account run a manual job only when it may merge to the job's branch
+(the **Developer** role is enough for an unprotected `agentic/*` branch), and a job that deploys to a
+protected environment only for an account on that environment's *Allowed to deploy* list. When
+GitLab refuses (`403`), the task page says *Could not start codeception: the platform's GitLab
+account may not run it. Start it in GitLab, or give the account permission.* and that job waits for
+a person on that attempt. GitLab rate-limits manual job runs (`429` with `Retry-After`); the
+platform retries the start as every provider call. A trigger job (one that starts another pipeline)
+is never started by the platform. Every start is an `integration_actions` row with the action
+`play_job`.
+
 ### The webhook URL
 
 For a provider with an inbound half, an integration's **Setup guide** tab (its page under

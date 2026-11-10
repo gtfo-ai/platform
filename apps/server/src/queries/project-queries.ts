@@ -625,3 +625,30 @@ export const countCurationsWaitingOnSettings = async (
        and c.abandoned_at is null`);
   return Number(rows[0]?.waiting ?? 0);
 };
+
+/**
+ * A project's most recent task heads, newest first, at most `limit` (S-28.7): the head CI judged
+ * (`tasks.ci_head_sha`) or else the merge request's recorded head — what the *Manual CI jobs* read
+ * asks the latest pipeline of. A task with neither has no pipeline to read and is skipped.
+ */
+export const findRecentTaskHeads = async (
+  database: Database,
+  projectId: string,
+  limit: number,
+): Promise<readonly { readonly taskId: Id; readonly headSha: string }[]> => {
+  const rows = await database
+    .select({ id: tasks.id, ciHeadSha: tasks.ciHeadSha, mrRef: tasks.mrRef })
+    .from(tasks)
+    .where(and(eq(tasks.projectId, projectId), isNotNull(tasks.mrRef)))
+    .orderBy(desc(tasks.createdAt))
+    .limit(limit * 2);
+  const heads: { readonly taskId: Id; readonly headSha: string }[] = [];
+  for (const row of rows) {
+    const head = row.ciHeadSha ?? row.mrRef?.head_sha ?? null;
+    if (typeof head === 'string' && /^[0-9a-f]{7,64}$/.test(head)) {
+      heads.push({ taskId: row.id as Id, headSha: head });
+    }
+    if (heads.length >= limit) break;
+  }
+  return heads;
+};

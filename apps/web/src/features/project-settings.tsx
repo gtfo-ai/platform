@@ -79,6 +79,7 @@ import { BusinessInterview } from './business-interview.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
 import { ExecutionSettings } from './execution-settings.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
+import { ManualCiJobs } from './manual-ci-jobs.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
 import { readinessNameAndWord, readinessTone } from './readiness-label.js';
@@ -314,6 +315,9 @@ const PoliciesAndWip = ({ project }: { readonly project: Project }): ReactElemen
 
       {/* BD-025's 2026-10-05 amendment (backlog 460): whether agents or CI run the checks. */}
       <VerificationMode projectId={project.id} />
+
+      {/* S-28.7: which manual CI jobs the platform starts, waits for, or leaves alone. */}
+      <ManualCiJobs projectId={project.id} />
 
       <Card className="flex flex-col gap-1">
         <h3 className="text-base font-semibold">Parallel tasks</h3>

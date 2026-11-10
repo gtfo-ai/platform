@@ -486,6 +486,11 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
     'The tracker has no status by some of the names you chose. Pick them from the tracker’s list.',
   lifecycle_statuses_unavailable:
     'The tracker’s statuses could not be read, so nothing was saved. Try again in a moment.',
+  // S-28.7: the manual CI jobs read of the project's settings.
+  no_git_binding:
+    'This project has no git host connected, so there are no pipelines to read jobs from. Connect one in its connections first.',
+  manual_jobs_unavailable:
+    'The project’s recent pipelines could not be read from the git host. Try again in a moment; you can still type a job name below.',
   project_has_live_tasks:
     'The project has tasks still in progress. Wait for them to finish or cancel them first.',
   project_stream_contended:

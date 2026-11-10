@@ -206,6 +206,22 @@ export const useProjectBindings = (projectId: string | null) => {
 };
 
 /**
+ * `GET /api/projects/:id/ci/manual-jobs` (S-28.7) — the manual CI jobs seen in the project's recent
+ * task pipelines, for the *Manual CI jobs* card. **Not retried**, as the statuses read is not: every
+ * read is up to five provider calls, and a 409/503 is the server's named answer.
+ */
+export const useManualJobsSeen = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.manualJobsSeen(projectId ?? ''),
+    queryFn: () => endpoints.manualJobsSeen(projectId ?? ''),
+    enabled: projectId !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
+};
+
+/**
  * `GET /api/projects/:id/ticket-statuses` (WP-182) — the tracker's statuses the lifecycle pick lists
  * offer. Asked only when a task-management binding is stored (`trackerId`, which also keys the
  * answer per tracker), since without one the answer is a 409. **Not retried**: every read is a provider call through the executor, and a 503 is

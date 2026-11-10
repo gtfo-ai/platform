@@ -83,6 +83,7 @@ import { toApiError } from './errors.js';
 import type { KnowledgeCommands } from './knowledge.js';
 import { checkProposedLifecycles, readProposedAccountIdentities } from './lifecycle-check.js';
 import { type PinoLogger, withLogContext } from './logging.js';
+import type { ManualJobsSeenReader } from './manual-jobs-seen.js';
 import type { Metrics } from './metrics.js';
 import { routeLabel } from './metrics.js';
 import type { OnboardingCommands } from './onboarding.js';
@@ -179,6 +180,7 @@ import { registerOrgRoutes } from './routes/org.js';
 import { registerOwnerCandidateRoutes } from './routes/owner-candidates.js';
 import { registerPipelineGraphRoutes } from './routes/pipeline-graph.js';
 import { registerProjectBindingRoutes } from './routes/project-bindings.js';
+import { registerProjectCiJobsRoutes } from './routes/project-ci-jobs.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
 import { registerProjectExecutionRoutes } from './routes/project-execution.js';
 import { registerProjectReadinessRoutes } from './routes/project-readiness.js';
@@ -287,6 +289,12 @@ export interface BuildAppOptions {
    * bindings write whose lifecycle block names no status needs no reader and is served either way.
    */
   readonly ticketStatuses?: TicketStatusReader | null;
+  /**
+   * The manual CI jobs seen in a project's recent task pipelines (S-28.7): `GET …/ci/manual-jobs`,
+   * or `null`/absent for a process that composed no integration stack — the route is registered
+   * either way and answers `503 manual_jobs_unavailable` by name, behind its guard.
+   */
+  readonly manualJobsSeen?: ManualJobsSeenReader | null;
   /**
    * The manual start from a ticket key (WP-122), or `null`/absent for a process that composed no
    * integration stack. Optional like `projectConfig`: `app.test.ts` and the census build an app
@@ -968,6 +976,15 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
           logger: app.log,
         }),
       ticketStatuses: ticketStatuses === null ? null : ticketStatuses.current,
+    });
+    // S-28.7: the manual CI jobs seen in the project's recent task pipelines.
+    const manualJobsSeen = options.manualJobsSeen ?? null;
+    await registerProjectCiJobsRoutes(app, {
+      projectRole: async (projectId, userId) =>
+        findProjectRole(options.database, projectId, userId),
+      projectExists: async (projectId) =>
+        (await findProjectById(options.database, projectId)) !== null,
+      manualJobsSeen: manualJobsSeen === null ? null : manualJobsSeen.read,
     });
     await registerOnboardingRoutes(app, {
       database: options.database,
