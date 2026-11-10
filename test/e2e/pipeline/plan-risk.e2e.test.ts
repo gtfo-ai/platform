@@ -77,6 +77,7 @@ const assessedScenarios = (withMigration: boolean) => (world: SeededWorld) => {
 
 // The dial asks about an L plan (above_size at L); the rule may waive that ask up to L.
 const CONFIG = {
+  version: 1,
   policies: { probation_tasks: 0, plan_approval_risk: { enabled: true, max_size: 'L' } },
 };
 
