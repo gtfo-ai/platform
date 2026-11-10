@@ -68,6 +68,7 @@ import {
   orderQueue,
   planApprovalReasons,
   QA_STAGE_ID,
+  type QueuedTask,
   queueTask,
   READY_FOR_MERGE_STAGE,
   requestApproval,
@@ -675,7 +676,7 @@ export const runIntakeCheck = async (
     if (!admission.admitted || ownerFull) {
       const queued = queueTask(
         created.aggregate,
-        { reason: admission.reason === 'max_parallel_runs' ? 'wip' : 'wip' },
+        { reason: 'wip' },
         contextFor(options, created.aggregate.id, causeEventId),
       );
       await options.store.tasks.save(scope.tx, { ...stored, task: queued.aggregate });
@@ -2232,14 +2233,42 @@ const schedulerHandler = (options: PipelineSagaOptions): EventHandler => ({
       return;
     }
     // S-28.6: a person's limit spans projects, so a place they freed here may start their queued
-    // task elsewhere — the event's project first, then each other project where the task's owner
-    // (both owners, for a reassignment) has one queued, by id.
-    const owners = await ownersOfSchedulerEvent(options.store, context.scope.tx, event);
-    const elsewhere = (
-      await options.store.tasks.queuedProjectsOfOwners(context.scope.tx, owners)
-    ).filter((other) => other !== projectId);
-    for (const project of [projectId, ...elsewhere]) {
-      await scheduleProject(options, context, project as Id);
+    // task elsewhere — the event's project and each other project where the task's owner (both
+    // owners, for a reassignment) has one queued.
+    const tx = context.scope.tx;
+    const owners = await ownersOfSchedulerEvent(options.store, tx, event);
+    const projects = [
+      ...new Set([projectId, ...(await options.store.tasks.queuedProjectsOfOwners(tx, owners))]),
+    ].sort() as Id[];
+    /**
+     * **One lock order for every admitter** (S-28.6, the review of #145): every project's admission
+     * lock (`counts`) in id order, then every queued task's owner's (`ownerAdmission`) in id order,
+     * all before the first start. Intake takes one project's and then one owner's, so no two
+     * admitters can each hold a lock the other waits for: projects always before owners, each kind
+     * ascending. An owner given a queued task after this read is not locked here and its task is
+     * left for the next pass — the reassignment's own `task.owner.changed` wakes it.
+     */
+    for (const project of projects) {
+      await options.store.tasks.counts(tx, project);
+    }
+    const queues = new Map<Id, readonly QueuedTask[]>();
+    for (const project of projects) {
+      queues.set(project, orderQueue(await options.store.tasks.queued(tx, project)));
+    }
+    const locked = [
+      ...new Set(
+        [...queues.values()].flatMap((queue) =>
+          queue.flatMap((task) =>
+            task.ownerUserId === null || task.ownerUserId === undefined ? [] : [task.ownerUserId],
+          ),
+        ),
+      ),
+    ].sort() as Id[];
+    for (const owner of locked) {
+      await options.store.tasks.ownerAdmission(tx, owner);
+    }
+    for (const project of projects) {
+      await scheduleProject(options, context, project, queues.get(project) ?? [], new Set(locked));
     }
   },
 });
@@ -2270,10 +2299,12 @@ const scheduleProject = async (
   options: PipelineSagaOptions,
   context: HandlerContext,
   projectId: Id,
+  queued: readonly QueuedTask[],
+  /** The owners whose admission lock this pass already holds — the only ones it may admit. */
+  locked: ReadonlySet<Id>,
 ): Promise<void> => {
   {
     const settings = await options.settings.forProject(projectId, context.scope.tx);
-    const queued = orderQueue(await options.store.tasks.queued(context.scope.tx, projectId));
     for (const next of queued) {
       const counts = await options.store.tasks.counts(context.scope.tx, projectId);
       if (!evaluateTaskAdmission(counts, settings.wip).admitted) {
@@ -2290,7 +2321,8 @@ const scheduleProject = async (
       const owner = (await options.store.tasks.ownership(context.scope.tx, next.id)).ownerUserId;
       if (
         owner !== null &&
-        !(await admitOwner(options.store, context.scope.tx, settings.wip, owner as Id)).admitted
+        (!locked.has(owner as Id) ||
+          !(await admitOwner(options.store, context.scope.tx, settings.wip, owner as Id)).admitted)
       ) {
         continue;
       }

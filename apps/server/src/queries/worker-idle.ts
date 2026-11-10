@@ -227,24 +227,30 @@ export const createWorkerIdleReader =
       const load =
         mineQueued && candidate.userId !== undefined ? await personLoadOf(candidate.userId) : null;
       const held = new Map<string, number>();
-      let ownerLimit: OwnerLimitFacts | null = null;
+      let heldLimit: number | null = null;
+      let heldQueued = 0;
       if (load !== null && candidate.userId !== undefined) {
         for (const project of projects) {
           const mine = byProject.get(project.projectId)?.mineQueued ?? 0;
           const limit = ownerLimitOf(project.limits, load.personal);
           if (mine > 0 && load.inFlight >= limit) {
             held.set(project.projectId, mine);
-            ownerLimit = {
-              userId: candidate.userId,
-              name: candidate.userName ?? candidate.userId,
-              count: load.inFlight,
-              limit: Math.min(limit, ownerLimit?.limit ?? limit),
-              queued: (ownerLimit?.queued ?? 0) + mine,
-              holders: load.holders,
-            };
+            heldLimit = heldLimit === null ? limit : Math.min(heldLimit, limit);
+            heldQueued += mine;
           }
         }
       }
+      const ownerLimit: OwnerLimitFacts | null =
+        load === null || heldLimit === null || candidate.userId === undefined
+          ? null
+          : {
+              userId: candidate.userId,
+              name: candidate.userName ?? 'the owner',
+              count: load.inFlight,
+              limit: heldLimit,
+              queued: heldQueued,
+              holders: load.holders,
+            };
       answers.set(
         candidate.workerId,
         workerIdleReasonOf({

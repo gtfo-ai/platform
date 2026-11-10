@@ -146,7 +146,7 @@ export const queueWaitsOver = (
           pipeline,
           holders: {
             total: theirs.length,
-            needs_human: 0,
+            needs_human: theirs.filter((task) => waitsForAPerson(task.state)).length,
             items: theirs.slice(0, MAX_QUEUE_WAIT_HOLDERS).map((task) => ({
               task_id: task.id as Id,
               ticket_key: task.ticketKey,
