@@ -241,8 +241,9 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > `include_rebase_in_progress`, the commit count off the first page of `…/commits`. With
 > `policies.merge.by: platform` the `pipeline.outbound` duty **`platform_merge`**
 > (`pipeline/platform-merge.ts`), enqueued by `ready_merge_check` on a "mergeable" read (or a rebase
-> as the only obstacle) and again by the recovery pass while the platform has no decisive attempt for
-> the reviewed head, re-reads everything outside any transaction and calls the merge through the
+> as the only obstacle), once more by itself when an open human-return window made it wait (after the
+> window's length — every entry into Ready opens one), and again by the recovery pass while the
+> platform has no decisive attempt for the reviewed head, re-reads everything outside any transaction and calls the merge through the
 > executor — idempotency key `platform_merge:<task>:<head>`, **one executor attempt**
 > (`MutatingActionRequest.singleAttempt`), so a lost answer is re-read before the job's next try
 > rather than sent again blind. One decisive attempt per (task, head) in `task_merges` (migration
