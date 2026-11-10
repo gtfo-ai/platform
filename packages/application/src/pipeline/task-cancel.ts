@@ -101,10 +101,11 @@ const mergeRequestName = (ref: {
 /**
  * **Why the platform cancelled a task whose ticket moved** (M28 ruling 4b, S-28.14) — the
  * `task.cancelled` outcome, so the notification and the task page say it in plain words: the
- * ticket's key, the status name (the redacted, bounded read) and the tracker; and, when the task
+ * ticket's key, the status name (the redacted, bounded read), the tracker and — when the delivery
+ * named them — who moved it and when (TD-029 Amendment E.3); and, when the task
  * has a merge request, that it was left alone and what the person does with it.
  *
- * `mergeRequest.open` is what the caller read: `true` — read open; `null` — not read (the claim's
+ * `mergeRequest.open` is what the caller read: `true` — read open; `false` — read and not open; `null` — not read (the claim's
  * path), so the sentence does not claim it is open.
  */
 export const ticketMovedCancelOutcome = (input: {
@@ -112,6 +113,10 @@ export const ticketMovedCancelOutcome = (input: {
   readonly provider: string;
   readonly status: string;
   readonly reason: 'ticket_closed_in_tracker' | 'ticket_taken_by_person';
+  /** Who moved the ticket, as the delivery named them (TD-029 Amendment E.3), or `null`. */
+  readonly movedBy?: string | null;
+  /** When the delivery says the ticket moved, or `null` (the sweep and the claim know no move). */
+  readonly movedAt?: string | null;
   readonly mergeRequest: {
     readonly ref: {
       readonly provider?: string | null;
@@ -122,16 +127,30 @@ export const ticketMovedCancelOutcome = (input: {
   } | null;
 }): string => {
   const where = trackerWord(input.provider);
+  const movedBy = input.movedBy ?? null;
+  const movedAt = input.movedAt ?? null;
+  const by = movedBy === null ? '' : ` by ${movedBy}`;
+  const on = movedAt === null ? '' : ` on ${movedAt.slice(0, 10)}`;
+  // A known move says who and when, as the stop's brief does; a read with no move says where it is.
+  const placement =
+    movedBy === null && movedAt === null && input.reason === 'ticket_closed_in_tracker'
+      ? `is "${input.status}" in ${where}`
+      : `was moved to "${input.status}" in ${where}${by}${on}`;
   const head =
     input.reason === 'ticket_closed_in_tracker'
-      ? `Cancelled automatically: ${input.key} is "${input.status}" in ${where}, a status that means it is finished.`
-      : `Cancelled automatically: ${input.key} was moved to "${input.status}" in ${where}, a status the platform did not set — a person seems to be working on it.`;
+      ? `Cancelled automatically: ${input.key} ${placement}, a status that means it is finished.`
+      : `Cancelled automatically: ${input.key} ${placement}, a status the platform did not set — a person seems to be working on it.`;
   const mr = input.mergeRequest;
   if (mr === null) {
     return head;
   }
   const name = mergeRequestName(mr.ref);
-  return mr.open === true
-    ? `${head} Its merge request ${name} is still open — close or merge it yourself: ${mr.ref.url}`
-    : `${head} Its merge request ${name} was left as it is — if it is still open, close or merge it yourself: ${mr.ref.url}`;
+  if (mr.open === true) {
+    return `${head} Its merge request ${name} is still open — close or merge it yourself: ${mr.ref.url}`;
+  }
+  if (mr.open === false) {
+    // Read and not open (closed, or locked): nothing is asked of anybody, so it is only named.
+    return `${head} Its merge request ${name} is not open; it was left as it is.`;
+  }
+  return `${head} Its merge request ${name} was left as it is — if it is still open, close or merge it yourself: ${mr.ref.url}`;
 };

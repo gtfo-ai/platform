@@ -322,6 +322,9 @@ export const runTicketStatusRecheck = async (
               provider: stored.task.ticket.provider,
               status: read.status,
               reason: decision.reason,
+              // TD-029 Amendment E.3: who moved the ticket, as the stop's brief says it.
+              movedBy: data.moved_by ?? null,
+              movedAt: data.moved_at ?? null,
               mergeRequest:
                 stored.mr === null
                   ? null

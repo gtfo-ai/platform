@@ -1471,7 +1471,7 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     // S-28.14: the outcome is a sentence a person reads, never the reason's code.
     expect(eventsOf(harness, 'task.cancelled').at(-1)?.payload).toMatchObject({
       outcome:
-        'Cancelled automatically: ACME-1 is "Done" in the tracker, a status that means it is finished.',
+        'Cancelled automatically: ACME-1 was moved to "Done" in the tracker by Vojtěch Kaizr on 2026-06-01, a status that means it is finished.',
     });
   });
 
@@ -1495,35 +1495,57 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     expect(lastEscalation(harness)?.reason).toBe('ticket_taken_by_person');
   });
 
-  it('the platform’s own status write stops nothing — a slot, or a status_mapping target, Done included', async () => {
-    const { ticket, harness } = await stoppedAtTheClaim();
-    // A task past its first stages: the slot's status is the platform's own.
-    await putIn(harness, 'paused', false, {
-      stageAttempts: { refinement: 1, architecture: 1, implementation: 1 },
-      currentStage: 'implementation',
-    });
-    const before = eventsOf(harness, 'task.escalated').length;
-    ticket.state.status = 'Doing';
-    ticket.state.statusCategory = 'in_progress';
-    await harness.publish([moved('To Do', 'Doing')]);
-    await harness.drain();
-    expect(taskOf(harness).task.state).toBe('paused');
-    expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
+  // S-28.14 (review): proven under the shipped default (`cancel`) as well as under `stop` — a
+  // platform write read as a person's would cancel a healthy task, the most dangerous case.
+  it.each(['stop', 'cancel'] as const)(
+    'the platform’s own status write stops nothing — a slot, the done slot (Done category), or a status_mapping target — under %s',
+    async (choice) => {
+      const owned = { in_progress: 'Doing', done: 'Delivered' };
+      const { ticket, harness } = await stoppedAtTheClaim({
+        ticketLifecycle: lifecycle(owned),
+        ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', {
+          ...owned,
+          on_ticket_closed: choice,
+        }),
+      });
+      // A task past its first stages: the slots' statuses are the platform's own.
+      await putIn(harness, 'paused', false, {
+        stageAttempts: { refinement: 1, architecture: 1, implementation: 1 },
+        currentStage: 'implementation',
+      });
+      const before = eventsOf(harness, 'task.escalated').length;
+      for (const [status, category] of [
+        ['Doing', 'in_progress'],
+        ['Delivered', 'done'],
+      ] as const) {
+        ticket.state.status = status;
+        ticket.state.statusCategory = category;
+        await harness.publish([moved('To Do', status)]);
+        await harness.drain();
+        expect(taskOf(harness).task.state, status).toBe('paused');
+      }
+      expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
+      expect(eventsOf(harness, 'task.cancelled')).toHaveLength(0);
 
-    const mapped = await stoppedAtTheClaim({
-      ticketLifecycle: lifecycle({ assign_owner: true }),
-      ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', { assign_owner: true }),
-      config: { status_mapping: { refinement: 'Shipped' } },
-    });
-    await putIn(mapped.harness, 'paused');
-    const mappedBefore = eventsOf(mapped.harness, 'task.escalated').length;
-    mapped.ticket.state.status = 'Shipped';
-    mapped.ticket.state.statusCategory = 'done';
-    await mapped.harness.publish([moved('To Do', 'Shipped')]);
-    await mapped.harness.drain();
-    expect(taskOf(mapped.harness).task.state).toBe('paused');
-    expect(eventsOf(mapped.harness, 'task.escalated')).toHaveLength(mappedBefore);
-  });
+      const mapped = await stoppedAtTheClaim({
+        ticketLifecycle: lifecycle({ assign_owner: true }),
+        ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', {
+          assign_owner: true,
+          on_ticket_closed: choice,
+        }),
+        config: { status_mapping: { refinement: 'Shipped' } },
+      });
+      await putIn(mapped.harness, 'paused');
+      const mappedBefore = eventsOf(mapped.harness, 'task.escalated').length;
+      mapped.ticket.state.status = 'Shipped';
+      mapped.ticket.state.statusCategory = 'done';
+      await mapped.harness.publish([moved('To Do', 'Shipped')]);
+      await mapped.harness.drain();
+      expect(taskOf(mapped.harness).task.state).toBe('paused');
+      expect(eventsOf(mapped.harness, 'task.escalated')).toHaveLength(mappedBefore);
+      expect(eventsOf(mapped.harness, 'task.cancelled')).toHaveLength(0);
+    },
+  );
 
   describe('S-28.11 — a never-run task exempts no status; a running one keeps the exemption', () => {
     const delivered = {
@@ -1753,7 +1775,7 @@ describe('S-28.14 — a ticket a person finished cancels its task automatically 
     expect(cancelled).toHaveLength(1);
     expect(cancelled[0]?.actor).toMatchObject({ kind: 'system' });
     expect((cancelled[0]?.payload as { outcome: string } | undefined)?.outcome).toBe(
-      'Cancelled automatically: ACME-1 is "Released" in the tracker, a status that means it is finished. Its merge request #7 is still open — close or merge it yourself: https://git.example.test/acme/api/-/merge_requests/7',
+      'Cancelled automatically: ACME-1 was moved to "Released" in the tracker on 2026-06-01, a status that means it is finished. Its merge request #7 is still open — close or merge it yourself: https://git.example.test/acme/api/-/merge_requests/7',
     );
     // The person's *Cancel task* path: the claimed run is told to stop through its lease holder.
     expect(harness.store.runCommandRows().map((row) => row.instruction.kind)).toEqual(['cancel']);
