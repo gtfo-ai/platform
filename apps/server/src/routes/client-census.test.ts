@@ -1048,6 +1048,34 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   }, 15_000);
 
+  it('serves a person’s task limit S-28.6 added, the client calls all four, and each refuses an anonymous caller', async () => {
+    const paths = clientPaths(
+      coreClientFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    for (const path of [
+      '/api/me/task-limit',
+      '/api/org/task-limits',
+      '/api/org/users/{}/task-limit',
+    ]) {
+      expect(paths).toContain(path);
+    }
+    for (const [method, url] of [
+      ['GET', '/api/me/task-limit'],
+      ['PUT', '/api/me/task-limit'],
+      ['GET', '/api/org/task-limits'],
+      ['PUT', `/api/org/users/${PROBE_ID}/task-limit`],
+    ] as const) {
+      const response = await app.inject({ method, url });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${url} ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${url} 401 unauthenticated`,
+      );
+    }
+  }, 15_000);
+
   it('serves the execution setting WP-278 added, the client calls it, and both methods refuse an anonymous caller', async () => {
     // Named positively (standing rule 10): TD-031 decision 8's read and its administrator's write.
     const paths = clientPaths(

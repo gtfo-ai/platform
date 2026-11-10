@@ -125,7 +125,7 @@ describe('queue_wait (S-25.16)', () => {
     const projectId = await project();
     const stopped: Id[] = [];
     for (let n = 1; n <= 5; n += 1) {
-      stopped.push(await task(projectId, `AUT-66${n}0`, 'needs_human', { minute: n }));
+      stopped.push(await task(projectId, `AUT-66${n}0`, 'waiting_approval', { minute: n }));
     }
     const first = await task(projectId, 'AUT-6861', 'queued', { minute: 10 });
     const second = await task(projectId, 'AUT-6862', 'queued', { minute: 20 });
@@ -149,7 +149,7 @@ describe('queue_wait (S-25.16)', () => {
         items: stopped.map((id, index) => ({
           task_id: id,
           ticket_key: `AUT-66${index + 1}0`,
-          state: 'needs_human',
+          state: 'waiting_approval',
         })),
       },
     });
@@ -170,8 +170,12 @@ describe('queue_wait (S-25.16)', () => {
 
   it.each<readonly [string, readonly TaskState[]]>([
     [
-      'the Autix shape',
+      'the Autix shape, which since S-28.6 holds no place',
       ['needs_human', 'needs_human', 'needs_human', 'needs_human', 'needs_human'],
+    ],
+    [
+      'waiting for a person fills the pipeline',
+      ['waiting_approval', 'waiting_answers', 'waiting_approval', 'waiting_answers', 'active'],
     ],
     ['two running', ['active', 'returned', 'waiting_answers']],
     ['room left', ['active', 'needs_human', 'paused']],
@@ -221,7 +225,7 @@ describe('queue_wait (S-25.16)', () => {
   it('applies the organisation’s lower bound, as admission does', async () => {
     const projectId = await project({ pipeline: { wip: { max_tasks_in_pipeline: 3 } } });
     for (let n = 0; n < 3; n += 1) {
-      await task(projectId, `ORG-${n}`, 'needs_human', { minute: n });
+      await task(projectId, `ORG-${n}`, 'waiting_approval', { minute: n });
     }
     const queued = await task(projectId, 'ORG-Q', 'queued', { minute: 9 });
     expect((await wipLimits(projectId)).limits.maxTasksInPipeline).toBe(3);
@@ -244,7 +248,7 @@ describe('queue_wait (S-25.16)', () => {
       JSON.stringify({ version: 1, pipeline: { wip: { max_tasks_in_pipeline: 2 } } }),
     ]);
     for (let n = 0; n < 2; n += 1) {
-      await task(projectId, `OWN-${n}`, 'needs_human', { minute: n });
+      await task(projectId, `OWN-${n}`, 'waiting_approval', { minute: n });
     }
     const queued = await task(projectId, 'OWN-Q', 'queued', { minute: 9 });
     expect(await queueWaitOf(projectId, queued)).toMatchObject({

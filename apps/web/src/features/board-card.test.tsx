@@ -1075,8 +1075,8 @@ describe('the Queued column says what holds it (S-25.16)', () => {
     task(31 + index, { state: 'needs_human', current_stage: 'refinement' }),
   );
   const NOTE =
-    'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — ' +
-    '5 of them wait for you. A place frees when one of them finishes or is cancelled, so decide ' +
+    'Waiting for a place: this project holds at most 5 tasks in its pipeline (the project’s limit, not a person’s), and 5 are in it — ' +
+    '5 of them wait for you. A place frees when one of them finishes, is paused, is cancelled or needs a person to unblock it, so decide ' +
     'them or cancel one.';
 
   it('says the sentence once, as the column’s note, and each card its own place', async () => {

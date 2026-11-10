@@ -68,6 +68,8 @@ describe('Better Auth schema parity', () => {
       'first_signed_in_at',
       'id',
       'image',
+      // S-28.6 (migration 0112): a person's own task limit — the platform's, never Better Auth's.
+      'max_tasks_in_flight',
       'name',
       'role',
       'status',

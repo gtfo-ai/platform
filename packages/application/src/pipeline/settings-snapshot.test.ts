@@ -3,6 +3,7 @@
  * hash is over, and the redaction and bound it goes through. The two `runs.insert` call sites are
  * asserted where the runs are made — `saga.test.ts` (a stage) and `ask-pipeline.test.ts` (an ask).
  */
+import { DEFAULT_WIP_LIMITS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { defaultProjectSettings, type ProjectSettings } from './settings.js';
@@ -47,7 +48,7 @@ describe('runSettingsSnapshot', () => {
     const { snapshot } = runSettingsSnapshot(
       settingsWith({
         config: { project: { communication_language: 'cs' } },
-        wip: { maxParallelTasks: 1, maxTasksInPipeline: 5, maxParallelRuns: 4 },
+        wip: { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 1, maxTasksInPipeline: 5 },
       }),
       nothing,
     );

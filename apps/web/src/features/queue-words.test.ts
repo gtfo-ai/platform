@@ -8,6 +8,7 @@ import type { IsoDateTime, QueueWait, TaskState } from '@platform/contracts';
 import { taskStateSchema } from '@platform/contracts';
 import {
   countsInPipeline,
+  DEFAULT_WIP_LIMITS,
   evaluateTaskAdmission,
   type QueueLiveTask,
   queueWaitsOver,
@@ -25,7 +26,12 @@ import {
   queueShort,
 } from './queue-words.js';
 
-const LIMITS: WipLimits = { maxParallelTasks: 2, maxTasksInPipeline: 5, maxParallelRuns: 4 };
+const LIMITS: WipLimits = { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 2, maxTasksInPipeline: 5 };
+
+/** The project's parenthesis (S-28.6): its limits are not a person's. */
+const PROJECTS = '(the project’s limit, not a person’s)';
+/** What frees a pipeline place since S-28.6 (paused and needs-a-person tasks hold none). */
+const FREES = 'finishes, is paused, is cancelled or needs a person to unblock it';
 
 /**
  * The read's `queue_wait` for the task at `position`, built through **the server's own function**
@@ -81,35 +87,37 @@ describe('ordinal', () => {
 });
 
 describe('the queue’s words', () => {
-  it('says the Autix case: the pipeline full of stopped tasks, what frees it, this task’s place', () => {
-    const autix = waitFor(repeat('needs_human', 5), LIMITS, 2);
+  it('says the Autix case: the pipeline full of tasks waiting for a person, what frees it, this task’s place', () => {
+    const autix = waitFor(repeat('waiting_approval', 5), LIMITS, 2);
     expect(queueSentence(autix, 'AUT-6862', true)).toBe(
-      'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — ' +
-        '5 of them wait for you. A place frees when one of them finishes or is cancelled, so decide ' +
+      `Waiting for a place: this project holds at most 5 tasks in its pipeline ${PROJECTS}, and 5 are in it — ` +
+        `5 of them wait for you. A place frees when one of them ${FREES}, so decide ` +
         'them or cancel one. AUT-6862 is 2nd in the queue: 1 ticket is ahead of it.',
     );
     expect(queueShort(autix)).toBe('2nd in queue · 5 of 5 places taken');
-    expect(queueSentence(waitFor(repeat('needs_human', 5), LIMITS, 1), 'AUT-6861', true)).toMatch(
-      /AUT-6861 is next in the queue and starts then\.$/,
-    );
+    expect(
+      queueSentence(waitFor(repeat('waiting_approval', 5), LIMITS, 1), 'AUT-6861', true),
+    ).toMatch(/AUT-6861 is next in the queue and starts then\.$/);
   });
 
   it('review case (a): 2 running + 3 stopped — only a running task finishing frees a place', () => {
-    const wait = waitFor([...repeat('active', 2), ...repeat('needs_human', 3)], LIMITS);
+    const wait = waitFor([...repeat('active', 2), ...repeat('waiting_approval', 3)], LIMITS);
     expect(wait).toMatchObject({ status: 'waiting', reason: 'max_parallel_tasks' });
     expect(queueRelief(wait)).toEqual({ freedBy: 'running_finishes', startsNext: true });
     const sentence = queueSentence(wait, 'AUT-1', true);
     expect(sentence).toBe(
-      'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — ' +
+      `Waiting for a place: this project holds at most 5 tasks in its pipeline ${PROJECTS}, and 5 are in it — ` +
         '3 of them wait for you; and it runs at most 2 at once, and 2 are running. A place frees ' +
-        'when a running task finishes or is cancelled. AUT-1 is next in the queue and starts then.',
+        'when a running task finishes, is paused, is cancelled or needs a person to unblock it. ' +
+        'AUT-1 is next in the queue and starts then.',
     );
-    // Never the parallel-only promise the review found: stopping or pausing frees nothing here.
-    expect(sentence).not.toMatch(/stops for a person|is paused/);
+    // Never the parallel-only promise the review found: a running task stopping for an answer
+    // frees nothing here.
+    expect(sentence).not.toMatch(/stops for a person/);
   });
 
   it('review case (b): 1 running + 4 stopped — the 2nd is told who is ahead, not a number of places', () => {
-    const wait = waitFor([...repeat('active', 1), ...repeat('needs_human', 4)], LIMITS, 2);
+    const wait = waitFor([...repeat('active', 1), ...repeat('waiting_approval', 4)], LIMITS, 2);
     expect(wait).toMatchObject({ reason: 'max_tasks_in_pipeline' });
     expect(queueRelief(wait)).toEqual({ freedBy: 'pipeline_finishes', startsNext: false });
     const sentence = queueSentence(wait, 'AUT-2', true);
@@ -118,7 +126,7 @@ describe('the queue’s words', () => {
   });
 
   it('promises no start past a lowered limit', () => {
-    const wait = waitFor(repeat('needs_human', 7), LIMITS, 1);
+    const wait = waitFor(repeat('waiting_approval', 7), LIMITS, 1);
     expect(queueRelief(wait)?.startsNext).toBe(false);
     expect(queueSentence(wait, 'AUT-1', true)).toMatch(
       /AUT-1 is next in the queue and starts once the project is back under its limits\.$/,
@@ -126,32 +134,37 @@ describe('the queue’s words', () => {
   });
 
   it('says “a person” and asks nobody to decide, for a reader who may not decide them', () => {
-    const note = queueNote(waitFor(repeat('needs_human', 5), LIMITS), false);
+    const note = queueNote(waitFor(repeat('waiting_approval', 5), LIMITS), false);
     expect(note).toBe(
-      'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — ' +
-        '5 of them wait for a person. A place frees when one of them finishes or is cancelled.',
+      `Waiting for a place: this project holds at most 5 tasks in its pipeline ${PROJECTS}, and 5 are in it — ` +
+        `5 of them wait for a person. A place frees when one of them ${FREES}.`,
     );
   });
 
   it('asks nobody to decide when no holder waits for a person', () => {
-    const note = queueNote(waitFor([...repeat('active', 1), ...repeat('paused', 4)], LIMITS), true);
+    const note = queueNote(
+      waitFor([...repeat('active', 1), ...repeat('ready_for_merge', 4)], LIMITS),
+      true,
+    );
     expect(note).toBe(
-      'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it. ' +
-        'A place frees when one of them finishes or is cancelled.',
+      `Waiting for a place: this project holds at most 5 tasks in its pipeline ${PROJECTS}, and 5 are in it. ` +
+        `A place frees when one of them ${FREES}.`,
     );
   });
 
   it('says one of them waits for you, in the singular', () => {
     const limits = { ...LIMITS, maxParallelTasks: 1, maxTasksInPipeline: 1 };
-    const note = queueNote(waitFor(['needs_human'], limits), true);
-    expect(note).toContain('at most 1 task in its pipeline, and 1 is in it — 1 of them waits');
+    const note = queueNote(waitFor(['waiting_approval'], limits), true);
+    expect(note).toContain(
+      `at most 1 task in its pipeline ${PROJECTS}, and 1 is in it — 1 of them waits`,
+    );
     expect(note).toContain('so decide it or cancel one.');
   });
 
   it('names the running tasks, cancelling included, when only they are full', () => {
     const wait = waitFor(repeat('active', 2), LIMITS);
     expect(queueNote(wait, true)).toBe(
-      'Waiting for a place: this project runs at most 2 tasks at once, and 2 are running. A place ' +
+      `Waiting for a place: this project runs at most 2 tasks at once ${PROJECTS}, and 2 are running. A place ` +
         'frees when one of them finishes, stops for a person, is paused or is cancelled.',
     );
     expect(queueShort(wait)).toBe('1st in queue · 2 of 2 running');
@@ -164,8 +177,8 @@ describe('the queue’s words', () => {
     expect(wait).toMatchObject({ status: 'waiting', reason: 'max_tasks_in_pipeline' });
     expect(queueRelief(wait)).toEqual({ freedBy: 'pipeline_finishes', startsNext: true });
     expect(queueNote(wait, true)).toBe(
-      'Waiting for a place: this project holds at most 2 tasks in its pipeline, and 2 are in it. ' +
-        'A place frees when one of them finishes or is cancelled.',
+      `Waiting for a place: this project holds at most 2 tasks in its pipeline ${PROJECTS}, and 2 are in it. ` +
+        `A place frees when one of them ${FREES}.`,
     );
     expect(evaluateTaskAdmission(wipCountsOf(['active', 'done']), limits).admitted).toBe(true);
   });
@@ -182,7 +195,7 @@ describe('the queue’s words', () => {
   });
 
   it('never says WIP on screen', () => {
-    const wait = waitFor(repeat('needs_human', 5), LIMITS, 2);
+    const wait = waitFor(repeat('waiting_approval', 5), LIMITS, 2);
     for (const text of [queueSentence(wait, 'AUT-1', true), queueShort(wait)]) {
       expect(text).not.toMatch(/\bWIP\b|max_/);
     }
@@ -195,9 +208,11 @@ const EVENTS: Readonly<
 > = {
   running_finishes: {
     from: (state) => state === 'active' || state === 'returned',
-    to: ['done', 'cancelled'],
+    to: ['done', 'cancelled', 'paused', 'needs_human'],
   },
-  pipeline_finishes: { from: countsInPipeline, to: ['done', 'cancelled'] },
+  pipeline_finishes: { from: countsInPipeline, to: ['done', 'cancelled', 'paused', 'needs_human'] },
+  // Never promised (`startsNext` is false for a person's limit), so never walked.
+  owner_frees: { from: () => false, to: [] },
   running_stops: {
     from: (state) => state === 'active' || state === 'returned',
     to: ['needs_human', 'paused', 'done', 'cancelled'],
@@ -248,5 +263,90 @@ describe('what the words promise is what the scheduler does (review of #124)', (
         },
       ),
     );
+  });
+});
+
+describe('a person’s own limit (S-28.6)', () => {
+  const JAN = '00000000-0000-4000-8000-00000000a001';
+  const queued = {
+    id: '00000000-0000-4000-9000-000000000001',
+    state: 'queued' as const,
+    ticketKey: 'AUT-9',
+    priorityRank: 2,
+    createdAt: '2026-11-09T08:00:00.000Z' as IsoDateTime,
+  };
+  const holder = (n: number): QueueLiveTask => ({
+    id: `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`,
+    state: 'active',
+    ticketKey: `AUT-${n}`,
+    priorityRank: 2,
+    createdAt: `2026-11-09T07:0${n}:00.000Z` as IsoDateTime,
+  });
+  const ownerWait = (): QueueWait => {
+    const wait = queueWaitsOver(
+      [queued],
+      [queued.id],
+      LIMITS,
+      [],
+      new Map([
+        [
+          queued.id,
+          {
+            userId: JAN,
+            name: 'Jan',
+            count: 3,
+            limit: 3,
+            holders: [holder(1), holder(2), holder(3)],
+          },
+        ],
+      ]),
+    ).get(queued.id);
+    if (wait === undefined) throw new Error('no queue_wait');
+    return wait;
+  };
+
+  it('waits behind its owner’s limit when the project has room, naming whose and the holders', () => {
+    const wait = ownerWait();
+    expect(wait).toMatchObject({
+      status: 'waiting',
+      reason: 'max_tasks_per_owner',
+      count: 3,
+      limit: 3,
+      owner: { user_id: JAN, name: 'Jan' },
+    });
+    expect(queueNote(wait, true)).toBe(
+      'Waiting for a place: Jan owns 3 tasks in flight and Jan’s limit is 3. AUT-1, AUT-2, AUT-3 ' +
+        'hold the places. A place frees when one finishes, is paused, or is handed to someone else. ' +
+        'Paused tasks and tasks waiting for a person to unblock them do not count; tasks waiting ' +
+        'for an approval or an answer do.',
+    );
+    expect(queueShort(wait)).toBe('1st in queue · Jan has 3 of 3 in flight');
+  });
+
+  it('says it to the owner as you and your', () => {
+    expect(queueNote(ownerWait(), true, JAN)).toMatch(
+      /^Waiting for a place: you own 3 tasks in flight and your limit is 3\./,
+    );
+    expect(queueSentence(ownerWait(), 'AUT-9', true, JAN)).toMatch(
+      /AUT-9 is next in the queue and starts once its owner has a free place\.$/,
+    );
+  });
+
+  it('is not the reason while the project itself is full', () => {
+    const live = [
+      ...Array.from({ length: 5 }, (_, n) => ({
+        ...holder(n + 1),
+        state: 'waiting_approval' as const,
+      })),
+      queued,
+    ];
+    const wait = queueWaitsOver(
+      live,
+      [queued.id],
+      LIMITS,
+      [],
+      new Map([[queued.id, { userId: JAN, name: 'Jan', count: 3, limit: 3, holders: [] }]]),
+    ).get(queued.id);
+    expect(wait).toMatchObject({ reason: 'max_tasks_in_pipeline' });
   });
 });

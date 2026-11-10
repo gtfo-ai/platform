@@ -201,8 +201,8 @@ describe('a queued task’s page (S-25.16)', () => {
     start(detail(AUTIX));
     const box = await notice();
     expect(box.querySelector('[data-queue-sentence]')?.textContent).toBe(
-      'Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — ' +
-        '5 of them wait for you. A place frees when one of them finishes or is cancelled, so decide ' +
+      'Waiting for a place: this project holds at most 5 tasks in its pipeline (the project’s limit, not a person’s), and 5 are in it — ' +
+        '5 of them wait for you. A place frees when one of them finishes, is paused, is cancelled or needs a person to unblock it, so decide ' +
         'them or cancel one. AUT-6862 is 2nd in the queue: 1 ticket is ahead of it.',
     );
     // Information, never the amber *Needs you* callout.
@@ -333,7 +333,7 @@ describe('a queued task’s page (S-25.16)', () => {
     start(detail(parallel));
     const box = await notice();
     expect(box.querySelector('[data-queue-sentence]')?.textContent).toBe(
-      'Waiting for a place: this project runs at most 2 tasks at once, and 2 are running. A place ' +
+      'Waiting for a place: this project runs at most 2 tasks at once (the project’s limit, not a person’s), and 2 are running. A place ' +
         'frees when one of them finishes, stops for a person, is paused or is cancelled. AUT-6862 is ' +
         'next in the queue and starts then.',
     );

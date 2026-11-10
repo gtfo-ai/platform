@@ -68,7 +68,7 @@ export const workerIdleWords = (reason: WorkerIdleReason, reader: IdleReader): I
       return {
         text: `${rule}${reason.organisation_bound ? ' The limit is the organisation’s maximum.' : ''} ${
           reason.limit_kind === 'max_tasks_in_pipeline'
-            ? 'A place frees when one of its tasks is done or cancelled.'
+            ? 'A place frees when one of its tasks finishes, is paused, is cancelled or needs a person to unblock it.'
             : 'A place frees when one of them stops moving: it waits for a person, is paused, is done or is cancelled.'
         }`,
         next: { kind: 'board', projectKey: reason.project_key, label: 'Open the board' },

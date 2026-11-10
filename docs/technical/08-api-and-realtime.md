@@ -788,6 +788,27 @@ state carries it as `idle_reason`. The Workers screen's row, the local page's *R
 the Agents screen (when every worker that would take a run by itself says why it does not) say it in
 one sentence with its next step (`apps/web/src/ui/words/worker-idle.ts`).
 
+**A person's limit on tasks in flight** (S-28.6, the M28 ruling B on BD-010). `pipeline.wip.max_tasks_per_owner`
+(1–200; the organisation's value is the default and the maximum, a project may tighten it, 3 when
+nobody states one) holds the tasks a person owns that are `active`, `returned`, `waiting_answers` or
+`waiting_approval`, across every project; `users.max_tasks_in_flight` (migration 0112) replaces the
+default for them, never above the organisation's value. Since S-28.6 `max_tasks_in_pipeline` no longer
+counts `paused` or `needs_human`. Enforced at admission only — intake and the scheduler, which skips a
+queued task whose owner is full and stops only on the project's ceiling, under a per-owner advisory
+lock taken after the project's (`TaskRepository.ownerAdmission`); a pick, a take, a resume and a
+hand-back are never refused. The scheduler also hears `task.owner.changed`, `task.resumed` and
+`task.handed_back`, and schedules every project where the event's owner has a queued task. `GET
+/api/me/task-limit` (`worker.register`) answers the reader's own number, the `limit` in force, the
+organisation's `default` and `maximum`, `in_flight`, `queued` and up to 20 `holders`; `PUT
+/api/me/task-limit {max_tasks_in_flight}` sets it (a state assertion: a repeat is `performed: false`,
+`422 task_limit_above_maximum` above the maximum, one `human_actions` row `user.task_limit` per
+change, and — for a raise — one `config.changed` per project holding the person's queued tasks after
+the commit); `GET /api/org/task-limits` and `PUT /api/org/users/:id/task-limit` are the same for an
+administrator (`org.users.manage`). `queue_wait` gains reason `max_tasks_per_owner` with `owner {user_id,
+name}`, the person's `count` of `limit` and their tasks as `holders`; `holders.needs_human` counts the
+holders waiting for a person (`waiting_answers`, `waiting_approval`). `idle_reason`'s `owner_limit` is
+produced for the machine's own person.
+
 **Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8). The task record (`GET /api/tasks/:id`'s
 `task` and every item of `GET /api/projects/:id/tasks`) and every `GET /api/org/agents` item carry
 `waiting` — `{reason, user, last_seen_at, assignee_name, blockers}` for the run's **open** offer (the task's: its

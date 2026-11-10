@@ -75,10 +75,12 @@ import {
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   myIdentityListSchema,
+  myTaskLimitResponseSchema,
   orgAuditResponseSchema,
   orgModelsResponseSchema,
   orgSettingsResponseSchema,
   orgStatsResponseSchema,
+  orgTaskLimitsResponseSchema,
   orgUsersResponseSchema,
   ownerCandidatesResponseSchema,
   patchIntegrationRequestSchema,
@@ -142,6 +144,8 @@ import {
   taskBreakdownSchema,
   taskCommandResponseSchema,
   taskDetailResponseSchema,
+  taskLimitRequestSchema,
+  taskLimitResponseSchema,
   tasksResponseSchema,
   testIntegrationResponseSchema,
   ticketStatusesResponseSchema,
@@ -266,6 +270,19 @@ export interface Endpoints {
     workerId: string,
     body: z.input<typeof workerClaimPolicyRequestSchema>,
   ) => Promise<z.output<typeof workerClaimPolicyResponseSchema>>;
+  /** `GET /api/me/task-limit` — your limit on tasks in flight and what counts toward it (S-28.6). */
+  readonly myTaskLimit: () => Promise<z.output<typeof myTaskLimitResponseSchema>>;
+  /** `PUT /api/me/task-limit` — set your own; `422 task_limit_above_maximum` above the organisation's. */
+  readonly setMyTaskLimit: (
+    body: z.input<typeof taskLimitRequestSchema>,
+  ) => Promise<z.output<typeof taskLimitResponseSchema>>;
+  /** `GET /api/org/task-limits` — every person's limit, an administrator's read (S-28.6). */
+  readonly orgTaskLimits: () => Promise<z.output<typeof orgTaskLimitsResponseSchema>>;
+  /** `PUT /api/org/users/:id/task-limit` — set a person's, an administrator's write (S-28.6). */
+  readonly setUserTaskLimit: (
+    userId: string,
+    body: z.input<typeof taskLimitRequestSchema>,
+  ) => Promise<z.output<typeof taskLimitResponseSchema>>;
   /** `DELETE /api/workers/:id` — revoke; a repeat answers `performed: false`. */
   readonly revokeWorker: (workerId: string) => Promise<z.output<typeof revokeWorkerResponseSchema>>;
   /** The newest refused or ignored inbound deliveries of one integration (WP-44, backlog 198). */
@@ -819,6 +836,21 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         method: 'PUT',
         schema: workerClaimPolicyResponseSchema,
         body: workerClaimPolicyRequestSchema.parse(body),
+      }),
+    myTaskLimit: () => client.get('/api/me/task-limit', { schema: myTaskLimitResponseSchema }),
+    setMyTaskLimit: (body) =>
+      client.command('/api/me/task-limit', {
+        method: 'PUT',
+        schema: taskLimitResponseSchema,
+        body: taskLimitRequestSchema.parse(body),
+      }),
+    orgTaskLimits: () =>
+      client.get('/api/org/task-limits', { schema: orgTaskLimitsResponseSchema }),
+    setUserTaskLimit: (userId, body) =>
+      client.command(`/api/org/users/${seg(userId)}/task-limit`, {
+        method: 'PUT',
+        schema: taskLimitResponseSchema,
+        body: taskLimitRequestSchema.parse(body),
       }),
     revokeWorker: (workerId) =>
       client.command(`/api/workers/${seg(workerId)}`, {

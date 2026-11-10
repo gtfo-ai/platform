@@ -23,6 +23,7 @@ runPipelineStoreConcurrencyContract({
     return {
       store,
       projectId: PROJECT,
+      ownerUserId: '00000000-0000-4000-8000-0000000000c2' as never,
       begin: async () => ({
         tx: { adapter: 'memory' } as never,
         commit: async () => {},

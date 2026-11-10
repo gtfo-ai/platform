@@ -108,6 +108,7 @@ import {
   type PipelineOutboundData,
 } from './jobs.js';
 import { closeStageOffer } from './offer-withdrawal.js';
+import { admitOwner } from './owner-admission.js';
 import { nextTaskSequence, syncOwnerAtIntake } from './owner-sync.js';
 import { appendOnProjectWithRetry } from './project-stream.js';
 import { refrozen, refrozenColumns } from './refreeze.js';
@@ -668,7 +669,15 @@ export const runIntakeCheck = async (
 
     const counts = await options.store.tasks.counts(scope.tx, projectId);
     const admission = evaluateTaskAdmission(counts, settings.wip);
-    if (!admission.admitted) {
+    // S-28.6 (the M28 ruling B): a ticket whose assignee became its owner above is held to that
+    // person's limit too — after the project's lock, the one order every admitter takes them in.
+    const owner = admission.admitted
+      ? (await options.store.tasks.ownership(scope.tx, created.aggregate.id)).ownerUserId
+      : null;
+    const ownerFull =
+      owner !== null &&
+      !(await admitOwner(options.store, scope.tx, settings.wip, owner as Id)).admitted;
+    if (!admission.admitted || ownerFull) {
       const queued = queueTask(
         created.aggregate,
         { reason: admission.reason === 'max_parallel_runs' ? 'wip' : 'wip' },
@@ -2253,6 +2262,12 @@ export const SCHEDULER_EVENT_TYPES = [
   'task.approval.requested',
   'task.stage.entered',
   'config.changed',
+  // S-28.6 (the M28 ruling B): a person's place frees when one of their tasks is handed to someone
+  // else, and a resume or a hand-back moves a task back into a counted state — the scheduler asks
+  // again on each, as it does for every other event that may have changed a count.
+  'task.owner.changed',
+  'task.resumed',
+  'task.handed_back',
 ] as const satisfies readonly DomainEvent['type'][];
 
 /** The stage entries that take a task out of the active set (S-25.21, BACKLOG 1379). */
@@ -2292,21 +2307,73 @@ const schedulerHandler = (options: PipelineSagaOptions): EventHandler => ({
       // project whose limit it raised, so this one has nothing to schedule.
       return;
     }
+    // S-28.6: a person's limit spans projects, so a place they freed here may start their queued
+    // task elsewhere — the event's project first, then each other project where the task's owner
+    // (both owners, for a reassignment) has one queued, by id.
+    const owners = await ownersOfSchedulerEvent(options.store, context.scope.tx, event);
+    const elsewhere = (
+      await options.store.tasks.queuedProjectsOfOwners(context.scope.tx, owners)
+    ).filter((other) => other !== projectId);
+    for (const project of [projectId, ...elsewhere]) {
+      await scheduleProject(options, context, project as Id);
+    }
+  },
+});
+
+/** The owners whose place an event may have freed: the task's, or both of a reassignment's. */
+const ownersOfSchedulerEvent = async (
+  store: PipelineStore,
+  tx: HandlerContext['scope']['tx'],
+  event: SchedulerEvent,
+): Promise<Id[]> => {
+  if (event.type === 'task.owner.changed') {
+    return [event.payload.previous_owner_user_id, event.payload.owner_user_id].filter(
+      (owner): owner is Id => owner !== null,
+    );
+  }
+  if (event.type === 'config.changed') {
+    return [];
+  }
+  const owner = (await store.tasks.ownership(tx, event.payload.task_id)).ownerUserId;
+  return owner === null ? [] : [owner as Id];
+};
+
+/**
+ * One project's queue against its limits — the project's two (stop at the first refusal: nothing
+ * behind can start) and each owner's (skip: S-28.6) — starting as many as they admit, in order.
+ */
+const scheduleProject = async (
+  options: PipelineSagaOptions,
+  context: HandlerContext,
+  projectId: Id,
+): Promise<void> => {
+  {
     const settings = await options.settings.forProject(projectId, context.scope.tx);
     const queued = orderQueue(await options.store.tasks.queued(context.scope.tx, projectId));
     for (const next of queued) {
       const counts = await options.store.tasks.counts(context.scope.tx, projectId);
       if (!evaluateTaskAdmission(counts, settings.wip).admitted) {
+        // The project is full: nothing behind this task can start either.
         return;
       }
       const stored = await options.store.tasks.load(context.scope.tx, next.id);
       if (stored === null || stored.task.state !== 'queued') {
         continue;
       }
+      // S-28.6 (the M28 ruling B): a task whose owner is at their own limit waits, and the queue
+      // goes on past it — one full person never holds back somebody else's task behind theirs.
+      // Read live under the task's own transaction, never off the queue snapshot.
+      const owner = (await options.store.tasks.ownership(context.scope.tx, next.id)).ownerUserId;
+      if (
+        owner !== null &&
+        !(await admitOwner(options.store, context.scope.tx, settings.wip, owner as Id)).admitted
+      ) {
+        continue;
+      }
       await step(options, context, stored, { kind: 'start' });
     }
-  },
-});
+  }
+};
 
 export const pipelineHandlers = (options: PipelineSagaOptions): readonly EventHandler[] => [
   // Core band (0–99): what happened. Integrations band (100–199): telling the outside world.

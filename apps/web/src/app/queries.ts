@@ -907,6 +907,25 @@ type WorkersData = Awaited<ReturnType<ReturnType<typeof useServices>['endpoints'
  * `refetchInterval` (S-23.24): no event announces a heartbeat, a handshake or a new worker, so the
  * screens that watch a worker's state ask again on a clock while they are open.
  */
+/** `GET /api/me/task-limit` (S-28.6): your limit on tasks in flight. */
+export const useMyTaskLimit = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.myTaskLimit],
+    queryFn: () => endpoints.myTaskLimit(),
+  });
+};
+
+/** `GET /api/org/task-limits` (S-28.6): every person's — asked only for an administrator. */
+export const useOrgTaskLimits = (enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.orgTaskLimits],
+    queryFn: () => endpoints.orgTaskLimits(),
+    enabled,
+  });
+};
+
 export const useWorkers = (
   options: {
     readonly refetchInterval?:
@@ -1792,6 +1811,24 @@ export const useSettingsCommands = (mint?: MintKey) => {
       }) => endpoints.setWorkerClaimPolicy(input.workerId, input.body),
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
+      },
+    }),
+    /**
+     * `PUT /api/me/task-limit` and `PUT /api/org/users/:id/task-limit` (S-28.6): a state
+     * assertion, not keyed. Both reads are asked again before the call resolves.
+     */
+    setTaskLimit: useMutation({
+      mutationFn: (input: { userId: string | null; max_tasks_in_flight: number | null }) =>
+        input.userId === null
+          ? endpoints.setMyTaskLimit({ max_tasks_in_flight: input.max_tasks_in_flight })
+          : endpoints.setUserTaskLimit(input.userId, {
+              max_tasks_in_flight: input.max_tasks_in_flight,
+            }),
+      onSuccess: async () => {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: [...queryKeys.myTaskLimit], exact: true }),
+          queryClient.invalidateQueries({ queryKey: [...queryKeys.orgTaskLimits], exact: true }),
+        ]);
       },
     }),
     /** `DELETE /api/workers/:id` (WP-280): revoke; a repeat answers `performed: false`. */

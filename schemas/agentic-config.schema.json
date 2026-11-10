@@ -144,6 +144,9 @@
             },
             "max_tasks_in_pipeline": {
               "$ref": "#/$defs/anon_7cdb89ae"
+            },
+            "max_tasks_per_owner": {
+              "$ref": "#/$defs/anon_7cdb89ae"
             }
           },
           "additionalProperties": false

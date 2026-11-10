@@ -322,9 +322,15 @@ const PoliciesAndWip = ({ project }: { readonly project: Project }): ReactElemen
             Max parallel tasks {wipLimit(config.data.effective.pipeline?.wip?.max_parallel_tasks)} (
             {sourceLabel(config.data.sources['pipeline.wip.max_parallel_tasks'])}) · max tasks in
             pipeline {wipLimit(config.data.effective.pipeline?.wip?.max_tasks_in_pipeline)} (
-            {sourceLabel(config.data.sources['pipeline.wip.max_tasks_in_pipeline'])}) — set in these
+            {sourceLabel(config.data.sources['pipeline.wip.max_tasks_in_pipeline'])}) · max tasks in
+            flight per person {wipLimit(config.data.effective.pipeline?.wip?.max_tasks_per_owner)} (
+            {sourceLabel(config.data.sources['pipeline.wip.max_tasks_per_owner'])}) — set in these
             settings or the repository’s settings file. The repository file may lower a limit and
-            never raise it, and neither may go above the organisation’s maximum.
+            never raise it, and neither may go above the organisation’s maximum. The pipeline counts
+            every started task that is not finished, except paused tasks and tasks waiting for a
+            person to unblock them; a person’s limit counts their own tasks that are moving or
+            waiting for an answer or an approval, and each person may set their own on the Workers
+            screen.
           </p>
         )}
         <ForAdministrators note="wip_limits" />

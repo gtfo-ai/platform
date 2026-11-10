@@ -397,6 +397,9 @@ export const REFUSED_CONFIGURATION_WIP_LIMITS: WipLimits = {
   maxParallelTasks: 1,
   maxTasksInPipeline: 1,
   maxParallelRuns: DEFAULT_WIP_LIMITS.maxParallelRuns,
+  // S-28.6: the floor for a person too — one task in flight, whatever they set for themself.
+  maxTasksPerOwner: 1,
+  ownerLimitMaximum: 1,
 };
 
 export type SettingsAdmission =

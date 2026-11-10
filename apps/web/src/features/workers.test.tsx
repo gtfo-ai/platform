@@ -946,3 +946,97 @@ describe('why a ready machine runs nothing — one sentence per cause (S-28.6)',
     expect(container.querySelectorAll('[data-idle-reason]')).toHaveLength(0);
   });
 });
+
+describe('Your limit — a person’s limit on tasks in flight (S-28.6)', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', '/workers');
+  });
+
+  const MINE = {
+    user_id: SESSION.user.id,
+    max_tasks_in_flight: null,
+    limit: 3,
+    default: 3,
+    maximum: 5,
+    organisation_states: true,
+    in_flight: 3,
+    queued: 2,
+    holders: [
+      {
+        task_id: '00000000-0000-4000-8000-0000000028d1',
+        ticket_key: 'AUT-1',
+        project_key: 'AUT',
+        state: 'active',
+      },
+    ],
+  };
+
+  const withLimits = (refuse: boolean) => {
+    const base = fetchFor('missing', [worker()]);
+    const puts: unknown[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/me/task-limit')) {
+        if ((init?.method ?? 'GET') === 'PUT') {
+          puts.push(JSON.parse(String(init?.body)));
+          return refuse
+            ? json(
+                {
+                  error: {
+                    code: 'task_limit_above_maximum',
+                    message: 'above',
+                    details: [{ path: 'max_tasks_in_flight', message: '5' }],
+                  },
+                },
+                422,
+              )
+            : json({ user_id: SESSION.user.id, max_tasks_in_flight: 4, limit: 4, performed: true });
+        }
+        return json(MINE);
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    return { fetchImpl, puts };
+  };
+
+  it('says the limit and the counting rule in words, what holds it, and where it comes from', async () => {
+    const { fetchImpl } = withLimits(false);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    const card = await waitFor(() => {
+      const found = container.querySelector('[data-task-limit]');
+      if (found === null) throw new Error('no card yet');
+      return found as HTMLElement;
+    });
+    expect(card.querySelector('[data-task-limit-sentence]')?.textContent).toBe(
+      'At most 3 of your tasks are worked on at once. Paused tasks and tasks waiting for a person to unblock them do not count; tasks waiting for your approval or answer do.',
+    );
+    expect(card.textContent).toContain('You have 3 in flight and 2 queued, waiting for a place.');
+    expect(within(card).getByRole('link', { name: 'AUT-1' }).getAttribute('href')).toBe(
+      '/tasks/00000000-0000-4000-8000-0000000028d1',
+    );
+    expect(card.textContent).toContain('The organisation allows at most 5.');
+    // A member is never shown everyone's limits.
+    expect(container.querySelector('[data-people-limits]')).toBeNull();
+  });
+
+  it('saves a number, and says a refusal above the organisation’s maximum in words', async () => {
+    const { fetchImpl, puts } = withLimits(true);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    await waitFor(() => {
+      if (container.querySelector('[data-task-limit]') === null) throw new Error('no card yet');
+    });
+    const card = container.querySelector('[data-task-limit]') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Change' }));
+    const field = within(card).getByRole('spinbutton');
+    await user.clear(field);
+    await user.type(field, '4');
+    await user.click(within(card).getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(within(card).getByRole('alert').textContent).toBe(
+        'The organisation allows at most 5 tasks in flight per person. Choose 5 or fewer, or ask an administrator to raise the organisation’s limit.',
+      );
+    });
+    expect(puts).toEqual([{ max_tasks_in_flight: 4 }]);
+  });
+});

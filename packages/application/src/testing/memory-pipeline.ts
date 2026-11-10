@@ -74,6 +74,7 @@ import {
   claimPolicyTakes,
   countsAsActive,
   countsInPipeline,
+  countsTowardOwner,
   effectiveClaimPolicy,
   isActiveRunStatus,
   isTerminalTaskState,
@@ -232,6 +233,11 @@ const endedUnmeasured = (
 export interface MemoryPipelineStore extends PipelineStore {
   /** Every task, for a test that wants to look without a transaction. */
   snapshot(): readonly StoredTask[];
+  /**
+   * `users.max_tasks_in_flight` (S-28.6, migration 0112) — a person's own limit, `null` for none.
+   * The store has no users table; this is what `ownerAdmission` answers as `personalLimit`.
+   */
+  setPersonalTaskLimit(userId: Id, limit: number | null): void;
   readonly stageRows: readonly StageRow[];
   /**
    * The in-memory twin of the one narrow write `CostStore.saveEstimate` makes on `tasks`.
@@ -460,6 +466,8 @@ export const createMemoryPipelineStore = (
   const ticketClaims = new Map<Id, StoredTicketClaim>();
   // S-26.1: the four ownership columns, kept off `StoredTask` as the claim is, and the directory.
   const ownerships = new Map<Id, TaskOwnership>();
+  /** `users.max_tasks_in_flight` (S-28.6): a person's own limit, set by a test. */
+  const personalLimits = new Map<Id, number>();
   /** The owner-backfill columns (migration 0110, BACKLOG 1510/1511): kept off `StoredTask` like the owner. */
   const ownerBackfills = new Map<Id, OwnerBackfillState>();
   const backfillOf = (taskId: Id): OwnerBackfillState =>
@@ -1201,6 +1209,28 @@ export const createMemoryPipelineStore = (
         tasksInPipeline: owned.filter((stored) => countsInPipeline(stored.task.state)).length,
       };
     },
+    ownerAdmission: async (_tx, ownerUserId) => ({
+      inFlight: [...tasks.values()].filter(
+        (stored) =>
+          (ownerships.get(stored.task.id) ?? UNOWNED).ownerUserId === ownerUserId &&
+          countsTowardOwner(stored.task.state),
+      ).length,
+      personalLimit: personalLimits.get(ownerUserId) ?? null,
+    }),
+    queuedProjectsOfOwners: async (_tx, ownerUserIds) =>
+      [
+        ...new Set(
+          [...tasks.values()]
+            .filter(
+              (stored) =>
+                stored.task.state === 'queued' &&
+                ownerUserIds.includes(
+                  (ownerships.get(stored.task.id) ?? UNOWNED).ownerUserId as Id,
+                ),
+            )
+            .map((stored) => stored.task.projectId),
+        ),
+      ].sort(),
     queued: async (_tx, projectId): Promise<readonly QueuedTask[]> =>
       [...tasks.values()]
         .filter((stored) => stored.task.projectId === projectId && stored.task.state === 'queued')
@@ -1208,6 +1238,7 @@ export const createMemoryPipelineStore = (
           id: stored.task.id,
           priorityRank: stored.priorityRank,
           createdAt: stored.createdAt,
+          ownerUserId: (ownerships.get(stored.task.id) ?? UNOWNED).ownerUserId,
         })),
     recordStageEntered: async (_tx, entry) => {
       sequence += 1;
@@ -3154,6 +3185,10 @@ export const createMemoryPipelineStore = (
       return held === undefined ? null : { ...held };
     },
     snapshot: () => [...tasks.values()].map(clone),
+    setPersonalTaskLimit: (userId, limit) => {
+      if (limit === null) personalLimits.delete(userId);
+      else personalLimits.set(userId, limit);
+    },
     get stageRows() {
       return stages.map((row) => ({ ...row }));
     },

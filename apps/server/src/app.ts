@@ -78,7 +78,7 @@ import type { HistoryBootstrapCommands, HistoryBootstrapGateResult } from './boo
 import type { BreakdownComposition } from './breakdown.js';
 import type { TaskCommands } from './commands.js';
 import type { ServerConfig } from './config.js';
-import { repositorySnapshotFrom } from './config-layers.js';
+import { organisationSettingsForRequest, repositorySnapshotFrom } from './config-layers.js';
 import { toApiError } from './errors.js';
 import type { KnowledgeCommands } from './knowledge.js';
 import { checkProposedLifecycles, readProposedAccountIdentities } from './lifecycle-check.js';
@@ -161,6 +161,13 @@ import {
   listShadowBatches,
 } from './queries/shadow-queries.js';
 import { findOrganisationTimezone, readStatsSources } from './queries/stats-queries.js';
+import {
+  listPeopleTaskLoads,
+  organisationOwnerLimitsOf,
+  readOrganisationSettingsDocument,
+  readPersonTaskLoad,
+  setPersonTaskLimit,
+} from './queries/task-limits.js';
 import { createWorkerIdleReader, type WorkerIdleReader } from './queries/worker-idle.js';
 import { createPostgresWorkerStore, type WorkerStore } from './queries/worker-queries.js';
 import { roleCapabilities } from './role.js';
@@ -191,6 +198,7 @@ import { registerSettingsRoutes } from './routes/settings.js';
 import { registerSetupStateRoutes, type SetupStateReader } from './routes/setup-state.js';
 import { registerShadowRoutes } from './routes/shadow.js';
 import { registerStatsRoutes } from './routes/stats.js';
+import { registerTaskLimitRoutes } from './routes/task-limits.js';
 import { registerTaskStartRoutes } from './routes/task-start.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
@@ -707,6 +715,25 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       // WP-159: open now, by this process's clock — the instant the retry's check reads too.
       models: async () => listedModelIds(options.database, new Date()),
+    });
+    // S-28.6 (the M28 ruling B): a person's limit on their tasks in flight — theirs, or an
+    // administrator's for anyone; a raise appends what the scheduler hears.
+    await registerTaskLimitRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        organisationLimits: async () =>
+          organisationOwnerLimitsOf(
+            organisationSettingsForRequest(
+              await readOrganisationSettingsDocument(options.database),
+            ),
+          ),
+        personLoad: async (userId, holders) =>
+          readPersonTaskLoad(options.database, userId, holders),
+        people: async () => listPeopleTaskLoads(options.database),
+        setLimit: async (input) => setPersonTaskLimit(options.database, input),
+      },
+      recorder: options.wipRaised ?? null,
     });
     // S-26.6: a person links their own tracker or git account, proven by the provider.
     await registerMeIdentityRoutes(app, {

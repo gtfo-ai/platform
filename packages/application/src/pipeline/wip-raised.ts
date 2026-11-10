@@ -31,7 +31,10 @@ import { appendOnProjectWithRetry } from './project-stream.js';
 
 /** One limit in force that a write raised. */
 export interface WipRaise {
-  readonly key: 'pipeline.wip.max_parallel_tasks' | 'pipeline.wip.max_tasks_in_pipeline';
+  readonly key:
+    | 'pipeline.wip.max_parallel_tasks'
+    | 'pipeline.wip.max_tasks_in_pipeline'
+    | 'pipeline.wip.max_tasks_per_owner';
   readonly from: number;
   readonly to: number;
 }
@@ -39,13 +42,22 @@ export interface WipRaise {
 const WIP_FIELDS = [
   ['pipeline.wip.max_parallel_tasks', 'maxParallelTasks'],
   ['pipeline.wip.max_tasks_in_pipeline', 'maxTasksInPipeline'],
+  // S-28.6: the per-person default, and — when only the maximum rose — the ceiling a person's own
+  // limit is held under, both said as the one key (the first that rose).
+  ['pipeline.wip.max_tasks_per_owner', 'maxTasksPerOwner'],
+  ['pipeline.wip.max_tasks_per_owner', 'ownerLimitMaximum'],
 ] as const;
 
 /** The project limits in force that rose from `before` to `after`; empty when none did. */
-export const raisedWipLimits = (before: WipLimits, after: WipLimits): WipRaise[] =>
-  WIP_FIELDS.flatMap(([key, field]) =>
-    after[field] > before[field] ? [{ key, from: before[field], to: after[field] }] : [],
-  );
+export const raisedWipLimits = (before: WipLimits, after: WipLimits): WipRaise[] => {
+  const raised: WipRaise[] = [];
+  for (const [key, field] of WIP_FIELDS) {
+    if (after[field] > before[field] && !raised.some((one) => one.key === key)) {
+      raised.push({ key, from: before[field], to: after[field] });
+    }
+  }
+  return raised;
+};
 
 export interface WipRaisedDependencies {
   readonly unitOfWork: UnitOfWork;

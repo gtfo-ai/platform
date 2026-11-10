@@ -6,11 +6,14 @@ import {
   compareQueuedTasks,
   countsAsActive,
   countsInPipeline,
+  countsTowardOwner,
   DEFAULT_WIP_LIMITS,
   evaluateRunAdmission,
   evaluateTaskAdmission,
   holdsPlace,
   orderQueue,
+  ownerAdmits,
+  ownerLimitOf,
   type QueuedTask,
   queueAdmissionOf,
   wipCountsOf,
@@ -22,6 +25,9 @@ describe('BD-010 defaults', () => {
       maxParallelTasks: 2,
       maxTasksInPipeline: 5,
       maxParallelRuns: 4,
+      // S-28.6 (the M28 ruling B): three of one person's tasks in flight, up to the schema's 200.
+      maxTasksPerOwner: 3,
+      ownerLimitMaximum: 200,
     });
   });
 });
@@ -31,14 +37,37 @@ describe('which states occupy a slot', () => {
     expect(taskStateSchema.options.filter(countsAsActive)).toEqual(['active', 'returned']);
   });
 
-  it('counts waiting tasks as in the pipeline, and nothing before or after it', () => {
+  it('counts waiting tasks as in the pipeline, and nothing before or after it, nor a stopped one', () => {
+    // S-28.6 (the owner's decision, the M28 ruling B): paused and needs_human hold no place.
     expect(taskStateSchema.options.filter((state) => !countsInPipeline(state))).toEqual([
       'queued',
+      'paused',
+      'needs_human',
       'done',
       'cancelled',
     ]);
     expect(countsInPipeline('waiting_answers')).toBe(true);
-    expect(countsInPipeline('paused')).toBe(true);
+    expect(countsInPipeline('waiting_approval')).toBe(true);
+    expect(countsInPipeline('paused')).toBe(false);
+    expect(countsInPipeline('needs_human')).toBe(false);
+  });
+
+  it('counts toward a person exactly the tasks moving or waiting for their answer or approval (S-28.6)', () => {
+    expect(taskStateSchema.options.filter(countsTowardOwner)).toEqual([
+      'active',
+      'returned',
+      'waiting_answers',
+      'waiting_approval',
+    ]);
+    expect(ownerAdmits(2, 3)).toBe(true);
+    expect(ownerAdmits(3, 3)).toBe(false);
+  });
+
+  it('holds a person to their own limit under the organisation’s, else the project’s default (S-28.6)', () => {
+    const limits = { ...DEFAULT_WIP_LIMITS, maxTasksPerOwner: 2, ownerLimitMaximum: 5 };
+    expect(ownerLimitOf(limits, null)).toBe(2);
+    expect(ownerLimitOf(limits, 4)).toBe(4);
+    expect(ownerLimitOf(limits, 9)).toBe(5);
   });
 
   it('never counts a task as active without counting it in the pipeline', () => {
@@ -71,7 +100,12 @@ describe('evaluateTaskAdmission', () => {
   });
 
   it('honours project limits', () => {
-    const limits = { maxParallelTasks: 4, maxTasksInPipeline: 10, maxParallelRuns: 8 };
+    const limits = {
+      ...DEFAULT_WIP_LIMITS,
+      maxParallelTasks: 4,
+      maxTasksInPipeline: 10,
+      maxParallelRuns: 8,
+    };
     expect(evaluateTaskAdmission({ activeTasks: 3, tasksInPipeline: 9 }, limits).admitted).toBe(
       true,
     );
@@ -162,6 +196,8 @@ describe('why a queued task waits (S-25.16)', () => {
     maxParallelTasks: fc.integer({ min: 1, max: 8 }),
     maxTasksInPipeline: fc.integer({ min: 1, max: 12 }),
     maxParallelRuns: fc.integer({ min: 1, max: 8 }),
+    maxTasksPerOwner: fc.integer({ min: 1, max: 8 }),
+    ownerLimitMaximum: fc.integer({ min: 1, max: 200 }),
   });
 
   it(

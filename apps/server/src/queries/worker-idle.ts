@@ -18,9 +18,17 @@
  * Two statements for every machine that is asked at all, and nothing for a machine a blocker stops
  * or whose places are all busy — those causes need no read. The limits are read once per project.
  */
-import type { TaskState, WorkerClaimPolicy, WorkerIdleReason } from '@platform/contracts';
+import {
+  type TaskState,
+  WORKER_IDLE_HOLDERS_MAX,
+  type WorkerClaimPolicy,
+  type WorkerIdleReason,
+} from '@platform/contracts';
 import {
   DEFAULT_EXECUTION_MODE,
+  OWNER_COUNTED_TASK_STATES,
+  type OwnerLimitFacts,
+  ownerLimitOf,
   type RunImageDigests,
   type ServedProject,
   type ServedStateCount,
@@ -34,6 +42,10 @@ import type { WipLimitsInForce, WipLimitsReader } from './queue-wait.js';
 /** A machine whose idle reason is asked, with what its row already says. */
 export interface IdleCandidate {
   readonly workerId: string;
+  /** The machine's person — whose own limit holds their queued tasks (S-28.6 part B). */
+  readonly userId?: string;
+  /** Their name (or email), as a sentence names them. */
+  readonly userName?: string;
   /** A claim blocker stands: the answer is `null` and nothing is read. */
   readonly blocked: boolean;
   readonly running: number;
@@ -73,6 +85,7 @@ const POLICY_TAKES_TASK = sql.raw(pipelineAdapters.workerPolicyTakesTaskSql('w',
 const SCOPE_TAKES = sql.raw(pipelineAdapters.projectListTakesSql('w', 'p.id'));
 
 const uuidArray = (ids: readonly string[]): string => `{${ids.join(',')}}`;
+const COUNTED = `{${OWNER_COUNTED_TASK_STATES.join(',')}}`;
 
 /** The reader over `database`, the limits read through `wipLimits` (the scheduler's settings). */
 export const createWorkerIdleReader =
@@ -121,6 +134,7 @@ export const createWorkerIdleReader =
         state: TaskState;
         count: number;
         takes: number;
+        mine: number;
       }>(sql`
         with served as (
           -- The projects each machine serves: the eligible_projects predicates, per project, once.
@@ -135,7 +149,9 @@ export const createWorkerIdleReader =
         )
         select sv.worker_id, sv.project_id, sv.project_key, t.state::text as state,
                count(*)::int as count,
-               count(*) filter (where ${POLICY_TAKES_TASK})::int as takes
+               count(*) filter (where ${POLICY_TAKES_TASK})::int as takes,
+               count(*) filter (where ${POLICY_TAKES_TASK}
+                                  and t.owner_user_id = w.user_id)::int as mine
           from served sv
           join workers w on w.id = sv.worker_id
           join tasks t on t.project_id = sv.project_id
@@ -143,6 +159,31 @@ export const createWorkerIdleReader =
          group by sv.worker_id, sv.project_id, sv.project_key, t.state`),
     ]);
     const offersOf = new Map(offers.rows.map((row) => [row.worker_id, row]));
+    /** A person's own limit and their tasks in flight (oldest first) — the scheduler's count. */
+    const personLoadOf = async (userId: string) => {
+      const { rows } = await database.execute<{
+        personal: number | null;
+        id: string | null;
+        ticket_key: string | null;
+      }>(sql`
+        select u.max_tasks_in_flight as personal, t.id, t.ticket_key
+          from users u
+          left join tasks t on t.owner_user_id = u.id and t.state::text = any(${COUNTED}::text[])
+         where u.id = ${userId}
+         order by t.created_at, t.id`);
+      const first = rows[0];
+      if (first === undefined) return null;
+      const holders = rows.flatMap((row) =>
+        row.id === null || row.ticket_key === null
+          ? []
+          : [{ taskId: row.id, ticketKey: row.ticket_key }],
+      );
+      return {
+        personal: first.personal === null ? null : Number(first.personal),
+        inFlight: holders.length,
+        holders: holders.slice(0, WORKER_IDLE_HOLDERS_MAX),
+      };
+    };
     const limits = new Map<string, Promise<WipLimitsInForce>>();
     const limitsOf = (projectId: string): Promise<WipLimitsInForce> => {
       const known = limits.get(projectId);
@@ -152,11 +193,19 @@ export const createWorkerIdleReader =
       return read;
     };
     for (const candidate of asked) {
-      const byProject = new Map<string, { key: string; states: ServedStateCount[] }>();
+      const byProject = new Map<
+        string,
+        { key: string; states: ServedStateCount[]; mineQueued: number }
+      >();
       for (const row of served.rows) {
         if (row.worker_id !== candidate.workerId) continue;
-        const entry = byProject.get(row.project_id) ?? { key: row.project_key, states: [] };
+        const entry = byProject.get(row.project_id) ?? {
+          key: row.project_key,
+          states: [],
+          mineQueued: 0,
+        };
         entry.states.push({ state: row.state, count: Number(row.count), takes: Number(row.takes) });
+        if (row.state === 'queued') entry.mineQueued += Number(row.mine);
         byProject.set(row.project_id, entry);
       }
       const projects: ServedProject[] = await Promise.all(
@@ -172,6 +221,30 @@ export const createWorkerIdleReader =
         }),
       );
       const counted = offersOf.get(candidate.workerId);
+      // S-28.6 part B: the person's own queued tasks it would take, held by their own limit — in
+      // each project, the limit they are held to there (`ownerLimitOf` over its defaults).
+      const mineQueued = [...byProject.values()].some((entry) => entry.mineQueued > 0);
+      const load =
+        mineQueued && candidate.userId !== undefined ? await personLoadOf(candidate.userId) : null;
+      const held = new Map<string, number>();
+      let ownerLimit: OwnerLimitFacts | null = null;
+      if (load !== null && candidate.userId !== undefined) {
+        for (const project of projects) {
+          const mine = byProject.get(project.projectId)?.mineQueued ?? 0;
+          const limit = ownerLimitOf(project.limits, load.personal);
+          if (mine > 0 && load.inFlight >= limit) {
+            held.set(project.projectId, mine);
+            ownerLimit = {
+              userId: candidate.userId,
+              name: candidate.userName ?? candidate.userId,
+              count: load.inFlight,
+              limit: Math.min(limit, ownerLimit?.limit ?? limit),
+              queued: (ownerLimit?.queued ?? 0) + mine,
+              holders: load.holders,
+            };
+          }
+        }
+      }
       answers.set(
         candidate.workerId,
         workerIdleReasonOf({
@@ -182,6 +255,8 @@ export const createWorkerIdleReader =
           policySkippedOffers: Number(counted?.skipped ?? 0),
           claimPolicy: candidate.claimPolicy,
           projects,
+          ownerLimit,
+          ownerHeldByProject: held,
         }),
       );
     }

@@ -223,6 +223,7 @@ const LIVE_UPDATES = 'Live updates could not be connected. Reload the page to co
 const WIP_LIMIT_WORDS: Readonly<Record<string, string>> = {
   max_parallel_tasks: 'parallel tasks',
   max_tasks_in_pipeline: 'tasks in the pipeline',
+  max_tasks_per_owner: 'tasks in flight per person',
 };
 
 /**
@@ -331,6 +332,13 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
     'No machine is waiting with that code. Check the code your machine shows now and enter it again.',
   claim_policy_owner_only:
     'Only the person whose machine this is can change what it takes. Ask them to change it.',
+  // S-28.6: a person's own limit above the organisation's `max_tasks_per_owner`.
+  task_limit_above_maximum: (error) => {
+    const maximum = detailOf(error, 'max_tasks_in_flight');
+    return maximum === undefined
+      ? 'That limit is above what the organisation allows. Choose a lower number, or ask an administrator to raise the organisation’s limit.'
+      : `The organisation allows at most ${maximum} tasks in flight per person. Choose ${maximum} or fewer, or ask an administrator to raise the organisation’s limit.`;
+  },
   claim_scope_empty:
     'Choose at least one project, or every project. To have the machine take nothing by itself, choose that option instead.',
   project_not_eligible:

@@ -762,17 +762,31 @@ pipeline still reads left to right.
 
 **Why a queued ticket has not started.** A project runs at most so many tasks at once and holds at
 most so many in its pipeline (*Parallel tasks* in *Settings → Rules & limits*: 2 and 5 unless a
-setting says otherwise, and never above the organisation's maximum), and a task stopped for a person
-still holds its pipeline place until it finishes or is cancelled. The platform checks both limits
-whenever a task finishes, stops for a person, is paused or is cancelled, and starts the first queued
-ticket when both have room. When they are full, the **Queued** column says so once, at its top —
-*Waiting for a place: this project holds at most 5 tasks in its pipeline, and 5 are in it — 5 of
-them wait for you. A place frees when one of them finishes or is cancelled, so decide them or cancel
-one.* (*… wait for a person.* when you may not decide them; when the running tasks are at their limit
-too, only a running task finishing or being cancelled frees a place) — and each queued card says its
-own place instead of *Queued*: *2nd in queue · 5 of 5 places taken* (*2 of 2 running* when only the
-running tasks are full). The queue is ordered by the ticket's priority, then by age. *1st in queue ·
-a place is free* means the limits have room and the queue moves on at the next such change.
+setting says otherwise, and never above the organisation's maximum). **What counts in the
+pipeline** (since S-28.6, the owner's decision): every task that has started and is not finished —
+**except** a paused task and one that stopped and needs a person to unblock it (*Needs you*); a task
+waiting for an answer or an approval still holds its place. **Each person has a limit too**: at most
+3 of the tasks they own are in flight at once (the organisation may set another default and maximum
+under `pipeline.wip.max_tasks_per_owner`, a project a lower one, and each person their own number on
+the Workers screen's *Your limit*, up to the organisation's maximum). It counts their tasks that are
+active, sent back, or waiting for an answer or an approval, in every project — not paused ones, not
+ones that need a person to unblock them, not queued ones and not ones at *Ready for merge* or later.
+A task with no owner is held to the project's limits only. Picking or taking a task never waits for
+the limit (it may go over it, and the next start waits instead), and neither does resuming or handing
+back. The platform checks the limits whenever a task finishes, stops for a person, is paused, is
+resumed or handed back, changes owner, or is cancelled, and whenever a limit is raised, and starts
+queued tickets in order while they fit: a ticket whose owner is at their limit waits and the ones
+behind it still start. When the project is full, the **Queued** column says so once, at its top —
+*Waiting for a place: this project holds at most 5 tasks in its pipeline (the project's limit, not a
+person's), and 5 are in it — 5 of them wait for you. A place frees when one of them finishes, is
+paused, is cancelled or needs a person to unblock it, so decide them or cancel one.* — and each
+queued card says its own place instead of *Queued*: *2nd in queue · 5 of 5 places taken* (*2 of 2
+running* when only the running tasks are full; *Jan has 3 of 3 in flight* when its owner's limit
+holds it). A task held by its owner's limit says on its page *Waiting for a place: Jan owns 3 tasks in
+flight and Jan's limit is 3. AUT-1, AUT-2, AUT-3 hold the places. A place frees when one finishes, is
+paused, or is handed to someone else.* (*you own … your limit* to Jan), with *Change the limit* for
+Jan and for an administrator. The queue is ordered by the ticket's priority, then by age. *1st in
+queue · a place is free* means the limits have room and the queue moves on at the next such change.
 
 **The `···` menu on a card** offers **Pause…** or **Resume**, **Return to stage…**, **Cancel…**,
 **Open ticket** and **Open merge request** — the task page's own commands. *Pause…* asks *Why are you
@@ -2062,6 +2076,15 @@ also folded, with its reason and what would give it a value.
 
 ### Workers
 
+**Your limit** (S-28.6), at the top, says how many of your tasks are worked on at once and the rule
+it counts by — *At most 3 of your tasks are worked on at once. Paused tasks and tasks waiting for a
+person to unblock them do not count; tasks waiting for your approval or answer do.* — how many are in
+flight now and which tasks hold the places, how many of yours wait, and where the number comes from
+(the default, or yours, and the organisation's maximum). **Change** sets your own number (1 up to the
+organisation's maximum; above it is refused and says the maximum) or **Use the default**; raising it
+starts your waiting tasks that now fit. An administrator also sees **Everyone's limit** and may change
+anybody's.
+
 **Workers** lists the machines registered to run agent stages for this platform — yours, or every
 one if you are an administrator. **Add a worker** at the top opens the wizard below, and **Approve a
 machine** the approval page. Each row says first **whether the machine can take work**, as the
@@ -2090,8 +2113,9 @@ state, with the numbers: *All 2 of its places are busy: it takes the next run wh
 *Project AUT is full: 5 of 5 places in its pipeline are taken (the project's limit, not a person's),
 and 4 tasks it would take are queued.* with **Open the board** (a project's two limits are its
 *Parallel tasks* card under *Rules & limits*: how many of its tasks move at once, and how many are in
-its pipeline at all — waiting ones included; a place in the pipeline frees when a task is done or
-cancelled); *It takes only your tasks, and 3 waiting runs belong to others.* (change it in the card
+its pipeline at all — ones waiting for an answer or an approval included, paused ones and ones that
+need a person to unblock them not); *You own 3 of 3 tasks in flight — your limit — and 2 more of your
+tasks are queued.* with *Change the limit*; *It takes only your tasks, and 3 waiting runs belong to others.* (change it in the card
 below); or *Nothing is queued or waiting for this machine in the projects it serves.* A machine that
 cannot take work says its reason instead, and one that is about to start something says nothing. The
 machine's own page says the same sentence under *Runs on this machine*, and **Agents** says it above

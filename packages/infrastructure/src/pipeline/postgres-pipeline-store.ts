@@ -102,7 +102,12 @@ import {
   workpadRefSchema,
 } from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
-import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
+import {
+  ACTIVE_RUN_STATUSES,
+  OUT_OF_PIPELINE_TASK_STATES,
+  OWNER_COUNTED_TASK_STATES,
+  resolveIterationLimits,
+} from '@platform/domain';
 import * as z from 'zod';
 import { unmeasuredEndedRunSql } from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -1324,11 +1329,13 @@ export const createPostgresPipelineStore = (
         `select pg_advisory_xact_lock(hashtextextended('task_admission/' || $1, 0))`,
         [projectId],
       );
+      // S-28.6 (the M28 ruling B): a paused task and one at `needs_human` hold no pipeline place —
+      // the domain's `countsInPipeline`, whose list is bound here so the two cannot drift.
       const { rows } = await sqlOf(tx).query<{ active: string; in_pipeline: string }>(
         `select count(*) filter (where state in ('active', 'returned')) as active,
-                count(*) filter (where state not in ('queued', 'done', 'cancelled')) as in_pipeline
+                count(*) filter (where not (state::text = any($2::text[]))) as in_pipeline
            from tasks where project_id = $1`,
-        [projectId],
+        [projectId, [...OUT_OF_PIPELINE_TASK_STATES]],
       );
       const row = rows[0];
       return {
@@ -1337,18 +1344,63 @@ export const createPostgresPipelineStore = (
       };
     },
 
+    /**
+     * Serialised per **owner** for the rest of the caller's transaction (S-28.6), the shape
+     * {@link counts} has per project: a transaction-scoped advisory lock on the user, namespaced
+     * `task_owner_admission/`, before the count — so a second admitter of the same person's task
+     * waits for the first to commit and then counts what it admitted.
+     */
+    ownerAdmission: async (tx, ownerUserId) => {
+      await sqlOf(tx).query(
+        `select pg_advisory_xact_lock(hashtextextended('task_owner_admission/' || $1, 0))`,
+        [ownerUserId],
+      );
+      const { rows } = await sqlOf(tx).query<{
+        in_flight: string;
+        personal_limit: number | null;
+      }>(
+        `select (select count(*) from tasks
+                  where owner_user_id = $1 and state::text = any($2::text[])) as in_flight,
+                (select max_tasks_in_flight from users where id = $1) as personal_limit`,
+        [ownerUserId, [...OWNER_COUNTED_TASK_STATES]],
+      );
+      const row = rows[0];
+      return {
+        inFlight: Number(row?.in_flight ?? 0),
+        personalLimit:
+          row?.personal_limit === null || row?.personal_limit === undefined
+            ? null
+            : Number(row.personal_limit),
+      };
+    },
+
+    queuedProjectsOfOwners: async (tx, ownerUserIds) => {
+      if (ownerUserIds.length === 0) return [];
+      const { rows } = await sqlOf(tx).query<{ project_id: string }>(
+        `select distinct project_id from tasks
+          where state = 'queued' and owner_user_id = any($1::uuid[])
+          order by project_id`,
+        [[...ownerUserIds]],
+      );
+      return rows.map((row) => row.project_id);
+    },
+
     queued: async (tx, projectId) => {
       const { rows } = await sqlOf(tx).query<{
         id: string;
         priority: string | null;
         created_at: Date;
-      }>(`select id, priority, created_at from tasks where project_id = $1 and state = 'queued'`, [
-        projectId,
-      ]);
+        owner_user_id: string | null;
+      }>(
+        `select id, priority, created_at, owner_user_id
+           from tasks where project_id = $1 and state = 'queued'`,
+        [projectId],
+      );
       return rows.map((row) => ({
         id: row.id,
         priorityRank: priorityRank(row.priority),
         createdAt: new Date(row.created_at).toISOString() as IsoDateTime,
+        ownerUserId: row.owner_user_id,
       }));
     },
 
