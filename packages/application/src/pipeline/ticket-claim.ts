@@ -97,9 +97,7 @@ import {
   compilePipeline,
   isRunnableTaskState,
   lifecycleClaims,
-  platformWrittenStatuses,
   type TicketStatusPolicy,
-  taskLifecycleReachOf,
   ticketClaimIsFirst,
   ticketClaimNeeded,
   ticketStatusDisposition,
@@ -440,13 +438,6 @@ const claim = async (
       policy: statusPolicy,
       first,
       humanCommanded,
-      /**
-       * S-28.11: only the statuses the platform actually wrote for this task are its own — read
-       * off the task's own history (the stages it entered). A first claim's earlier claim, if any,
-       * was released, so its `in_progress` write is not this claim's: a task that never ran has
-       * written nothing, and its ticket is judged by `start_from` and `closed` alone.
-       */
-      written: platformWrittenStatuses(statusPolicy, taskLifecycleReachOf(task, null)),
     });
     if (
       humanCommanded &&

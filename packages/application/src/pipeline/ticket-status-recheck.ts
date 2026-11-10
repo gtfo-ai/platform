@@ -44,12 +44,10 @@ import {
   isMergedTask,
   isTerminalTaskState,
   MERGED_GATE_STAGE,
-  platformWrittenStatuses,
   QA_STAGE_ID,
   READY_FOR_MERGE_STAGE,
   type TicketStatusStop,
   type TicketStatusStopReason,
-  taskLifecycleReachOf,
   ticketStatusDisposition,
   ticketStatusStopDecision,
   withStatusMappingStatuses,
@@ -189,11 +187,9 @@ export const runTicketStatusRecheck = async (
   }
   const logger = options.logger ?? silentLogger;
   const taskId = data.task_id as Id;
-  const found = await options.unitOfWork.transaction(async (scope) => ({
-    loaded: await options.store.tasks.load(scope.tx, taskId),
-    claim: await options.store.tasks.ticketClaim(scope.tx, taskId),
-  }));
-  const loaded = found.loaded;
+  const loaded = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.load(scope.tx, taskId),
+  );
   if (loaded === null || isTerminalTaskState(loaded.task.state)) {
     return;
   }
@@ -220,19 +216,22 @@ export const runTicketStatusRecheck = async (
     return;
   }
   /**
-   * S-28.11: only the statuses the platform actually wrote **for this task** are its own — the
-   * moments its own history shows it reached (`platformWrittenStatuses`). A task that never ran has
-   * written nothing, so a person's *Ready for Merge* (the binding's `done` slot) on a queued task
-   * is a person's move; a released claim's `in_progress` write is not counted.
+   * **Whose statuses are exempt** (S-28.11, the revised ruling). A `queued` task that never entered
+   * a stage has run nothing, so the platform wrote nothing for it: its ticket is judged by
+   * `start_from` and `closed` alone — AUT-6743, queued while a linked member had delivered its
+   * ticket to *Ready for Merge* (the binding's `done` slot), is a person's move and is cancelled.
+   * Every other live task keeps S-28.5's exemption **in full**: every lifecycle slot's status,
+   * `returned`, and the `status_mapping` targets are the platform's. People moving a held ticket
+   * among the workflow's own statuses is the normal flow (a task returned from Ready still showing
+   * *Ready for Merge* because the workflow has no way back, AUT-6655; the platform's own
+   * *In Progress* write re-checked before its claim record commits), so for a running task only a
+   * `closed` status stops it. **Given up, deliberately**: noticing a person moving a running task's
+   * ticket ahead to a slot's status (backlog 1571).
    */
-  const written = platformWrittenStatuses(
-    policy,
-    taskLifecycleReachOf(
-      loaded.task,
-      found.claim !== null && found.claim.released_at === null ? found.claim : null,
-    ),
-  );
-  const disposition = ticketStatusDisposition(read.status, read.statusCategory, policy, written);
+  const neverRan =
+    loaded.task.state === 'queued' &&
+    Object.values(loaded.task.stageAttempts).every((attempt) => attempt === 0);
+  const disposition = ticketStatusDisposition(read.status, read.statusCategory, policy, !neverRan);
   if (disposition !== 'closed' && disposition !== 'hands_off') {
     return;
   }

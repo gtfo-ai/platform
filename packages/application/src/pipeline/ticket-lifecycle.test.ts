@@ -1464,7 +1464,7 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
 
   it('the platform’s own status write stops nothing — a slot, or a status_mapping target, Done included', async () => {
     const { ticket, harness } = await stoppedAtTheClaim();
-    // S-28.11: the slot is the platform's own only once the task reached its moment.
+    // A task past its first stages: the slot's status is the platform's own.
     await putIn(harness, 'paused', false, {
       stageAttempts: { refinement: 1, architecture: 1, implementation: 1 },
       currentStage: 'implementation',
@@ -1492,7 +1492,7 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     expect(eventsOf(mapped.harness, 'task.escalated')).toHaveLength(mappedBefore);
   });
 
-  describe('S-28.11 — a status is the platform’s own only once the task reached its moment', () => {
+  describe('S-28.11 — a never-run task exempts no status; a running one keeps the exemption', () => {
     const delivered = {
       in_progress: 'Doing',
       in_review: 'Waiting for review',
@@ -1533,17 +1533,48 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
       });
     });
 
-    it('a task at Implementation whose ticket a person moves to the done slot’s status is stopped', async () => {
+    it('AUT-6655: a task returned from Ready to Implementation, its ticket still at the done slot’s status, is not stopped', async () => {
       const { ticket, harness } = await reached();
       await putIn(harness, 'paused', false, {
-        stageAttempts: { refinement: 1, architecture: 1, implementation: 1 },
+        stageAttempts: { refinement: 1, implementation: 2, code_review: 1, ready_for_merge: 1 },
         currentStage: 'implementation',
       });
+      const before = eventsOf(harness, 'task.escalated').length;
+      // The workflow has no way back from Ready for Merge, so the ticket stays there.
       ticket.state.status = 'Ready for Merge';
       ticket.state.statusCategory = 'in_progress';
-      await harness.publish([moved('Doing', 'Ready for Merge')]);
+      await harness.publish([moved('Waiting for review', 'Ready for Merge')]);
       await harness.drain();
-      expect(lastEscalation(harness)?.reason).toBe('ticket_taken_by_person');
+      expect(taskOf(harness).task.state).toBe('paused');
+      expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
+    });
+
+    it('a task at refinement whose own In Progress write is re-checked before its claim record commits is not stopped', async () => {
+      const { ticket, harness } = await reached();
+      await putIn(harness, 'paused', false, {
+        stageAttempts: { refinement: 1 },
+        currentStage: 'refinement',
+      });
+      const before = eventsOf(harness, 'task.escalated').length;
+      ticket.state.status = 'Doing';
+      ticket.state.statusCategory = 'in_progress';
+      await harness.publish([moved('To Do', 'Doing')]);
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('paused');
+      expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
+    });
+
+    it('a closed status still stops a running task that has not merged', async () => {
+      const { ticket, harness } = await reached();
+      await putIn(harness, 'paused', false, {
+        stageAttempts: { refinement: 1, implementation: 1 },
+        currentStage: 'implementation',
+      });
+      ticket.state.status = 'Released';
+      ticket.state.statusCategory = 'done';
+      await harness.publish([moved('Doing', 'Released')]);
+      await harness.drain();
+      expect(lastEscalation(harness)?.reason).toBe('ticket_closed_in_tracker');
     });
 
     it('a task past its code review, whose ticket the platform’s own in_review moment moved, is left alone', async () => {

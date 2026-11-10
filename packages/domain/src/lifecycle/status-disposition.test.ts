@@ -13,8 +13,6 @@ import {
   claimStatusDecision,
   DEFAULT_TICKET_STATUS_POLICY,
   intakeStatusDecision,
-  platformWrittenStatuses,
-  taskLifecycleReachOf,
   ticketStatusDisposition,
   ticketStatusPolicyOf,
   ticketStatusStopDecision,
@@ -165,10 +163,45 @@ describe('claimStatusDecision (M28 ruling 3 (d))', () => {
     ).toEqual({ kind: 'refuse', reason: 'ticket_not_startable' });
   });
 
-  it('lets a first claim meet the platform’s own in_progress move, and a re-claim any open status', () => {
+  it('S-28.11: a first claim exempts no lifecycle slot’s status (AUT-6743), only a status_mapping target', () => {
     expect(
       claimStatusDecision({ status: 'Doing', category: 'in_progress', policy, first: true }),
+    ).toEqual({ kind: 'refuse', reason: 'ticket_not_startable' });
+    const delivered = ticketStatusPolicyOf(null, { in_progress: 'Doing', done: 'Ready for Merge' });
+    expect(
+      claimStatusDecision({
+        status: 'Ready for Merge',
+        category: 'in_progress',
+        policy: delivered,
+        first: true,
+      }),
+    ).toEqual({ kind: 'refuse', reason: 'ticket_not_startable' });
+    expect(
+      claimStatusDecision({
+        status: 'Ready for Merge',
+        category: 'done',
+        policy: delivered,
+        first: true,
+      }),
+    ).toEqual({ kind: 'refuse', reason: 'ticket_closed_in_tracker' });
+    const mapped = withStatusMappingStatuses(
+      ticketStatusPolicyOf(null, { assign_owner: true }),
+      {
+        assign_owner: true,
+      },
+      { refinement: 'In Progress' },
+    );
+    expect(
+      claimStatusDecision({
+        status: 'In Progress',
+        category: 'in_progress',
+        policy: mapped,
+        first: true,
+      }),
     ).toEqual({ kind: 'proceed' });
+  });
+
+  it('lets a re-claim meet any open status, and a first claim a startable or unsaid one', () => {
     expect(
       claimStatusDecision({ status: 'Review', category: 'in_progress', policy, first: false }),
     ).toEqual({ kind: 'proceed' });
@@ -308,89 +341,5 @@ describe('ticketStatusStopDecision — the reverse sync (M28 ruling 4, S-28.5)',
     );
     expect(ticketStatusDisposition('Released', 'done', mapped, true)).toBe('not_ready');
     expect(ticketStatusDisposition('In Progress', 'in_progress', mapped, true)).toBe('not_ready');
-  });
-});
-
-describe('platformWrittenStatuses — the exemption by reached moment (S-28.11)', () => {
-  const policy = withStatusMappingStatuses(
-    ticketStatusPolicyOf(null, {
-      in_progress: 'Doing',
-      in_review: 'Waiting for review',
-      approved: 'Approved',
-      qa: 'Testing',
-      done: 'Ready for Merge',
-      returned: ['Sent back'],
-    }),
-    null,
-    null,
-  );
-  const reach = (stages: string[], inProgressWritten = false, state = 'active') =>
-    taskLifecycleReachOf(
-      { stageAttempts: Object.fromEntries(stages.map((stage) => [stage, 1])), state },
-      { in_progress_written: inProgressWritten },
-    );
-
-  it('exempts nothing for a task that never ran (AUT-6743: queued, ticket at the done slot’s status)', () => {
-    expect(platformWrittenStatuses(policy, reach([], false, 'queued'))).toEqual([]);
-    expect(ticketStatusDisposition('Ready for Merge', 'in_progress', policy, [])).toBe('hands_off');
-    expect(ticketStatusDisposition('Ready for Merge', 'done', policy, [])).toBe('closed');
-  });
-
-  it('exempts each slot only once the task reached the moment that writes it', () => {
-    expect(platformWrittenStatuses(policy, reach(['refinement'], true))).toEqual(['Doing']);
-    expect(platformWrittenStatuses(policy, reach(['refinement', 'implementation']))).toEqual([
-      'Doing',
-    ]);
-    expect(
-      platformWrittenStatuses(policy, reach(['refinement', 'implementation', 'code_review'])),
-    ).toEqual(['Doing', 'Waiting for review']);
-    expect(
-      platformWrittenStatuses(
-        policy,
-        reach(['implementation', 'code_review', 'business_review', 'ci_gate', 'ready_for_merge']),
-      ),
-    ).toEqual(['Doing', 'Waiting for review', 'Approved', 'Sent back']);
-    expect(platformWrittenStatuses(policy, reach(['implementation', 'qa', 'merged_gate']))).toEqual(
-      ['Doing', 'Approved', 'Testing', 'Ready for Merge', 'Sent back'],
-    );
-  });
-
-  it('a person moving a task at Implementation to the done slot’s status is a person’s move', () => {
-    const written = platformWrittenStatuses(policy, reach(['refinement', 'implementation']));
-    expect(ticketStatusDisposition('Ready for Merge', 'in_progress', policy, written)).toBe(
-      'hands_off',
-    );
-    expect(ticketStatusDisposition('Doing', 'in_progress', policy, written)).toBe('not_ready');
-  });
-
-  it('a status_mapping target is the platform’s own once its stage or state was reached', () => {
-    const mapped = withStatusMappingStatuses(
-      ticketStatusPolicyOf(null, {}),
-      {},
-      {
-        implementation: 'In Progress',
-        merged: 'Released',
-      },
-    );
-    expect(platformWrittenStatuses(mapped, reach(['refinement']))).toEqual([]);
-    expect(platformWrittenStatuses(mapped, reach(['refinement', 'implementation']))).toEqual([
-      'In Progress',
-    ]);
-    expect(platformWrittenStatuses(mapped, reach(['implementation'], false, 'merged'))).toEqual([
-      'In Progress',
-      'Released',
-    ]);
-  });
-
-  it('a first claim refuses a slot’s status when the platform wrote none for the task', () => {
-    expect(
-      claimStatusDecision({
-        status: 'Ready for Merge',
-        category: 'in_progress',
-        policy,
-        first: true,
-        written: [],
-      }),
-    ).toEqual({ kind: 'refuse', reason: 'ticket_not_startable' });
   });
 });
