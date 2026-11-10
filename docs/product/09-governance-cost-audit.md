@@ -20,6 +20,7 @@ Decisions: [BD-011 cost accounting](../decisions/business/BD-011-cost-accounting
 | Stage run | per-run cap (see stage defaults) | run stops via SDK budget limit; stage is retried once with a summary of progress if the cap was hit mid-work, otherwise escalate |
 
 - Thresholds: notify at 50% and 80% (configurable), block a new run that could take the window past 100% (*as built at WP-131*: the run's own per-run cap counts toward the window before it is admitted).
+- *Amended 2026-11-10 (BD-010).* **The task cap admits a run when spent + held + the stage's run reserve ≤ cap.** A pause says that arithmetic — spent, held, the stage's reserve, the cap and the cap it needs — and never says *spent its cap* unless it has. A raise below the needed cap is refused with the minimum named; a resume of a stage attempt that ran nothing reuses it; on a return the merge request goes back to draft only once the implementation run is admitted.
 - Windows are in the organisation timezone (setting, default from the container `TZ`, fallback UTC), reset at boundary.
 - **Never kill a run mid-flight for an organisation/project budget** — that wastes the spend already made. Only per-run caps stop a run, and those are known upfront.
 - Budget changes are audited (who, when, from → to).
@@ -31,6 +32,8 @@ Decisions: [BD-011 cost accounting](../decisions/business/BD-011-cost-accounting
 ## Concurrency limits (WIP)
 
 Per project: `max_parallel_tasks` (default 2), `max_tasks_in_pipeline` (default 5, i.e. including waiting ones), `max_parallel_runs` per organisation (default 4, protects against rate limits). Tasks beyond limits wait in `Queued` ordered by ticket priority then age. Limits exist to keep review load humane, not only to protect spend.
+
+*Amended 2026-11-10 (BD-010).* **A limit per owner:** `pipeline.wip.max_tasks_per_owner` (default 3; the organisation's value is a maximum a project may tighten; a per-person override) counts a person's owned tasks that are active, returned, waiting for answers or waiting for approval. `max_tasks_in_pipeline` no longer counts paused or *Needs human* tasks. Unowned tasks are bound by the project limit only. A person's own pick, resume or hand-back is never refused; the scheduler skips a full owner and starts the next task. A ready machine that runs nothing always says why.
 
 ## Audit
 

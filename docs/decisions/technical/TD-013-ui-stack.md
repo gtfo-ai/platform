@@ -41,5 +41,15 @@ Single-page app (no SSR) served by the app process; stack as in technical/09. Tr
 > real focus management (Menu, Dialog, Tooltip, Popover, Tabs). shadcn/ui is not adopted: the visual
 > language is TD-033's own. `@xyflow/react` joins the stack as a lazy chunk for the flow canvas.
 
+> **Amendment 2026-11-10 (M28, the owner's feedback round; slice S-28.9). Prose is formatted again — by an in-house
+> parser that emits React elements, never HTML.** The WP-20 amendment named the shape that would reopen it: *"a markdown
+> renderer that never produces HTML — one that emits React elements from an AST directly"*. That is now adopted, written in
+> the repository rather than taken as a dependency: `ui/untrusted-text.ts`'s segmenter grows a block and inline markdown
+> parser, and `ui/untrusted.tsx` renders its
+> output as React elements whose every string is a text node. **Unchanged:** no `dangerouslySetInnerHTML`, no sanitiser,
+> `apps/web/src/no-html.test.ts` unchanged and green. **Links** are rendered only through `safeHref`; a scheme it refuses
+> is shown as text, and when the label differs from the destination the **destination host** is shown beside it, so a
+> link cannot disguise where it goes. **Raw HTML in the source stays literal text.** Plan-format fidelity is the owner's ask: plans, specs and review verdicts were unreadable as one paragraph.
+
 ## Alternatives considered
 Next.js (self-hosting overhead, no SSR need), SvelteKit/Solid (ecosystem pieces are React-first), Mantine (own theming), Monaco (95 MB), xterm for output (only for a future interactive terminal), assistant-ui (chat-composer framework).

@@ -25,3 +25,57 @@ The record the 2026-10-06 amendment relies on is written **before** the shim is 
 
 ## Amendment (2026-10-17, WP-163, session 16 — PROGRESS backlog 554)
 The 2026-10-08 amendment's last sentence reads *"That window is one transaction"*. As built, the window is **the record's commit plus the ending's transaction**: a process that dies after the record commits and before its ending is recorded leaves the run held. The run is still held, so the window fails closed. WP-163 also withholds the request when a stop is asked for while the record commits, not only when the shim's connection ends.
+
+## Amendment (2026-11-10, the product owner's feedback round, M28 — a budget pause shows its arithmetic; S-28.1)
+*"Clear communication everywhere is key — the user must always understand what is wrong, why it is stuck, the rules."*
+
+**Evidence.** AUT-6655 on Autix paused at **$10.99 of $50** and the page said it *"has spent its cap"*
+(`apps/web/src/features/task-callout.tsx:246`). It had not: the task cap admits a run only when spent + held + the
+stage's per-run reserve stays within the cap (`taskBudgetExhausted`, `packages/application/src/pipeline/stage-executor.ts:614-620`),
+and Autix reserves **$40** per implementation run. The maintainer raised the cap to 51, 52, 53 and 54; each raise
+resumed the task, was re-paused at once by the same arithmetic, and opened an empty stage attempt (4 → 8). A return also
+re-drafted the merge request before the run that was supposed to follow it had been admitted.
+
+**Decision.**
+1. **The rule is unchanged and is now stated:** the task cap admits a run when *spent + held + the stage's run reserve ≤ cap*.
+   This sentence replaces product/09's *"total cap … task → Paused: budget"* as the reading of the task row.
+2. **A pause records and shows that arithmetic**: spent, held (with the count of unmeasured runs), the reserve of the stage
+   it would run and that stage's name, the cap, and the **required cap** (spent + held + reserve). The words never say
+   *spent its cap* unless spent ≥ cap.
+3. **A raise below the required cap is refused** (a typed refusal naming the minimum) rather than accepted and re-paused.
+   A raise at or above it resumes.
+4. **A resume of a stage attempt that ran nothing reuses that attempt**; no empty attempt is opened, and none is counted
+   against a loop bound.
+5. **On a return, the merge request is re-drafted only once the implementation run is admitted**, so a return that pauses
+   on budget leaves the MR as the person saw it.
+
+**Rejected.** Lowering the reserve automatically to fit the cap (it would let a run start with less than its stage needs,
+which is BD-010's own *predictable worst case* undone); accepting any raise and pausing again (AUT-6655's loop).
+**Residual.** The reserve is the stage's per-run cap, not a forecast; a project that wants cheaper admission lowers
+`stages.<id>.budget_usd`, and the pause names that lever. Slice S-28.1.
+
+## Amendment (2026-11-10, the product owner's feedback round, M28 — a limit per owner, and what a stopped task holds; S-28.6)
+**Context.** With task owners (BD-031's 2026-11-06 amendment) one person's tickets could fill a project's pipeline, and
+the project ceiling counted every state but queued, done and cancelled (`packages/domain/src/policies/wip.ts:88-95`), so
+tasks at *Needs you* or paused held the places the queue waited for (S-25.16's evidence: five tickets queued for days with
+nothing running). The owner had already ruled that paused and `needs_human` tasks free their place; it was never built.
+
+**Decision.**
+1. **`pipeline.wip.max_tasks_per_owner`**, default **3**. The organisation's value is a maximum; a project may tighten it,
+   never loosen it. A per-user override, **`users.max_tasks_in_flight`** (migration **0112**, additive), replaces it for
+   that person.
+2. **What counts for an owner:** the person's owned tasks in `active`, `returned`, `waiting_answers` and `waiting_approval`.
+   `paused`, `needs_human` and `ready_for_merge` do not count.
+3. **`max_tasks_in_pipeline` stops counting `paused` and `needs_human`.** `waiting_approval` still counts (BD-006's
+   2026-11-07 amendment, clause 5, which said it counts *exactly as `needs_human` did*, now reads: it counts; `needs_human`
+   no longer does).
+4. **Unowned tasks** are bound by the project ceiling only.
+5. **A person's own act is never refused by the owner limit**: a pick, a resume and a hand-back go through. The limit is
+   enforced at admission under an advisory lock per owner, and the scheduler **skips** a full owner's task and admits the
+   next one rather than stopping the queue.
+6. **A ready machine that runs nothing always states one idle reason** (`idle_reason` on the worker reads): no offer, the
+   owner is full, the project is full, the claim policy excludes it, and so on — never a silent idle.
+
+**Rejected.** A per-owner limit with no organisation maximum (a project could undo it); refusing a person's pick at the
+limit (the owner wants the person's choice to win). **Residual.** A person over their limit by their own picks keeps
+those tasks; the scheduler simply starts none of theirs until they fall below it. Slice S-28.6.

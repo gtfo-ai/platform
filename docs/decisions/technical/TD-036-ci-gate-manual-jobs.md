@@ -120,3 +120,32 @@ draft-merge-request context runs a test job, and never for a file with `include:
 - **An older build refuses a configuration that sets `pipeline.ci`**, which is the strict schema's general rollback
   cost.
 - Slice S-27.2.
+
+## Amendment (2026-11-10, M28, the owner's ruling; S-28.7) — the platform may start a manual job a project names
+
+**Context.** Autix's draft rule makes `build_composer`, `codeception` and `crawler-test` manual and blocking on every
+merge request the platform opens (pipeline 3044845312). Under decision 2 the `test`-stage ones keep the gate waiting until
+a person starts them on GitLab — for every task. Decision 3's `required_manual_jobs` can only say *wait* or *don't wait*;
+nothing could say *start it*.
+
+**Decision.**
+1. **`pipeline.ci.manual_jobs`**: a map from an **exact job name** to `run | wait | ignore` (strict; ≤ 50 entries, names as
+   decision 3). `run`: the platform plays the job and the gate waits for its result. `wait`: the gate waits for a person
+   to start it (as a name in `required_manual_jobs`). `ignore`: the job is never waited for.
+2. **Trust.** `run` and `ignore` are accepted **only from the project's settings** (a maintainer's write); the repository
+   file may add `wait` only, and a `run`/`ignore` there is graded *not applied* (technical/12, BD-025: a branch must not
+   be able to start jobs or drop a check). A listed job is decided by this map; every **unlisted** job keeps decisions 2–3
+   unchanged and is **never played**.
+3. **Playing.** A new `pipeline.outbound` duty, `ci_play_manual`, plays through `IntegrationActionExecutor` (port method
+   `playJob`, refused by name where unsupported, BD-017), idempotent per **(task, pipeline id, job id)**. The CI-settle
+   read re-judges on every poll, so jobs that become playable after an earlier one finishes (waves) are played in turn.
+   A downstream **bridge** (trigger job) cannot be `run`: refused at save.
+4. **A played job is a required check** even when it has `allow_failure: true`: its failure fails the gate.
+5. **A 403** (the binding may not play jobs) falls back to `wait`, recorded and worded: *the platform could not start X;
+   start it on GitLab or give the account Developer access*.
+6. **Recorded**: `task_stages.ci_manual_started` (migration **0113**, additive; one writer in the duty's settle), the jobs
+   played with pipeline, job id and time, shown beside decision 5's `ci_manual_not_run`.
+
+**Rejected.** Playing every blocking manual job (a release or deploy job would run on every task); globs (a job name is an
+identity, decision 3). **Residual.** A played job spends the project's CI minutes on every attempt; that is the project's
+choice when it writes `run`.

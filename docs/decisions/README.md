@@ -40,11 +40,11 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-003](business/BD-003-auditability.md) | Everything is auditable and replayable | accepted |
 | [BD-004](business/BD-004-claude-only-provider-modes.md) | Claude only; provider modes `api` and `local`; no claude.ai login in the product | accepted |
 | [BD-005](business/BD-005-pipeline-stages.md) | Default pipeline stages, templates and review independence | accepted |
-| [BD-006](business/BD-006-human-checkpoints.md) | Human checkpoints: questions always, plan approval by size + probation (amended 2026-11-07: an approval never expires; bounded reminders) | accepted |
+| [BD-006](business/BD-006-human-checkpoints.md) | Human checkpoints: questions always, plan approval by size + probation (amended 2026-11-07: an approval never expires; bounded reminders; amended 2026-11-10: opt-in risk-gated plan approval, TD-037) | accepted |
 | [BD-007](business/BD-007-human-merges.md) | A human merges; human MR comments re-enter the pipeline | accepted |
 | [BD-008](business/BD-008-bounded-loops-and-escalation.md) | Every loop is bounded; escalation to `Needs human` | accepted |
 | [BD-009](business/BD-009-single-tenant-instances.md) | One instance per organisation (tenant); many projects per instance | accepted |
-| [BD-010](business/BD-010-wip-limits-and-budgets.md) | WIP limits per project; budgets at org/project/task/run with pause-not-kill | accepted |
+| [BD-010](business/BD-010-wip-limits-and-budgets.md) | WIP limits per project; budgets at org/project/task/run with pause-not-kill (amended 2026-11-10: a budget pause shows its arithmetic; a limit per owner; a stopped task frees its pipeline place) | accepted |
 | [BD-011](business/BD-011-cost-accounting.md) | Cost accounting: provider-reported cost is truth, price table for estimates | accepted |
 | [BD-012](business/BD-012-knowledge-in-repo.md) | Knowledge base lives in the project repository as markdown; indexes are derived | accepted |
 | [BD-013](business/BD-013-default-models-and-effort.md) | Default model and effort per stage | proposed |
@@ -65,7 +65,7 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-028](business/BD-028-opt-in-features-and-wizard.md) | Adoption features are opt-in, configured in a wizard step, and always editable later | accepted |
 | [BD-029](business/BD-029-business-model.md) | Everything is Apache-2.0; revenue from hosting, support and a registry service | accepted |
 | [BD-030](business/BD-030-additional-pipeline-gates.md) | Rebase gate, dependency/epic awareness, reviewer routing with risk classes, dependency policy, coverage delta | accepted |
-| [BD-031](business/BD-031-ticket-lifecycle-claim-qa-and-mr-conversation.md) | The tracker lifecycle is the project's mapping: optional status slots, a claimed ticket, a human QA stage, every form of a human return, the review conversation on the MR (amended 2026-11-06: a task has an owner; the claim keeps a member's ticket) | accepted |
+| [BD-031](business/BD-031-ticket-lifecycle-claim-qa-and-mr-conversation.md) | The tracker lifecycle is the project's mapping: optional status slots, a claimed ticket, a human QA stage, every form of a human return, the review conversation on the MR (amended 2026-11-06: a task has an owner; the claim keeps a member's ticket; amended 2026-11-10: an explicit return, the platform resolves threads it fixed, the ticket's status bounds the task) | accepted |
 | [BD-032](business/BD-032-worker-mode.md) | Worker mode: agent runs may execute on developers' machines with their own Claude subscription, beside or instead of the server's runner (amended 2026-11-06: the head start goes to the owner; a claim policy per machine) | accepted |
 | [BD-033](business/BD-033-desktop-app-for-the-worker.md) | A desktop app for the worker on macOS and Windows: a thin, signed, self-updating shell around the worker bundle, released from this repository (planned; build after the worker is verified) | proposed |
 

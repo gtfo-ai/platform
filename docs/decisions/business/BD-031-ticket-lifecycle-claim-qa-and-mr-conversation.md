@@ -165,3 +165,34 @@ ticket for the platform's account: this hides who is responsible and fights the 
 **Consequences.** A broad intake rule (*every To Do ticket*) now takes members' assigned tickets, so a team
 narrows intake by label. Technical design: TD-031's 2026-11-06 amendment. Product text: product/04
 § "Ticket lifecycle" and product/06 step 2, amended the same day. Work: plan § "Milestone M26".
+
+## Amendment (2026-11-10, the product owner's feedback round, M28) — an explicit return, threads the platform resolves, and a ticket the team closed
+
+**Evidence.** AUT-6655 was returned **twice** by a Czech QA comment that said *"OK"* in a sentence the English
+acknowledgement list did not cover (ruling 4(d) and TD-029 decision 8). AUT-6676 had been **Released** on 2026-10-14 and was
+started on 2026-11-04 by its pick-up label alone. People asked why platform-addressed MR threads stayed open.
+
+**Decision** (the owner, 2026-11-10; technical design in TD-029's 2026-11-10 amendments):
+1. **Ruling 4 is narrowed: a return needs an explicit, language-independent signal.** At `qa` and `ready_for_merge` the task
+   returns on (a) a person moving the ticket to a return status (as before), (b) an **unresolved, resolvable** MR thread a
+   person opened or added to, or (c) the task page's **Send back**. A ticket comment or a plain (non-resolvable) MR note
+   **alone never returns** the task; it is shown on the task page with **Send back to Implementation**, and it still
+   reaches the next run as conversation. A status move forward in the same delivery wins over a return. 4(c) and 4(d)
+   as return forms, and *"A comment on a task at a human stage returns it even with no status change"*, are superseded.
+2. **Ruling 6 is widened: the platform resolves a person's thread after itself.** When the developer replied *fixed* or
+   *documented* on a person's thread, the platform resolves it and names the commit in its reply; a thread it did not
+   address gets a *not addressed* reply and stays open. The owner: *"resolve threads after itself … always mark as resolved
+   so it is not confusing."* Threads and comments the platform answered, resolved or saw are recorded as **handled**, and
+   are not read as new unless a person adds a note.
+3. **The ticket's status bounds the task.** A project states which statuses a ticket may **start from** (default: the
+   tracker's *To Do* category) and which mean **closed** (default: *Done* category). Nothing starts outside `start_from`,
+   whatever the label says. A ticket moved to a closed status cancels a queued task and stops a live one (or, per project,
+   is ignored); a person moving it to a hands-off status takes it from the platform. The platform's own lifecycle moves
+   never count as a person's.
+4. **A lifecycle move the tracker refused is shown, not only logged** (S-28.10): the task page says the ticket's status is
+   out of sync and offers Retry.
+
+**Rationale.** The word list could never be complete in every language a team writes in (BD-016), and its failure
+direction — return on doubt — cost real runs. An explicit act is unambiguous in any language.
+**Rejected.** Growing the vocabulary per project (it fails on the next language); a model classifier (TD-029 decision 8's
+reason stands). **Consequence.** A person who only writes a ticket comment must press Send back; the page tells them so.

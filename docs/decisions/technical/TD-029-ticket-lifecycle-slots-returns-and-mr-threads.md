@@ -425,3 +425,74 @@ Vendor facts are in `docs/research/15-tracker-lifecycle-and-mr-conversation.md`.
   - An unrecognised acknowledgement costs one run.
   - A webhook-only binding does not re-match a ticket that was unassigned.
   - GitLab's reply to an individual note remains **[unverified]**: WP-173 records the documented answer and a fallback to a new general note (divergence 8); the live check is in `docs/TODO.md`.
+
+## Amendment A (2026-11-10, M28, the owner's ruling; S-28.2) — an explicit return, a handled ledger, and the platform resolves a person's thread
+
+**Context.** Decision 7 returns the task on *a person's non-acknowledgement word newer than the horizon*, from the MR or
+the ticket, and decision 8 decides "acknowledgement" from an English vocabulary (`packages/domain/src/lifecycle/acknowledgement.ts`).
+AUT-6655's Czech QA *"OK"* comment returned the task twice. Decision 10 resolves only threads opened by this task's
+`review-finding` marker, *"never a person's thread"* (line 316), so a person's thread the developer fixed stayed open and
+was re-read as new at the next window. BD-031's 2026-11-10 amendment narrows the product rule.
+
+**Decision.**
+1. **The return forms (supersedes decision 7's *Return* bullet and decision 8).** At `qa`/`ready_for_merge` the window
+   returns the task only on: a **return status** (decision 7 and its amendments (a)–(f), unchanged); an **unresolved,
+   resolvable MR thread** with a person's note newer than the horizon that is not handled (2); or the task page's **Send
+   back** command. A ticket comment or a non-resolvable MR note never returns by itself. When one delivery carries both a
+   forward status move (a QA pass, decision 9) and a return form, **the forward move wins**. The acknowledgement rule and
+   `human_returns.acknowledgements` are **removed** (the key is accepted and ignored with a warning, so an older config
+   still parses). Asks (amendment (c)) are unchanged.
+2. **The handled ledger** — `task_conversation_handled` (migration **0111**, additive): one row per (task, provider item:
+   MR thread or note id, ticket comment id) the platform **answered, resolved or saw** (a non-returning comment the
+   window read counts as seen). A handled item is not read as new unless a person adds a note to it after the row. The
+   conversation data block (decision 11) carries `handled="true"` on its marker. One writer per cause (the replies duty,
+   the resolve duty, the window).
+3. **A non-returning person's word is shown**: the task page lists it with **Send back to Implementation**, which is the
+   same command as Send back with that item as its feedback (one `human_actions` row; it spends `human_rounds`).
+4. **Resolution (supersedes decision 10's *"never a person's thread"*).** After the developer stage, for each
+   `thread_replies` entry of kind `fixed` or `documented` on a person's resolvable thread, the platform replies naming the
+   commit (short sha of the run's pushed head) and **resolves** the thread, through the executor, idempotent per
+   (task, run, thread). A person's open thread the run did not address gets one *not addressed* reply and stays open.
+   `needs_person` and `not_changed` resolve nothing. Platform-opened finding threads keep decision 10's rule.
+
+**Rejected.** A per-project vocabulary in more languages (incomplete by construction); resolving every thread on a new
+push (a person's unanswered request would vanish). **Residuals.** A person who wants a return from a plain comment must
+press Send back. Resolving a person's thread is a write in their conversation; shadow mode and the dial gate it as every
+executor write.
+
+## Amendment B (2026-11-10, M28, the owner's ruling; S-28.4/S-28.5) — the ticket's status bounds the task, both ways
+
+**Context.** AUT-6676 was moved to *Released* on 2026-10-14 and started on 2026-11-04 because intake reads the pick-up
+label or `pickup_status` only (`packages/integrations/src/providers/jira-cloud/config.ts:60-70`), and nothing reads a
+ticket the team closed under a live task.
+
+**Decision.**
+1. **Overlay keys** on the binding's `lifecycle` block (decision 1): `start_from: string[]` (default: every status of
+   category `todo`, decision 2's `listStatuses`), `closed: string[]` (default: category `done`), `on_ticket_closed:
+   stop | ignore` (default `stop`). Validated at save as decision 1 validates the slots.
+2. **Enforced in four places:** the poll's JQL, the webhook pick-up rule, **intake** (authoritative: a ticket outside
+   `start_from` records `ticket.intake.skipped {reason: 'status_not_startable'}` and creates no task), and the claim's
+   pre-read (amendment (a) of decision 5), so a ticket that moved between intake and the first run starts nothing.
+3. **Reverse sync.** A ticket that reaches a `closed` status: a **queued** task is cancelled with reason
+   `ticket_closed_in_tracker`; a **live** task is stopped and escalated to `needs_human` with a brief naming who moved it
+   and when. A **hands-off** status a person set escalates with `ticket_taken_by_person`. The statuses the platform itself
+   writes (decision 4's slots) never count as hands-off or closed-by-person. Which statuses are hands-off is not fixed
+   by the ruling; S-28.4 states the set in technical/12 and this record holds only that a platform move never counts.
+   `on_ticket_closed: ignore` keeps today's behaviour.
+4. **A one-off sweep** re-checks every live task's ticket against these rules once, after deploy.
+
+**Rejected.** Matching status names in English (*Released*, *Done*) — ruling 1 forbids it; categories are the tracker's own
+classification. **Residual.** A tracker whose statuses carry no category reads `unknown`; its defaults are empty and the
+project must name the statuses.
+
+## Amendment C (2026-11-10, M28, follow-up; S-28.10) — a lifecycle move that failed is visible
+
+**Context.** AUT-6655 left 20 failed `transition_ticket` calls: Jira stayed at *Ready for Merge* with a **Draft** MR, and
+the product showed nothing — decision 4 says a failed write *"leaves its audit row and a `warn` log"*, and the audit row
+did not keep the error.
+
+**Decision.** (1) A failed `integration_actions` row stores the **redacted** error. (2) A failed lifecycle move is shown on
+the task page as *ticket status out of sync* — the slot, the target status, the provider's reason — with **Retry**
+(supersedes *"a `warn` log"* as the only signal; the stage still runs). (3) `mr_ready` re-reads the merge request and
+fails loudly if it is still a draft. (4) An optional **`ready_for_merge`** slot is written only after the MR has read back
+non-draft, so a tracker never says *ready* about a draft.

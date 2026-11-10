@@ -66,6 +66,7 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 - Left: vertical **stage timeline** with status, duration, cost per stage, returns drawn as loops with reason.
 - Centre: **artifacts** tab (Refined Spec, Plan, RCA, Review Verdicts, Retro) rendered markdown with version history; **runs** tab; **questions** tab; **events** tab (raw).
 - Right: **Checks** panel — merge-readiness at a glance: acceptance criteria met, CI green, rebase status, review threads open/resolved, business verdict, tamper check, coverage delta, dependency status, risk classes and required reviewers, budget vs estimate, questions pending (research/01: Conductor); cost breakdown donut (per stage), budget bar, links (ticket, MR, Slack thread), actions.
+- *Amended 2026-11-10 (M28: the owner — "the user must always understand what is wrong, why it is stuck, the rules").* A budget pause shows its arithmetic and the cap it needs (BD-010); a person's comment that did not return the task is listed with *Send back to Implementation* (TD-029 amendment A); a refused ticket move reads *ticket status out of sync* with Retry (amendment C); a plan the platform approved says so, with its figures (TD-037); artifacts, comments and other prose render as formatted markdown built as React elements, never HTML, with a link's destination host shown when its label differs (TD-013).
 
 *Amended 2026-11-06 (BD-006 amendment, M25).*
 - **Approvals.** A pending approval is shown **with its subject**: the plan itself, open (summary, size, files, risks),
