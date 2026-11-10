@@ -237,7 +237,15 @@ export const notificationBody = (draft: NotificationDraft): MessageBody => ({
  * `expired` row whose reason is a cancelled task's (`withdrawApproval`, S-27.1), which no deadline
  * ended.
  */
-export type SettledApprovalOutcome = 'approved' | 'rejected' | 'expired' | 'withdrawn';
+export type SettledApprovalOutcome =
+  | 'approved'
+  | 'rejected'
+  | 'expired'
+  | 'withdrawn'
+  /** S-28.16: a budget approval the platform settled as no longer required (`auto_decided`). */
+  | 'not_required'
+  /** S-28.8: a plan the platform let go ahead (`auto_decided`); no message is posted for one. */
+  | 'went_ahead';
 
 /** The longest decider name the edited message carries; a person's name, not a paragraph. */
 export const SETTLED_APPROVAL_DECIDER_MAX = 80;
@@ -262,6 +270,10 @@ const settledApprovalText = (outcome: SettledApprovalOutcome, decider: string | 
       return 'Expired: nobody decided before the deadline, so the deadline did.';
     case 'withdrawn':
       return 'Withdrawn: the task was cancelled, so there is nothing left to decide.';
+    case 'not_required':
+      return 'No longer required: the estimate rested on too few finished tasks to ask about; the task goes on within its cap.';
+    case 'went_ahead':
+      return 'Went ahead without approval: the project’s low-risk rule let this plan through.';
   }
 };
 

@@ -242,6 +242,15 @@ describe('the budget approval’s words (S-28.16)', () => {
     ).toContain('estimated at $123.66 (from 3 finished tasks)');
   });
 
+  it('says nothing is over budget only while the spend is under the cap', () => {
+    expect(budgetApprovalHeadline(subject, 0.45, 50)).toMatch(/^Nothing is over budget: \$0\.45/);
+    const atCap = budgetApprovalHeadline(subject, 50, 50);
+    expect(atCap).not.toContain('Nothing is over budget');
+    expect(atCap).toMatch(
+      /^\$50\.00 spent so far, which has reached this task’s cap of \$50\.00\./,
+    );
+  });
+
   it('says the cap approving sets: raised above the cap, kept within it', () => {
     expect(budgetApproveConsequence(subject, 50)).toBe(
       'Approve: the task goes on to Implementation. Approving raises this task’s cap from $50.00 to $123.66.',

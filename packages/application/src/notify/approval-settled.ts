@@ -39,6 +39,7 @@ import {
   noRunScopedSecrets,
 } from '../pipeline/integrations.js';
 import type { PipelineOutboundData } from '../pipeline/jobs.js';
+import type { StoredApproval } from '../pipeline/store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { NotifyOptions } from './options.js';
@@ -137,10 +138,7 @@ export const settleApprovalMessage = async (
         subject: { name, url },
         // A cancelled task's withdrawn approval is stored `expired` (no migration); its reason
         // tells it from an expiry, so the message never says a deadline ended it (S-27.1).
-        outcome:
-          status === 'expired' && read.approval.approval.reason === APPROVAL_WITHDRAWN_REASON
-            ? 'withdrawn'
-            : (status as SettledApprovalOutcome),
+        outcome: settledOutcomeOf(read.approval, status),
         decider: read.decider === null ? null : chat.redactor.redactText(read.decider).value,
       }),
       idempotencyKey: approvalSettledKey(approvalId),
@@ -148,6 +146,25 @@ export const settleApprovalMessage = async (
     { projectId, taskId: read.message.taskId, mode },
   );
   return 'updated';
+};
+
+/**
+ * What the edited message says happened. Two decisions name no person and must not read as one:
+ * a cancelled task's withdrawn approval (stored `expired`, S-27.1), and an approval **the platform**
+ * decided (`auto_decided`) — since S-28.16 a budget approval asked on too few finished tasks,
+ * settled as no longer required, which *"Approved by a maintainer"* would misreport.
+ */
+export const settledOutcomeOf = (
+  stored: StoredApproval,
+  status: Exclude<StoredApproval['approval']['status'], 'pending'>,
+): SettledApprovalOutcome => {
+  if (status === 'expired' && stored.approval.reason === APPROVAL_WITHDRAWN_REASON) {
+    return 'withdrawn';
+  }
+  if (status === 'approved' && stored.autoDecided === true) {
+    return stored.approval.kind === 'budget' ? 'not_required' : 'went_ahead';
+  }
+  return status;
 };
 
 export const runApprovalSettled = async (

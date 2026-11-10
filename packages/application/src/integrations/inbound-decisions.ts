@@ -70,11 +70,7 @@ import {
   IllegalTransitionError,
   PermissionDeniedError,
 } from '@platform/domain';
-import {
-  applyBudgetApprovalCap,
-  budgetApprovalCapChange,
-  capChangeAuditParams,
-} from '../pipeline/budget-approval.js';
+import { capChangeAuditParams, raiseCapForBudgetApproval } from '../pipeline/budget-approval.js';
 import {
   type ApprovalSubjectRefusal,
   ApprovalSubjectRefusedError,
@@ -319,34 +315,26 @@ export const createInboundDecisionApplier = (
     }
     try {
       const reason = text(payload.reason);
-      // S-28.16 (M28 ruling B2): the same raise the route makes, in the same order — read before
-      // the aggregate decides, written only after it and the subject check accepted.
-      const defaultCapUsd = options.defaultTaskCapUsd ?? DEFAULT_TASK_BUDGET_USD;
-      const capChange = await budgetApprovalCapChange(options.store.tasks, tx, {
-        stored,
-        decision,
-        defaultCapUsd,
-      });
-      const decided = decideApproval(
-        approval,
-        {
-          decision,
-          userId,
-          role,
-          ...(reason === null ? {} : { reason }),
-          ...(capChange === undefined ? {} : { capChange }),
-        },
-        contextFor(approval.taskId, draft.actor),
-      );
+      const decisionInput = { decision, userId, role, ...(reason === null ? {} : { reason }) };
+      const context = contextFor(approval.taskId, draft.actor);
+      // The aggregate first, as a dry run: a refused decision raises no cap (S-28.16) — a refusal
+      // here is returned, not thrown, so the delivery's transaction still commits.
+      decideApproval(approval, decisionInput, context);
       // After the aggregate said the decision is legal, as the route asks it (S-25.9).
       if (approval.kind === 'plan' && decision === 'approved') {
         await assertApprovesItsSubject(options.store, tx, stored, draft.subjectArtifactId);
       }
-      await applyBudgetApprovalCap(options.store.tasks, tx, {
-        taskId: approval.taskId,
-        change: capChange,
-        defaultCapUsd,
+      // S-28.16 (M28 ruling B2): the same raise the route makes, carried as written.
+      const capChange = await raiseCapForBudgetApproval(options.store.tasks, tx, {
+        stored,
+        decision,
+        defaultCapUsd: options.defaultTaskCapUsd ?? DEFAULT_TASK_BUDGET_USD,
       });
+      const decided = decideApproval(
+        approval,
+        { ...decisionInput, ...(capChange === undefined ? {} : { capChange }) },
+        context,
+      );
       await options.store.approvals.save(tx, { ...stored, approval: decided.aggregate });
       await audit(tx, {
         type: draft.type,

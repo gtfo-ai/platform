@@ -73,7 +73,7 @@ import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { approvalToResumeInto, pendingApproval } from './approval-wait.js';
-import { applyBudgetApprovalCap, budgetApprovalCapChange } from './budget-approval.js';
+import { raiseCapForBudgetApproval } from './budget-approval.js';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE, stoppedBeforeCliSpawn } from './cli-spawn.js';
 import {
   enqueueOutbound,
@@ -343,35 +343,32 @@ export const decideTaskApproval = async (
     if (stored === null) {
       throw new UnknownAggregateError(`approval ${input.approvalId} does not exist`);
     }
-    // S-28.16 (M28 ruling B2): an approved estimate above the task's cap raises the cap — read
-    // here so the decision's event carries it, written below once the decision is accepted.
-    const defaultCapUsd = deps.defaultTaskCapUsd ?? DEFAULT_TASK_BUDGET_USD;
-    const capChange = await budgetApprovalCapChange(deps.store.tasks, scope.tx, {
-      stored,
+    const decisionInput = {
       decision: input.decision,
-      defaultCapUsd,
-    });
-    const decision = decideApproval(
-      stored.approval,
-      {
-        decision: input.decision,
-        userId: input.userId,
-        role: input.role,
-        ...(input.reason === undefined
-          ? {}
-          : { reason: deps.redactor.redactText(input.reason).value }),
-        ...(capChange === undefined ? {} : { capChange }),
-      },
-      deps.context(stored.approval.taskId),
-    );
+      userId: input.userId,
+      role: input.role,
+      ...(input.reason === undefined
+        ? {}
+        : { reason: deps.redactor.redactText(input.reason).value }),
+    };
+    const context = deps.context(stored.approval.taskId);
+    // The aggregate first, as a dry run: a decision it refuses raises no cap (S-28.16).
+    decideApproval(stored.approval, decisionInput, context);
     if (stored.approval.kind === 'plan' && input.decision === 'approved') {
       await assertApprovesItsSubject(deps.store, scope.tx, stored, input.subjectArtifactId);
     }
-    await applyBudgetApprovalCap(deps.store.tasks, scope.tx, {
-      taskId: stored.approval.taskId,
-      change: capChange,
-      defaultCapUsd,
+    // S-28.16 (M28 ruling B2): an approved estimate above the task's cap raises the cap, and the
+    // decision carries the change `raiseBudgetCap` itself reported.
+    const capChange = await raiseCapForBudgetApproval(deps.store.tasks, scope.tx, {
+      stored,
+      decision: input.decision,
+      defaultCapUsd: deps.defaultTaskCapUsd ?? DEFAULT_TASK_BUDGET_USD,
     });
+    const decision = decideApproval(
+      stored.approval,
+      { ...decisionInput, ...(capChange === undefined ? {} : { capChange }) },
+      context,
+    );
     await deps.store.approvals.save(scope.tx, { ...stored, approval: decision.aggregate });
     await scope.events.append(decision.events);
     return { capChange: capChange ?? null };

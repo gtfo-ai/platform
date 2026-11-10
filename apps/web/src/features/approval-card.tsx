@@ -343,7 +343,7 @@ export const ApprovalCard = ({
           // S-28.16 (M28 ruling B2): first what was spent — nothing is over budget — then the
           // estimate, what it rests on and the threshold. The live spend, not the ask's snapshot.
           <p className="text-sm" data-approval-subject="budget">
-            {budgetApprovalHeadline(subject, spentUsd ?? subject.spent_usd ?? 0)}
+            {budgetApprovalHeadline(subject, spentUsd ?? subject.spent_usd ?? 0, capInForce)}
           </p>
         ) : (
           <>

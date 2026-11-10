@@ -65,42 +65,54 @@ export const recoverBudgetApprovalSettle = async (
     }),
   );
   let settled = 0;
+  const logger = options.logger ?? silentLogger;
   for (const approvalId of due) {
-    const done = await options.unitOfWork.transaction(async (scope) => {
-      // Re-read in this transaction: another pass, or a person, may have decided it since.
-      const stored = await site.approvals.load(scope.tx, approvalId);
-      if (stored === null || stored.approval.kind !== 'budget') {
+    // One approval's lost race (a person deciding it in the same instant, a version conflict on
+    // its task's stream) must not abort the rest of this row or of the recovery pass: it is
+    // logged and found again on the next pass while it is still pending.
+    const done = await options.unitOfWork
+      .transaction(async (scope) => {
+        // Re-read in this transaction: another pass, or a person, may have decided it since.
+        const stored = await site.approvals.load(scope.tx, approvalId);
+        if (stored === null || stored.approval.kind !== 'budget') {
+          return false;
+        }
+        if (stored.approval.status !== 'pending') {
+          return false;
+        }
+        const samples =
+          stored.subjectDetail?.estimate_samples ??
+          (await site.tasks.load(scope.tx, stored.approval.taskId))?.estimateSamples ??
+          null;
+        if (samples === null || estimateRestsOnEnough(samples)) {
+          return false;
+        }
+        const decision = settleBudgetApprovalNotRequired(
+          stored.approval,
+          { samples, min: MIN_ESTIMATE_SAMPLES_FOR_APPROVAL },
+          site.context(stored.approval.taskId),
+        );
+        await site.approvals.save(scope.tx, {
+          ...stored,
+          approval: decision.aggregate,
+          autoDecided: true,
+        });
+        await scope.events.append(decision.events);
+        return true;
+      })
+      .catch((error: unknown) => {
+        logger.warn(
+          { err: error, approval_id: approvalId },
+          'budget approval settle: this approval could not be settled now; the next pass tries again',
+        );
         return false;
-      }
-      if (stored.approval.status !== 'pending') {
-        return false;
-      }
-      const samples =
-        stored.subjectDetail?.estimate_samples ??
-        (await site.tasks.load(scope.tx, stored.approval.taskId))?.estimateSamples ??
-        null;
-      if (samples === null || estimateRestsOnEnough(samples)) {
-        return false;
-      }
-      const decision = settleBudgetApprovalNotRequired(
-        stored.approval,
-        { samples, min: MIN_ESTIMATE_SAMPLES_FOR_APPROVAL },
-        site.context(stored.approval.taskId),
-      );
-      await site.approvals.save(scope.tx, {
-        ...stored,
-        approval: decision.aggregate,
-        autoDecided: true,
       });
-      await scope.events.append(decision.events);
-      return true;
-    });
     if (done) {
       settled += 1;
     }
   }
   if (settled > 0) {
-    (options.logger ?? silentLogger).info(
+    logger.info(
       { settled, min_samples: MIN_ESTIMATE_SAMPLES_FOR_APPROVAL },
       'budget approvals asked on too few finished tasks were settled as no longer required (S-28.16)',
     );

@@ -330,7 +330,12 @@ const upToCents = (usd: number): number => Math.ceil(Number((usd * 100).toFixed(
  * the owner read it as the budget being over. So it opens with what was spent, then says this is an
  * estimate made before the expensive stages, what it rests on, and the threshold it crossed.
  */
-export const budgetApprovalHeadline = (subject: BudgetSubject, spentUsd: number): string => {
+export const budgetApprovalHeadline = (
+  subject: BudgetSubject,
+  spentUsd: number,
+  /** The task's cap in force; *nothing is over budget* is said only while the spend is under it. */
+  capUsd?: number,
+): string => {
   const restsOn = [
     ...(subject.size === undefined
       ? []
@@ -344,7 +349,9 @@ export const budgetApprovalHeadline = (subject: BudgetSubject, spentUsd: number)
       : [`from ${finishedTasks(subject.estimate_samples)}`]),
   ];
   return (
-    `Nothing is over budget: ${formatUsd(spentUsd)} spent so far. ` +
+    (capUsd !== undefined && spentUsd >= capUsd
+      ? `${formatUsd(spentUsd)} spent so far, which has reached this task’s cap of ${formatUsd(capUsd)}. `
+      : `Nothing is over budget: ${formatUsd(spentUsd)} spent so far. `) +
     `Before the expensive stages, this task is estimated at ${formatUsd(subject.estimate_usd)}` +
     (restsOn.length === 0 ? '' : ` (${restsOn.join(', ')})`) +
     `, above this project’s threshold of ${formatUsd(subject.threshold_usd)} for asking a maintainer first.`

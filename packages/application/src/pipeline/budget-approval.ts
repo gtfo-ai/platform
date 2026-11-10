@@ -12,20 +12,26 @@
  * changes nothing; a cap is never lowered.
  *
  * Two doors decide an approval — the route (`decideTaskApproval`) and a chat button
- * (`integrations/inbound-decisions.ts`) — and both ask these two functions in the same order: the
- * change is **read** before the aggregate decides (so the event carries it), and **written** only
- * after the aggregate and the subject check accepted the decision, so a refused decision writes
- * no cap.
+ * (`integrations/inbound-decisions.ts`) — and both take the same steps: the aggregate is asked
+ * first (a dry run, so a refused decision writes no cap), then the cap is raised, then the decision
+ * is recorded carrying the change `raiseBudgetCap` itself reported.
  */
 import { MAX_TASK_CAP_USD } from '@platform/contracts';
 import type { ApprovalCapChange } from '@platform/domain';
-import { capAfterBudgetApproval } from '@platform/domain';
+import { usdUpToCents } from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
 import type { StoredApproval, TaskRepository } from './store.js';
 
-/** What approving `stored` would do to its task's cap, or `undefined` for nothing. Reads only. */
-export const budgetApprovalCapChange = async (
-  tasks: Pick<TaskRepository, 'budgetCap'>,
+/**
+ * Raises the task's cap for an approved budget, and answers the change **as written** — the cap
+ * before is `raiseBudgetCap`'s own `previousCapUsd`, read under the row lock it takes — or
+ * `undefined` when nothing was raised (not a budget, not an approval, no recorded estimate, or an
+ * estimate at or under the cap in force). Called after the aggregate has accepted the decision (a
+ * dry run) and before the decision is recorded, so the event carries exactly what was written
+ * (closing BACKLOG 1600).
+ */
+export const raiseCapForBudgetApproval = async (
+  tasks: Pick<TaskRepository, 'raiseBudgetCap'>,
   tx: Transaction,
   input: {
     readonly stored: StoredApproval;
@@ -43,35 +49,14 @@ export const budgetApprovalCapChange = async (
   if (estimateUsd === undefined) {
     return undefined;
   }
-  const beforeUsd = (await tasks.budgetCap(tx, approval.taskId)) ?? input.defaultCapUsd;
-  const afterUsd = capAfterBudgetApproval({
-    estimateUsd,
-    capUsd: beforeUsd,
-    maxCapUsd: MAX_TASK_CAP_USD,
-  });
-  return afterUsd === null ? undefined : { beforeUsd, afterUsd };
-};
-
-/** Writes the raise the decision carried — after the aggregate accepted it, never before. */
-export const applyBudgetApprovalCap = async (
-  tasks: Pick<TaskRepository, 'raiseBudgetCap'>,
-  tx: Transaction,
-  input: {
-    readonly taskId: StoredApproval['approval']['taskId'];
-    readonly change: ApprovalCapChange | undefined;
-    readonly defaultCapUsd: number;
-  },
-): Promise<void> => {
-  if (input.change === undefined) {
-    return;
-  }
-  // `raised: false` only when another writer already put the cap at or above the estimate in this
-  // instant (the row lock serialises the two): the task is then covered, and nothing is lowered.
-  await tasks.raiseBudgetCap(tx, {
-    taskId: input.taskId,
-    capUsd: input.change.afterUsd,
+  // `max(cap in force, estimate up to the cent)`: `raiseBudgetCap` writes only a raise.
+  const afterUsd = Math.min(usdUpToCents(estimateUsd), MAX_TASK_CAP_USD);
+  const written = await tasks.raiseBudgetCap(tx, {
+    taskId: approval.taskId,
+    capUsd: afterUsd,
     defaultCapUsd: input.defaultCapUsd,
   });
+  return written.raised ? { beforeUsd: written.previousCapUsd, afterUsd } : undefined;
 };
 
 /** The audit row's two fields for a decision that raised the cap (`human_actions.params`). */

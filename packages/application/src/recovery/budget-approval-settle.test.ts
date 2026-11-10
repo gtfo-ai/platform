@@ -122,7 +122,7 @@ const setup = async () => {
     (await memory.store.readStream('approval', approvalIds.get(taskId) as Id)).filter(
       (row) => row.event.type === 'task.approval.decided',
     );
-  return { pass, load, decidedEvents, store, memory };
+  return { pass, load, decidedEvents, store, memory, approvalIds };
 };
 
 describe('budget approvals asked on too few finished tasks are settled (S-28.16)', () => {
@@ -165,5 +165,32 @@ describe('budget approvals asked on too few finished tasks are settled (S-28.16)
     await world.pass();
     expect(await world.pass()).toEqual({ found: 0, settled: 0 });
     expect(await world.decidedEvents(ONE)).toHaveLength(1);
+  });
+
+  it('settles the rest when one approval cannot be settled now, and that one on the next pass', async () => {
+    const world = await setup();
+    const failing = world.approvalIds.get(ONE);
+    let failOnce = true;
+    const approvals = {
+      ...world.store.approvals,
+      load: async (tx: Parameters<typeof world.store.approvals.load>[0], id: Id) => {
+        if (id === failing && failOnce) {
+          failOnce = false;
+          throw new Error('a person decided it in the same instant');
+        }
+        return world.store.approvals.load(tx, id);
+      },
+    };
+    const pass = () =>
+      recoverBudgetApprovalSettle(
+        { unitOfWork: world.memory },
+        { approvals, tasks: world.store.tasks, context },
+        { limit: 50 },
+      );
+    expect(await pass()).toEqual({ found: 3, settled: 2 });
+    expect((await world.load(ONE))?.approval.status).toBe('pending');
+    expect((await world.load(TWO))?.approval.status).toBe('approved');
+    expect(await pass()).toEqual({ found: 1, settled: 1 });
+    expect((await world.load(ONE))?.approval.status).toBe('approved');
   });
 });

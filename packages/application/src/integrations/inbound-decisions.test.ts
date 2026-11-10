@@ -84,9 +84,13 @@ const harness = (
     readonly subject?: Id | null;
     /** The task's latest `ImplementationPlan`. `PLAN` by default. */
     readonly latest?: Id | null;
+    /** S-28.16: the budget approval's recorded estimate; none by default. */
+    readonly estimateUsd?: number;
   } = {},
 ) => {
   const actions: { tx: Transaction; entry: InboundHumanActionEntry }[] = [];
+  // S-28.16: the task's own cap, as `raiseBudgetCap` holds it (`null` = the default applies).
+  const caps = new Map<Id, number>();
   const approvals = new Map<Id, StoredApproval>();
   const questions = new Map<Id, Question>();
   const subject = options.subject === undefined ? PLAN : options.subject;
@@ -100,7 +104,21 @@ const harness = (
     },
     context(),
   );
-  approvals.set(APPROVAL, { approval, stage: 'architecture' as never, attempt: 1 });
+  approvals.set(APPROVAL, {
+    approval,
+    stage: 'architecture' as never,
+    attempt: 1,
+    ...(options.estimateUsd === undefined
+      ? {}
+      : {
+          subjectDetail: {
+            estimate_usd: options.estimateUsd,
+            threshold_usd: 50,
+            estimate_basis: 'project_history',
+            estimate_samples: 3,
+          },
+        }),
+  });
   questions.set(
     QUESTION,
     openQuestion(
@@ -142,6 +160,18 @@ const harness = (
       tasks: {
         load: async (_tx: Transaction, id: Id) =>
           id === TASK ? { task: { id: TASK, projectId: options.taskProject ?? PROJECT } } : null,
+        // The memory store's own rule: only a raise is written, and the previous cap is answered.
+        raiseBudgetCap: async (
+          _tx: Transaction,
+          input: { taskId: Id; capUsd: number; defaultCapUsd: number },
+        ) => {
+          const previousCapUsd = caps.get(input.taskId) ?? input.defaultCapUsd;
+          if (!(input.capUsd > previousCapUsd)) {
+            return { raised: false, previousCapUsd };
+          }
+          caps.set(input.taskId, input.capUsd);
+          return { raised: true, previousCapUsd };
+        },
       },
     } as never,
     roles: {
@@ -154,7 +184,7 @@ const harness = (
     },
     context: () => context(),
   });
-  return { applier, approvals, questions, actions };
+  return { applier, approvals, questions, actions, caps };
 };
 
 /** A click; `echo` is the plan the button carried (S-25.9) — the subject by default, `null` none. */
@@ -412,6 +442,55 @@ describe('the plan a chat Approve echoes (S-25.9)', () => {
 
     expect(outcome.kind).toBe('applied');
     expect(approvals.get(APPROVAL)?.approval.status).toBe('approved');
+  });
+
+  /**
+   * S-28.16 (M28 ruling B2): a chat button's approve of an estimate above the task's cap raises the
+   * cap, as the task page's does, and the audit row and the event carry the change as written.
+   */
+  it('raises the task’s cap on a chat approve of an estimate above it, and audits the change', async () => {
+    const { applier, actions, caps } = harness({
+      kind: 'budget',
+      subject: null,
+      latest: null,
+      estimateUsd: 123.66,
+    });
+
+    const outcome = await applier.apply(TX, {
+      projectId: PROJECT,
+      delivery: DELIVERY,
+      draft: approvalDraft({}, null),
+    });
+
+    expect(outcome.kind).toBe('applied');
+    expect(caps.get(TASK)).toBe(123.66);
+    expect(actions[0]?.entry.params).toMatchObject({
+      decision: 'approve',
+      cap_before_usd: 50,
+      cap_after_usd: 123.66,
+    });
+    expect(outcome.kind === 'applied' ? outcome.events[0]?.payload : null).toMatchObject({
+      cap_before_usd: 50,
+      cap_after_usd: 123.66,
+    });
+  });
+
+  it('raises no cap when a viewer’s chat approve of a budget is refused', async () => {
+    const { applier, actions, caps } = harness({
+      kind: 'budget',
+      subject: null,
+      latest: null,
+      estimateUsd: 123.66,
+      role: 'viewer',
+    });
+    const outcome = await applier.apply(TX, {
+      projectId: PROJECT,
+      delivery: DELIVERY,
+      draft: approvalDraft({}, null),
+    });
+    expect(outcome.kind).toBe('refused');
+    expect(caps.size).toBe(0);
+    expect(actions).toEqual([]);
   });
 
   it('asks the aggregate first: a viewer with a stale button is refused for the role, with no reply', async () => {

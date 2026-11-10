@@ -778,6 +778,48 @@ describe('a plan approve carries the plan it was shown (TD-035)', () => {
   });
 });
 
+/**
+ * S-28.16 (BD-010's 2026-11-10 amendment, M28 ruling B2): a person's approve of an estimate above
+ * the task's cap raised the cap; the `task.approval.decide` row names both figures — what the
+ * command reported writing — and a decision that raised nothing names neither. The raise itself is
+ * the command's (`saga.test.ts`, *raises the cap … once*); this is the route's half.
+ */
+describe('an approved estimate’s cap raise is audited at the route (S-28.16)', () => {
+  it('records cap_before_usd 50 and cap_after_usd 123.66 on the approve’s audit row', async () => {
+    world.result = { capChange: { beforeUsd: 50, afterUsd: 123.66 } };
+    const reply = await post(
+      world,
+      `/api/tasks/${TASK}/approvals/${APPROVAL}/decide`,
+      { decision: 'approve' },
+      'decide-cap-1',
+    );
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(world.calls.map((call) => call.name)).toEqual(['decide']);
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]).toMatchObject({
+      action: 'task.approval.decide',
+      params: {
+        approval_id: APPROVAL,
+        decision: 'approve',
+        cap_before_usd: 50,
+        cap_after_usd: 123.66,
+      },
+    });
+  });
+
+  it('writes no cap keys for a decision that raised nothing', async () => {
+    world.result = { capChange: null };
+    await post(
+      world,
+      `/api/tasks/${TASK}/approvals/${APPROVAL}/decide`,
+      { decision: 'approve' },
+      'decide-cap-2',
+    );
+    expect(world.actions[0]?.params).not.toHaveProperty('cap_before_usd');
+    expect(world.actions[0]?.params).not.toHaveProperty('cap_after_usd');
+  });
+});
+
 describe('what each refusal maps to', () => {
   const cases: readonly {
     readonly error: Error;
