@@ -62,8 +62,8 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
     case 'policy_always':
       return reason.source === 'stage_override'
         ? {
-            why: 'This stage’s override in the repository configuration asks for every plan.',
-            stop: 'To be asked less, change this stage’s plan-approval setting in the project’s repository configuration.',
+            why: 'This stage’s plan-approval setting asks for every plan.',
+            stop: 'To be asked less, switch on Low-risk plans so that low-risk plans go ahead, or change this stage’s plan-approval setting in the project’s settings or repository configuration.',
             section: 'repository',
             link: 'Repository configuration',
           }

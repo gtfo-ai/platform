@@ -102,7 +102,7 @@ export const approvalReasonWords = (reason: ApprovalReason): string => {
       return `The project is on probation: ${reason.completed} of its first ${reason.of} tasks are done.`;
     case 'policy_always':
       return reason.source === 'stage_override'
-        ? 'This stage’s setting in the repository configuration asks a person to approve every plan.'
+        ? 'This stage’s plan-approval setting asks a person to approve every plan.'
         : 'This project’s autonomy dial asks a person to approve every plan.';
     case 'size_at_or_above':
       return reason.source === 'stage_override'

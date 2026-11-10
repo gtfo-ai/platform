@@ -1511,7 +1511,8 @@ describe('the low-risk plan rule on the task page', () => {
     expect(notice.querySelector('[data-plan-went-ahead]')?.textContent).toBe(
       'Plan went ahead without approval: low risk, high confidence, 2 files.',
     );
-    expect(notice.textContent).toContain('Risk classes and the first tasks’ extra checks');
+    expect(notice.textContent).toContain('A plan that touches a sensitive area');
+    expect(notice.textContent).toContain('inside this project’s limits');
     expect(within(notice).getByText('See plan').closest('details')).not.toBeNull();
     expect(within(notice).getByRole('button', { name: 'Pause' })).toBeTruthy();
     await user.click(within(notice).getByRole('button', { name: 'Send back…' }));

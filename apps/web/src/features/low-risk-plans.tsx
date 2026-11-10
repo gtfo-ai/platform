@@ -5,10 +5,16 @@
  *
  * The switch writes `policies.plan_approval_risk` into the project's configuration document through
  * `PUT /api/projects/:id/config` — the **whole** document plus the hash it was read at, like every
- * other control on this screen. Off, nothing changes. On, a plan goes ahead with nobody asked when
- * the platform finds none of the ticked risks in it **and** the agent's own assessment is inside the
- * three thresholds; anything else waits, with the reasons on the card. What it does not change is
- * said here too: sensitive areas (risk classes) and the first tasks' extra checks still wait.
+ * other control on this screen. The rule only ever **waives** an ask the plan-approval policy made
+ * (TD-037 decision 4): it never makes a plan wait that would not have, so the screen says which
+ * policy is in force and what that means together with the rule — a size threshold leaves smaller
+ * plans unasked whatever the rule says. The owner's wish (*"low-risk plans go right away; where the
+ * agent judges a human should approve, wait"*) is the combination **"Assess every plan"**: one save
+ * that sets the plan-approval policy to `always` for the stage that writes the plan (the per-stage
+ * `pipeline.template_overrides.<template>.stages.architecture.plan_approval`, the dial's own
+ * override mechanism) and switches the rule on. Both are keys of the settings document, so both
+ * need the administrator role (`project.settings.write`); a reader without it sees the controls
+ * disabled and why. Sensitive areas and the first tasks' extra checks are untouched.
  *
  * Every word is the platform's; the thresholds are said as outcomes (*"only plans the agent calls
  * low-risk"*), never as the key names. Defaults are `PLAN_APPROVAL_RISK_DEFAULT` (contracts), the one
@@ -22,8 +28,13 @@ import {
   type Size,
 } from '@platform/contracts';
 import type { ReactElement } from 'react';
-import { useOnboardingCommands, useProjectConfig } from '../app/queries.js';
-import { Card, ErrorNotice, Loading, SectionHeading } from '../ui/kit.js';
+import {
+  useOnboardingCommands,
+  useProjectAutonomy,
+  useProjectConfig,
+  useSession,
+} from '../app/queries.js';
+import { Button, Card, ErrorNotice, Loading, SectionHeading } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { RISK_FACTOR_LABEL } from '../ui/words/plan-risk.js';
 
@@ -57,22 +68,117 @@ export const MAX_SIZE_CHOICES = [
 /** The two examples the screen gives, so the rule is read as what happens to a ticket. */
 export const LOW_RISK_EXAMPLES = [
   'A one-file text fix the agent is sure of goes ahead.',
-  'Anything touching database migrations waits for you.',
+  'A plan touching database migrations still waits for you.',
 ] as const;
 
 /** What the rule leaves alone, said where it is switched on. */
 export const LOW_RISK_UNCHANGED =
   'Unchanged either way: a plan that touches a sensitive area, and the plans of this project’s first tasks, always wait for you; a person still merges.';
 
+/** Said in both states: the rule only waives asks (TD-037 decision 4). */
+export const LOW_RISK_NEVER_ADDS =
+  'This never makes a plan wait that would not have waited without it.';
+
+/** The ticket templates whose `architecture` stage writes the plan (`ImplementationPlan`). */
+export const PLAN_TEMPLATES = ['feature', 'bug'] as const;
+const PLAN_STAGE = 'architecture';
+
+/** Which plans the plan-approval policy in force asks about, before the rule. */
+export type PlanApprovalInForce =
+  | { readonly kind: 'every' }
+  | { readonly kind: 'size'; readonly threshold: Size }
+  | { readonly kind: 'none' };
+
+interface StageOverride {
+  readonly plan_approval?: 'never' | 'above_size' | 'always';
+  readonly size_threshold?: Size;
+}
+type TemplateOverrides = Record<string, { stages?: Record<string, StageOverride> } | undefined>;
+
+/**
+ * The plan-approval policy in force for a feature's plan, as the gate reads it: the stage override
+ * where the settings state one, else the dial's materialised policy, else the never-materialised
+ * default (`above_size` at L, the gate's `UNMATERIALISED_PLAN_APPROVAL`).
+ */
+export const planApprovalInForce = (
+  dial: {
+    readonly plan_approval: string;
+    readonly plan_approval_size_threshold: Size | null;
+  } | null,
+  overrides: TemplateOverrides | undefined,
+): PlanApprovalInForce => {
+  const stage = overrides?.feature?.stages?.[PLAN_STAGE];
+  const policy = stage?.plan_approval ?? dial?.plan_approval ?? 'above_size';
+  const threshold = stage?.size_threshold ?? dial?.plan_approval_size_threshold ?? 'L';
+  if (policy === 'always') return { kind: 'every' };
+  if (policy === 'never') return { kind: 'none' };
+  return { kind: 'size', threshold };
+};
+
+/** What the rule and the policy in force mean together, in one sentence. */
+export const lowRiskSummary = (enabled: boolean, inForce: PlanApprovalInForce): string => {
+  if (!enabled) {
+    return 'Off (the default): plans wait for approval as How much agents do alone says.';
+  }
+  switch (inForce.kind) {
+    case 'every':
+      return 'Every plan is assessed. Low-risk plans (within the limits below) go ahead; all others wait for your approval, and the task page says why.';
+    case 'size':
+      return `Now: plans of size ${inForce.threshold} and larger are assessed; smaller plans go ahead without anyone being asked.`;
+    case 'none':
+      return 'Now: How much agents do alone lets every plan go ahead without approval, so this rule has nothing to waive.';
+  }
+};
+
+/** The document with every plan assessed and the rule on — the one save "Assess every plan" makes. */
+export const assessEveryPlan = (
+  whole: Record<string, unknown>,
+  stated: PlanApprovalRiskConfig | undefined,
+): Record<string, unknown> => {
+  const policies = (whole.policies ?? {}) as Record<string, unknown>;
+  const pipeline = (whole.pipeline ?? {}) as Record<string, unknown>;
+  const overrides = { ...((pipeline.template_overrides ?? {}) as Record<string, unknown>) };
+  for (const template of PLAN_TEMPLATES) {
+    const existing = (overrides[template] ?? {}) as { stages?: Record<string, unknown> };
+    const stages = existing.stages ?? {};
+    overrides[template] = {
+      ...existing,
+      stages: {
+        ...stages,
+        [PLAN_STAGE]: {
+          ...((stages[PLAN_STAGE] ?? {}) as Record<string, unknown>),
+          plan_approval: 'always',
+        },
+      },
+    };
+  }
+  return {
+    ...whole,
+    pipeline: { ...pipeline, template_overrides: overrides },
+    policies: { ...policies, plan_approval_risk: { ...(stated ?? {}), enabled: true } },
+  };
+};
+
 export const LowRiskPlans = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const config = useProjectConfig(projectId);
+  const autonomy = useProjectAutonomy(projectId);
+  const session = useSession();
   const commands = useOnboardingCommands();
   const document = config.data?.config as
-    | { policies?: { plan_approval_risk?: PlanApprovalRiskConfig } }
+    | {
+        policies?: { plan_approval_risk?: PlanApprovalRiskConfig };
+        pipeline?: { template_overrides?: TemplateOverrides };
+      }
     | undefined;
   const stated = document?.policies?.plan_approval_risk;
   const rule = lowRiskRuleOf(stated);
-  const disabled = !config.isSuccess || commands.writeConfig.isPending;
+  // Both writes are settings keys, so both need `project.settings.write` — the administrator.
+  const mayChange = session.data?.user.role === 'admin';
+  const disabled = !config.isSuccess || commands.writeConfig.isPending || !mayChange;
+  const inForce = planApprovalInForce(
+    autonomy.data?.materialised === true ? autonomy.data.policies : null,
+    document?.pipeline?.template_overrides,
+  );
 
   const write = (patch: PlanApprovalRiskConfig): void => {
     if (!config.isSuccess) {
@@ -116,11 +222,45 @@ export const LowRiskPlans = ({ projectId }: { readonly projectId: string }): Rea
         />
         Let low-risk plans go ahead without approval
       </label>
-      <p className="text-xs">
-        {rule.enabled
-          ? 'On: a plan that would wait only because of its size or because every plan is approved goes ahead with nobody asked, when the platform finds none of the risks below in it and the agent judges it inside the limits below. Otherwise it waits for you as before, and the card says why. This never makes a plan wait that would not have.'
-          : 'Off (the default): plans wait for approval as How much agents do alone says.'}
+      <p className="text-xs" data-low-risk-summary="">
+        {lowRiskSummary(rule.enabled, inForce)}
       </p>
+      <p className="text-xs text-fg-muted" data-low-risk-never-adds="">
+        {LOW_RISK_NEVER_ADDS}
+      </p>
+      {rule.enabled && inForce.kind === 'every' ? null : (
+        <div className="flex flex-col gap-1 rounded-md bg-subtle p-3" data-low-risk-every="">
+          <p className="text-xs">
+            Recommended to approve only what matters: <strong>Assess every plan</strong> asks for
+            every plan, switches this rule on, and so lets the low-risk ones go ahead — all others
+            wait for you.
+            {inForce.kind === 'size'
+              ? ` Keeping the size threshold instead leaves plans smaller than ${inForce.threshold} unasked, whatever this rule says.`
+              : ''}
+          </p>
+          <div>
+            <Button
+              size="sm"
+              disabled={disabled}
+              onClick={() => {
+                if (!config.isSuccess) return;
+                commands.writeConfig.mutate({
+                  projectId,
+                  config: assessEveryPlan(config.data.config as Record<string, unknown>, stated),
+                  base_hash: config.data.hash,
+                });
+              }}
+            >
+              Assess every plan
+            </Button>
+          </div>
+        </div>
+      )}
+      {mayChange || session.isPending ? null : (
+        <p className="text-xs text-fg-muted" data-low-risk-role="">
+          Changing this needs the administrator role.
+        </p>
+      )}
       <ul className="flex flex-col gap-0.5 text-xs text-fg-muted" data-low-risk-examples="">
         {LOW_RISK_EXAMPLES.map((example) => (
           <li key={example}>{example}</li>
@@ -183,7 +323,9 @@ export const LowRiskPlans = ({ projectId }: { readonly projectId: string }): Rea
       </div>
 
       <fieldset className="flex flex-col gap-1" data-low-risk-always-ask="">
-        <legend className="text-sm font-medium">Always wait for you when the plan touches</legend>
+        <legend className="text-sm font-medium">
+          Never go ahead without approval when the plan touches
+        </legend>
         <p className="text-xs text-fg-muted">
           Whether the platform finds it in the plan or the agent names it. Every item is ticked by
           default; untick one only when that kind of change may go ahead on the agent’s word.
