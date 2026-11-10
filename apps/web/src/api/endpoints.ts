@@ -128,6 +128,7 @@ import {
   setupGuideResponseSchema,
   shadowBatchesResponseSchema,
   shadowBatchResponseSchema,
+  skippedTicketsResponseSchema,
   startDiscoveryResponseSchema,
   startHistoryBootstrapRequestSchema,
   startHistoryBootstrapResponseSchema,
@@ -439,6 +440,13 @@ export interface Endpoints {
   readonly ticketStatuses: (
     projectId: string,
   ) => Promise<z.output<typeof ticketStatusesResponseSchema>>;
+  /**
+   * `GET /api/projects/:id/skipped-tickets` (S-28.5) — the newest tickets intake did not start, and
+   * why, so a person can see why a labelled ticket did not become a task. A project member's read.
+   */
+  readonly skippedTickets: (
+    projectId: string,
+  ) => Promise<z.output<typeof skippedTicketsResponseSchema>>;
   /**
    * `GET /api/projects/:id/owner-candidates?task_id=` — the people *Assign…* offers (S-26.1's
    * follow-up, S-26.8b's picker): exactly those the owner command accepts, by name, each with
@@ -983,6 +991,10 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     ticketStatuses: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/ticket-statuses`, {
         schema: ticketStatusesResponseSchema,
+      }),
+    skippedTickets: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/skipped-tickets`, {
+        schema: skippedTicketsResponseSchema,
       }),
     ownerCandidates: (projectId, taskId) =>
       client.get(`/api/projects/${seg(projectId)}/owner-candidates`, {

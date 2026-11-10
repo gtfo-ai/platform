@@ -83,7 +83,8 @@ describe('Drizzle schema', () => {
     // 2026-11-06 amendment item 9), plus `task_conversation_handled` — the handled ledger of what the
     // platform answered, resolved or read as not a change request (migration 0111, S-28.2, M28
     // ruling R2).
-    expect(tables.length).toBe(84);
+    // S-28.5: plus `ticket_status_sweeps`, the one-off ticket-status sweep's record (migration 0116).
+    expect(tables.length).toBe(85);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

@@ -124,7 +124,9 @@ export type TaskStageState = z.infer<typeof taskStageStateSchema>;
  *    assigned to somebody other than the binding's own account, or the tracker refused a claim write;
  *  - `ticket_not_startable`, `ticket_closed_in_tracker` — the claim's pre-read found the ticket
  *    moved while its task waited (M28 ruling 3 (d), S-28.4): to a status work is not started from,
- *    or to one that means a person finished it;
+ *    or to one that means a person finished it; and since S-28.5 the reverse sync
+ *    (`ticket-status-recheck.ts`) writes `ticket_closed_in_tracker` and `ticket_taken_by_person`
+ *    when a person finished, or took, a live task's ticket;
  *  - `settings_config_invalid` — the project's stored settings (`projects.config`) do not parse
  *    under this release's schema, so the run was refused at admission (WP-106, PROGRESS backlog 311);
  *  - `context_budget_above_ceiling` — WP-83's refusal of a context budget above the ceiling. **No
@@ -175,6 +177,7 @@ export const taskStageOutcomeWordSchema = z.enum([
   'ticket_claim_failed',
   'ticket_not_startable',
   'ticket_closed_in_tracker',
+  'ticket_taken_by_person',
   'settings_config_invalid',
   'context_budget_above_ceiling',
   'protected_paths_changed',

@@ -160,6 +160,7 @@ import {
   findShadowBatchProjectId,
   listShadowBatches,
 } from './queries/shadow-queries.js';
+import { listSkippedTickets } from './queries/skipped-tickets-queries.js';
 import { findOrganisationTimezone, readStatsSources } from './queries/stats-queries.js';
 import {
   listPeopleTaskLoads,
@@ -992,6 +993,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         replaceBindings: async (projectId, items) =>
           replaceProjectBindings(options.database, projectId, items, { egress: bindingEgress }),
         recordAction: async (input) => recordHumanAction(options.database, input),
+        skippedTickets: async (projectId) => listSkippedTickets(options.database, projectId),
       },
       checkLifecycles: async (projectId, items) =>
         checkProposedLifecycles(projectId, items, {

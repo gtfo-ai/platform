@@ -98,6 +98,7 @@ import {
 import type { OfferWithdrawalReason } from './store.js';
 import { ticketLifecycleHandlers } from './ticket-lifecycle.js';
 import { ticketLintHandlers } from './ticket-lint.js';
+import { ticketStatusRecheckHandlers } from './ticket-status-recheck.js';
 
 export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptions {
   readonly unitOfWork: UnitOfWork;
@@ -479,6 +480,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // S-26.1 (TD-031's 2026-11-06 amendment item 2): an edited ticket's live task follows its
       // assignee — the decision here, the read in the `owner_sync` duty.
       ...ownerSyncHandlers(options),
+      // S-28.5 (M28 ruling 4): a ticket a person finished or took stops its live task.
+      ...ticketStatusRecheckHandlers(options),
       // S-26.3 (TD-031's 2026-11-06 amendment item 4): an owner the platform set is written back
       // to the tracker on a binding that opts in — the decision here, the call in the duty.
       ...ownerWriteBackHandlers(options),

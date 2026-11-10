@@ -203,6 +203,7 @@ export * from './pipeline/ticket-lifecycle.js';
 export { resolveTicketLintSettings } from './pipeline/ticket-lint.js';
 export * from './pipeline/ticket-poll.js';
 export * from './pipeline/ticket-snapshot.js';
+export * from './pipeline/ticket-status-recheck.js';
 export * from './pipeline/transitions.js';
 export * from './pipeline/unfinished-work.js';
 export * from './pipeline/verdicts.js';
@@ -253,6 +254,7 @@ export * from './recovery/run-lease.js';
 export * from './recovery/stranded.js';
 export * from './recovery/stranded-stage.js';
 export * from './recovery/superseded-mr.js';
+export * from './recovery/ticket-status-sweep.js';
 export * from './scheduling/working-calendar.js';
 export * from './scheduling/zoned-time.js';
 // Scheduling (WP-05)

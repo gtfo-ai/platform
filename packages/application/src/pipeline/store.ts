@@ -769,6 +769,22 @@ export interface TaskRepository {
    */
   settleOwnerBackfill(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
   /**
+   * The live tasks the **one-off ticket-status sweep** has not re-read yet (S-28.5, M28 ruling 5,
+   * migration 0116, `recovery/ticket-status-sweep.ts`): live (not `done`, not `cancelled`), mode
+   * `normal`, created before `olderThan` **and** before the sweep's own first record (the earliest
+   * `ticket_status_sweeps.swept_at`, none yet being no bound), with no record — the most recently
+   * touched first, then id, at most `limit`.
+   */
+  ticketStatusSweepDue(
+    tx: Transaction,
+    query: { readonly olderThan: IsoDateTime; readonly limit: number },
+  ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
+  /**
+   * Records that the sweep re-reads this task — `insert … on conflict do nothing`, so two passes
+   * that found the same task claim it once. Answers whether this call recorded it.
+   */
+  claimTicketStatusSweep(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
+  /**
    * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
    * (WP-79, PROGRESS backlog 243).
    *

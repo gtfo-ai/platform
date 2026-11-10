@@ -15,6 +15,7 @@ import {
   intakeStatusDecision,
   ticketStatusDisposition,
   ticketStatusPolicyOf,
+  ticketStatusStopDecision,
   withStatusMappingStatuses,
 } from './status-disposition.js';
 
@@ -234,5 +235,70 @@ describe('the S-28.4 review rulings', () => {
         implementation: 'In Progress',
       }).platformStatuses,
     ).toEqual(['Doing']);
+  });
+});
+
+describe('ticketStatusStopDecision — the reverse sync (M28 ruling 4, S-28.5)', () => {
+  const stop = (over: Partial<Parameters<typeof ticketStatusStopDecision>[0]>) =>
+    ticketStatusStopDecision({
+      state: 'active',
+      humanStage: false,
+      disposition: 'closed',
+      onTicketClosed: 'stop',
+      mayAmend: true,
+      ...over,
+    });
+
+  it('cancels a queued task, escalates a working one, amends another stop', () => {
+    expect(stop({ state: 'queued' })).toEqual({
+      kind: 'cancel',
+      reason: 'ticket_closed_in_tracker',
+    });
+    for (const state of ['active', 'returned', 'waiting_answers', 'waiting_approval', 'paused']) {
+      expect(stop({ state })).toEqual({ kind: 'escalate', reason: 'ticket_closed_in_tracker' });
+    }
+    expect(stop({ state: 'needs_human' })).toEqual({
+      kind: 'amend',
+      reason: 'ticket_closed_in_tracker',
+    });
+    // A polled edit of a ticket that stays closed does not amend it again.
+    expect(stop({ state: 'needs_human', mayAmend: false })).toEqual({ kind: 'none' });
+  });
+
+  it('a person taking the ticket cancels a queued task and escalates a working one, never amends', () => {
+    expect(stop({ state: 'queued', disposition: 'hands_off' })).toEqual({
+      kind: 'cancel',
+      reason: 'ticket_taken_by_person',
+    });
+    expect(stop({ disposition: 'hands_off' })).toEqual({
+      kind: 'escalate',
+      reason: 'ticket_taken_by_person',
+    });
+    expect(stop({ state: 'needs_human', disposition: 'hands_off' })).toEqual({ kind: 'none' });
+  });
+
+  it('never stops a finished or merged task, a human stage, a startable or waiting status, or when told to ignore', () => {
+    for (const state of ['done', 'cancelled', 'merged', 'retro']) {
+      expect(stop({ state })).toEqual({ kind: 'none' });
+    }
+    expect(stop({ state: 'ready_for_merge', humanStage: true })).toEqual({ kind: 'none' });
+    expect(stop({ disposition: 'startable' })).toEqual({ kind: 'none' });
+    expect(stop({ disposition: 'not_ready' })).toEqual({ kind: 'none' });
+    expect(stop({ onTicketClosed: 'ignore' })).toEqual({ kind: 'none' });
+  });
+
+  it('never stops a task for a status the platform wrote — a slot, or a status_mapping target, Done included', () => {
+    const slotted = ticketStatusPolicyOf(null, { in_progress: 'Doing', done: 'Ready for Merge' });
+    expect(ticketStatusDisposition('Ready for Merge', 'done', slotted, true)).toBe('not_ready');
+    const mapped = withStatusMappingStatuses(
+      ticketStatusPolicyOf(null, {}),
+      {},
+      {
+        implementation: 'In Progress',
+        done: 'Released',
+      },
+    );
+    expect(ticketStatusDisposition('Released', 'done', mapped, true)).toBe('not_ready');
+    expect(ticketStatusDisposition('In Progress', 'in_progress', mapped, true)).toBe('not_ready');
   });
 });

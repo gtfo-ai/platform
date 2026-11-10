@@ -61,6 +61,8 @@ export const queryKeys = {
    * keyed by the tracker binding's integration when one is named, so another tracker bound on the
    * same page is a different answer rather than a cached one. Without it, the prefix of all of them.
    */
+  /** S-28.5: the tickets intake skipped, under the project's prefix. */
+  skippedTickets: (id: string) => ['project', id, 'skipped-tickets'] as const,
   ticketStatuses: (id: string, integrationId?: string) =>
     integrationId === undefined
       ? (['project', id, 'ticket-statuses'] as const)

@@ -56,6 +56,8 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
       return 'Needs you: the platform could not claim the ticket, so no agent run started.';
     case 'ticket_not_startable':
       return 'Needs you: while the task waited, its ticket moved to a status work does not start from, so no agent run started. Move it back, or cancel the task.';
+    case 'ticket_taken_by_person':
+      return 'Needs you: a person moved the ticket to a status the platform did not set, so it stopped. Agree who takes it, then cancel the task or give it back.';
     case 'ticket_closed_in_tracker':
       return 'Needs you: while the task waited, its ticket was moved to a finished status, so the platform stopped. Cancel the task, or move the ticket back to continue.';
     case 'settings_config_invalid':

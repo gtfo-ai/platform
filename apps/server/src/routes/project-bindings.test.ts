@@ -189,6 +189,18 @@ const build = async (): Promise<void> => {
     queries: {
       projectRole: async () => world.role,
       projectExists: async (projectId) => projectId === PROJECT,
+      skippedTickets: async () => [
+        {
+          ticket: {
+            provider: 'fake-task-management',
+            key: 'ACME-9',
+            url: 'https://tickets.example.test/browse/ACME-9',
+          },
+          reason: 'status_not_startable' as const,
+          status: 'Released',
+          skipped_at: '2026-11-10T09:00:00.000Z' as IsoDateTime,
+        },
+      ],
       listBindings: async (): Promise<readonly ProjectBindingSummary[]> =>
         [...stored.entries()].map(([integrationId, config]) => ({
           integration_id: integrationId as Id,
@@ -288,6 +300,31 @@ describe('GET /api/projects/:id/ticket-statuses (WP-181 criterion (1))', () => {
       url: '/api/projects/00000000-0000-4000-8000-000000000fff/ticket-statuses',
     });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe('GET /api/projects/:id/skipped-tickets (S-28.5)', () => {
+  const getSkipped = () =>
+    app.inject({ method: 'GET', url: `/api/projects/${PROJECT}/skipped-tickets` });
+
+  it('answers 401 to an anonymous caller, and the skips with their status to a member', async () => {
+    world.role = null;
+    expect((await getSkipped()).statusCode).toBe(401);
+    world.role = 'member';
+    const response = await getSkipped();
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toEqual([
+      {
+        ticket: {
+          provider: 'fake-task-management',
+          key: 'ACME-9',
+          url: 'https://tickets.example.test/browse/ACME-9',
+        },
+        reason: 'status_not_startable',
+        status: 'Released',
+        skipped_at: '2026-11-10T09:00:00.000Z',
+      },
+    ]);
   });
 });
 

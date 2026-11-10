@@ -12,6 +12,7 @@ import type {
   DomainEvent,
   ExternalIdentity,
   Id,
+  IsoDateTime,
   Slug,
   StoredTicketClaim,
   TicketStatusCategory,
@@ -22,6 +23,7 @@ import { describe, expect, it } from 'vitest';
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { recoverTicketStatusSweep } from '../recovery/ticket-status-sweep.js';
 import {
   createPipelineHarness,
   type HarnessOptions,
@@ -1187,6 +1189,139 @@ describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 
     await harness.publish([ticketMatched()]);
     expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
     expect(runsCreated(harness)).toBeGreaterThan(0);
+  });
+});
+
+// ── S-28.5: the reverse sync and the sweep ─────────────────────────────────
+
+describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruling 4)', () => {
+  const slots = { in_progress: 'Doing' };
+  const policy = ticketStatusPolicyOf('Ready for the agent', slots);
+  /** A task stopped at the claim (somebody else holds the ticket): `needs_human`, nothing running. */
+  const stoppedAtTheClaim = async (settings: Record<string, unknown> = {}) => {
+    const ticket = tracker({ stealAfterAssign: 'jane', status: 'To Do', statusCategory: 'todo' });
+    const harness = harnessFor(ticket, lifecycle(slots), {
+      settings: { ticketStatusPolicy: policy, ...settings },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    return { ticket, harness };
+  };
+  /** Puts the task in `state`, as a pause or the WIP queue would have. */
+  const putIn = async (harness: PipelineHarness, state: 'paused' | 'queued') => {
+    await harness.memory.transaction(async (scope) => {
+      const stored = taskOf(harness);
+      await harness.store.tasks.save(scope.tx, { ...stored, task: { ...stored.task, state } });
+    });
+  };
+  const moved = (from: string, to: string) =>
+    event('ticket.status.changed', {
+      project_id: PROJECT,
+      task_id: null,
+      ticket: { ...TICKET },
+      from,
+      to,
+    });
+  const lastEscalation = (harness: PipelineHarness) =>
+    eventsOf(harness, 'task.escalated').at(-1)?.payload as
+      | { reason: string; blocker_brief: string }
+      | undefined;
+
+  it('closed while waiting: the task stops in needs_human with the brief, and its ticket is not touched', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim();
+    await putIn(harness, 'paused');
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    const calls = ticket.lifecycleCalls().length;
+    await harness.publish([moved('To Do', 'Released')]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = lastEscalation(harness);
+    expect(escalation?.reason).toBe('ticket_closed_in_tracker');
+    expect(escalation?.blocker_brief).toContain('ACME-1 was moved to "Released"');
+    expect(escalation?.blocker_brief).toContain('Cancel the task, or move the ticket back');
+    expect(ticket.lifecycleCalls()).toHaveLength(calls);
+  });
+
+  it('closed while queued: the task is cancelled with the reason', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim();
+    await putIn(harness, 'queued');
+    ticket.state.status = 'Done';
+    ticket.state.statusCategory = 'done';
+    await harness.publish([moved('To Do', 'Done')]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect(eventsOf(harness, 'task.cancelled').at(-1)?.payload).toMatchObject({
+      outcome: 'ticket_closed_in_tracker',
+    });
+  });
+
+  it('a task already stopped for a held ticket becomes one-click cancellable with the closed words', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim();
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    await harness.publish([moved('To Do', 'Released')]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(lastEscalation(harness)?.reason).toBe('ticket_closed_in_tracker');
+  });
+
+  it('a person taking the ticket into their own work stops a waiting task with ticket_taken_by_person', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim();
+    await putIn(harness, 'paused');
+    ticket.state.status = 'Review In Progress';
+    ticket.state.statusCategory = 'in_progress';
+    await harness.publish([moved('To Do', 'Review In Progress')]);
+    await harness.drain();
+    expect(lastEscalation(harness)?.reason).toBe('ticket_taken_by_person');
+  });
+
+  it('the platform’s own status write stops nothing — a slot, or a status_mapping target, Done included', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim();
+    await putIn(harness, 'paused');
+    const before = eventsOf(harness, 'task.escalated').length;
+    ticket.state.status = 'Doing';
+    ticket.state.statusCategory = 'in_progress';
+    await harness.publish([moved('To Do', 'Doing')]);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
+
+    const mapped = await stoppedAtTheClaim({
+      ticketLifecycle: lifecycle({ assign_owner: true }),
+      ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', { assign_owner: true }),
+      config: { status_mapping: { refinement: 'Shipped' } },
+    });
+    await putIn(mapped.harness, 'paused');
+    const mappedBefore = eventsOf(mapped.harness, 'task.escalated').length;
+    mapped.ticket.state.status = 'Shipped';
+    mapped.ticket.state.statusCategory = 'done';
+    await mapped.harness.publish([moved('To Do', 'Shipped')]);
+    await mapped.harness.drain();
+    expect(taskOf(mapped.harness).task.state).toBe('paused');
+    expect(eventsOf(mapped.harness, 'task.escalated')).toHaveLength(mappedBefore);
+  });
+
+  it('the one-off sweep re-reads each live task once, and stops one whose ticket was finished before', async () => {
+    const { ticket, harness } = await stoppedAtTheClaim();
+    await putIn(harness, 'paused');
+    ticket.state.status = 'Released';
+    ticket.state.statusCategory = 'done';
+    const pass = () =>
+      recoverTicketStatusSweep(
+        { unitOfWork: harness.memory, jobs: harness.jobs },
+        { tasks: harness.store.tasks },
+        {
+          now: '2026-06-02T09:00:00.000Z' as IsoDateTime,
+          olderThan: '2999-01-01T00:00:00.000Z' as IsoDateTime,
+          limit: 100,
+        },
+      );
+    expect(await pass()).toEqual({ found: 1, enqueued: 1 });
+    await harness.drain();
+    expect(lastEscalation(harness)?.reason).toBe('ticket_closed_in_tracker');
+    // Idempotent: the task is recorded, so the next pass finds nothing.
+    expect(await pass()).toEqual({ found: 0, enqueued: 0 });
   });
 });
 

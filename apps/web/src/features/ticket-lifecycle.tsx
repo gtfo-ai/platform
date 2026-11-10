@@ -73,6 +73,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { ASSIGN_OWNER_WORDS } from '../ui/words/owners.js';
 import { bindingConfigOf } from './operating-mode.js';
+import { SkippedTickets } from './skipped-tickets.js';
 import { useStepActionTone } from './step-action-tone.js';
 
 /** Every slot of the lifecycle, in the order a ticket normally passes them. */
@@ -605,7 +606,7 @@ const PolicyPreview = ({
         <>
           {' '}
           <NameList names={preview.finished} /> are never started
-          {draft.stopOnClosed ? ', and stop a task that has not started its first run yet.' : '.'}
+          {draft.stopOnClosed ? ' and stop a task.' : '.'}
         </>
       )}
     </p>
@@ -838,6 +839,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
           Stop a task when a person moves its ticket to a finished status
         </label>
         <PolicyPreview draft={draft} statuses={items} />
+        <SkippedTickets projectId={projectId} />
       </div>
       <label className="flex items-center gap-2 text-sm">
         <input

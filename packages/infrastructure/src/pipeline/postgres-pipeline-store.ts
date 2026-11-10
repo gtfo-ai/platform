@@ -847,6 +847,33 @@ export const createPostgresPipelineStore = (
       return (result.rowCount ?? 0) > 0;
     },
 
+    // S-28.5 (migration 0116): the one-off ticket-status sweep, bounded by its own first record.
+    ticketStatusSweepDue: async (tx, query) => {
+      const { rows } = await sqlOf(tx).query<{ id: string; project_id: string }>(
+        `select t.id, t.project_id from tasks t
+          where t.mode = 'normal'
+            and t.state <> all (array['done', 'cancelled']::task_state[])
+            and t.created_at < $1
+            and t.created_at < coalesce(
+              (select min(s.swept_at) from ticket_status_sweeps s), 'infinity'::timestamptz)
+            and not exists (select 1 from ticket_status_sweeps s where s.task_id = t.id)
+          order by t.updated_at desc, t.id
+          limit $2`,
+        [query.olderThan, query.limit],
+      );
+      return rows.map((row) => ({ taskId: row.id as Id, projectId: row.project_id as Id }));
+    },
+
+    claimTicketStatusSweep: async (tx, taskId, at) => {
+      const { rows } = await sqlOf(tx).query(
+        `insert into ticket_status_sweeps (task_id, swept_at) values ($1, $2)
+           on conflict (task_id) do nothing
+           returning task_id`,
+        [taskId, at],
+      );
+      return rows.length > 0;
+    },
+
     saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
       // Two columns, for the reason `saveWorkpad` is one: the backfill runs in the `stage.execute`
       // job beside the stage executor's transactions, and a whole-row write from there is a lost
