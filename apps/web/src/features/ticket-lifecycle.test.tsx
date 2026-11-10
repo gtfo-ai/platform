@@ -127,6 +127,8 @@ interface World {
   statusReads: number;
   /** `GET …/config`'s `status_mapping_superseded`, or no configuration read at all. */
   superseded: boolean | null;
+  /** `GET …/skipped-tickets` (S-28.5). */
+  skipped?: readonly unknown[];
 }
 
 const world = (overrides: Partial<World> = {}): World => ({
@@ -158,6 +160,9 @@ const server = (state: World): typeof fetch =>
       );
     }
     if (url.endsWith(`/api/projects/${PROJECT}/bindings`)) return json({ items: state.bindings });
+    if (url.endsWith(`/api/projects/${PROJECT}/skipped-tickets`)) {
+      return json({ items: state.skipped ?? [] });
+    }
     if (url.endsWith(`/api/projects/${PROJECT}/config`) && state.superseded !== null) {
       return json(effectiveConfig(state.superseded));
     }
@@ -731,7 +736,7 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
     expect(ticked(FINISHED)).toEqual(['Finished']);
     const preview = card.querySelector('[data-lifecycle="policy-preview"]');
     expect(preview?.textContent).toBe(
-      'With these settings, tickets in Sent back start. Doing, Waiting for review, Testing wait. Finished are never started, and stop a task that has not started its first run yet.',
+      'With these settings, tickets in Sent back start. Doing, Waiting for review, Testing wait. Finished are never started and stop a task.',
     );
     // Untouched, the defaults are saved as nothing: the categories stay the rule.
     const user = userEvent.setup();
@@ -776,6 +781,33 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
         on_ticket_closed: 'ignore',
       },
     });
+  });
+
+  it('lists the tickets intake did not start, with the status in words (S-28.5)', async () => {
+    const state = world({
+      skipped: [
+        {
+          ticket: {
+            provider: 'jira-cloud',
+            key: 'ACME-9',
+            url: 'https://tracker.example.invalid/browse/ACME-9',
+          },
+          reason: 'status_not_startable',
+          status: 'Finished',
+          skipped_at: '2026-11-04T09:00:00.000Z',
+        },
+      ],
+    });
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const row = await waitFor(() => {
+      const found = card.querySelector('[data-skipped-ticket="ACME-9"]');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(row.textContent).toBe(
+      'Skipped ACME-9: its status is Finished, which is not a status work starts from (or means it is finished). (2026-11-04)',
+    );
   });
 
   it('refuses to save a setting that starts nothing, and says so', async () => {

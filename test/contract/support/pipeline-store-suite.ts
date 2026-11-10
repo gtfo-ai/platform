@@ -494,6 +494,42 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await owed(future, future)).toEqual([{ taskId: due.task.id, attempts: 2 }]);
       });
 
+      it('finds the live tasks the ticket-status sweep has not read, claims each once, and stops at its own first record (S-28.5)', async () => {
+        const first = task({}, 'ACME-SWEEP-1');
+        const second = task({}, 'ACME-SWEEP-2');
+        const third = task({}, 'ACME-SWEEP-3');
+        const finishedBase = task({}, 'ACME-SWEEP-4');
+        for (const stored of [first, second, third, finishedBase]) {
+          await store.tasks.insert(tx, stored);
+        }
+        const loadedFinished = (await store.tasks.load(tx, finishedBase.task.id)) as StoredTask;
+        await store.tasks.save(tx, {
+          ...loadedFinished,
+          task: { ...loadedFinished.task, state: 'cancelled' },
+        });
+        const mine = new Set([first, second, third, finishedBase].map((s) => s.task.id));
+        const future = '2999-01-01T00:00:00.000Z' as IsoDateTime;
+        const due = async () =>
+          (await store.tasks.ticketStatusSweepDue(tx, { olderThan: future, limit: 10_000 }))
+            .map((row) => row.taskId)
+            .filter((id) => mine.has(id))
+            .sort();
+        expect(await due()).toEqual([first, second, third].map((s) => s.task.id).sort());
+        // Claimed once: the second claim loses, and the task is never due again.
+        expect(await store.tasks.claimTicketStatusSweep(tx, first.task.id, future)).toBe(true);
+        expect(await store.tasks.claimTicketStatusSweep(tx, first.task.id, future)).toBe(false);
+        expect(await due()).toEqual([second, third].map((s) => s.task.id).sort());
+        // A record dated before every task bounds the sweep: nothing created after it is due.
+        expect(
+          await store.tasks.claimTicketStatusSweep(
+            tx,
+            second.task.id,
+            '2000-01-01T00:00:00.000Z' as IsoDateTime,
+          ),
+        ).toBe(true);
+        expect(await due()).toEqual([]);
+      });
+
       /**
        * WP-79: the insert names `requested_by_user_id`. Until then the PostgreSQL statement did not,
        * so WP-67's three writers (discovery, a shadow batch, a bootstrap's chunk tasks) wrote the

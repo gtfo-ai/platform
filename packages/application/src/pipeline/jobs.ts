@@ -346,7 +346,13 @@ export interface PipelineOutboundData {
      * S-26.3 (TD-031's 2026-11-06 amendment item 4): assign the ticket to the owner the platform
      * set, on a binding with `lifecycle.assign_owner` (`owner-write-back.ts`).
      */
-    | 'ticket_owner_assign';
+    | 'ticket_owner_assign'
+    /**
+     * S-28.5 (M28 ruling 4, TD-029 amendment B decision 3): re-read a live task's ticket after a
+     * status signal (or once, from the sweep) and stop the task when a person finished or took the
+     * ticket (`ticket-status-recheck.ts`).
+     */
+    | 'ticket_status_recheck';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -428,6 +434,16 @@ export interface PipelineOutboundData {
    * so the duty knows a transient failure on the last one ends the backfill.
    */
   readonly owner_backfill_attempt?: number;
+  /**
+   * `ticket_status_recheck` only (S-28.5): `status_moved` — the wake-up is a `ticket.status.changed`
+   * (a move a person made), which may amend a `needs_human` task's escalation; `moved_by` — the
+   * delivery's actor display name, redacted at ingress and bounded at 128; `moved_at` — the event's
+   * instant; `ticket_status_sweep` — the one-off sweep's wake-up (`recovery/ticket-status-sweep.ts`).
+   */
+  readonly status_moved?: boolean;
+  readonly moved_by?: string;
+  readonly moved_at?: string;
+  readonly ticket_status_sweep?: true;
   /** `ticket_release` only (WP-177): why the ticket is given back. */
   readonly release_cause?: 'cancelled' | 'rework' | 'stopped';
   /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */

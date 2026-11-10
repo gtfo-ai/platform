@@ -206,6 +206,11 @@ import {
   type SupersededMergeRequestRecoverySite,
   supersededEndingReason,
 } from './superseded-mr.js';
+import {
+  recoverTicketStatusSweep,
+  TICKET_STATUS_SWEEP_SITE,
+  type TicketStatusSweepRecoverySite,
+} from './ticket-status-sweep.js';
 
 /** A history bootstrap batch whose `collect` wake-up was lost (backlog 101). */
 export interface StrandedBootstrapBatch {
@@ -487,6 +492,8 @@ export interface StrandedRecoveryOptions {
    * Optional for the reason `credentials` is: its wake-up is a `pipeline.outbound` duty.
    */
   readonly ownerBackfill?: OwnerBackfillRecoverySite;
+  /** S-28.5 (M28 ruling 5): the one-off ticket-status sweep (`./ticket-status-sweep.ts`). */
+  readonly ticketStatusSweep?: TicketStatusSweepRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -1126,6 +1133,25 @@ export const runStrandedRecovery = async (
       site: OWNER_BACKFILL_SITE,
       found: backfill.found,
       reEnqueued: backfill.enqueued,
+      ended: 0,
+    });
+  }
+
+  if (options.ticketStatusSweep !== undefined) {
+    // A re-enqueue per recorded task; the duty decides, so the pass has no ending of its own.
+    const swept = await recoverTicketStatusSweep(
+      {
+        unitOfWork: options.unitOfWork,
+        jobs: options.jobs,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      options.ticketStatusSweep,
+      { now, olderThan, limit },
+    );
+    sites.push({
+      site: TICKET_STATUS_SWEEP_SITE,
+      found: swept.found,
+      reEnqueued: swept.enqueued,
       ended: 0,
     });
   }

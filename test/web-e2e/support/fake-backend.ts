@@ -980,6 +980,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         // WP-182: the tracker binding and its statuses, which the lifecycle pick lists read.
         [`/api/projects/${fixtures.IDS.project}/bindings`]: fixtures.projectBindings,
         [`/api/projects/${fixtures.IDS.project}/ticket-statuses`]: fixtures.ticketStatuses,
+        // S-28.5: the tickets intake skipped (none here), read beside the lifecycle form.
+        [`/api/projects/${fixtures.IDS.project}/skipped-tickets`]: { items: [] },
         // S-26.8b's follow-up: the people *Assign…* offers (the fake ignores `?task_id=`).
         [`/api/projects/${fixtures.IDS.project}/owner-candidates`]: fixtures.ownerCandidates,
         '/api/org/budgets': fixtures.orgBudgets,

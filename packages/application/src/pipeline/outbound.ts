@@ -90,6 +90,7 @@ import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
 import { runSupersededMergeRequestClose } from './superseded-mr.js';
 import { runTicketLifecycle, runTicketRelease } from './ticket-lifecycle.js';
 import { runTicketLintCheck, runTicketLintPost } from './ticket-lint.js';
+import { runTicketStatusRecheck } from './ticket-status-recheck.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
 
 export interface PipelineOutboundOptions
@@ -333,6 +334,10 @@ const dispatchOutbound =
       // tracker on a binding with `lifecycle.assign_owner` — re-validated on fire.
       case 'ticket_owner_assign':
         await runTicketOwnerAssign(options, data);
+        return;
+      // S-28.5 (M28 ruling 4): a ticket a person finished or took stops its task.
+      case 'ticket_status_recheck':
+        await runTicketStatusRecheck(options, data);
         return;
       // WP-179 (TD-029 decision 10): the review conversation on the merge request — under the
       // task's duty lease since WP-184, because the stage job performs the same duties before it

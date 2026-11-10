@@ -449,6 +449,8 @@ export const createMemoryPipelineStore = (
   const ownerships = new Map<Id, TaskOwnership>();
   /** The owner-backfill columns (migration 0110, BACKLOG 1510/1511): kept off `StoredTask` like the owner. */
   const ownerBackfills = new Map<Id, OwnerBackfillState>();
+  /** S-28.5: the one-off ticket-status sweep's records, task id → `swept_at`. */
+  const ticketStatusSweeps = new Map<Id, string>();
   const backfillOf = (taskId: Id): OwnerBackfillState =>
     ownerBackfills.get(taskId) ?? NO_OWNER_BACKFILL;
   const backfillClaimable = (
@@ -1133,6 +1135,31 @@ export const createMemoryPipelineStore = (
       const attempts = state.attempts + 1;
       ownerBackfills.set(taskId, { ...state, attempts, retryAt: claim.retryAt });
       return attempts;
+    },
+    // S-28.5: the sweep's predicate, cutoff and claim; the order is divergence 16's.
+    ticketStatusSweepDue: async (_tx, query) => {
+      const cutoff = [...ticketStatusSweeps.values()].sort()[0] ?? null;
+      return [...tasks.values()]
+        .filter(
+          (stored) =>
+            !ticketStatusSweeps.has(stored.task.id) &&
+            stored.task.mode === 'normal' &&
+            !isTerminalTaskState(stored.task.state) &&
+            Date.parse(stored.createdAt) < Date.parse(query.olderThan) &&
+            (cutoff === null || Date.parse(stored.createdAt) < Date.parse(cutoff)),
+        )
+        .sort(
+          (a, b) => b.createdAt.localeCompare(a.createdAt) || a.task.id.localeCompare(b.task.id),
+        )
+        .slice(0, query.limit)
+        .map((stored) => ({ taskId: stored.task.id, projectId: stored.task.projectId }));
+    },
+    claimTicketStatusSweep: async (_tx, taskId, at) => {
+      if (!tasks.has(taskId) || ticketStatusSweeps.has(taskId)) {
+        return false;
+      }
+      ticketStatusSweeps.set(taskId, at);
+      return true;
     },
     settleOwnerBackfill: async (_tx, taskId, at) => {
       const state = backfillOf(taskId);

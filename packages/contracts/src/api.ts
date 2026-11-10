@@ -63,7 +63,7 @@ import {
   organisationSettingsSchema,
   riskClassSchema,
 } from './config.js';
-import { domainEventTypeSchema } from './events.js';
+import { domainEventTypeSchema, ticketIntakeSkipReasonSchema } from './events.js';
 import { liveDomainEventSchema, liveDomainEventTypeSchema } from './live-events.js';
 import { taskStageOutcomeSchema, taskStageStateSchema } from './pipeline.js';
 import {
@@ -1035,6 +1035,32 @@ export const putProjectBindingsRequestSchema = z.strictObject({
 export const ticketStatusesResponseSchema = z.strictObject({
   items: z.array(ticketStatusSchema).max(MAX_TICKET_STATUSES),
 });
+
+/** How many skipped tickets `GET …/skipped-tickets` answers, at most (S-28.5): the newest. */
+export const MAX_SKIPPED_TICKETS = 20;
+
+/**
+ * One matched ticket intake created **no** task for (`ticket.intake.skipped`, S-28.5, M28 ruling 6):
+ * the ticket, why (`assigned` — somebody else holds it on a claiming binding; `status_not_startable`
+ * — its status is not one work starts from, or means it is finished), the tracker's status name for
+ * the second (untrusted provider text, BD-022, redacted at the read), and when.
+ */
+export const skippedTicketSchema = z.strictObject({
+  ticket: ticketRefSchema,
+  reason: ticketIntakeSkipReasonSchema,
+  status: nonEmptyStringSchema.max(255).nullable(),
+  skipped_at: isoDateTimeSchema,
+});
+export type SkippedTicket = z.infer<typeof skippedTicketSchema>;
+
+/**
+ * `GET /api/projects/:project_id/skipped-tickets` — the newest {@link MAX_SKIPPED_TICKETS} skips,
+ * newest first, so the owner can see why a labelled ticket did not start (S-28.5, M28 ruling 6).
+ */
+export const skippedTicketsResponseSchema = z.strictObject({
+  items: z.array(skippedTicketSchema).max(MAX_SKIPPED_TICKETS),
+});
+export type SkippedTicketsResponse = z.infer<typeof skippedTicketsResponseSchema>;
 
 /**
  * The refusals of a `lifecycle` block at `PUT /api/projects/:project_id/bindings` (TD-029

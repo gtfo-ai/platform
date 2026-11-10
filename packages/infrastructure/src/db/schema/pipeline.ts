@@ -764,6 +764,18 @@ export const expiredJobEscalations = pgTable('expired_job_escalations', {
 });
 
 /**
+ * S-28.5's one-off ticket-status sweep (migration 0116, `recovery/ticket-status-sweep.ts`): one row
+ * per live task whose ticket the sweep re-read, written before the read is enqueued; the earliest
+ * `swept_at` is the sweep's cutoff.
+ */
+export const ticketStatusSweeps = pgTable('ticket_status_sweeps', {
+  taskId: uuid('task_id')
+    .primaryKey()
+    .references(() => tasks.id, { onDelete: 'cascade' }),
+  sweptAt: timestamp('swept_at', { withTimezone: true }).notNull(),
+});
+
+/**
  * WP-184's per-task duty lease (migration 0091): who performs a group of one task's outbound duties
  * right now. Claimed before the first provider call, renewed while its holder works, deleted when it
  * is done; the instants are the claimant's clock. The migration's header carries the reasoning.

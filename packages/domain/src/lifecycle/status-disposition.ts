@@ -248,3 +248,67 @@ export const claimStatusDecision = (input: {
   }
   return { kind: 'refuse', reason: 'ticket_not_startable' };
 };
+
+/** Why the reverse sync stops a task (M28 ruling 4, TD-029 amendment B decision 3). */
+export type TicketStatusStopReason = 'ticket_closed_in_tracker' | 'ticket_taken_by_person';
+
+/** What the reverse sync does with a live task whose ticket it re-read. */
+export type TicketStatusStop =
+  | { readonly kind: 'none' }
+  /** A **queued** task — it never ran, holds nothing, and has no merge request: cancelled. */
+  | { readonly kind: 'cancel'; readonly reason: TicketStatusStopReason }
+  /** A task that ran or waits: its offer closed and its run stopped, then `needs_human`. */
+  | { readonly kind: 'escalate'; readonly reason: TicketStatusStopReason }
+  /** A task already in `needs_human` for another reason: the brief and the reason are replaced. */
+  | { readonly kind: 'amend'; readonly reason: TicketStatusStopReason };
+
+/**
+ * **The reverse sync's table** (M28 ruling 4, S-28.5). `disposition` is
+ * {@link ticketStatusDisposition}'s answer with `platformHolds: true` — a live task's ticket — over
+ * a policy that already counts `status_mapping`'s targets as the platform's own
+ * ({@link withStatusMappingStatuses}), so **a status the platform wrote is never a reason to stop**.
+ *
+ *  - Never for a finished task (`done`, `cancelled`), a merged one (`merged`, `retro`: its ticket
+ *    legitimately ends Done), nor at a **human stage** (`qa`, `ready_for_merge`, `merged_gate`):
+ *    there a person is working the ticket — QA moves it through their own statuses, and a merge
+ *    may move it to Done before the platform hears `mr.merged`. Stopping there would race the
+ *    person the stage waits for.
+ *  - `closed` (unless `on_ticket_closed: ignore`): a `queued` task is cancelled; a task in
+ *    `needs_human` has its escalation amended (say one stopped `ticket_assigned_elsewhere`), so the
+ *    one click is *Cancel task* — only when the caller saw the ticket **move** (`mayAmend`: a
+ *    status change, or the sweep), never on every polled edit of a ticket that stays closed;
+ *    every other live state escalates. A task that may have an open merge request is never
+ *    cancelled by the platform.
+ *  - `hands_off`: a `queued` task is cancelled with `ticket_taken_by_person`; one already in
+ *    `needs_human` is left (a person already decides); every other live state escalates.
+ *  - `startable`, `not_ready`: nothing.
+ */
+export const ticketStatusStopDecision = (input: {
+  readonly state: string;
+  readonly humanStage: boolean;
+  readonly disposition: TicketStatusDisposition;
+  readonly onTicketClosed: 'stop' | 'ignore';
+  /** A `needs_human` task's escalation may be amended: the caller saw the status move (or sweeps). */
+  readonly mayAmend: boolean;
+}): TicketStatusStop => {
+  const { state, disposition } = input;
+  if (
+    ['done', 'cancelled', 'merged', 'retro'].includes(state) ||
+    input.humanStage ||
+    (disposition !== 'closed' && disposition !== 'hands_off') ||
+    (disposition === 'closed' && input.onTicketClosed === 'ignore')
+  ) {
+    return { kind: 'none' };
+  }
+  const reason: TicketStatusStopReason =
+    disposition === 'closed' ? 'ticket_closed_in_tracker' : 'ticket_taken_by_person';
+  if (state === 'queued') {
+    return { kind: 'cancel', reason };
+  }
+  if (state === 'needs_human') {
+    return disposition === 'closed' && input.mayAmend
+      ? { kind: 'amend', reason }
+      : { kind: 'none' };
+  }
+  return { kind: 'escalate', reason };
+};

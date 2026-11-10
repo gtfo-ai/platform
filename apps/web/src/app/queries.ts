@@ -222,6 +222,16 @@ export const useTicketStatuses = (projectId: string | null, trackerId: string | 
   });
 };
 
+/** `GET /api/projects/:id/skipped-tickets` (S-28.5) — why labelled tickets did not start. */
+export const useSkippedTickets = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.skippedTickets(projectId ?? ''),
+    queryFn: () => endpoints.skippedTickets(projectId ?? ''),
+    enabled: projectId !== null,
+  });
+};
+
 /**
  * `GET /api/projects/:id/owner-candidates?task_id=` (S-26.8b's *Assign…*) — asked only while the
  * picker is open, so a reader who never opens it costs the server nothing. **Not retried**: a `403`

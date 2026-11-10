@@ -169,6 +169,7 @@ beforeEach(async () => {
       projectRole: async () => 'admin',
       projectExists: async () => true,
       listBindings: async () => [],
+      skippedTickets: async () => [],
       replaceBindings: async (_projectId, items) => {
         stored = new Map(
           items.map((item) => [

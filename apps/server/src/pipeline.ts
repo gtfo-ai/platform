@@ -1837,6 +1837,11 @@ export const composePipeline = async (
        * `packages/application/src/recovery/owner-backfill.ts`.
        */
       ownerBackfill: { tasks: store.tasks },
+      /**
+       * S-28.5 (M28 ruling 5): every live task's ticket status is re-read once after the deploy, so
+       * a ticket a person finished before it stops its task; `recovery/ticket-status-sweep.ts`.
+       */
+      ticketStatusSweep: { tasks: store.tasks },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,

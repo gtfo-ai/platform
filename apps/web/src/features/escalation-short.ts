@@ -48,6 +48,7 @@ export const ESCALATION_SHORT_WORDS: Readonly<Partial<Record<TaskStageOutcomeWor
   ticket_claim_failed: 'The platform couldn’t take the ticket',
   ticket_not_startable: 'The ticket moved to a status work doesn’t start from',
   ticket_closed_in_tracker: 'The ticket was finished in the tracker',
+  ticket_taken_by_person: 'A person moved the ticket into their own work',
   settings_config_invalid: 'The project’s stored settings don’t parse',
   context_budget_above_ceiling: 'The context budget is above this release’s ceiling',
 };

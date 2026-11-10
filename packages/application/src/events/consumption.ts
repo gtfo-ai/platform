@@ -171,7 +171,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * the linter's re-lint on a measurement of how often a real Jira sends updates (`docs/TODO.md`),
    * and product/18:60's *"edited within 48 h"* on a statistics fold (`stats-metrics.ts`'s absent
    * entry names its owner). Since S-26.1 `pipeline.owner.sync` (`owner-sync.ts`) also wakes the
-   * `owner_sync` duty for the ticket's live task, which follows the ticket's assignee.
+   * `owner_sync` duty for the ticket's live task, which follows the ticket's assignee; since S-28.5
+   * `pipeline.ticket.status.recheck` (`ticket-status-recheck.ts`) wakes the `ticket_status_recheck`
+   * duty for an edit that may have moved the status.
    */
   'ticket.updated': 'handled',
 
@@ -220,7 +222,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    *
    * This row read `'unconsumed'` from WP-15c until WP-178: first as *"Task sync, no owner"*, then —
    * since the M10-head amendment named the window its consumer — with WP-178 as its owner
-   * (`UNCONSUMED_OWNERS`). Review-only mode never read it: it has no ticket at all (WP-24).
+   * (`UNCONSUMED_OWNERS`). Review-only mode never read it: it has no ticket at all (WP-24). Since
+   * S-28.5 `pipeline.ticket.status.recheck` also re-reads the ticket of a live task and stops the
+   * task when a person finished or took it (M28 ruling 4).
    */
   'ticket.status.changed': 'handled',
 

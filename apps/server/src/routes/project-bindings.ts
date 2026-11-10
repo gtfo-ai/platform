@@ -38,6 +38,8 @@ import {
   type ProjectBindingSummary,
   projectBindingsResponseSchema,
   putProjectBindingsRequestSchema,
+  type SkippedTicket,
+  skippedTicketsResponseSchema,
   ticketStatusesResponseSchema,
   type UserRole,
 } from '@platform/contracts';
@@ -65,6 +67,8 @@ export interface ProjectBindingQueries {
     })[],
   ) => Promise<void>;
   readonly recordAction: (input: HumanActionInput) => Promise<void>;
+  /** S-28.5: the newest `ticket.intake.skipped` of the project (`listSkippedTickets`). */
+  readonly skippedTickets: (projectId: string) => Promise<readonly SkippedTicket[]>;
 }
 
 export interface ProjectBindingRoutesOptions {
@@ -179,6 +183,28 @@ export const registerProjectBindingRoutes = async (
         },
       });
       return { items: [...(await options.queries.listBindings(projectId))] };
+    },
+  );
+
+  typed.get(
+    '/api/projects/:project_id/skipped-tickets',
+    {
+      preValidation: requirePermission(guard, 'project.read', { project: projectOf }),
+      schema: {
+        summary: 'The tickets intake did not start, and why',
+        description:
+          'The newest `ticket.intake.skipped` events of the project (at most `MAX_SKIPPED_TICKETS`, newest first; S-28.5): the ticket, the reason — `assigned` (somebody else holds it on a claiming binding) or `status_not_startable` (its status is not one work starts from, or means it is finished) — the tracker’s status name for the second (untrusted provider text, redacted when it was recorded), and when. A project member’s read (`project.read`).',
+        tags: ['projects'],
+        params: projectParamsSchema,
+        response: { 200: skippedTicketsResponseSchema, 404: apiErrorSchema },
+      },
+    },
+    async (request) => {
+      const projectId = request.params.project_id;
+      if (!(await options.queries.projectExists(projectId))) {
+        throw new NotFoundError(`project ${projectId}`);
+      }
+      return { items: [...(await options.queries.skippedTickets(projectId))] };
     },
   );
 

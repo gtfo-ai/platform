@@ -305,8 +305,7 @@ weeks ago may still carry it. So the form has two more checkbox lists: **Start w
 statuses** and **A ticket in these statuses is finished**. Until you change them they are ticked by
 your tracker's own categories — every *To Do* status starts work, every *Done* status is finished —
 and a line under them says what that means: *"With these settings, tickets in To Do, Ready start.
-Idea, Discovery wait. Released, Done are never started, and stop a task that has not started its first
-run yet."* *Pick up from*, when
+Idea, Discovery wait. Released, Done are never started and stop a task."* *Pick up from*, when
 mapped, always starts work too. A status of no known category never starts work. Ticking a status in
 one list unticks it in the other, and the form will not save a setting that starts nothing. Lists
 left as the categories tick them are saved as "follow the categories", so a status your tracker adds
@@ -329,6 +328,22 @@ What the platform does with them:
   ticket moved to a status work doesn't start from"*. Nothing is written to the tracker. This check
   runs where the claim runs (a tracker whose lifecycle claims). The switch **Stop a task when a
   person moves its ticket to a finished status** (on by default) turns the first of these off.
+- **A task already working stops too** (since S-28.5). When a person moves a live task's ticket to a
+  finished status, the platform re-reads the ticket and stops: a **queued** task is cancelled (it
+  never ran); any other one stops its run and waits in **Needs you** with *"AUT-6676 was moved to
+  Released in Jira by Vojtěch Kaizr on 2026-11-04; the platform stopped working on it. Cancel the
+  task, or move the ticket back to continue."* A task already waiting for you because its ticket
+  was assigned elsewhere gets the same words, so the one click is *Cancel task*. A person moving the
+  ticket into a working status the platform did not set (*Review In Progress*, say) stops it the same
+  way with *"A person moved the ticket into their own work"*. A task is never stopped for a status
+  the platform itself writes (the lifecycle's slots, *Returned*, or the older status mapping), at
+  QA or Ready for merge (a person is working the ticket there), or after its merge request merged.
+  The platform cancels only a task that never ran; one that may have a merge request is yours to
+  cancel.
+- **Once after the upgrade** the platform re-reads every live task's ticket a single time, so a
+  ticket finished before this release stops its task too.
+- **Tickets not started** — under the two lists, the newest tickets that matched the pick-up rule but
+  did not become tasks, each with why (*"Skipped AUT-6676: its status is Released, …"*).
 
 **Save the ticket lifecycle** checks every name against the tracker's statuses before anything is
 written. A name the tracker does not list is refused, the slot that names it is marked, and nothing
