@@ -196,3 +196,29 @@ started on 2026-11-04 by its pick-up label alone. People asked why platform-addr
 direction — return on doubt — cost real runs. An explicit act is unambiguous in any language.
 **Rejected.** Growing the vocabulary per project (it fails on the next language); a model classifier (TD-029 decision 8's
 reason stands). **Consequence.** A person who only writes a ticket comment must press Send back; the page tells them so.
+
+## Amendment (2026-11-10, the product owner's feedback after the M28 deploy) — the platform's own threads never block a merge; a closed ticket cancels its task
+
+**Evidence.** AUT-6655 sat at *Ready for Merge* while GitLab refused the merge with `discussions_not_resolved`: all five open
+threads were the platform's own (three review summaries, one nit answered *Not changed*, one nit from an approving review).
+The owner, on the reverse sync: *"when the ticket is in state released it should not have a job/agent assigned"*.
+
+**Decision** (the owner, 2026-11-10; technical design in TD-029 amendments D and E):
+1. **R3b — the platform never leaves its own thread blocking a merge it called ready.** A review summary is not a thread
+   anyone has to resolve. When the Reviewer approves, the platform resolves every open thread that is its own and in which
+   no person wrote; an unfixed finding first says *"Left as is — the reviewer approved the change with this open. Reopen
+   this thread to have it changed."* A thread a person wrote in is never resolved this way, and a platform thread a person
+   reopens is an explicit return (ruling 4 as narrowed above). At *Ready for Merge* the task page shows the provider's own
+   verdict on whether the merge request can merge — what blocks it, why, and what to do — until the provider says it can.
+   *Rejected:* leaving approved nits open for a person — it blocks the merge the platform just called ready, and the
+   findings stay readable in the resolved threads and on the task page.
+2. **Ruling 3 (2026-11-10) is changed: a ticket the team closed cancels its task.** A live task whose ticket reaches a
+   closed status is **cancelled** by the platform, whatever it is doing — a running agent is stopped as a person's Cancel
+   stops it — and says why, with the ticket's key and status, telling the task's people once. The exemptions stand (a
+   finished or merged task; a task at a human stage once it has run; a status the platform wrote; a task that never ran is
+   judged as S-28.11 says). Stopping and waiting for a person (`stop`) and doing nothing (`ignore`) remain per-project
+   choices; cancelling is the default. **The merge request is never touched**: an open one is named in the cancellation
+   and left for people. This **supersedes** the earlier rule that *a task that may have an open merge request is never
+   cancelled by the platform* (`packages/application/src/pipeline/ticket-status-recheck.ts:11-12`), by the owner's
+   decision: a closed ticket means nobody wants the work, and the merge request is the people's to close or keep.
+   A person's hands-off status still stops and escalates, unchanged.

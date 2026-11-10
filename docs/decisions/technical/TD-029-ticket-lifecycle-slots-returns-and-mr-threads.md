@@ -500,3 +500,53 @@ the task page as *ticket status out of sync* — the slot, the target status, th
 (supersedes *"a `warn` log"* as the only signal; the stage still runs). (3) `mr_ready` re-reads the merge request and
 fails loudly if it is still a draft. (4) An optional **`ready_for_merge`** slot is written only after the MR has read back
 non-draft, so a tracker never says *ready* about a draft.
+
+## Amendment D (2026-11-10, M28 follow-up, the owner's ruling R3b; S-28.13) — the platform's own threads never block a merge
+
+**Context.** AUT-6655 at `ready_for_merge`: GitLab's `detailed_merge_status` read `discussions_not_resolved`, and every
+open thread was the platform's — decision 10 posts the summary as a note GitLab may list as resolvable (research/15 G2;
+`packages/integrations/src/providers/gitlab/provider.ts:68-70`), and resolves a finding only when a later verdict names
+it in `resolved_threads`, so an approving review's nits and a *not changed* nit stayed open.
+
+**Decision** (amends decision 10).
+1. **The summary is not left resolvable.** It is posted as a general note; when the read-back says `resolvable: true`,
+   the same duty resolves it at once (idempotent on `review_summary:<task>:<run>`).
+2. **Resolve on approval.** On the Reviewer's approving verdict — and once, idempotently, for every task already at
+   `ready_for_merge` — a `platform_threads_resolve` duty (executor, shadow mode and the dial as every write) lists the
+   discussions and resolves each **unresolved** thread whose first note carries a platform marker **and** whose every
+   note is by the binding's own author or carries a platform marker. A finding the run did not fix first gets one note:
+   *"Left as is — the reviewer approved the change with this open. Reopen this thread to have it changed."* (idempotent
+   per (task, thread)). A thread with any person's note is never resolved here (amendment A's rule governs it).
+3. **A reopened platform thread is a return signal**: an unresolved platform thread that the platform had resolved
+   counts as amendment A.1's *unresolved resolvable thread* — the reopen is a person's act even with no new note.
+4. **The mergeability verdict.** At `ready_for_merge` the task DTO carries the provider's verdict (GitLab's
+   `detailed_merge_status`, documented values at <https://docs.gitlab.com/api/merge_requests/#merge-status>, already
+   mapped in `gitlab/mapping.ts`) as one of `unresolved_threads | conflict | pipeline | approvals | draft | other`, read
+   on the existing MR poll; the page says what blocks, why, and what to do, and the callout clears when the provider
+   reports mergeable. No storage beyond the last read.
+
+**Rejected.** Leaving approved nits open for a person (the owner's reason in BD-031); resolving every platform thread
+on approval including ones a person wrote in (a person's request would vanish). **Residual.** A provider whose notes
+carry no author identity can only be judged by marker; such a thread is left open rather than guessed.
+
+## Amendment E (2026-11-10, M28 follow-up, the owner's ruling 4b; S-28.14) — a closed ticket cancels its task
+
+**Context.** Amendment B.3 stops and escalates a live task whose ticket reached `closed`; the S-28.5 duty never cancels
+a task that may have an open merge request (`packages/application/src/pipeline/ticket-status-recheck.ts:11-12`). The
+owner: a released ticket must not keep an agent assigned.
+
+**Decision** (amends B.1 and B.3).
+1. `on_ticket_closed: cancel | stop | ignore`, **default `cancel`**; a stored explicit `stop` or `ignore` is kept.
+2. Under `cancel`, a live task whose ticket is in a `closed` status is cancelled with reason `ticket_closed_in_tracker`
+   in **every live state**; a live run is cancelled through the **same path as a person's Cancel** (the task command,
+   offer withdrawal first, `run_commands` to a lease holder), attributed to the system actor. Exemptions unchanged:
+   finished and merged tasks, human stages for a task that has run, statuses the platform wrote, S-28.11's never-run rule.
+3. The cancellation's brief names the ticket key, the status and who moved it; it names an **open merge request**,
+   which is **never touched**; the task's people are told **once** (the notify duty's idempotency).
+4. Tasks already in `needs_human` with a `ticket_closed_in_tracker` stop are cancelled by the sweep, which runs once more
+   (a new revision of `TICKET_STATUS_SWEEP_REVISION_AT`) under the same rule.
+5. **Supersedes** *"a task that may have an open merge request is never cancelled by the platform"* — the owner's
+   decision; the merge request is left for people. Hands-off (`ticket_taken_by_person`) still stops and escalates.
+
+**Rejected.** Closing the merge request too (a write in the people's repository nobody asked for). **Residual.** A ticket
+closed by mistake cancels real work; the branch and the merge request survive for people to pick up, and the brief says so.

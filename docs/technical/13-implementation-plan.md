@@ -2098,6 +2098,8 @@ opened empty attempts; two false returns from a Czech *"OK"*; 20 silent failed t
 ticket started by its label) and **pipeline 3044845312** (manual test jobs held on every draft MR). The decisions are
 **BD-010**'s two 2026-11-10 amendments, **BD-031**'s and **BD-006**'s 2026-11-10 amendments, **TD-029** amendments A–C,
 **TD-036**'s and **TD-013**'s 2026-11-10 amendments, and **TD-037**. product/04, /09 and /10 carry dated notes.
+The owner's feedback after the M28 deploy added **S-28.13** and **S-28.14** (BD-031's second 2026-11-10 amendment, TD-029
+amendments D and E).
 
 Rules:
 - **No test runs locally**: CI is the verdict.
@@ -2105,7 +2107,8 @@ Rules:
   S-28.8 (`approvals.auto_decided`), 0114 S-28.6 (`users.max_tasks_in_flight`), 0115 S-28.5 (`ticket_status_sweeps`,
   `ticket_status_stops`), 0116 S-28.10 (`task_provider_sync`); all `additive`. The reservation was 0112 S-28.6, 0113 S-28.7, 0114 S-28.8 (S-28.5 had taken
   0116); the slices landed in merge trains in another order, and `migrations:check` (rule 6) refuses a new file that
-  sorts before one already on `main`, so each train renumbered to the next free number. The next free number is 0117.
+  sorts before one already on `main`, so each train renumbered to the next free number. S-28.12 took 0117; the next free
+  number is 0118 (S-28.13 and S-28.14 need none as designed; one that does takes the next free number when it lands).
 - Backlog findings take **1563–1566** (1562 is TD-037's stated residual).
 - A slice's PR fixes the docs it makes false (technical/02, 03, 06, 08, 12, the guides) and adds its own LEDGER line.
 - **Lanes (parallel):** S-28.1 · S-28.2 · S-28.4 → S-28.5 · S-28.6 · S-28.7 · S-28.8 · S-28.9 run at once; they share only
@@ -2123,8 +2126,11 @@ Rules:
 | **S-28.8** | A low-risk plan may approve itself, opt-in | — | BD-006 2026-11-10; TD-037 | (1) `policies.plan_approval_risk` (off by default) and `self_assessment` on the plan artifact, schemas regenerated; Architect prompt version bump + eval cases. (2) `planRiskFacts` pure, unit + property test: facts and assessment each only add asks; absent assessment waits; a `risk_class` or `probation` reason always waits. (3) Auto-approval writes the approval row with `auto_decided` (0113) and its reasons, and `task.approval.decided` (integration). (4) The task page says *Approved by the platform* with the figures (ui test). (5) Shadow, probation and risk classes unchanged (existing tests green). | high (removes a human ask) |
 | **S-28.9** | Prose is formatted, still never HTML | — | TD-013 2026-11-10 | (1) The in-house parser renders markdown prose as React elements (ui tests over plans, specs, comments). (2) `no-html.test.ts` unchanged and green. (3) Links only through `safeHref`; the destination host shown when the label differs; a refused scheme is text (ui tests). (4) Raw HTML stays literal (ui test). (5) `bundle:check` within budget. | medium (untrusted text) |
 | **S-28.10** | A lifecycle move that failed is visible | S-28.4 | TD-029 amendment C | (1) A failed `integration_actions` row stores the redacted error (integration). (2) The task page shows *ticket status out of sync* with the slot, target and reason, and **Retry** (ui + route test). (3) `mr_ready` re-reads and fails loudly when still draft (unit with fake GitLab). (4) An optional `ready_for_merge` slot written only after the MR reads back non-draft (unit + fake-Claude e2e replaying AUT-6655's 20 failed moves). | medium |
+| **S-28.13** | The platform's own threads never block a merge | — | BD-031 2026-11-10 (second) R3b; TD-029 amendment D | (1) The review summary reads back non-resolvable or is resolved at once (fake GitLab contract + duty unit test, idempotent). (2) On an approving verdict, and once for a task already at `ready_for_merge`, every unresolved platform-only thread is resolved; an unfixed finding first gets the *Left as is* note once; a thread with a person's note stays open (duty unit table + fake GitLab contract). (3) A platform thread a person reopens returns the task at `qa`/`ready_for_merge` (domain table test). (4) At `ready_for_merge` the task page shows the provider's mergeability verdict with what/why/next and clears when mergeable (mapping unit test over `detailed_merge_status` values + ui test). (5) Fake-Claude e2e of AUT-6655's five threads reaching mergeable. | medium (writes in the MR conversation) |
+| **S-28.14** | A closed ticket cancels its task | — | BD-031 2026-11-10 (second) 4b; TD-029 amendment E | (1) `on_ticket_closed` accepts `cancel` and defaults to it; a stored `stop`/`ignore` is kept (contract + config tests, `schemas/` regenerated). (2) A live task in any non-exempt state whose ticket reaches `closed` is cancelled `ticket_closed_in_tracker`; a running run is cancelled through the person's Cancel path (in-memory harness + `run_commands` assertion). (3) Exemptions unchanged — finished, merged, a human stage after a run, a platform-written status, S-28.11's never-run rule (domain table test). (4) The brief names key, status, mover and an open MR; no MR write; the people are told once (unit + fake GitLab asserting no call). (5) The sweep's new revision cancels tasks already stopped `ticket_closed_in_tracker` (store contract / harness). (6) The comment in `ticket-status-recheck.ts` and technical/02, /12 and the user guide say the new rule. | high (cancels live work) |
 
-**Order.** All but S-28.5 and S-28.10 in parallel; then S-28.5 and S-28.10. When all are on `main`, the worker session
+**Order.** All but S-28.5 and S-28.10 in parallel; then S-28.5 and S-28.10. S-28.13 and S-28.14 run in parallel after S-28.12; they share
+only the task page and docs, and the second to land rebases. When all are on `main`, the worker session
 deploys them to Autix (AUT-6655's cap and AUT-6676's task are fixed by hand).
 
 ## Suggested agent team for the orchestrator
