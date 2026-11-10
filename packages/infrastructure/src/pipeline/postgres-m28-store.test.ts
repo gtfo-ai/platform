@@ -96,18 +96,22 @@ describe('task_provider_sync (S-28.10, migration 0116)', () => {
 describe('the ticket-status sweep and stop (S-28.5, migration 0115)', () => {
   it('maps the due tasks, with the bound and the limit as parameters', async () => {
     const due = recording([{ id: TASK, project_id: OWNER }]);
-    expect(await store().tasks.ticketStatusSweepDue(due.tx, { olderThan: AT, limit: 25 })).toEqual([
-      { taskId: TASK, projectId: OWNER },
-    ]);
-    expect(due.calls[0]?.values).toEqual([AT, 25]);
+    expect(
+      await store().tasks.ticketStatusSweepDue(due.tx, {
+        olderThan: AT,
+        limit: 25,
+        revisionAt: AT,
+      }),
+    ).toEqual([{ taskId: TASK, projectId: OWNER }]);
+    expect(due.calls[0]?.values).toEqual([AT, 25, AT]);
   });
 
   it('claims a task once: a returned row is a claim, none is somebody else’s', async () => {
     const won = recording([{ task_id: TASK }]);
-    expect(await store().tasks.claimTicketStatusSweep(won.tx, TASK, AT)).toBe(true);
-    expect(won.calls[0]?.values).toEqual([TASK, AT]);
+    expect(await store().tasks.claimTicketStatusSweep(won.tx, TASK, AT, AT)).toBe(true);
+    expect(won.calls[0]?.values).toEqual([TASK, AT, AT]);
     const lost = recording([]);
-    expect(await store().tasks.claimTicketStatusSweep(lost.tx, TASK, AT)).toBe(false);
+    expect(await store().tasks.claimTicketStatusSweep(lost.tx, TASK, AT, AT)).toBe(false);
   });
 
   it('reads the status a stop acted on, null without one, and upserts a new one', async () => {

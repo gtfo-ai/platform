@@ -24,7 +24,11 @@
  * terms), intake ({@link intakeStatusDecision}) and the claim before the first run
  * ({@link claimStatusDecision}).
  */
-import type { TicketLifecycle, TicketStatusCategory } from '@platform/contracts';
+import type {
+  LifecycleSingleSlot,
+  TicketLifecycle,
+  TicketStatusCategory,
+} from '@platform/contracts';
 import { LIFECYCLE_SINGLE_SLOTS, lifecycleStatusKey } from '@platform/contracts';
 import { lifecycleMapsAnySlot } from './claim.js';
 
@@ -43,7 +47,19 @@ export interface TicketStatusPolicy {
    * into one of these is the platform's own (or a human return), never a person taking it.
    */
   readonly platformStatuses: readonly string[];
+  /**
+   * **Which moment writes each of those statuses** (S-28.11): a lifecycle slot, `returned`, or a
+   * `status_mapping` key (a stage or a task state). {@link platformWrittenStatuses} reads it against
+   * how far a task has got, so a status is exempt only once the platform has actually put the ticket
+   * there for that task.
+   */
+  readonly platformWriters: readonly PlatformStatusWriter[];
 }
+
+/** One status the platform may write, and the moment that writes it. */
+export type PlatformStatusWriter =
+  | { readonly status: string; readonly slot: LifecycleSingleSlot | 'returned' }
+  | { readonly status: string; readonly mappingKey: string };
 
 /**
  * The policy of a binding: its `pickup_status` and its `lifecycle` block, which may be absent — the
@@ -68,7 +84,93 @@ export const ticketStatusPolicyOf = (
           }),
           ...(block.returned ?? []),
         ],
+  platformWriters:
+    block === null || block === undefined
+      ? []
+      : [
+          ...LIFECYCLE_SINGLE_SLOTS.flatMap((slot): PlatformStatusWriter[] => {
+            const name = block[slot];
+            return name === undefined ? [] : [{ status: name, slot }];
+          }),
+          ...(block.returned ?? []).map(
+            (name): PlatformStatusWriter => ({ status: name, slot: 'returned' }),
+          ),
+        ],
 });
+
+/**
+ * **How far a task has got through the moments that write the ticket** (S-28.11): the stages it has
+ * entered (`Task.stageAttempts`' keys — every entry is recorded there, and nothing else writes it),
+ * its state now, and whether its claim recorded the `in_progress` write. The task's own history is
+ * the source rather than the `transition_ticket` audit rows: a lifecycle write that failed still
+ * leaves the moment reached, and the audit is per binding, not a column the pipeline reads.
+ */
+export interface TaskLifecycleReach {
+  readonly stagesEntered: readonly string[];
+  readonly state: string;
+  readonly inProgressWritten: boolean;
+}
+
+export const taskLifecycleReachOf = (
+  task: { readonly stageAttempts: Readonly<Record<string, number>>; readonly state: string },
+  claim: { readonly in_progress_written: boolean } | null,
+): TaskLifecycleReach => ({
+  stagesEntered: Object.keys(task.stageAttempts).filter(
+    (stage) => (task.stageAttempts[stage] ?? 0) > 0,
+  ),
+  state: task.state,
+  inProgressWritten: claim?.in_progress_written === true,
+});
+
+/** The stages whose entry writes `in_progress` (developer-role agent stages, `moments.ts`). */
+const IN_PROGRESS_STAGES: readonly string[] = ['implementation', 'conflict_resolution'];
+/** The stages a task enters only after its last agent review approved (`approved` is written then). */
+const AFTER_APPROVAL_STAGES: readonly string[] = [
+  'ci_gate',
+  'rebase_gate',
+  'qa',
+  'ready_for_merge',
+  'merged_gate',
+];
+
+/**
+ * **The statuses the platform has actually written for this task** (S-28.11, the production
+ * defect: a queued task whose ticket a person had delivered to *Ready for Merge* — the binding's
+ * `done` slot — was exempted as the platform's own status and started). A slot's status is the
+ * platform's only once the task reached the moment that writes it (`moments.ts`): `in_progress` at
+ * the claim's recorded write or a developer stage's entry; `in_review` at `code_review`;
+ * `approved` once the task moved past its reviews; `qa` at `qa`; `done` at `merged_gate`;
+ * `returned` (a person handing work back) once the task waited at `qa` or `ready_for_merge`; a
+ * `status_mapping` target once its key — a stage the task entered, or the state it is in — was
+ * reached. A task that never ran has reached nothing, so nothing is exempt.
+ */
+export const platformWrittenStatuses = (
+  policy: TicketStatusPolicy,
+  reach: TaskLifecycleReach,
+): readonly string[] => {
+  const entered = (stages: readonly string[]) =>
+    stages.some((stage) => reach.stagesEntered.includes(stage));
+  const reached = (writer: PlatformStatusWriter): boolean => {
+    if ('mappingKey' in writer) {
+      return reach.stagesEntered.includes(writer.mappingKey) || reach.state === writer.mappingKey;
+    }
+    switch (writer.slot) {
+      case 'in_progress':
+        return reach.inProgressWritten || entered(IN_PROGRESS_STAGES);
+      case 'in_review':
+        return entered(['code_review']);
+      case 'approved':
+        return entered(AFTER_APPROVAL_STAGES);
+      case 'qa':
+        return entered(['qa']);
+      case 'done':
+        return entered(['merged_gate']);
+      case 'returned':
+        return entered(['qa', 'ready_for_merge']);
+    }
+  };
+  return policy.platformWriters.filter(reached).map((writer) => writer.status);
+};
 
 /**
  * **The legacy `status_mapping` writes count as the platform's own** (S-28.4 review finding 1): a
@@ -88,9 +190,24 @@ export const withStatusMappingStatuses = (
   const extra = Object.values(statusMapping).filter(
     (name) => !listHas(policy.platformStatuses, name),
   );
-  return extra.length === 0
+  const writers = Object.entries(statusMapping)
+    .filter(
+      ([key, name]) =>
+        !policy.platformWriters.some(
+          (writer) =>
+            'mappingKey' in writer &&
+            writer.mappingKey === key &&
+            lifecycleStatusKey(writer.status) === lifecycleStatusKey(name),
+        ),
+    )
+    .map(([mappingKey, status]): PlatformStatusWriter => ({ status, mappingKey }));
+  return extra.length === 0 && writers.length === 0
     ? policy
-    : { ...policy, platformStatuses: [...policy.platformStatuses, ...extra] };
+    : {
+        ...policy,
+        platformStatuses: [...policy.platformStatuses, ...extra],
+        platformWriters: [...policy.platformWriters, ...writers],
+      };
 };
 
 /** The policy of a binding that declares nothing: the category defaults, no `pickup_status`. */
@@ -142,9 +259,15 @@ export const ticketStatusDisposition = (
   status: string,
   category: TicketStatusCategory | null,
   policy: TicketStatusPolicy,
-  platformHolds: boolean,
+  /**
+   * The statuses the platform wrote for this task ({@link platformWrittenStatuses}, S-28.11), which
+   * answer `not_ready`; `true` exempts every status it could write, `false` none.
+   */
+  platformHolds: boolean | readonly string[],
 ): TicketStatusDisposition => {
-  if (platformHolds && listHas(policy.platformStatuses, status)) {
+  const exempt =
+    platformHolds === true ? policy.platformStatuses : platformHolds === false ? [] : platformHolds;
+  if (listHas(exempt, status)) {
     return 'not_ready';
   }
   if (closed(status, category, policy)) {
@@ -227,12 +350,18 @@ export const claimStatusDecision = (input: {
    * nothing is refused; the caller may say a closed status as a notice.
    */
   readonly humanCommanded?: boolean;
+  /**
+   * The statuses the platform wrote for this task (S-28.11, {@link platformWrittenStatuses}): only
+   * these are exempt. Absent, every status it could write is (the behaviour before S-28.11).
+   */
+  readonly written?: readonly string[];
 }): ClaimStatusDecision => {
   const { status, category, policy, first } = input;
   if (input.humanCommanded === true) {
     return { kind: 'proceed' };
   }
-  const disposition = ticketStatusDisposition(status, category, policy, true);
+  const written = input.written ?? policy.platformStatuses;
+  const disposition = ticketStatusDisposition(status, category, policy, written);
   if (disposition === 'closed') {
     return policy.onTicketClosed === 'ignore'
       ? { kind: 'proceed' }
@@ -241,7 +370,7 @@ export const claimStatusDecision = (input: {
   if (
     !first ||
     disposition === 'startable' ||
-    listHas(policy.platformStatuses, status) ||
+    listHas(written, status) ||
     undecidedForWantOfCategory(status, category, policy)
   ) {
     return { kind: 'proceed' };

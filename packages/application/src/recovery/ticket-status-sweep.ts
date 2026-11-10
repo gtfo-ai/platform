@@ -12,8 +12,8 @@
  * so a status the platform wrote (a slot, `returned`, a `status_mapping` target) never stops a task,
  * and neither does a human stage or a merged task.
  *
- * **One-off by its own cutoff**: only tasks created before the sweep's first record are considered
- * (`TaskRepository.ticketStatusSweepDue`), so a task created after the deploy is never swept. A lost
+ * **Once per revision** (S-28.11): only tasks created before {@link TICKET_STATUS_SWEEP_REVISION_AT}
+ * are considered, and each once in that revision (`TaskRepository.ticketStatusSweepDue`). A lost
  * enqueue is not retried — the record is written first, the `./stranded.ts` ordering — and the task
  * is then covered by the next status signal and by the claim's re-check, as any task is.
  *
@@ -34,6 +34,17 @@ export const TICKET_STATUS_SWEEP_SITE = 'ticket_status_sweep';
 /** Tasks one pass sweeps, at most — the owner backfill's bound, for the same reason (20 reads/min). */
 export const TICKET_STATUS_SWEEP_PER_PASS = 20;
 
+/**
+ * **The sweep's revision** (S-28.11): the instant the current rule of the reverse sync took effect.
+ * A task recorded by an earlier revision is due again — S-28.5's sweep exempted every status the
+ * binding's lifecycle *could* write, so a queued task whose ticket a person had delivered to the
+ * `done` slot's status (AUT-6743, *Ready for Merge*) was judged the platform's own and started —
+ * and a record this revision writes is `greatest(now, revision)`, so it is never due again. Only
+ * tasks created before it are swept: a later one went through intake and the claim under the
+ * corrected rule. Bump it when the rule that decides a stop changes.
+ */
+export const TICKET_STATUS_SWEEP_REVISION_AT = '2026-11-11T00:00:00.000Z' as IsoDateTime;
+
 export interface TicketStatusSweepRecoverySite {
   readonly tasks: Pick<TaskRepository, 'ticketStatusSweepDue' | 'claimTicketStatusSweep'>;
 }
@@ -42,18 +53,30 @@ export interface TicketStatusSweepRecoverySite {
 export const recoverTicketStatusSweep = async (
   options: { readonly unitOfWork: UnitOfWork; readonly jobs: Jobs; readonly logger?: Logger },
   site: TicketStatusSweepRecoverySite,
-  input: { readonly now: IsoDateTime; readonly olderThan: IsoDateTime; readonly limit: number },
+  input: {
+    readonly now: IsoDateTime;
+    readonly olderThan: IsoDateTime;
+    readonly limit: number;
+    /** The sweep's revision; {@link TICKET_STATUS_SWEEP_REVISION_AT} when absent (tests pass one). */
+    readonly revisionAt?: IsoDateTime;
+  },
 ): Promise<{ readonly found: number; readonly enqueued: number }> => {
   const due = await options.unitOfWork.transaction(async (scope) =>
     site.tasks.ticketStatusSweepDue(scope.tx, {
       olderThan: input.olderThan,
+      revisionAt: input.revisionAt ?? TICKET_STATUS_SWEEP_REVISION_AT,
       limit: Math.max(0, Math.min(input.limit, TICKET_STATUS_SWEEP_PER_PASS)),
     }),
   );
   const enqueued: Id[] = [];
   for (const row of due) {
     const claimed = await options.unitOfWork.transaction(async (scope) =>
-      site.tasks.claimTicketStatusSweep(scope.tx, row.taskId, input.now),
+      site.tasks.claimTicketStatusSweep(
+        scope.tx,
+        row.taskId,
+        input.now,
+        input.revisionAt ?? TICKET_STATUS_SWEEP_REVISION_AT,
+      ),
     );
     if (!claimed) {
       // Another pass recorded it first; that pass enqueued the read.

@@ -44,10 +44,12 @@ import {
   isMergedTask,
   isTerminalTaskState,
   MERGED_GATE_STAGE,
+  platformWrittenStatuses,
   QA_STAGE_ID,
   READY_FOR_MERGE_STAGE,
   type TicketStatusStop,
   type TicketStatusStopReason,
+  taskLifecycleReachOf,
   ticketStatusDisposition,
   ticketStatusStopDecision,
   withStatusMappingStatuses,
@@ -187,9 +189,11 @@ export const runTicketStatusRecheck = async (
   }
   const logger = options.logger ?? silentLogger;
   const taskId = data.task_id as Id;
-  const loaded = await options.unitOfWork.transaction(async (scope) =>
-    options.store.tasks.load(scope.tx, taskId),
-  );
+  const found = await options.unitOfWork.transaction(async (scope) => ({
+    loaded: await options.store.tasks.load(scope.tx, taskId),
+    claim: await options.store.tasks.ticketClaim(scope.tx, taskId),
+  }));
+  const loaded = found.loaded;
   if (loaded === null || isTerminalTaskState(loaded.task.state)) {
     return;
   }
@@ -215,7 +219,20 @@ export const runTicketStatusRecheck = async (
     // A ticket the platform cannot read stops nothing; the next signal or pass asks again.
     return;
   }
-  const disposition = ticketStatusDisposition(read.status, read.statusCategory, policy, true);
+  /**
+   * S-28.11: only the statuses the platform actually wrote **for this task** are its own — the
+   * moments its own history shows it reached (`platformWrittenStatuses`). A task that never ran has
+   * written nothing, so a person's *Ready for Merge* (the binding's `done` slot) on a queued task
+   * is a person's move; a released claim's `in_progress` write is not counted.
+   */
+  const written = platformWrittenStatuses(
+    policy,
+    taskLifecycleReachOf(
+      loaded.task,
+      found.claim !== null && found.claim.released_at === null ? found.claim : null,
+    ),
+  );
+  const disposition = ticketStatusDisposition(read.status, read.statusCategory, policy, written);
   if (disposition !== 'closed' && disposition !== 'hands_off') {
     return;
   }

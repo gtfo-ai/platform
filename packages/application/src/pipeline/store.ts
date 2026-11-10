@@ -771,21 +771,32 @@ export interface TaskRepository {
    */
   settleOwnerBackfill(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
   /**
-   * The live tasks the **one-off ticket-status sweep** has not re-read yet (S-28.5, M28 ruling 5,
-   * migration 0115, `recovery/ticket-status-sweep.ts`): live (not `done`, not `cancelled`), mode
-   * `normal`, created before `olderThan` **and** before the sweep's own first record (the earliest
-   * `ticket_status_sweeps.swept_at`, none yet being no bound), with no record — the most recently
-   * touched first, then id, at most `limit`.
+   * The live tasks the **ticket-status sweep's current revision** has not re-read yet (S-28.5, M28
+   * ruling 5; revisions since S-28.11, migration 0115, `recovery/ticket-status-sweep.ts`): live (not
+   * `done`, not `cancelled`), mode `normal`, created before `olderThan` **and** before `revisionAt`,
+   * with no record or a record older than `revisionAt` — a record an earlier revision wrote — the
+   * most recently touched first, then id, at most `limit`.
    */
   ticketStatusSweepDue(
     tx: Transaction,
-    query: { readonly olderThan: IsoDateTime; readonly limit: number },
+    query: {
+      readonly olderThan: IsoDateTime;
+      readonly limit: number;
+      readonly revisionAt: IsoDateTime;
+    },
   ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
   /**
-   * Records that the sweep re-reads this task — `insert … on conflict do nothing`, so two passes
-   * that found the same task claim it once. Answers whether this call recorded it.
+   * Records that the current revision re-reads this task: an insert, or an update of a record older
+   * than `revisionAt`, writing `greatest(at, revisionAt)` — so two passes that found the same task
+   * claim it once per revision, and the record is never due again in it. Answers whether this call
+   * recorded it.
    */
-  claimTicketStatusSweep(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
+  claimTicketStatusSweep(
+    tx: Transaction,
+    taskId: Id,
+    at: IsoDateTime,
+    revisionAt: IsoDateTime,
+  ): Promise<boolean>;
   /** The status the task's last reverse-sync stop acted on (S-28.5 review, migration 0115), or `null`. */
   ticketStatusStopOf(tx: Transaction, taskId: Id): Promise<string | null>;
   /** Records (upserts) the status a reverse-sync stop acted on, in the stop's transaction. */

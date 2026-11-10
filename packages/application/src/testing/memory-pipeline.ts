@@ -1164,15 +1164,15 @@ export const createMemoryPipelineStore = (
     },
     // S-28.5: the sweep's predicate, cutoff and claim; the order is divergence 16's.
     ticketStatusSweepDue: async (_tx, query) => {
-      const cutoff = [...ticketStatusSweeps.values()].sort()[0] ?? null;
+      const revision = Date.parse(query.revisionAt);
       return [...tasks.values()]
         .filter(
           (stored) =>
-            !ticketStatusSweeps.has(stored.task.id) &&
+            !(Date.parse(ticketStatusSweeps.get(stored.task.id) ?? '') >= revision) &&
             stored.task.mode === 'normal' &&
             !isTerminalTaskState(stored.task.state) &&
             Date.parse(stored.createdAt) < Date.parse(query.olderThan) &&
-            (cutoff === null || Date.parse(stored.createdAt) < Date.parse(cutoff)),
+            Date.parse(stored.createdAt) < revision,
         )
         .sort(
           (a, b) => b.createdAt.localeCompare(a.createdAt) || a.task.id.localeCompare(b.task.id),
@@ -1180,11 +1180,15 @@ export const createMemoryPipelineStore = (
         .slice(0, query.limit)
         .map((stored) => ({ taskId: stored.task.id, projectId: stored.task.projectId }));
     },
-    claimTicketStatusSweep: async (_tx, taskId, at) => {
-      if (!tasks.has(taskId) || ticketStatusSweeps.has(taskId)) {
+    claimTicketStatusSweep: async (_tx, taskId, at, revisionAt) => {
+      const recorded = ticketStatusSweeps.get(taskId);
+      if (
+        !tasks.has(taskId) ||
+        (recorded !== undefined && Date.parse(recorded) >= Date.parse(revisionAt))
+      ) {
         return false;
       }
-      ticketStatusSweeps.set(taskId, at);
+      ticketStatusSweeps.set(taskId, Date.parse(at) > Date.parse(revisionAt) ? at : revisionAt);
       return true;
     },
     ticketStatusStopOf: async (_tx, taskId) => ticketStatusStops.get(taskId) ?? null,

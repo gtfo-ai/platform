@@ -1263,16 +1263,29 @@ describe('S-28.4 — the status policy at intake and at the claim (M28 ruling 3 
     expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
   });
 
-  it('the claim meets the platform’s own in_progress status and proceeds', async () => {
-    const ticket = tracker({
-      status: 'To Do',
-      statusCategory: 'todo',
-      movedBeforeTheClaimTo: { status: 'Doing', category: 'in_progress' },
-    });
-    const harness = withPolicy(ticket);
-    await harness.publish([ticketMatched()]);
-    expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
-    expect(runsCreated(harness)).toBeGreaterThan(0);
+  /**
+   * S-28.11 (the production defect, AUT-6743): a first claim is a task that never ran, so the
+   * platform has written no status for it — not even a lifecycle slot's. A ticket a person moved to
+   * the `in_progress` slot's status (or the `done` slot's, *Ready for Merge*) is a person's move.
+   * Until S-28.11 every slot's status was exempt, and this claim proceeded.
+   */
+  it('a first claim does not treat a lifecycle slot’s status as the platform’s own: refused (S-28.11)', async () => {
+    for (const status of ['Doing', 'Ready for Merge']) {
+      const ticket = tracker({
+        status: 'To Do',
+        statusCategory: 'todo',
+        movedBeforeTheClaimTo: { status, category: 'in_progress' },
+      });
+      const harness = withPolicy(ticket, { in_progress: 'Doing', done: 'Ready for Merge' });
+      await harness.publish([ticketMatched()]);
+      expect(taskOf(harness).task.state, status).toBe('needs_human');
+      expect(
+        (eventsOf(harness, 'task.escalated')[0]?.payload as { reason: string } | undefined)?.reason,
+        status,
+      ).toBe('ticket_not_startable');
+      expect(ticket.calls, status).not.toContain('assignToSelf');
+      expect(runsCreated(harness), status).toBe(0);
+    }
   });
 });
 
@@ -1311,10 +1324,27 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     harness: PipelineHarness,
     state: 'paused' | 'queued',
     withMergeRequest = false,
+    /** S-28.11: how far the task got — the stages it entered, and the one it is at. */
+    reached?: {
+      readonly stageAttempts: Record<string, number>;
+      readonly currentStage: string | null;
+    },
   ) => {
     await harness.memory.transaction(async (scope) => {
       const stored = taskOf(harness);
-      await harness.store.tasks.save(scope.tx, { ...stored, task: { ...stored.task, state } });
+      await harness.store.tasks.save(scope.tx, {
+        ...stored,
+        task: {
+          ...stored.task,
+          state,
+          ...(reached === undefined
+            ? {}
+            : {
+                stageAttempts: reached.stageAttempts,
+                currentStage: reached.currentStage as Slug | null,
+              }),
+        },
+      });
       if (withMergeRequest) {
         // The merge request is its own column's (`recordMergeRequest`), never `save`'s (WP-138).
         await harness.store.tasks.recordMergeRequest(scope.tx, stored.task.id, mergeRequest.ref);
@@ -1434,7 +1464,11 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
 
   it('the platform’s own status write stops nothing — a slot, or a status_mapping target, Done included', async () => {
     const { ticket, harness } = await stoppedAtTheClaim();
-    await putIn(harness, 'paused');
+    // S-28.11: the slot is the platform's own only once the task reached its moment.
+    await putIn(harness, 'paused', false, {
+      stageAttempts: { refinement: 1, architecture: 1, implementation: 1 },
+      currentStage: 'implementation',
+    });
     const before = eventsOf(harness, 'task.escalated').length;
     ticket.state.status = 'Doing';
     ticket.state.statusCategory = 'in_progress';
@@ -1456,6 +1490,96 @@ describe('S-28.5 — a ticket a person finished or took stops its task (M28 ruli
     await mapped.harness.drain();
     expect(taskOf(mapped.harness).task.state).toBe('paused');
     expect(eventsOf(mapped.harness, 'task.escalated')).toHaveLength(mappedBefore);
+  });
+
+  describe('S-28.11 — a status is the platform’s own only once the task reached its moment', () => {
+    const delivered = {
+      in_progress: 'Doing',
+      in_review: 'Waiting for review',
+      done: 'Ready for Merge',
+    };
+    const reached = async (settings: Record<string, unknown> = {}) => {
+      const ticket = tracker({ stealAfterAssign: 'jane', status: 'To Do', statusCategory: 'todo' });
+      const harness = harnessFor(ticket, lifecycle(delivered), {
+        settings: {
+          ticketStatusPolicy: ticketStatusPolicyOf('Ready for the agent', delivered),
+          ...settings,
+        },
+      });
+      await harness.publish([ticketMatched()]);
+      return { ticket, harness };
+    };
+    const sweep = (harness: PipelineHarness) =>
+      recoverTicketStatusSweep(
+        { unitOfWork: harness.memory, jobs: harness.jobs },
+        { tasks: harness.store.tasks },
+        {
+          now: '2026-06-02T09:00:00.000Z' as IsoDateTime,
+          olderThan: '2999-01-01T00:00:00.000Z' as IsoDateTime,
+          limit: 100,
+        },
+      );
+
+    it('AUT-6743: a queued task that never ran, its ticket a person delivered to the done slot’s status, is cancelled by the sweep', async () => {
+      const { ticket, harness } = await reached();
+      await putIn(harness, 'queued', false, { stageAttempts: {}, currentStage: null });
+      ticket.state.status = 'Ready for Merge';
+      ticket.state.statusCategory = 'in_progress';
+      expect(await sweep(harness)).toEqual({ found: 1, enqueued: 1 });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('cancelled');
+      expect(eventsOf(harness, 'task.cancelled').at(-1)?.payload).toMatchObject({
+        outcome: 'ticket_taken_by_person',
+      });
+    });
+
+    it('a task at Implementation whose ticket a person moves to the done slot’s status is stopped', async () => {
+      const { ticket, harness } = await reached();
+      await putIn(harness, 'paused', false, {
+        stageAttempts: { refinement: 1, architecture: 1, implementation: 1 },
+        currentStage: 'implementation',
+      });
+      ticket.state.status = 'Ready for Merge';
+      ticket.state.statusCategory = 'in_progress';
+      await harness.publish([moved('Doing', 'Ready for Merge')]);
+      await harness.drain();
+      expect(lastEscalation(harness)?.reason).toBe('ticket_taken_by_person');
+    });
+
+    it('a task past its code review, whose ticket the platform’s own in_review moment moved, is left alone', async () => {
+      const { ticket, harness } = await reached();
+      await putIn(harness, 'paused', false, {
+        stageAttempts: { refinement: 1, architecture: 1, implementation: 1, code_review: 1 },
+        currentStage: 'code_review',
+      });
+      const before = eventsOf(harness, 'task.escalated').length;
+      ticket.state.status = 'Waiting for review';
+      ticket.state.statusCategory = 'in_progress';
+      await harness.publish([moved('Doing', 'Waiting for review')]);
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('paused');
+      expect(eventsOf(harness, 'task.escalated')).toHaveLength(before);
+    });
+
+    it('re-judges a task an earlier sweep revision recorded, once', async () => {
+      const { ticket, harness } = await reached();
+      await putIn(harness, 'queued', false, { stageAttempts: {}, currentStage: null });
+      // S-28.5's pass recorded it (and, under its rule, left it alone).
+      await harness.memory.transaction(async (scope) =>
+        harness.store.tasks.claimTicketStatusSweep(
+          scope.tx,
+          taskOf(harness).task.id,
+          '2026-06-02T08:00:00.000Z' as IsoDateTime,
+          '2026-06-02T08:00:00.000Z' as IsoDateTime,
+        ),
+      );
+      ticket.state.status = 'Ready for Merge';
+      ticket.state.statusCategory = 'in_progress';
+      expect(await sweep(harness)).toEqual({ found: 1, enqueued: 1 });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('cancelled');
+      expect(await sweep(harness)).toEqual({ found: 0, enqueued: 0 });
+    });
   });
 
   it('the one-off sweep re-reads each live task once, and stops one whose ticket was finished before', async () => {

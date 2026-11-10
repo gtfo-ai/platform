@@ -848,29 +848,32 @@ export const createPostgresPipelineStore = (
       return (result.rowCount ?? 0) > 0;
     },
 
-    // S-28.5 (migration 0115): the one-off ticket-status sweep, bounded by its own first record.
+    // S-28.5 (migration 0115): the ticket-status sweep, one pass per revision (S-28.11), bounded
+    // by the revision's instant.
     ticketStatusSweepDue: async (tx, query) => {
       const { rows } = await sqlOf(tx).query<{ id: string; project_id: string }>(
         `select t.id, t.project_id from tasks t
           where t.mode = 'normal'
             and t.state <> all (array['done', 'cancelled']::task_state[])
             and t.created_at < $1
-            and t.created_at < coalesce(
-              (select min(s.swept_at) from ticket_status_sweeps s), 'infinity'::timestamptz)
-            and not exists (select 1 from ticket_status_sweeps s where s.task_id = t.id)
+            and t.created_at < $3
+            and not exists (
+              select 1 from ticket_status_sweeps s where s.task_id = t.id and s.swept_at >= $3)
           order by t.updated_at desc, t.id
           limit $2`,
-        [query.olderThan, query.limit],
+        [query.olderThan, query.limit, query.revisionAt],
       );
       return rows.map((row) => ({ taskId: row.id as Id, projectId: row.project_id as Id }));
     },
 
-    claimTicketStatusSweep: async (tx, taskId, at) => {
+    claimTicketStatusSweep: async (tx, taskId, at, revisionAt) => {
       const { rows } = await sqlOf(tx).query(
-        `insert into ticket_status_sweeps (task_id, swept_at) values ($1, $2)
-           on conflict (task_id) do nothing
+        `insert into ticket_status_sweeps (task_id, swept_at)
+           values ($1, greatest($2::timestamptz, $3::timestamptz))
+           on conflict (task_id) do update set swept_at = excluded.swept_at
+             where ticket_status_sweeps.swept_at < $3
            returning task_id`,
-        [taskId, at],
+        [taskId, at, revisionAt],
       );
       return rows.length > 0;
     },

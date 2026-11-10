@@ -285,8 +285,9 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 > task-management binding, block or not. What counts as startable, closed, **hands-off** or neither is
 > one pure function, `ticketStatusDisposition` (`packages/domain/src/lifecycle/status-disposition.ts`):
 > hands-off is a status of the In Progress category that is neither startable nor closed and — for a
-> ticket the platform holds — not one the platform itself writes (a slot, `returned`, or, when no slot
-> is mapped, a `status_mapping` target).
+> ticket the platform holds — not one the platform itself **has written for that task** (a slot,
+> `returned`, or, when no slot is mapped, a `status_mapping` target — each only once the task reached
+> the moment that writes it, `platformWrittenStatuses`, S-28.11; a task that never ran has written none).
 >
 > **New settings key `human_returns.acknowledgements`** (a list of at most 50 words, each 1–40
 > characters). It **adds** words in a project's own language to the shipped acknowledgement vocabulary

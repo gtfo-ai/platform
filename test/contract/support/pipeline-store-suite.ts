@@ -509,25 +509,35 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         });
         const mine = new Set([first, second, third, finishedBase].map((s) => s.task.id));
         const future = '2999-01-01T00:00:00.000Z' as IsoDateTime;
-        const due = async () =>
-          (await store.tasks.ticketStatusSweepDue(tx, { olderThan: future, limit: 10_000 }))
+        const early = '2026-06-01T00:00:00.000Z' as IsoDateTime;
+        const revision = '2998-01-01T00:00:00.000Z' as IsoDateTime;
+        const due = async (revisionAt: IsoDateTime = revision) =>
+          (
+            await store.tasks.ticketStatusSweepDue(tx, {
+              olderThan: future,
+              limit: 10_000,
+              revisionAt,
+            })
+          )
             .map((row) => row.taskId)
             .filter((id) => mine.has(id))
             .sort();
         expect(await due()).toEqual([first, second, third].map((s) => s.task.id).sort());
-        // Claimed once: the second claim loses, and the task is never due again.
-        expect(await store.tasks.claimTicketStatusSweep(tx, first.task.id, future)).toBe(true);
-        expect(await store.tasks.claimTicketStatusSweep(tx, first.task.id, future)).toBe(false);
+        // Claimed once per revision: the second claim loses, and the task is not due again in it.
+        expect(await store.tasks.claimTicketStatusSweep(tx, first.task.id, early, revision)).toBe(
+          true,
+        );
+        expect(await store.tasks.claimTicketStatusSweep(tx, first.task.id, early, revision)).toBe(
+          false,
+        );
         expect(await due()).toEqual([second, third].map((s) => s.task.id).sort());
-        // A record dated before every task bounds the sweep: nothing created after it is due.
-        expect(
-          await store.tasks.claimTicketStatusSweep(
-            tx,
-            second.task.id,
-            '2000-01-01T00:00:00.000Z' as IsoDateTime,
-          ),
-        ).toBe(true);
-        expect(await due()).toEqual([]);
+        // S-28.11: a later revision re-judges a task an earlier one recorded, once.
+        const next = '2998-06-01T00:00:00.000Z' as IsoDateTime;
+        expect(await due(next)).toEqual([first, second, third].map((s) => s.task.id).sort());
+        expect(await store.tasks.claimTicketStatusSweep(tx, first.task.id, early, next)).toBe(true);
+        expect(await due(next)).toEqual([second, third].map((s) => s.task.id).sort());
+        // A revision before every task's creation sweeps none of them.
+        expect(await due('2000-01-01T00:00:00.000Z' as IsoDateTime)).toEqual([]);
       });
 
       it('records the status a reverse-sync stop acted on, and replaces it (S-28.5 review)', async () => {
