@@ -3857,6 +3857,7 @@ describe('a human’s way into Ready (WP-79)', () => {
         'assertRunTransition', // a check
         'canTransitionTask', // a check
         'compilePipeline', // pure
+        'DEFAULT_TASK_BUDGET_USD', // a constant: the cap an approved budget's raise compares (S-28.16)
         'decideApproval', // Approval aggregate
         'evaluateIteration', // a check
         'expireQuestion', // Question aggregate
