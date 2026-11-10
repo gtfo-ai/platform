@@ -104,8 +104,8 @@ export interface PostgresIntegrationAuditLogOptions {
 
 const INSERT_ACTION = `insert into integration_actions
     (integration_id, project_id, task_id, direction, action, payload, result, status,
-     duration_ms, redaction_count, attempts, created_at)
-  values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12)`;
+     duration_ms, redaction_count, attempts, created_at, error_code, error_message)
+  values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)`;
 
 /**
  * The minted credential's shape, upserted **in the audit row's transaction** (WP-80, TD-012's M5
@@ -189,6 +189,10 @@ export const createPostgresIntegrationAuditLog = (
         entry.redactionCount,
         entry.attempts,
         entry.occurredAt,
+        // S-28.10 (migration 0115): a failed row keeps what failed — the code and the message the
+        // executor already redacted and bounded — so the row alone answers "why".
+        entry.status === 'failed' ? (entry.errorCode ?? null) : null,
+        entry.status === 'failed' ? entry.error : null,
       ]);
       const shape = entry.status === 'ok' ? entry.credentialShape : undefined;
       if (shape !== undefined) {

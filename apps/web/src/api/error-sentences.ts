@@ -73,6 +73,7 @@ const autonomyWord = (level: string): string =>
 const COMMAND_PARTICIPLE: Readonly<Record<string, string>> = {
   'task.pause': 'paused',
   'task.resume': 'resumed',
+  'task.ticket_sync.retry': 'moved in the tracker again',
   'task.cancel': 'cancelled',
   'task.retry_stage': 'retried',
   'task.return_to_stage': 'sent back to an earlier step',
@@ -282,6 +283,9 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
   run_not_live:
     'The run has already ended, so there is nothing to stop or message. Re-run it from the task page if it is still needed.',
   budget_not_raised: 'The new cap must be above the cap in force. Enter a higher figure.',
+  // S-28.10: Retry pressed on a ticket whose status is already where the platform wanted it.
+  ticket_in_sync:
+    'The ticket’s status is no longer out of sync, so there is nothing to retry. Reload the page to see where it stands.',
   // S-28.1 (M28 ruling 2): a raise the next run would still not fit under, with its arithmetic.
   budget_raise_insufficient: (error) => {
     const minimum = dollarsOf(detailOf(error, 'required_cap_usd'), 'up');

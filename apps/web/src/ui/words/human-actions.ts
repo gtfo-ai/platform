@@ -19,6 +19,8 @@ export const HUMAN_ACTION_WORDS: Readonly<Record<string, string>> = {
   // A task (`routes/commands.ts`, `asks.ts`, `breakdown.ts`, the manual start).
   'task.pause': 'Paused the task',
   'task.resume': 'Resumed the task',
+  // S-28.10: Retry on *ticket status out of sync*.
+  'task.ticket_sync.retry': 'Asked the tracker again to move the ticket',
   'task.cancel': 'Cancelled the task',
   'task.budget.raise': 'Raised the task’s cost cap',
   'task.owner': 'Changed who owns the task',

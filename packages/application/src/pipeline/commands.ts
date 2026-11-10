@@ -2667,3 +2667,54 @@ export const handBackTaskCommand = async (
     },
   );
 };
+
+/** **Retry** on a task whose ticket status is not out of sync: nothing to retry (409). */
+export class TicketInSyncError extends Error {
+  override readonly name = 'TicketInSyncError';
+  constructor(taskId: Id) {
+    super(`task ${taskId} has no ticket status out of sync, so there is nothing to retry`);
+  }
+}
+
+/**
+ * `POST /api/tasks/:task_id/ticket-sync/retry` — **Retry** on *ticket status out of sync*
+ * (S-28.10, TD-029's amendment C (2)): the same `ticket_lifecycle` duty the moment enqueued, with
+ * the recorded slot and status and a fresh wake-up identity, so the executor makes the call again
+ * rather than replaying a failure it never stored. The duty clears the record when the move goes
+ * through and records the new reason when it does not. Moves no state; refused `409
+ * ticket_in_sync` when nothing is out of sync.
+ */
+export const retryTicketSyncCommand = async (
+  deps: Pick<HumanCommandDependencies, 'unitOfWork' | 'store' | 'jobs' | 'context'>,
+  input: { readonly taskId: Id; readonly userId: Id },
+): Promise<{ readonly status: string; readonly slot: string | null }> => {
+  const found = await deps.unitOfWork.transaction(async (scope) => {
+    const stored = await deps.store.tasks.load(scope.tx, input.taskId);
+    if (stored === null) {
+      throw new UnknownAggregateError(`task ${input.taskId} does not exist`);
+    }
+    const row = (await deps.store.tasks.providerSync(scope.tx, input.taskId)).find(
+      (entry) => entry.subject === 'ticket_status',
+    );
+    return row === undefined ? null : { stored, row };
+  });
+  if (found === null) {
+    throw new TicketInSyncError(input.taskId);
+  }
+  if (deps.jobs === null) {
+    throw new CommandsUnavailableError(
+      'this process runs no job workers, so it cannot move the ticket. Ask an instance that runs the workers',
+    );
+  }
+  const wakeUp = deps.context(input.taskId).ids.next();
+  await enqueueOutbound(deps.jobs, {
+    duty: 'ticket_lifecycle',
+    project_id: found.stored.task.projectId,
+    task_id: input.taskId,
+    cause_event_id: wakeUp,
+    status: found.row.target,
+    ...(found.row.slot === null ? {} : { lifecycle_slot: found.row.slot }),
+    lifecycle_key: `ticket_lifecycle_retry:${input.taskId}:${wakeUp}`,
+  });
+  return { status: found.row.target, slot: found.row.slot };
+};

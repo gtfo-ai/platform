@@ -71,6 +71,7 @@ import type {
   JsonObject,
   PipelineTemplate,
   PromptsWithheldRecord,
+  ProviderSync,
   QuestionRecord,
   QueueWait,
   RunCommandRecord,
@@ -106,6 +107,7 @@ import {
   pausedBudgetFiguresSchema,
   pausedBudgetScopeSchema,
   promptsWithheldSchema,
+  providerSyncSchema,
   runSavedWorkSchema,
   runStartFailureSchema,
   runStoppedReasonSchema,
@@ -172,6 +174,7 @@ const {
   runCommands,
   runModelUsage,
   runs,
+  taskProviderSync,
   taskStages,
   tasks,
 } = dbAdapters.schema;
@@ -2379,6 +2382,8 @@ export const findTaskDetail = async (
     last_gate_wait: lastGateWaitOf(task, stageRows),
     // S-27.2: the manual jobs the latest CI pass left unstarted.
     ci_manual_not_run: ciManualNotRunOf(stageRows),
+    // S-28.10: what is out of sync with the provider, if anything.
+    provider_sync: await providerSyncFor(database, taskId),
     queue_wait: queueWaits.get(task.id) ?? null,
     manual_pause: manualPause,
     // S-25.11: the returns and the stop, off the same rows.
@@ -2416,6 +2421,42 @@ export const findTaskDetail = async (
       ),
     ),
   };
+};
+
+/**
+ * **What is out of sync with the provider** (S-28.10, TD-029's amendment C): the task's
+ * `task_provider_sync` rows, oldest first, each parsed with the published shape — a row that does
+ * not parse is refused by name rather than served half-read.
+ */
+export const providerSyncFor = async (
+  database: Database,
+  taskId: string,
+): Promise<readonly ProviderSync[]> => {
+  const rows = await database
+    .select()
+    .from(taskProviderSync)
+    .where(eq(taskProviderSync.taskId, taskId))
+    .orderBy(asc(taskProviderSync.failedAt), asc(taskProviderSync.subject));
+  return rows.map((row) => {
+    const parsed = providerSyncSchema.safeParse({
+      subject: row.subject,
+      slot: row.slot,
+      target: row.target,
+      observed: row.observed,
+      available: row.available,
+      reason: row.reason,
+      reason_code: row.reasonCode,
+      failed_at: row.failedAt.toISOString(),
+      attempts: row.attempts,
+    });
+    if (!parsed.success) {
+      throw new UnprojectableRowError(
+        `task_provider_sync (${taskId}, ${row.subject})`,
+        'it does not parse as the published out-of-sync shape',
+      );
+    }
+    return parsed.data;
+  });
 };
 
 /**

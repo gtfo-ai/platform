@@ -97,6 +97,10 @@ export const SLOT_COPY: Readonly<Record<LifecycleSlot, { label: string; hint: st
     label: 'Returned',
     hint: `Never set by the platform. A person moving the ticket into one of these returns the task to the agent. Up to ${MAX_LIFECYCLE_RETURNED_STATUSES}.`,
   },
+  ready_for_merge: {
+    label: 'Ready for merge',
+    hint: 'Optional. Set when the task is ready to merge and its merge request has been read back as no longer a draft, so the ticket never says ready about a draft.',
+  },
   done: { label: 'Done', hint: 'Set when the merge request is merged.' },
 };
 

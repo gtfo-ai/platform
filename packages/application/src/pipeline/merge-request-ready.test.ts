@@ -31,6 +31,7 @@ import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import type { PipelineOutboundData } from './jobs.js';
 import {
+  MergeRequestStillDraftError,
   mergeRequestReadyHandlers,
   runMergeRequestDraft,
   runMergeRequestPipeline,
@@ -112,6 +113,10 @@ const world = async (
     readonly state?: 'active' | 'ready_for_merge' | 'done' | 'paused';
     /** The live merge request on the provider. @default an open draft. */
     readonly live?: { readonly draft: boolean; readonly state?: 'opened' | 'merged' | 'closed' };
+    /** S-28.10: the provider answers a draft write but the merge request stays as it was. */
+    readonly ignoresDraftWrite?: boolean;
+    /** S-28.10: the binding's lifecycle slots (`ticketLifecycle.slots`), for `ready_for_merge`. */
+    readonly lifecycleSlots?: Readonly<Record<string, string | boolean>>;
   } = {},
 ) => {
   const mirrorReads: { paths: readonly string[]; presence: readonly string[] }[] = [];
@@ -174,6 +179,7 @@ const world = async (
   });
   const updates: MergeRequestUpdate[] = [];
   const live = options.live ?? { draft: true };
+  let draftNow = live.draft;
   const liveMergeRequest = (ref: typeof MR, draft: boolean) => ({
     ref,
     state: live.state ?? 'opened',
@@ -196,10 +202,15 @@ const world = async (
     },
     capabilities: () => ({}),
     repositorySettings: async () => ({ defaultBranch: 'develop', ciConfig }),
-    getMergeRequest: async (ref: typeof MR) => liveMergeRequest(ref, live.draft),
+    getMergeRequest: async (ref: typeof MR) => liveMergeRequest(ref, draftNow),
     updateMergeRequest: async (ref: typeof MR, update: MergeRequestUpdate) => {
       updates.push(update);
-      return liveMergeRequest(ref, update.draft ?? live.draft);
+      // S-28.10: a provider that accepts the write and keeps the draft (AUT-6655's shape) when
+      // `ignoresDraftWrite`; otherwise the next read sees what was written.
+      if (options.ignoresDraftWrite !== true) {
+        draftNow = update.draft ?? draftNow;
+      }
+      return liveMergeRequest(ref, update.draft ?? draftNow);
     },
     getPipelineStatus: async () =>
       options.pipeline === true
@@ -229,11 +240,21 @@ const world = async (
     },
   } as unknown as GitProviderPort;
   const auditLog = createMemoryAuditLog();
+  const transitions: string[] = [];
   const options_ = {
+    clock: { now: () => '2026-06-01T09:00:00.000Z' },
     unitOfWork: memory,
     store,
     settings: staticProjectSettings((projectId) =>
       defaultProjectSettings(projectId, {
+        ...(options.lifecycleSlots === undefined
+          ? {}
+          : {
+              ticketLifecycle: {
+                pickUpFrom: null,
+                slots: { ...options.lifecycleSlots } as never,
+              },
+            }),
         ...(options.requiredManualJobs === undefined
           ? {}
           : {
@@ -265,7 +286,24 @@ const world = async (
         clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
       }),
       git: { port, ref: port.ref, project: 'acme/api', redactor: exactSecretRedactor([]) },
-      taskManagement: null,
+      taskManagement:
+        options.lifecycleSlots === undefined
+          ? null
+          : {
+              port: {
+                capabilities: () => ({}),
+                transition: async (_ref: unknown, status: string) => {
+                  transitions.push(status);
+                  return { changed: true, from: 'Doing', to: status };
+                },
+              },
+              ref: {
+                integrationId: '00000000-0000-4000-8000-00000000a002',
+                provider: 'fake-jira',
+                type: 'task_management',
+              },
+              redactor: exactSecretRedactor([]),
+            },
       communication: null,
     }),
   } as unknown as Parameters<typeof runMergeRequestReady>[0];
@@ -286,6 +324,22 @@ const world = async (
     pipelines,
     auditLog,
     mirrorReads,
+    transitions,
+    outOfSync: async () =>
+      memory.transaction(async (scope) => store.tasks.providerSync(scope.tx, TASK)),
+    recordOutOfSync: async () =>
+      memory.transaction(async (scope) =>
+        store.tasks.recordProviderSyncFailure(scope.tx, TASK, {
+          subject: 'merge_request_draft',
+          slot: null,
+          target: 'ready',
+          observed: 'draft',
+          available: null,
+          reason: 'still a draft',
+          reason_code: 'still_draft',
+          failed_at: '2026-06-01T08:00:00.000Z',
+        }),
+      ),
   };
 };
 
@@ -622,5 +676,56 @@ describe('mr_draft waits for the admitted run (S-28.1, M28 ruling 6)', () => {
     expect(await handle(claimed, { stage: null, attempt: 1 })).toEqual([]);
     expect(await handle(claimed, { stage: 'implementation', attempt: 1 })).toEqual([]);
     expect(await handle(claimed, null)).toEqual([]);
+  });
+});
+
+/**
+ * **`mr_ready` reads back, and a tracker never says ready about a draft** (S-28.10, TD-029's
+ * amendment C (3)–(4)). AUT-6655's merge request stayed *Draft* while the platform believed it
+ * ready, and Jira said *Ready for Merge*. Canaries: dropping the read-back answers `marked_ready`
+ * for the provider that kept the draft; moving the slot before the read-back moves the ticket in
+ * that case too.
+ */
+describe('mr_ready reads the merge request back (S-28.10)', () => {
+  it('fails loudly, and records the merge request out of sync, when the write did not take', async () => {
+    const { ready, transitions, outOfSync } = await world({
+      state: 'ready_for_merge',
+      ignoresDraftWrite: true,
+      lifecycleSlots: { ready_for_merge: 'Ready for Merge', claim: false },
+    });
+    await expect(ready()).rejects.toBeInstanceOf(MergeRequestStillDraftError);
+    expect((await outOfSync()).map((row) => [row.subject, row.observed, row.attempts])).toEqual([
+      ['merge_request_draft', 'draft', 1],
+    ]);
+    // The ticket is not told "ready" about a draft.
+    expect(transitions).toEqual([]);
+  });
+
+  it('marks ready, clears an earlier out-of-sync row, and only then moves the ticket to ready_for_merge', async () => {
+    const { ready, transitions, outOfSync, recordOutOfSync } = await world({
+      state: 'ready_for_merge',
+      lifecycleSlots: { ready_for_merge: 'Ready for Merge', claim: false },
+    });
+    await recordOutOfSync();
+    expect(await ready()).toBe('marked_ready');
+    expect(await outOfSync()).toEqual([]);
+    expect(transitions).toEqual(['Ready for Merge']);
+  });
+
+  it('moves the ticket for a merge request that already reads non-draft, and nothing when the slot is unmapped', async () => {
+    const mapped = await world({
+      state: 'ready_for_merge',
+      live: { draft: false },
+      lifecycleSlots: { ready_for_merge: 'Ready for Merge', claim: false },
+    });
+    expect(await mapped.ready()).toBe('unchanged');
+    expect(mapped.transitions).toEqual(['Ready for Merge']);
+    const unmapped = await world({
+      state: 'ready_for_merge',
+      live: { draft: false },
+      lifecycleSlots: { claim: false },
+    });
+    expect(await unmapped.ready()).toBe('unchanged');
+    expect(unmapped.transitions).toEqual([]);
   });
 });

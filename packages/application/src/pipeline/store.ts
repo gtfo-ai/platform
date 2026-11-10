@@ -42,6 +42,8 @@ import type {
   PausedBudgetScope,
   PipelineTemplate,
   ProviderMode,
+  ProviderSync,
+  ProviderSyncSubject,
   RunClaimantKind,
   RunCost,
   RunOfferKind,
@@ -1275,6 +1277,22 @@ export interface TaskRepository {
       readonly causedByEventId: string | null;
     },
   ): Promise<boolean>;
+  /**
+   * The task's subjects **out of sync** with the provider (S-28.10, TD-029's amendment C,
+   * `task_provider_sync`), oldest first; `[]` when everything the platform moved stayed moved.
+   */
+  providerSync(tx: Transaction, taskId: Id): Promise<readonly ProviderSync[]>;
+  /**
+   * Records that `subject` is out of sync — an upsert: a second failure replaces the row's figures
+   * and counts one more `attempts`. One writer, `./provider-sync.ts`.
+   */
+  recordProviderSyncFailure(
+    tx: Transaction,
+    taskId: Id,
+    failure: Omit<ProviderSync, 'attempts'>,
+  ): Promise<void>;
+  /** Clears `subject`: a later move or read-back succeeded. Answers whether a row was cleared. */
+  clearProviderSync(tx: Transaction, taskId: Id, subject: ProviderSyncSubject): Promise<boolean>;
   /**
    * When `stage`'s attempt `attempt` was entered (`task_stages.entered_at`, the database's clock)
    * and whether it is still open — `null` when the attempt has no row (WP-136).

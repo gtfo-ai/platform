@@ -181,6 +181,9 @@ export const integrationActions = pgTable(
     /** Provider attempts including the successful one; 0 for `would_have` and `replayed`. */
     attempts: integer('attempts').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** S-28.10 (migration 0115): a failed row's redacted code and message; `null` otherwise. */
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
   },
   (table) => [primaryKey({ columns: [table.id, table.createdAt] })],
 );

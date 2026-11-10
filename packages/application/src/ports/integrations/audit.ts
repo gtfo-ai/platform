@@ -60,6 +60,13 @@ export interface IntegrationActionEntry {
   readonly result: JsonObject | null;
   /** Redacted error message, `null` unless `status` is `failed`. */
   readonly error: string | null;
+  /**
+   * The failure's machine-readable code (S-28.10, TD-029's amendment C (1)): an
+   * `IntegrationError`'s `code` (`invalid_request`, `not_found`, …), else the error's class name —
+   * platform vocabulary, never provider text, at most 64 characters of `[A-Za-z0-9_.-]`. `null` (or
+   * absent, for an entry built before it existed) unless `status` is `failed`.
+   */
+  readonly errorCode?: string | null;
   readonly durationMs: number;
   readonly occurredAt: IsoDateTime;
   readonly redactionCount: number;

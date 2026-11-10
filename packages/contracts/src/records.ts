@@ -334,6 +334,35 @@ export const pausedBudgetFiguresSchema = z.strictObject({
 
 export type PausedBudgetFigures = z.infer<typeof pausedBudgetFiguresSchema>;
 
+/** What can be out of sync with the platform's intent (S-28.10, TD-029's amendment C). */
+export const providerSyncSubjectSchema = z.enum(['ticket_status', 'merge_request_draft']);
+export type ProviderSyncSubject = z.infer<typeof providerSyncSubjectSchema>;
+
+/**
+ * **A ticket status or a merge request out of sync** (S-28.10, TD-029's amendment C (2)–(3)): the
+ * platform tried to move the ticket to `target` (for the lifecycle `slot`) — or to mark the merge
+ * request ready — and the provider did not follow. `observed` is what the provider showed when it
+ * was read after the failure (`null`: it could not be read), `available` the statuses the ticket
+ * could move to then (`null`: the provider cannot list them). `reason` is the provider's reason,
+ * redacted and bounded, and `reason_code` its code. Provider text throughout (`target`,
+ * `observed`, `available`, `reason`): rendered as untrusted text (BD-022).
+ */
+export const providerSyncSchema = z.strictObject({
+  subject: providerSyncSubjectSchema,
+  slot: slugSchema.nullable(),
+  target: nonEmptyStringSchema.max(255),
+  observed: nonEmptyStringSchema.max(255).nullable(),
+  available: z.array(nonEmptyStringSchema.max(255)).max(50).nullable(),
+  reason: nonEmptyStringSchema.max(2000),
+  reason_code: z
+    .string()
+    .regex(/^[A-Za-z0-9_.-]{1,64}$/)
+    .nullable(),
+  failed_at: isoDateTimeSchema,
+  attempts: z.int().positive(),
+});
+export type ProviderSync = z.infer<typeof providerSyncSchema>;
+
 /**
  * Cost and effort totals attached to `task.completed` / `task.cancelled`.
  *

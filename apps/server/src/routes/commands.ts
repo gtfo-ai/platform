@@ -103,6 +103,7 @@ import {
   retryRunRequestSchema,
   retryStageRequestSchema,
   retryStageResponseSchema,
+  retryTicketSyncRequestSchema,
   returnToStageRequestSchema,
   reworkRequestSchema,
   runCommandResponseSchema,
@@ -690,6 +691,29 @@ export const registerCommandRoutes = async (
       }
       return deps.setOwner({ taskId, userId, role, targetUserId: body.user_id });
     },
+  });
+
+  /**
+   * **Retry a lifecycle move the tracker refused** (S-28.10, TD-029's amendment C (2)): the task
+   * page's *Ticket status out of sync* box. The same permission as *Resume* — it moves the ticket,
+   * never the task. The key is optional: a second press re-asks the tracker, which is what a
+   * person pressing it twice means.
+   */
+  taskCommand({
+    path: '/api/tasks/:task_id/ticket-sync/retry',
+    action: 'task.resume',
+    name: 'task.ticket_sync.retry',
+    key: 'optional',
+    body: retryTicketSyncRequestSchema,
+    summary: 'Retry the ticket status move the tracker refused',
+    description:
+      'Re-asks the tracker to move the ticket to the status the platform recorded as out of sync (`provider_sync` on `GET /api/tasks/:id`), through the same lifecycle duty: the record is cleared when the move goes through and updated with the new reason when it does not. The task is not moved. `409 ticket_in_sync` when the ticket status is not out of sync. The audit row names the status and the slot.',
+    params: () => ({}),
+    auditResult: (result: { readonly status: string; readonly slot: string | null }) => ({
+      status: result.status,
+      slot: result.slot,
+    }),
+    perform: async ({ deps, taskId, userId }) => deps.retryTicketSync({ taskId, userId }),
   });
 
   taskCommand({

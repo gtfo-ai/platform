@@ -37,6 +37,7 @@ import type {
   Id,
   IsoDateTime,
   ProviderMode,
+  ProviderSync,
   RunSavedWork,
   RunStartFailure,
   Size,
@@ -443,6 +444,8 @@ export const createMemoryPipelineStore = (
   const contextPacks = new Map<Id, ContextPackRecord>();
   /** `tasks.budget_cap_usd` (WP-131 review round 1): not on `StoredTask`, as `save` never names it. */
   const budgetCaps = new Map<Id, number>();
+  /** `task_provider_sync` (S-28.10, migration 0115), keyed `task_id#subject` like its primary key. */
+  const providerSyncRows = new Map<string, { readonly taskId: Id; readonly row: ProviderSync }>();
   /** `tasks.ticket_claim` (migration 0088, WP-177): not on `StoredTask`, as `save` never names it. */
   const ticketClaims = new Map<Id, StoredTicketClaim>();
   // S-26.1: the four ownership columns, kept off `StoredTask` as the claim is, and the directory.
@@ -1361,6 +1364,20 @@ export const createMemoryPipelineStore = (
       if (row === undefined) return 'absent';
       return row.state === 'running' && row.exitedAt === null ? 'open' : 'closed';
     },
+    // S-28.10: the SQL's upsert, delete and read over `task_provider_sync`, insertion order.
+    providerSync: async (_tx, taskId) =>
+      [...providerSyncRows.values()]
+        .filter((entry) => entry.taskId === taskId)
+        .map((entry) => clone(entry.row)),
+    recordProviderSyncFailure: async (_tx, taskId, failure) => {
+      const key = `${taskId}#${failure.subject}`;
+      const previous = providerSyncRows.get(key);
+      const row: ProviderSync = { ...clone(failure), attempts: (previous?.row.attempts ?? 0) + 1 };
+      if (previous !== undefined) providerSyncRows.delete(key);
+      providerSyncRows.set(key, { taskId, row });
+    },
+    clearProviderSync: async (_tx, taskId, subject) =>
+      providerSyncRows.delete(`${taskId}#${subject}`),
     // S-28.1: the SQL's join through `runs.task_stage_id`, here the run's own stage and attempt.
     stageAttemptRuns: async (_tx, taskId, stage, attempt) =>
       [...runs.values()].filter(

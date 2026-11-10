@@ -81,6 +81,7 @@ import {
   contextPackRecordSchema,
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
+  providerSyncSchema,
   runSavedWorkSchema,
   runStatusSchema,
   runTerminalReasonSchema,
@@ -1489,6 +1490,50 @@ export const createPostgresPipelineStore = (
       );
       const row = rows[0];
       return row === undefined ? 'absent' : row.open ? 'open' : 'closed';
+    },
+
+    providerSync: async (tx, taskId) => {
+      // S-28.10 (migration 0115): what is out of sync now, parsed with the published shape.
+      const { rows } = await sqlOf(tx).query<Record<string, unknown>>(
+        `select subject, slot, target, observed, available, reason, reason_code,
+                to_char(failed_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as failed_at,
+                attempts
+           from task_provider_sync where task_id = $1 order by failed_at, subject`,
+        [taskId],
+      );
+      return rows.map((row) => providerSyncSchema.parse(row));
+    },
+
+    recordProviderSyncFailure: async (tx, taskId, failure) => {
+      await sqlOf(tx).query(
+        `insert into task_provider_sync
+           (task_id, subject, slot, target, observed, available, reason, reason_code, failed_at)
+         values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::timestamptz)
+         on conflict (task_id, subject) do update
+            set slot = excluded.slot, target = excluded.target, observed = excluded.observed,
+                available = excluded.available, reason = excluded.reason,
+                reason_code = excluded.reason_code, failed_at = excluded.failed_at,
+                attempts = task_provider_sync.attempts + 1`,
+        [
+          taskId,
+          failure.subject,
+          failure.slot,
+          failure.target,
+          failure.observed,
+          failure.available === null ? null : JSON.stringify(failure.available),
+          failure.reason,
+          failure.reason_code,
+          failure.failed_at,
+        ],
+      );
+    },
+
+    clearProviderSync: async (tx, taskId, subject) => {
+      const result = await sqlOf(tx).query(
+        'delete from task_provider_sync where task_id = $1 and subject = $2',
+        [taskId, subject],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
 
     stageAttemptRuns: async (tx, taskId, stage, attempt) => {

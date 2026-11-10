@@ -1104,6 +1104,11 @@ export const useTaskCommands = (taskId: string) => {
       mutationFn: (reason: string) => endpoints.cancelTask(taskId, { reason }),
       onSuccess: invalidate,
     }),
+    /** S-28.10: Retry the ticket status move the tracker refused. */
+    retryTicketSync: useMutation({
+      mutationFn: () => endpoints.retryTicketSync(taskId, {}),
+      onSuccess: invalidate,
+    }),
     /**
      * WP-131 review round 1: raise this task's cap, then resume it through the existing resume
      * command — the raise moves no state, and a task paused for its budget waits for both.

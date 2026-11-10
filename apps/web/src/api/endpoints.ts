@@ -111,6 +111,7 @@ import {
   retryRunRequestSchema,
   retryStageRequestSchema,
   retryStageResponseSchema,
+  retryTicketSyncRequestSchema,
   returnToStageRequestSchema,
   revokeWorkerResponseSchema,
   reworkRequestSchema,
@@ -609,6 +610,11 @@ export interface Endpoints {
   readonly cancelTask: (
     taskId: string,
     body: z.input<typeof cancelTaskRequestSchema>,
+  ) => Promise<void>;
+  /** S-28.10: Retry the ticket status move the tracker refused (*ticket status out of sync*). */
+  readonly retryTicketSync: (
+    taskId: string,
+    body: z.input<typeof retryTicketSyncRequestSchema>,
   ) => Promise<void>;
   /** WP-131 review round 1: raise this task's own cap; idempotent, it is a decision made once. */
   readonly raiseTaskBudget: (
@@ -1114,6 +1120,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       command(`/api/tasks/${seg(taskId)}/resume`, resumeTaskRequestSchema, body),
     cancelTask: (taskId, body) =>
       command(`/api/tasks/${seg(taskId)}/cancel`, cancelTaskRequestSchema, body),
+    retryTicketSync: (taskId, body) =>
+      command(`/api/tasks/${seg(taskId)}/ticket-sync/retry`, retryTicketSyncRequestSchema, body),
     raiseTaskBudget: (taskId, body) =>
       command(`/api/tasks/${seg(taskId)}/budget`, raiseTaskBudgetRequestSchema, body, true),
     answerQuestion: (taskId, questionId, body) =>

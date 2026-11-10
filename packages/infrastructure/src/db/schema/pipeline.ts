@@ -781,6 +781,28 @@ export const taskDutyLeases = pgTable(
 );
 
 /**
+ * A task's ticket status or merge request **out of sync** (S-28.10, TD-029's amendment C, migration
+ * 0115): one row per task and subject while it is, deleted when a later move or read-back
+ * succeeds. One writer, `pipeline/provider-sync.ts`.
+ */
+export const taskProviderSync = pgTable(
+  'task_provider_sync',
+  {
+    taskId: uuid('task_id').notNull(),
+    subject: text('subject').notNull(),
+    slot: text('slot'),
+    target: text('target').notNull(),
+    observed: text('observed'),
+    available: jsonb('available').$type<string[]>(),
+    reason: text('reason').notNull(),
+    reasonCode: text('reason_code'),
+    failedAt: timestamp('failed_at', { withTimezone: true }).notNull(),
+    attempts: integer('attempts').notNull().default(1),
+  },
+  (table) => [primaryKey({ columns: [table.taskId, table.subject] })],
+);
+
+/**
  * The ask-the-task thread (WP-31, migration 0024).
  *
  * `citations` is the model's own list after the application dropped the entries that name another
