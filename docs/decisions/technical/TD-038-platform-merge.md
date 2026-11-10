@@ -75,3 +75,45 @@ migration 0118) and resolves the platform's own threads. `tasks.ready_head_sha` 
   `merge: false` and a person merges, said as `provider_cannot_merge`.
 - The binding's account needs *Allowed to merge* on the target branch; a 401 says so and the setup guide documents it.
 - An organisation's autonomy maximum does not bound `policies.merge` (same shape as BACKLOG 1557); filed as BACKLOG 1589.
+
+## Amendment A (2026-11-10, the orchestrator's ruling on a measurement) — the provider says `need_rebase`
+
+**Context.** On AUT-6655's merge request, once the platform's threads were closed, GitLab answered `detailed_merge_status:
+need_rebase` (*"The merge request must be rebased"*, docs above): the project merges fast-forward or semi-linear, so
+every merge request needs a rebase whenever the default branch moved. BD-030's rebase gate does not answer it: it asks
+the conflict question (`mergeable`, `has_conflicts`) and, on a conflict, merges the default branch in at
+`conflict_resolution`; a clean branch that is merely behind passes it. Without a ruling the platform never merges there.
+
+**Decision.**
+1. **`merge.by: person`**: S-28.13's panel says *GitLab wants a rebase first* with the merge request's link. Nothing else.
+2. **`merge.by: platform`, and `rebase` is the only obstacle** (every other item of decision 3 holds): the same
+   `platform_merge` duty asks the provider to rebase — new port method `rebaseMergeRequest(ref)` and capability
+   `rebase`, through the executor, keyed `platform_rebase:<task>:<head before>`. GitLab: `PUT …/merge_requests/:iid/rebase`
+   (202, asynchronous; completion read as `rebase_in_progress: false` with `include_rebase_in_progress=true`, failure as
+   `merge_error` *"Rebase failed. Please rebase locally"*; 403 *cannot push*; 409 *failed to enqueue*). No `skip_ci`.
+3. **The rebased head is accepted as the reviewed change only when the platform can show it is the same change**:
+   - before the call, with MR head == `ready_head_sha`, it records the **change digest** of the merge request's diff —
+     SHA-256 over every file sorted by path: old path, new path, the new/deleted/renamed flags, and the ordered added
+     and removed lines, with hunk headers and context dropped (the idea of `git patch-id`, which ignores line numbers:
+     <https://git-scm.com/docs/git-patch-id>); a diff the provider truncated or would not return gives no digest, and
+     a person decides;
+   - after completion, the new head H′ is accepted only if: H′ ≠ the old head; the merge request's commit count is
+     unchanged; the change digest over the new diff is **identical**; and H′ is still the head at every later read
+     (any other push is `head_moved`, decision 3);
+   - then the platform waits — the task stays at Ready — for the pipeline on H′, judged by the CI gate's own verdict
+     (TD-036's manual-job rules included); on a pass it writes `ready_head_sha = ci_head_sha = H′` (a narrow write,
+     recorded with both digests) and merges with `sha = H′`. No re-review: the reviewed lines are byte-identical.
+   - a different digest, a changed commit count, a red pipeline, or no digest → **no merge**; the page says what
+     differed and a person decides (merge it, or *Send back*).
+4. **Conflicts go to BD-030's gate.** A `merge_error` after the rebase re-enters `rebase_gate` the way
+   `default_branch.moved` does (spending `rebase_rechecks`), whose read finds the conflict and runs
+   `conflict_resolution`. 403 or 409 → refused, said, left to a person.
+5. **Bound: 3 provider rebases per Ready entry**, counted on `task_merges` (outcome `rebased`, `rebase_refused`,
+   `rebase_conflict`, `rebase_changed`). The fourth `need_rebase` is said plainly: *GitLab wants a rebase again; the
+   platform has rebased 3 times since this task reached Ready because the default branch keeps moving — rebase and
+   merge it yourself.*
+
+**Rejected.** Rebasing in a run's checkout and pushing (a run and a push for a provider button). Re-entering `ci_gate`
+after the rebase (re-runs the review tail for a change the digest proves unchanged). Trusting the provider's rebase
+without the digest (a rebase can silently change resolved lines). **Residual.** The digest ignores context lines, so a
+rebase over a default branch that changed the surrounding code passes it; the pipeline on H′ is what judges that.

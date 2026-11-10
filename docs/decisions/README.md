@@ -44,7 +44,7 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-007](business/BD-007-human-merges.md) | A human merges; human MR comments re-enter the pipeline (amended 2026-11-10: a project may let the platform merge when everything is true at that moment; resting on the plan decision — a person's approval, the platform's low-risk approval or none required, TD-038) | accepted |
 | [BD-008](business/BD-008-bounded-loops-and-escalation.md) | Every loop is bounded; escalation to `Needs human` | accepted |
 | [BD-009](business/BD-009-single-tenant-instances.md) | One instance per organisation (tenant); many projects per instance | accepted |
-| [BD-010](business/BD-010-wip-limits-and-budgets.md) | WIP limits per project; budgets at org/project/task/run with pause-not-kill (amended 2026-11-10: a budget pause shows its arithmetic; a limit per owner; a stopped task frees its pipeline place) | accepted |
+| [BD-010](business/BD-010-wip-limits-and-budgets.md) | WIP limits per project; budgets at org/project/task/run with pause-not-kill (amended 2026-11-10: a budget pause shows its arithmetic; a limit per owner; a stopped task frees its pipeline place; an estimate asks only from 3 finished tasks and approving it raises the task's cap) | accepted |
 | [BD-011](business/BD-011-cost-accounting.md) | Cost accounting: provider-reported cost is truth, price table for estimates | accepted |
 | [BD-012](business/BD-012-knowledge-in-repo.md) | Knowledge base lives in the project repository as markdown; indexes are derived | accepted |
 | [BD-013](business/BD-013-default-models-and-effort.md) | Default model and effort per stage | proposed |

@@ -26,6 +26,7 @@ Decisions: [BD-011 cost accounting](../decisions/business/BD-011-cost-accounting
 - Budget changes are audited (who, when, from → to).
 - Forecast: the dashboard shows projected month-end spend from the trailing 7-day average.
 - **Estimate before spend:** each task gets a cost estimate at refinement (size × project history); an optional per-project threshold routes expensive tasks to budget approval by a maintainer before Implementation. Estimate accuracy is tracked.
+  *Amended 2026-11-10 (BD-010, S-28.16).* An estimate asks for approval only when it rests on at least **3** finished tasks; with fewer it is shown as a *rough estimate from n finished task(s)* and the task cap bounds the spend. **Approving an estimate above the task's cap raises that task's cap to the estimate**, and the card says so first (*Approving raises this task's cap from $50.00 to $123.66*). The card never reads as money spent: it says what was spent so far, that this is an estimate before the expensive stages, and what it rests on. Approvals waiting on fewer than 3 tasks when this shipped were settled by the platform as no longer required.
 - **Separate budgets** for shadow mode and the maintenance pipeline so experiments never eat delivery budget.
 - **Human time accounting:** human minutes derived from events (review start → merge, question → answer, approvals) are shown next to token cost as *total cost of delivery*; per-user breakdown is off by default.
 

@@ -80,3 +80,24 @@ neither (`saga.ts:1281-1290`). So the task page can only say "Plan approval · r
   write no `human_actions` row, and are answered in the approval's thread by the `pipeline.outbound` duty
   `approval_refused`, enqueued after the delivery commits. A plan approval whose subject is unrecorded, no
   longer the latest plan, or unreadable is posted with no *Approve* — only *Review plan* and *Request changes*.
+
+## Amendment (2026-11-10, M28, BD-010's *an estimate is not money spent*; S-28.16) — the budget approval's floor, its cap, and settled-as-not-required
+
+1. **The floor is in the reasons function.** `budgetApprovalReasons(preset, estimate)` takes the estimate's `samples`
+   and answers no reason below `MIN_ESTIMATE_SAMPLES_FOR_APPROVAL` (3, in `packages/domain/src/cost/`), so the saga's
+   one guard (`budgetApprovalGate`, `packages/application/src/pipeline/saga.ts:1450-1456`) needs no second check.
+2. **The subject carries the cap.** The budget approval's `subject_detail` gains `spent_usd`, `cap_usd` (the task's
+   effective cap at the ask) and `size`/`size_weight`; strict, written by the one writer. On **approve**, in the
+   approval's transaction, the command writes `tasks.budget_cap_usd = max(effective cap, estimate rounded up to the
+   cent)` through the same narrow write `POST /api/tasks/:id/budget` uses, and records `cap_before_usd`/`cap_after_usd`
+   on the decision and its `human_actions` row; `task.approval.decided` carries both. Reject is unchanged.
+3. **Settled as not required.** No new status (widening `approvals.status` is not additive, TD-032 §1): the row becomes
+   `approved` with `auto_decided = true` (migration 0113) and a decision reason `estimate_basis_too_thin {samples, min}`
+   from the closed vocabulary, `task.approval.decided` with the system actor, and the task resumes through the
+   approval's own resume path — no cap change. A one-off recovery row (a revision constant, the S-28.5 sweep's shape)
+   settles every **pending** budget approval whose `subject_detail.estimate_samples < 3` once; nothing else settles an
+   approval, and a new ask below the floor is never created.
+4. **Words.** `approval-text.ts` (both copies, web and notify) states *spent so far*, *estimate before the expensive
+   stages, from n finished task(s), size L × 4*, the threshold, and the cap sentence of BD-010 decision 2; *Approve*
+   says the cap it sets. The phrase *may spend what was estimated* is removed.
+

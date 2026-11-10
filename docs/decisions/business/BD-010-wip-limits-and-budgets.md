@@ -54,6 +54,35 @@ which is BD-010's own *predictable worst case* undone); accepting any raise and 
 **Residual.** The reserve is the stage's per-run cap, not a forecast; a project that wants cheaper admission lowers
 `stages.<id>.budget_usd`, and the pause names that lever. Slice S-28.1.
 
+## Amendment (2026-11-10, the product owner's feedback round, M28 — an estimate is not money spent; S-28.16)
+*"what is this? saying the budget is over but it shows 0.45 cost so far"* — the owner, on a task page.
+
+**Evidence.** The card was the pre-spend **budget approval**: estimate **$123.66** against the **$50** approval
+threshold, *"from 1 finished task"*. The estimate is the size weight × the mean unit cost of the project's finished tasks
+(`packages/domain/src/cost/estimate.ts:35,95-113`), and the project's only finished task had cost $123.05; four tasks
+were parked on it. The card said *"Approve: … may spend what was estimated"* (`apps/web/src/features/approval-text.ts:256`),
+but approving changed nothing about the task's own cap ($50), so an approved task would pause at $50 anyway.
+
+**Decision.**
+1. **An estimate asks for approval only when it rests on at least 3 finished tasks** (`MIN_ESTIMATE_SAMPLES_FOR_APPROVAL
+   = 3`, one named constant). With fewer, nothing is asked: the number is shown as *rough estimate from n finished
+   task(s)*, and the per-task cap bounds the spend, exactly as for a task with no estimate (`basis: unknown`).
+2. **Approving an estimate above the task's cap raises that task's cap to the estimate**, as part of the approval and
+   recorded with it (the cap before and after). The card says so before the click: *Approving raises this task's cap
+   from $50.00 to $123.66.* An estimate within the cap says *the cap stays $50.00*.
+3. **The card and the waiting sentence never read as money spent.** They say what was spent so far, that this is an
+   estimate made before the expensive stages, and what it rests on (n finished tasks, the size and its weight), then
+   the threshold it crossed.
+4. **Approvals already waiting when this ships whose estimate rests on fewer than 3 tasks are settled by the platform
+   as no longer required** — recorded as decided by the platform with that reason — and their tasks continue without a
+   click; the page says *Budget approval no longer required: the estimate rested on 1 finished task.*
+
+**Rejected.** Raising the approval threshold (the four tasks would still wait on a one-sample mean); dropping the gate
+(a well-founded estimate over the threshold is exactly what it is for); approving without touching the cap (the
+approval would promise a spend the cap then refuses). **Residual.** Three samples is still a small mean; the label says
+how many, and `estimateAccuracy` is where a later revision of the constant is measured. Design: TD-035's 2026-11-10
+amendment. Slice S-28.16.
+
 ## Amendment (2026-11-10, the product owner's feedback round, M28 — a limit per owner, and what a stopped task holds; S-28.6)
 **Context.** With task owners (BD-031's 2026-11-06 amendment) one person's tickets could fill a project's pipeline, and
 the project ceiling counted every state but queued, done and cancelled (`packages/domain/src/policies/wip.ts:88-95`), so
