@@ -1071,6 +1071,32 @@ const harnessDiscussion = (markdown: string, path: string | null, line: number |
   };
 };
 
+/**
+ * **A provider remembers what it was told** (S-28.10): since `mr_ready` reads the merge request back
+ * after marking it ready (TD-029's amendment C (3)), a scripted `getMergeRequest` that answers a
+ * fixed draft flag would read as a provider that ignored the write. This overlay answers the draft
+ * flag the platform last wrote for a merge request (by iid) on every later read, and the script's
+ * own flag until then — what a real provider does. A case that wants AUT-6655's provider (one that
+ * keeps the draft) scripts `updateMergeRequest` and `getMergeRequest` itself in a unit test.
+ */
+const rememberingDraft = (port: GitProviderPort | null): GitProviderPort | null => {
+  if (port === null) return null;
+  const written = new Map<number, boolean>();
+  return {
+    ...port,
+    updateMergeRequest: async (ref, update) => {
+      const answer = await port.updateMergeRequest(ref, update);
+      if (typeof update.draft === 'boolean') written.set(ref.iid, update.draft);
+      return answer;
+    },
+    getMergeRequest: async (ref) => {
+      const answer = await port.getMergeRequest(ref);
+      const draft = written.get(ref.iid);
+      return draft === undefined ? answer : { ...answer, draft };
+    },
+  };
+};
+
 const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitProviderPort | null =>
   overrides === null
     ? null
@@ -1669,7 +1695,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   };
   watchDeclarations();
 
-  const gitPort = stubGit(options.git);
+  const gitPort = rememberingDraft(stubGit(options.git));
   const taskManagementPort = stubTaskManagement(options.taskManagement);
   const communication = stubCommunication(options.communication);
   const organisationCommunication = stubCommunication(
