@@ -223,9 +223,10 @@ describe('why a queued task waits (S-25.16)', () => {
     PROPERTY_TEST_TIMEOUT_MS,
   );
 
-  it('names the pipeline limit when stopped tasks fill it — the Autix shape', () => {
+  it('names the pipeline limit when tasks waiting for a person fill it', () => {
+    // Since S-28.6 the Autix shape (five at needs_human) holds no place; five approvals do.
     const autix: TaskState[] = [
-      ...Array.from({ length: 5 }, () => 'needs_human' as const),
+      ...Array.from({ length: 5 }, () => 'waiting_approval' as const),
       ...Array.from({ length: 5 }, () => 'queued' as const),
     ];
     expect(queueAdmissionOf(wipCountsOf(autix))).toEqual({
@@ -250,13 +251,17 @@ describe('why a queued task waits (S-25.16)', () => {
       status: 'admitted',
     });
     expect(queueAdmissionOf(wipCountsOf(['active', 'active'])).status).toBe('waiting');
-    expect(queueAdmissionOf(wipCountsOf(Array(4).fill('needs_human'))).status).toBe('admitted');
-    expect(queueAdmissionOf(wipCountsOf(Array(5).fill('needs_human'))).status).toBe('waiting');
+    expect(queueAdmissionOf(wipCountsOf(Array(4).fill('waiting_answers'))).status).toBe('admitted');
+    expect(queueAdmissionOf(wipCountsOf(Array(5).fill('waiting_answers'))).status).toBe('waiting');
+    // S-28.6: stopped tasks hold none.
+    expect(queueAdmissionOf(wipCountsOf(Array(9).fill('needs_human'))).status).toBe('admitted');
   });
 
-  it('counts a stopped task as holding a pipeline place and no parallel one', () => {
-    expect(holdsPlace('max_tasks_in_pipeline', 'needs_human')).toBe(true);
-    expect(holdsPlace('max_parallel_tasks', 'needs_human')).toBe(false);
+  it('counts a waiting task as holding a pipeline place and no parallel one, a stopped one neither', () => {
+    expect(holdsPlace('max_tasks_in_pipeline', 'waiting_approval')).toBe(true);
+    expect(holdsPlace('max_parallel_tasks', 'waiting_approval')).toBe(false);
+    expect(holdsPlace('max_tasks_in_pipeline', 'needs_human')).toBe(false);
+    expect(holdsPlace('max_tasks_in_pipeline', 'paused')).toBe(false);
     expect(holdsPlace('max_parallel_tasks', 'returned')).toBe(true);
     expect(holdsPlace('max_tasks_in_pipeline', 'queued')).toBe(false);
   });
