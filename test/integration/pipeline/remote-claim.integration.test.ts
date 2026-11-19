@@ -71,8 +71,17 @@ import { remoteRunCredentialOf } from '../../../apps/server/src/worker-run-calls
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
-const NOW = '2026-11-04T09:00:00.000Z' as IsoDateTime;
-const PAST = '2026-11-04T08:00:00.000Z' as IsoDateTime;
+/**
+ * The suite's clock, relative to the wall clock: the harness refuses an event more than 14 days
+ * before the database's `now()`, so a fixed date stops working two weeks after it is written (the
+ * 2026-11-04 constant did on 2026-11-18). `minutesFromNow(m)` is `m` minutes after the start of
+ * this minute.
+ */
+const BASE = Math.floor(Date.now() / 60_000) * 60_000;
+const minutesFromNow = (minutes: number): IsoDateTime =>
+  new Date(BASE + minutes * 60_000).toISOString() as IsoDateTime;
+const NOW = minutesFromNow(0);
+const PAST = minutesFromNow(-60);
 const FUTURE = '2099-01-01T00:00:00.000Z' as IsoDateTime;
 const RUN_DIGEST = `sha256:${'a'.repeat(64)}`;
 const EGRESS_DIGEST = `sha256:${'b'.repeat(64)}`;
@@ -334,7 +343,7 @@ const workerClaim = (workerId: Id, runId: Id, held: readonly string[] = HELD): R
   eligibility: { runId },
   claimantKind: 'worker',
   owner: `worker:${workerId}`,
-  expiresAt: '2026-11-04T09:10:00.000Z' as IsoDateTime,
+  expiresAt: minutesFromNow(10),
   now: NOW,
   worker: {
     workerId,
@@ -1033,13 +1042,11 @@ describe('WP-282: the run-scoped calls’ statements', () => {
           takeOverBefore: takeOverBefore as IsoDateTime | null,
         }),
       );
-    expect(await claimOf('2026-11-04T09:00:00.000Z', null)).toBe(true);
-    expect(await claimOf('2026-11-04T09:01:00.000Z', null)).toBe(false);
+    expect(await claimOf(minutesFromNow(0), null)).toBe(true);
+    expect(await claimOf(minutesFromNow(1), null)).toBe(false);
     // Stale, but another input: never taken over.
-    expect(await claimOf('2026-11-04T09:10:00.000Z', '2026-11-04T09:05:00.000Z', digest(2))).toBe(
-      false,
-    );
-    expect(await claimOf('2026-11-04T09:10:00.000Z', '2026-11-04T09:05:00.000Z')).toBe(true);
+    expect(await claimOf(minutesFromNow(10), minutesFromNow(5), digest(2))).toBe(false);
+    expect(await claimOf(minutesFromNow(10), minutesFromNow(5))).toBe(true);
     await inTx((tx) =>
       calls.completeToolCall(tx, {
         runId,
@@ -1047,7 +1054,7 @@ describe('WP-282: the run-scoped calls’ statements', () => {
         result: { iid: 7 },
         isError: false,
         redactionCount: 1,
-        at: '2026-11-04T09:11:00.000Z' as IsoDateTime,
+        at: minutesFromNow(11),
       }),
     );
     const found = await inTx((tx) => calls.findToolCall(tx, runId, digest(9)));
@@ -1057,7 +1064,7 @@ describe('WP-282: the run-scoped calls’ statements', () => {
       answer: { result: { iid: 7 }, isError: false },
     });
     // An answered call is never claimed again, however old.
-    expect(await claimOf('2026-11-04T10:00:00.000Z', '2026-11-04T09:59:00.000Z')).toBe(false);
+    expect(await claimOf(minutesFromNow(60), minutesFromNow(59))).toBe(false);
   });
 
   it('approvals: one per tool use, decided once, delivered once', async () => {
