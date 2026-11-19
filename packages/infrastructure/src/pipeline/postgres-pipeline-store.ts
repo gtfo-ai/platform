@@ -2252,7 +2252,9 @@ export const createPostgresPipelineStore = (
     },
     platformTicketTransitionsSinceEntry: async (tx, query) => {
       // TD-029 Amendment F.2 (S-28.17): the executor's own audit of the platform's lifecycle moves,
-      // through `integration_actions_task_idx`; `since` bounds `created_at` so partitions prune.
+      // through `integration_actions_task_idx`; `since` bounds `created_at` so partitions prune —
+      // a plain `>=` rather than `$n is null or …`, which a generic plan cannot prune by.
+      const since = query.since === null ? '' : 'and a.created_at >= $5::timestamptz';
       const { rows } = await sqlOf(tx).query<{ to: unknown }>(
         `select a.payload ->> 'to' as "to"
            from task_stages s
@@ -2260,10 +2262,16 @@ export const createPostgresPipelineStore = (
           where s.task_id = $1 and s.stage = $2 and s.attempt = $3
             and a.action = 'transition_ticket' and a.status = 'ok'
             and a.created_at >= s.entered_at
-            and ($4::timestamptz is null or a.created_at >= $4::timestamptz)
+            ${since}
           order by a.created_at desc
-          limit $5`,
-        [query.taskId, query.stage, query.attempt, query.since, MAX_PLATFORM_TICKET_TRANSITIONS],
+          limit $4`,
+        [
+          query.taskId,
+          query.stage,
+          query.attempt,
+          MAX_PLATFORM_TICKET_TRANSITIONS,
+          ...(query.since === null ? [] : [query.since]),
+        ],
       );
       return rows.flatMap((row) => (typeof row.to === 'string' ? [row.to] : []));
     },

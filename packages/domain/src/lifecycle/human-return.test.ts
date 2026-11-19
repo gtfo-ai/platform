@@ -422,6 +422,12 @@ describe('humanReturnDecision (WP-174 criterion 6, M28 R1)', () => {
         // A recorded change out of qa into one of them licenses no later pass either.
         expect(at('qa', 'Merge me', { entryStatus: 'Doing', leftQa: status }).kind).toBe('none');
       }
+      // A status the platform wrote that is not a return status does not pass either (the isPass
+      // guard alone: ready_for_merge, after the ticket left qa).
+      expect(at('qa', 'Merge me', { leftQa: 'Merge me', platformStatuses: ['Merge me'] })).toEqual({
+        kind: 'none',
+        seen: [],
+      });
       // ready_for_merge, done and an unmapped status still pass, by the entry at qa or by leftQa.
       for (const status of ['Merge me', 'Finished', 'Reopened']) {
         expect(at('qa', status).kind).toBe('pass');
