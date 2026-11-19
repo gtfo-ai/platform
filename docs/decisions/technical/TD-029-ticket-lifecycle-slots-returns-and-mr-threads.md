@@ -570,8 +570,10 @@ it is the hazard: a retried `approved` duty (`moments.ts`: written at the last r
 2. **The platform's own write never counts — one new input field.** `HumanReturnInput.platformStatuses: readonly string[]`:
    the `to` of every `transition_ticket` the platform made for this task that **landed after the human stage's entry** —
    read by the window, in its first transaction, from the executor's own audit (`integration_actions`: `task_id`,
-   `action = 'transition_ticket'`, `payload.to`, a successful status, `created_at + duration_ms` ≥ the stage attempt's
-   entry; `created_at` ≥ the horizon bounds the partitions). No migration, no new writer: the executor already records
+   `action = 'transition_ticket'`, `payload.to`, a successful status, `created_at` ≥ the stage attempt's
+   entry; `created_at` ≥ the horizon bounds the partitions). *(Corrected at S-28.17's implementation: the executor stamps
+   `created_at` after the call returns — `occurredAt` in `action-executor.ts`'s entry builder — so it already is the landing
+   instant; adding `duration_ms` would count a write that landed up to one call's length before the entry.)* No migration, no new writer: the executor already records
    every lifecycle move (`packages/application/src/pipeline/integrations.ts:1741-1765`). The status form (rule 6) returns
    only when the status is a return status, differs from `entryStatus`, **and is not in `platformStatuses`** (compared by
    `lifecycleStatusKey`) — for every return status, not only the two new ones. Shadow `would_have` rows moved nothing and

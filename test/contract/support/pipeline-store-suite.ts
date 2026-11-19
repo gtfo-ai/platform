@@ -50,6 +50,18 @@ export interface PipelineStoreHarness {
       readonly userId: Id;
       readonly at: IsoDateTime;
     }): Promise<void>;
+    /**
+     * Records one executor audit row of a `transition_ticket` the platform made for a task (S-28.17,
+     * TD-029 Amendment F.2) — what `tasks.platformTicketTransitionsSinceEntry` reads. Stamped
+     * `offsetMs` from the store's own clock now (PostgreSQL's `clock_timestamp()`, the clock
+     * `task_stages.entered_at` is written by), so the case orders it against a stage entry.
+     */
+    recordTicketTransition(input: {
+      readonly taskId: Id;
+      readonly to: string;
+      readonly status: 'ok' | 'failed' | 'would_have' | 'replayed';
+      readonly offsetMs: number;
+    }): Promise<void>;
     cleanup(): Promise<void>;
   }>;
 }
@@ -96,6 +108,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       readonly userId: Id;
       readonly at: IsoDateTime;
     }) => Promise<void>;
+    let recordTicketTransition: Awaited<
+      ReturnType<PipelineStoreHarness['create']>
+    >['recordTicketTransition'];
 
     const task = (
       overrides: Partial<StoredTask> = {},
@@ -163,6 +178,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       appendTaskEvent = context.appendTaskEvent;
       otherUserId = context.otherUserId;
       recordHumanAction = context.recordHumanAction;
+      recordTicketTransition = context.recordTicketTransition;
       return async () => {
         await context.cleanup();
       };
@@ -5684,6 +5700,54 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       expect(await observe('Finished', false)).toEqual({ entryStatus: 'Reviewed', seenAtQa: true });
       // An attempt with no row records nothing.
       expect(await observe('Finished', false, 2)).toBeNull();
+    });
+
+    /**
+     * S-28.17, TD-029 Amendment F.2: the statuses the platform moved the ticket to since a human
+     * stage attempt's entry — successful `transition_ticket` audit rows landed no earlier than the
+     * entry and created no earlier than `since`, newest first.
+     */
+    it('reads the platform’s own ticket transitions landed since a stage entry (S-28.17)', async () => {
+      const stored = task();
+      await store.tasks.insert(tx, stored);
+      const taskId = stored.task.id;
+      const other = task();
+      await store.tasks.insert(tx, other);
+      const read = (since: string | null = null, attempt = 1) =>
+        store.tasks.platformTicketTransitionsSinceEntry(tx, {
+          taskId,
+          stage: 'qa' as Slug,
+          attempt,
+          since,
+        });
+      // No stage row yet: nothing.
+      await recordTicketTransition({ taskId, to: 'Reviewed', status: 'ok', offsetMs: 60_000 });
+      expect(await read()).toEqual([]);
+
+      await recordTicketTransition({ taskId, to: 'Doing', status: 'ok', offsetMs: -60_000 });
+      await store.tasks.recordStageEntered(tx, {
+        taskId,
+        stage: 'qa' as Slug,
+        attempt: 1,
+        causedByEventId: null,
+      });
+      await recordTicketTransition({ taskId, to: 'Testing', status: 'ok', offsetMs: 120_000 });
+      await recordTicketTransition({ taskId, to: 'Shadowed', status: 'would_have', offsetMs: 1 });
+      await recordTicketTransition({ taskId, to: 'Refused', status: 'failed', offsetMs: 1 });
+      await recordTicketTransition({ taskId, to: 'Replayed', status: 'replayed', offsetMs: 1 });
+      await recordTicketTransition({
+        taskId: other.task.id,
+        to: 'Elsewhere',
+        status: 'ok',
+        offsetMs: 1,
+      });
+
+      // Landed after the entry, `ok`, this task's — newest first; the claim's move before it is not.
+      expect(await read()).toEqual(['Testing', 'Reviewed']);
+      // `since` bounds the creation instant from below.
+      expect(await read(new Date(Date.now() + 90_000).toISOString())).toEqual(['Testing']);
+      // Another attempt has no row: nothing.
+      expect(await read(null, 2)).toEqual([]);
     });
 
     /** M28 ruling R1 (migration 0111): the first sighting of a forward move is written once. */

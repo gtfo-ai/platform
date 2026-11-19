@@ -24,6 +24,7 @@
  * | 14 | The **owner directory** (S-26.1, `owners`) answers from {@link MemoryPipelineStore.seedIdentity}, {@link MemoryPipelineStore.seedProjectMember} and {@link MemoryPipelineStore.seedBindingAccount} where PostgreSQL joins `user_identities`, `users`, `project_members` and `bindings.account_identity`. Unseeded, every assignee is a `person` and nobody may own a task. `personIdentity` (S-26.3) answers the first seeded link, where the SQL orders by `created_at`. | **same** on the predicate, **stricter** unseeded | The SQL's order — a linked member first, then a machine, then a binding's account — is the one {@link classify} applies; that the effective role is the higher of the organisation role and a membership, and that a disabled user (`users.status`) may own nothing, is the SQL's alone, asserted by `test/integration/pipeline/task-owner.integration.test.ts`. |
  * | 13 | A **remote worker's claim** (WP-281) asks {@link MemoryPipelineStoreOptions.remoteWorkers} and {@link MemoryPipelineStoreOptions.runCredentialSource} where the SQL claim joins `workers`, `users`, `project_members`, `bindings` and `integrations` in its one statement; the same callback fences `finish`, `renewLease` and the spawn marker of a run a worker holds (backlog 714's `runHolderUsableSql`). Unwired, no worker is eligible and a worker-held run's fence never holds. | **same** on the predicates, **stricter** unwired | That the predicates are asked **in the committing statement** — a revoke that commits between a request's authentication and its write is seen — is PostgreSQL's isolation, asserted by `test/integration/pipeline/remote-claim.integration.test.ts`; divergence 4 is why it cannot be shown here. |
  * | 15 | A worker's **claim policy** (S-26.4) is the domain's `claimPolicyTakes` over this store's ownership map and directory, as the SQL's `workerPolicyTakesSql`; an **ask's** "mine" is read off the offer's assignee — the asker, which the ask executor always writes there — where the SQL reads `task_asks.asked_by_user_id`, and the offers list and the pick refusal name an owner with an empty `name` (no `users` here). | **same** on the predicate, **kinder** on an ask whose offer named no assignee | The policy × task matrix, the ask's asker and the owner's name are asserted against PostgreSQL in `test/integration/pipeline/claim-policy.integration.test.ts`. |
+ * | 17 | `tasks.platformTicketTransitionsSinceEntry` (S-28.17) reads the executor's audit through {@link MemoryPipelineStoreOptions.integrationActions} and the stage row's `enteredAtMs`; PostgreSQL reads `integration_actions` against `task_stages.entered_at`. Unwired, it answers `[]`. | **same, when wired** | The predicate — the task, `transition_ticket`, `ok` only, landed no earlier than the entry, created no earlier than `since`, newest first, bounded — is the SQL's; the contract suite drives it against both stores. |
  * | 16 | `tasks.ownerBackfillDue` (BACKLOG 1510) orders the most recently **created** first, then by id; the SQL orders by `updated_at` descending, which this store does not keep. The predicate (live, `normal`, no stored assignee, unsettled, under the attempt cap, no retry time after `now`, created before `olderThan`) and the `limit` are the SQL's, and `claimOwnerBackfillAttempt` and `settleOwnerBackfill` are the same conditional writes (BACKLOG 1511). | **different (order only)** | No column of `StoredTask` is an update time, and adding one to every writer for one query's order would be a second clock to keep honest. The shared suite asserts the predicate, the mark and the bound, and orders only tasks created and touched in the same order, so it holds both stores. |
  */
 import type {
@@ -124,6 +125,7 @@ import {
   LeaseLostError,
   MAX_CONVERSATION_HANDLED_AUTHOR_CHARS,
   MAX_CONVERSATION_HANDLED_ROWS,
+  MAX_PLATFORM_TICKET_TRANSITIONS,
   PAUSE_ENDING_EVENTS,
   STOPPING_RUN_COMMAND_KINDS,
   TAKE_OVER_BOUNDARY_EVENTS,
@@ -131,6 +133,7 @@ import {
   type TaskPause,
 } from '../pipeline/store.js';
 import type { StoredEvent } from '../ports/event-store.js';
+import type { IntegrationActionEntry } from '../ports/integrations/audit.js';
 import type {
   DeadlineRecoveryStore,
   HeldTask,
@@ -386,6 +389,13 @@ export interface MemoryPipelineStoreOptions {
    * without the log has seen no status change, and says so. `createPipelineHarness` wires it.
    */
   readonly committedLog?: () => readonly StoredEvent[];
+  /**
+   * The executor's audit rows — what `TaskRepository.platformTicketTransitionsSinceEntry` reads
+   * (TD-029 Amendment F.2, S-28.17), `integration_actions` in PostgreSQL. Optional for
+   * {@link streamSequence}'s reason. **Unwired, it answers `[]`** — divergence 17: a store built
+   * without the audit has seen no platform transition. `createPipelineHarness` wires it.
+   */
+  readonly integrationActions?: () => readonly IntegrationActionEntry[];
   /**
    * The clock `run_commands.created_at` is stamped by and the steer window reads (WP-101) — the
    * database's `now()` in PostgreSQL. Defaults to `Date.now`.
@@ -1851,6 +1861,31 @@ export const createMemoryPipelineStore = (
         .reverse()
         .slice(0, MAX_CONVERSATION_HANDLED_ROWS)
         .map((row) => ({ ...row })),
+    platformTicketTransitionsSinceEntry: async (_tx, query) => {
+      // The SQL store's predicate over the audit (divergence 17).
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === query.taskId &&
+          candidate.stage === query.stage &&
+          candidate.attempt === query.attempt,
+      );
+      if (row === undefined) {
+        return [];
+      }
+      const since = query.since === null ? Number.NEGATIVE_INFINITY : Date.parse(query.since);
+      return (options.integrationActions?.() ?? [])
+        .filter(
+          (entry) =>
+            entry.taskId === query.taskId &&
+            entry.action === 'transition_ticket' &&
+            entry.status === 'ok' &&
+            Date.parse(entry.occurredAt) >= row.enteredAtMs &&
+            Date.parse(entry.occurredAt) >= since,
+        )
+        .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+        .slice(0, MAX_PLATFORM_TICKET_TRANSITIONS)
+        .flatMap((entry) => (typeof entry.payload.to === 'string' ? [entry.payload.to] : []));
+    },
     ticketStatusChangesSinceEntry: async (_tx, query) => {
       // The SQL store's predicate over the committed log (divergence 12).
       const task = tasks.get(query.taskId);

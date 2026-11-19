@@ -1604,6 +1604,27 @@ export interface TaskRepository {
     },
   ): Promise<readonly TicketStatusChange[]>;
   /**
+   * The statuses **the platform** moved this task's ticket to since one entry into a human stage
+   * (TD-029 Amendment F.2, S-28.17): the `payload.to` of the task's `transition_ticket` rows in
+   * the executor's own audit (`integration_actions`) whose status is `ok` — a shadow `would_have`,
+   * a `replayed` or a `failed` row moved nothing — and that **landed** no earlier than the
+   * `(task, stage, attempt)` row's `entered_at`. The executor stamps `created_at` after the call
+   * returned (`action-executor.ts`'s entry builder), so `created_at` is the landing instant.
+   * `since` (the window's horizon) bounds `created_at` from below so the read prunes the audit's
+   * partitions. Newest first, at most
+   * {@link MAX_PLATFORM_TICKET_TRANSITIONS}; `[]` when the stage row does not exist. One statement.
+   */
+  platformTicketTransitionsSinceEntry(
+    tx: Transaction,
+    query: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      /** ISO 8601, or `null` for no lower bound. */
+      readonly since: string | null;
+    },
+  ): Promise<readonly string[]>;
+  /**
    * Records what the human-return window saw of the ticket's status during one entry into a human
    * stage — `task_stages.entry_ticket_status` and `ticket_seen_at_qa` on the `(task, stage,
    * attempt)` row (migration 0089, WP-178 review, TD-029 decision 7's amendment (a) and (b)) — and
@@ -1655,6 +1676,9 @@ export interface TaskRepository {
    */
   conversationHandled(tx: Transaction, taskId: Id): Promise<readonly ConversationHandledRow[]>;
 }
+
+/** The most rows {@link TaskRepository.platformTicketTransitionsSinceEntry} reads for one entry. */
+export const MAX_PLATFORM_TICKET_TRANSITIONS = 50;
 
 /** The most ledger rows {@link TaskRepository.conversationHandled} reads for one task. */
 export const MAX_CONVERSATION_HANDLED_ROWS = 500;

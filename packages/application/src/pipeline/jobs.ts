@@ -1860,6 +1860,11 @@ interface WindowRead {
   readonly earliestChanges: readonly TicketStatusChange[];
   /** The task's handled ledger (M28 ruling R2, migration 0111). */
   readonly handled: readonly ConversationHandledRow[];
+  /**
+   * The statuses the platform moved the ticket to since this stage attempt's entry, off the
+   * executor's audit (TD-029 Amendment F.2, S-28.17) — `HumanReturnInput.platformStatuses`.
+   */
+  readonly platformStatuses: readonly string[];
 }
 
 const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowData> => {
@@ -1873,27 +1878,36 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
       if (stored === null || stage === null || stored.mr === null) {
         return null;
       }
+      const stageId = stage === 'qa' ? QA_STAGE_ID : READY_FOR_MERGE_STAGE;
+      const horizon = await options.store.runs.latestStartedAt(scope.tx, {
+        taskId: stored.task.id,
+        stage: HORIZON_STAGE,
+      });
       return {
         stored,
         stage,
-        horizon: await options.store.runs.latestStartedAt(scope.tx, {
-          taskId: stored.task.id,
-          stage: HORIZON_STAGE,
-        }),
+        horizon,
         statusChanges: await options.store.tasks.ticketStatusChangesSinceEntry(scope.tx, {
           taskId: stored.task.id,
-          stage: stage === 'qa' ? QA_STAGE_ID : READY_FOR_MERGE_STAGE,
+          stage: stageId,
           limit: MAX_WINDOW_STATUS_CHANGES,
         }),
         // Both stages since the WP-178 review: the entry is read from the earliest changes, so the
         // bound is taken from the entry's side (TD-029 decision 7's amendment (e)).
         earliestChanges: await options.store.tasks.ticketStatusChangesSinceEntry(scope.tx, {
           taskId: stored.task.id,
-          stage: stage === 'qa' ? QA_STAGE_ID : READY_FOR_MERGE_STAGE,
+          stage: stageId,
           limit: MAX_WINDOW_STATUS_CHANGES,
           order: 'oldest_first',
         }),
         handled: await options.store.tasks.conversationHandled(scope.tx, stored.task.id),
+        // TD-029 Amendment F.2: the horizon precedes the entry, so it is a safe lower bound.
+        platformStatuses: await options.store.tasks.platformTicketTransitionsSinceEntry(scope.tx, {
+          taskId: stored.task.id,
+          stage: stageId,
+          attempt: stored.task.stageAttempts[stageId] ?? 0,
+          since: horizon,
+        }),
       };
     });
     if (read === null || read.stored.mr === null) {
@@ -1988,6 +2002,7 @@ const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowD
       leftQa: leftQaOf(read.statusChanges, slots.lifecycle.qa),
       entryStatus,
       seenAtQa: observed?.seenAtQa ?? false,
+      platformStatuses: read.platformStatuses,
     });
     if (decision.seen.length > 0) {
       await recordSeenWords(options, read, integrations, decision.seen);

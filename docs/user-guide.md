@@ -1354,8 +1354,8 @@ one of three explicit ways, whatever language they write in:
 - **an open review thread on the merge request** — a comment on a diff line, or a thread started on
   the merge request that GitLab lets you resolve. An unresolved thread is a change request by
   GitLab's own meaning; resolve it yourself if it was only a remark;
-- **a status** — moving the ticket to one of the *Returned* statuses, or back to *In progress* or
-  *Pick up from*;
+- **a status** — moving the ticket to one of the *Returned* statuses, or back to *In progress*,
+  *Pick up from*, *In review* or *Approved* (a status the platform wrote itself never counts);
 - **the task page's *Send back to Implementation…*** (the return dialog, with your reason).
 
 **A ticket comment, or a merge-request comment that cannot be resolved, never sends the task back**
@@ -1363,7 +1363,7 @@ on its own. The platform still reads it: the task page says *"Petr commented on 
 not treated as a change request"*, with **Open** (where the comment is) and **Send back to
 Implementation…** for anyone who may return the task, and the next agent run reads it in the
 conversation. **Moving the ticket forward wins**: when the ticket moves to a status that is not a
-return status (the *Approved* or *Done* status, say) in the same go as a comment or a thread, nothing
+return status (the *Done* status, say) in the same go as a comment or a thread, nothing
 written before that move returns the task — a QA person who writes *"QA: OK"* and moves the ticket to
 *Ready for Merge* is not sent back to Implementation. A thread opened after the move still is.
 

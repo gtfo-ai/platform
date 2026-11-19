@@ -1580,6 +1580,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         .filter((event) => event.stream_type === 'project' && event.stream_id === projectId),
     // WP-178: `ticketStatusChangesSinceEntry` orders two streams by the log's position.
     committedLog: () => memory.log,
+    // S-28.17: the platform's own ticket transitions, read off the executor's audit as PostgreSQL
+    // reads `integration_actions` (`audit` is declared below; the read happens later).
+    integrationActions: () => audit.entries,
     // WP-281: the worker claim's eligibility facts, when a case names any.
     ...(options.remoteWorkers ?? {}),
   });

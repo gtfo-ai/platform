@@ -946,6 +946,7 @@ describe('(3) the replies', () => {
       leftQa: null,
       entryStatus: null,
       seenAtQa: false,
+      platformStatuses: [],
     });
     expect(decision).toMatchObject({ kind: 'return', counts: { mr_diff: 1 } });
   });
@@ -968,6 +969,7 @@ describe('(3) the replies', () => {
       leftQa: null,
       entryStatus: null,
       seenAtQa: false,
+      platformStatuses: [],
     });
     expect(decision).toEqual({ kind: 'none', seen: [] });
   });

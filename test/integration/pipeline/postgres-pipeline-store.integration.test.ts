@@ -22,6 +22,7 @@ let database: MigratedDatabase;
 let projectId: string;
 let userId: string;
 let otherUserId: string;
+let integrationId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('pipeline-store');
@@ -45,6 +46,12 @@ beforeAll(async () => {
       `insert into users (email, name) values ('bystander@example.test', 'Bystander') returning id`,
     );
     otherUserId = other.rows[0]?.id as string;
+    const integration = await client.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name)
+       values ($1, 'task_management', 'fake-jira', 'tracker') returning id`,
+      [org.rows[0]?.id],
+    );
+    integrationId = integration.rows[0]?.id as string;
   } finally {
     await client.end();
   }
@@ -107,6 +114,18 @@ runPipelineStoreContract({
           `insert into human_actions (task_id, user_id, action, created_at)
            values ($1, $2, 'task.pause', $3)`,
           [input.taskId, input.userId, input.at],
+        );
+      },
+      // S-28.17: an executor audit row, on the clock `task_stages.entered_at` is written by.
+      recordTicketTransition: async (input) => {
+        await client.query(
+          `insert into integration_actions
+             (integration_id, project_id, task_id, direction, action, payload, status, duration_ms,
+              redaction_count, attempts, created_at)
+           values ($1, $2, $3, 'out', 'transition_ticket',
+                   jsonb_build_object('ticket_key', 'ACME-1', 'to', $4::text), $5, 0, 0, 1,
+                   clock_timestamp() + make_interval(secs => $6::double precision / 1000))`,
+          [integrationId, projectId, input.taskId, input.to, input.status, input.offsetMs],
         );
       },
       cleanup: async () => {

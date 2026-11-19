@@ -40,19 +40,22 @@
  *     A ticket comment and a non-resolvable merge-request note never return the task, whatever they
  *     say — until M28 any of them that was not a short English acknowledgement did (TD-029 decision
  *     8), which sent AUT-6655 back to Implementation twice on a long Czech *QA: OK*.
- *  6. **The status returns** when it is one of `returned`, or the `in_progress` or `pick_up_from`
- *     status, compared by {@link lifecycleStatusKey} — **and differs from the status the ticket had
- *     at the human stage's entry** (`entryStatus`, TD-029 decision 7's WP-178 review amendment (a)).
+ *  6. **The status returns** when it is one of `returned`, or the `in_progress`, `pick_up_from`,
+ *     `in_review` or `approved` status (TD-029 Amendment F, S-28.17), compared by
+ *     {@link lifecycleStatusKey} — **and differs from the status the ticket had at the human stage's
+ *     entry** (`entryStatus`, TD-029 decision 7's WP-178 review amendment (a)) — **and is not a
+ *     status the platform itself wrote since the entry** (`platformStatuses`, Amendment F.2).
  *  7. **Forward wins over return** (M28 ruling R1): when the ticket's status moved **forward** since
- *     the stage was entered — it differs from the entry status and is a lifecycle slot ahead of the
- *     stage, `approved`/`done` at Ready and `done` at QA ({@link isForwardMove}) — no word written no later than the instant the window first saw that
+ *     the stage was entered — it differs from the entry status and is the `done` slot, at either
+ *     stage ({@link isForwardMove}) — no word written no later than the instant the window first saw that
  *     move (`forwardSeenAt`) returns the task. A note written after it still does. (Until M28 the
  *     opposite held: return won over pass.)
  *  7a. **A reopened platform thread returns** (TD-029 Amendment D.3, S-28.13): an unresolved
  *     platform thread the platform resolved since the horizon (a `resolved` ledger row) — the
  *     reopen is a person's act even with no note; never while the status has moved forward.
  *  8. Any form returns → `return`. Otherwise, at `qa`, a status that is mapped, readable, not the
- *     `qa` status and not a return status → `pass` — **and only when the ticket has been seen
+ *     `qa` status, not a return status and not one the platform wrote (`platformStatuses`) → `pass`
+ *     — **and only when the ticket has been seen
  *     leaving the `qa` status**: a recorded change out of it (`leftQa`, WP-178 criterion (14)), or
  *     an entry status at the `qa` slot or a sighting of it since (`entryStatus`/`seenAtQa`,
  *     amendment (b)). Otherwise `none`.
@@ -166,6 +169,13 @@ export interface HumanReturnInput<TWord extends HumanWord = HumanWord> {
    * `qa` slot, it is what lets a binding that records no `from` (one that only polls) pass QA.
    */
   readonly seenAtQa: boolean;
+  /**
+   * The `to` of every ticket transition **the platform** made for this task that landed after the
+   * human stage's entry (TD-029 Amendment F.2) — read from the executor's audit, successful calls
+   * only. A status in it never returns the task by status and never passes QA, however late the
+   * platform's write landed. Provider text, compared by {@link lifecycleStatusKey}.
+   */
+  readonly platformStatuses: readonly string[];
 }
 
 export type HumanReturnDecision<TWord extends HumanWord = HumanWord> =
@@ -282,27 +292,35 @@ export const handledWords = <TWord extends HumanWord>(
 /** The statuses that return a task (rule 6), as comparison keys. */
 const returnStatusKeys = (slots: HumanReturnSlots): ReadonlySet<string> =>
   new Set(
-    [...(slots.lifecycle.returned ?? []), slots.lifecycle.in_progress, slots.pickUpFrom]
+    [
+      ...(slots.lifecycle.returned ?? []),
+      slots.lifecycle.in_progress,
+      slots.pickUpFrom,
+      // TD-029 Amendment F (S-28.17): a person moving the ticket back to review is a return.
+      slots.lifecycle.in_review,
+      slots.lifecycle.approved,
+    ]
       .filter((name): name is string => typeof name === 'string')
       .map(lifecycleStatusKey),
   );
 
 /**
  * The lifecycle slots that are **ahead** of a human stage (review of #139, the coordinator's ruling
- * on "forward"): at `ready_for_merge` the `approved` and `done` slots, at `qa` the `done` slot. The
- * slots the platform writes itself on the way in — `in_review`, `approved` before `qa`, and `qa`
- * at `qa` — are never ahead, so the platform's own status write landing late is never read as a
- * person's forward move.
+ * on "forward", as TD-029 Amendment F narrows it): the `done` slot, at either stage. `approved` was
+ * ahead at `ready_for_merge` until Amendment F made it a return status. The slots the platform
+ * writes itself on the way in — `in_review`, `approved` and `qa` — are never ahead, so the
+ * platform's own status write landing late is never read as a person's forward move.
  */
-const forwardSlotKeys = (stage: Slug, slots: HumanReturnSlots): ReadonlySet<string> =>
+const forwardSlotKeys = (slots: HumanReturnSlots): ReadonlySet<string> =>
   new Set(
-    (stage === QA_STAGE_ID
-      ? [slots.lifecycle.done]
-      : [slots.lifecycle.approved, slots.lifecycle.done]
-    )
+    [slots.lifecycle.done]
       .filter((name): name is string => typeof name === 'string')
       .map(lifecycleStatusKey),
   );
+
+/** Amendment F.2: the statuses the platform wrote since the entry, as comparison keys. */
+const platformStatusKeys = (input: HumanReturnInput<HumanWord>): ReadonlySet<string> =>
+  new Set(input.platformStatuses.map(lifecycleStatusKey));
 
 /**
  * Rule 7: the ticket's status moved **forward** since the human stage began — readable, different
@@ -319,7 +337,7 @@ export const isForwardMove = (input: {
   input.status !== null &&
   input.entryStatus !== null &&
   lifecycleStatusKey(input.status) !== lifecycleStatusKey(input.entryStatus) &&
-  forwardSlotKeys(input.stage, input.slots).has(lifecycleStatusKey(input.status));
+  forwardSlotKeys(input.slots).has(lifecycleStatusKey(input.status));
 
 /**
  * The words that return the task (rules 4, 5 and 7, over the candidates of rules 2 and 3): in an
@@ -395,7 +413,8 @@ const isPass = (input: HumanReturnInput<HumanWord>, returnsByStatus: boolean): b
     qa === undefined ||
     input.status === null ||
     lifecycleStatusKey(input.status) === lifecycleStatusKey(qa) ||
-    returnStatusKeys(input.slots).has(lifecycleStatusKey(input.status))
+    returnStatusKeys(input.slots).has(lifecycleStatusKey(input.status)) ||
+    platformStatusKeys(input).has(lifecycleStatusKey(input.status))
   ) {
     return false;
   }
@@ -415,13 +434,15 @@ const isPass = (input: HumanReturnInput<HumanWord>, returnsByStatus: boolean): b
 
 /**
  * The status form (amendment (a)): the current status is a return status **and is not the status
- * the ticket had when the human stage began** — a change, never a state.
+ * the ticket had when the human stage began** — a change, never a state — **and is not one the
+ * platform wrote since the entry** (Amendment F.2): a late platform write is nobody's return.
  */
 const returnsByStatusOf = (input: HumanReturnInput<HumanWord>): boolean =>
   input.status !== null &&
   input.entryStatus !== null &&
   returnStatusKeys(input.slots).has(lifecycleStatusKey(input.status)) &&
-  lifecycleStatusKey(input.status) !== lifecycleStatusKey(input.entryStatus);
+  lifecycleStatusKey(input.status) !== lifecycleStatusKey(input.entryStatus) &&
+  !platformStatusKeys(input).has(lifecycleStatusKey(input.status));
 
 /** TD-029's human-return decision, as M28 ruling R1 amends it. Pure and total. */
 export const humanReturnDecision = <TWord extends HumanWord>(

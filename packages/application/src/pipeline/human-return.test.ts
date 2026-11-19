@@ -303,6 +303,12 @@ const waitingAt = async (
     },
     taskManagement: ticket.port,
     ticketAssignPermission: 'Assign Issues',
+    // A run takes time, as in production: the window counts only the platform's ticket moves landed
+    // since the human stage's entry (TD-029 Amendment F.2), and on a clock that never moves the
+    // claim's in_progress and the review's in_review writes would land at the entry itself.
+    whileRunning: async () => {
+      holder.harness?.clock.advance(1);
+    },
     ...options.harness,
     settings: {
       ticketLifecycle: options.lifecycle ?? lifecycle(stage === 'qa'),
@@ -1302,6 +1308,92 @@ describe('(f) the entry status at ready_for_merge', () => {
     waiting.ticket.state.status = 'Doing';
     await fire(waiting.harness, echo(waiting.harness, 'Sent back', 'Doing'));
     expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
+  });
+});
+
+/**
+ * TD-029 Amendment F (S-28.17, BD-031 2026-11-19): a person moving the ticket back to the
+ * `in_review` or `approved` status at a human stage returns the task like a `returned` status, and
+ * spends a human round; the platform's own transition landed after the entry — read off the
+ * executor's audit — never does.
+ */
+describe('back to review or approved is a return; the platform’s own late move is not (TD-029 Amendment F)', () => {
+  /**
+   * The entry's own window fires first: a person's move into a slot the platform writes made
+   * before that firing would be the entry (amendment (f)) — Amendment F's stated residual.
+   */
+  const entryRead = async (waiting: Waiting) => {
+    waiting.harness.clock.advance(WINDOW + 1);
+    await waiting.harness.drain();
+    later(waiting.harness);
+  };
+
+  /** The platform's own move landing late: an `ok` audit row as the executor writes it, and the echo. */
+  const platformMoved = (waiting: Waiting, to: string): DomainEvent => {
+    const written = waiting.harness.audit
+      .entriesFor('transition_ticket')
+      .find((entry) => entry.status === 'ok');
+    if (written === undefined) throw new Error('the walk wrote no ticket transition');
+    void waiting.harness.audit.record({
+      ...written,
+      payload: { ...written.payload, to },
+      occurredAt: waiting.harness.clock.now(),
+    });
+    return statusMoved(waiting, to);
+  };
+
+  // The approved move is written as the last review settles, beside the stage's entry, so whether
+  // it landed before the entry is a race; the domain's table covers approved, this covers in_review.
+  it('at qa, a person’s move back to in_review returns the task and spends a human round', async () => {
+    const waiting = await waitingAt('qa');
+    await entryRead(waiting);
+    await fire(waiting.harness, statusMoved(waiting, 'Waiting for review'));
+
+    expect(returnsFrom(waiting.harness, 'qa')).toHaveLength(1);
+    expect(eventsOf(waiting.harness, 'task.human_return')[0]?.payload).toMatchObject({
+      forms: ['status'],
+      status: 'Waiting for review',
+    });
+    expect(taskOf(waiting.harness).task.iterationCounters.human_rounds).toBe(1);
+  });
+
+  it('at ready_for_merge, a person’s move back to in_review returns the task', async () => {
+    const waiting = await waitingAt('ready_for_merge');
+    await entryRead(waiting);
+    await fire(waiting.harness, statusMoved(waiting, 'Waiting for review'));
+    expect(returnsFrom(waiting.harness, 'ready_for_merge')).toHaveLength(1);
+    expect(taskOf(waiting.harness).task.iterationCounters.human_rounds).toBe(1);
+  });
+
+  it('a late platform approved at qa does not return and does not pass; a person’s move to in_review then does', async () => {
+    const waiting = await waitingAt('qa');
+    await entryRead(waiting);
+    await fire(waiting.harness, platformMoved(waiting, 'Reviewed'));
+    expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
+    expect(taskOf(waiting.harness).task.currentStage).toBe('qa');
+
+    later(waiting.harness);
+    await fire(waiting.harness, statusMoved(waiting, 'Waiting for review'));
+    expect(returnsFrom(waiting.harness, 'qa')).toHaveLength(1);
+    expect(taskOf(waiting.harness).task.iterationCounters.human_rounds).toBe(1);
+  });
+
+  it('a shadow would_have row is no platform write: the same status moved by a person returns', async () => {
+    const waiting = await waitingAt('qa');
+    const written = waiting.harness.audit
+      .entriesFor('transition_ticket')
+      .find((entry) => entry.status === 'ok');
+    if (written === undefined) throw new Error('the walk wrote no ticket transition');
+    await entryRead(waiting);
+    await waiting.harness.audit.record({
+      ...written,
+      status: 'would_have',
+      attempts: 0,
+      payload: { ...written.payload, to: 'Sent back' },
+      occurredAt: waiting.harness.clock.now(),
+    });
+    await fire(waiting.harness, statusMoved(waiting, 'Sent back'));
+    expect(returnsFrom(waiting.harness, 'qa')).toHaveLength(1);
   });
 });
 

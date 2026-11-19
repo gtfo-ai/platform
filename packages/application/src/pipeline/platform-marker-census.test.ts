@@ -274,6 +274,7 @@ const decides = (word: HumanWord) =>
       leftQa: null,
       entryStatus: null,
       seenAtQa: false,
+      platformStatuses: [],
     });
     return decision.seen.length === 0 ? decision.kind : 'seen';
   });

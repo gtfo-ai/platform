@@ -951,6 +951,46 @@ describe('the ticket lifecycle and the review conversation, end to end (WP-183)'
     }, 300_000);
 
     /**
+     * TD-029 Amendment F (S-28.17, BD-031 2026-11-19): a person moving the ticket back from QA to
+     * the review status returns the task like a returned status, and spends a human round. The
+     * entry's own window fires first: a move into a slot the platform writes made before it would
+     * be the entry (amendment (f)), the residual the amendment states.
+     */
+    it('by moving the ticket back to the in_review status: QA → In review returns the task', async () => {
+      const { pipeline, moves } = await startFlow('lifecycle-back-to-review', { slots: true });
+
+      const taskId = await atHumanStage(pipeline, 'qa', 1);
+      await pipeline.waitFor('the entry read by the window', async () => {
+        await nudgeWindow(pipeline);
+        const rows = await pipeline.query<{ entry: string | null }>(
+          `select entry_ticket_status as entry from task_stages
+            where task_id = $1 and stage = 'qa' and attempt = 1`,
+          [taskId],
+        );
+        return (rows[0]?.entry ?? null) !== null;
+      });
+      await statusMovedByAPerson(pipeline, LIFECYCLE.in_review);
+      await returned(pipeline, 1);
+
+      await atHumanStage(pipeline, 'qa', 2);
+      await qaPasses(pipeline);
+      await merges(pipeline);
+      await pipeline.waitFor(
+        'the done status reached the ticket',
+        async () => pipeline.tickets.peek(TICKET_KEY)?.status === LIFECYCLE.done,
+      );
+      await quiet(pipeline);
+
+      expect(await stageEntries(pipeline)).toEqual(QA_WALK);
+      await expectOneHumanReturn(pipeline, 'qa', ['status']);
+      expect(payloadOf((await ofType(pipeline, 'task.human_return'))[0]).status).toBe(
+        LIFECYCLE.in_review,
+      );
+      expect((await pipeline.task()).iteration_counters.human_rounds).toBe(1);
+      await expectLifecycleOnTheTracker(pipeline, moves, 2);
+    }, 300_000);
+
+    /**
      * M28 ruling R1 (AUT-6655): a ticket comment alone is not a change request. It is recorded as
      * seen and the task stays at QA, which a person then passes.
      */

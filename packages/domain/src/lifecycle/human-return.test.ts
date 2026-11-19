@@ -49,6 +49,7 @@ const input = (overrides: Partial<HumanReturnInput>): HumanReturnInput => ({
   // leaves it (WP-178 review amendment (a)).
   entryStatus: 'Reviewed',
   seenAtQa: false,
+  platformStatuses: [],
   ...overrides,
 });
 
@@ -245,8 +246,9 @@ describe('humanReturnDecision (WP-174 criterion 6, M28 R1)', () => {
       const of = (status: string | null, entryStatus: string | null, stage = 'ready_for_merge') =>
         isForwardMove({ stage, slots: SLOTS, status, entryStatus });
       expect(of('Ready for Merge', 'Reviewed')).toBe(true);
-      expect(of('Reviewed', 'Testing')).toBe(true);
       expect(of('Ready for Merge', 'Testing', 'qa')).toBe(true);
+      // TD-029 Amendment F (S-28.17): approved is no longer ahead of ready_for_merge.
+      expect(of('Reviewed', 'Testing')).toBe(false);
       // An unmapped status is not forward.
       expect(of('Reopened', 'Reviewed')).toBe(false);
       // The platform's own writes, landing late, are never forward: in_review, approved at qa, qa at qa.
@@ -342,6 +344,168 @@ describe('humanReturnDecision (WP-174 criterion 6, M28 R1)', () => {
           }),
         ).seen,
       ).toEqual([]);
+    });
+  });
+
+  /**
+   * TD-029 Amendment F (S-28.17, BD-031 2026-11-19): at a human stage, a person moving the ticket
+   * back to the `in_review` or `approved` status returns it like a `returned` status; `done` alone is
+   * forward; `qa` at `ready_for_merge` is neither; a status the platform wrote since the entry never
+   * counts.
+   */
+  describe('back to review or approved is a return (TD-029 Amendment F)', () => {
+    const FULL = {
+      lifecycle: { ...SLOTS.lifecycle, ready_for_merge: 'Merge me', done: 'Finished' },
+      pickUpFrom: 'Backlog',
+    };
+    const ENTRY = { qa: 'Testing', ready_for_merge: 'Merge me' } as const;
+    const at = (
+      stage: (typeof HUMAN_STAGES)[number],
+      status: string,
+      more: Partial<HumanReturnInput> = {},
+    ) =>
+      humanReturnDecision(
+        input({ stage, slots: FULL, status, entryStatus: ENTRY[stage], leftQa: null, ...more }),
+      );
+
+    it.each([
+      ['qa', 'Sent back', 'return'],
+      ['qa', 'Doing', 'return'],
+      ['qa', 'Backlog', 'return'],
+      ['qa', 'Waiting for review', 'return'],
+      ['qa', 'Reviewed', 'return'],
+      ['qa', 'Merge me', 'pass'],
+      ['qa', 'Finished', 'pass'],
+      ['qa', 'Reopened', 'pass'],
+      ['ready_for_merge', 'Sent back', 'return'],
+      ['ready_for_merge', 'Doing', 'return'],
+      ['ready_for_merge', 'Backlog', 'return'],
+      ['ready_for_merge', 'Waiting for review', 'return'],
+      ['ready_for_merge', 'Reviewed', 'return'],
+      ['ready_for_merge', 'Testing', 'none'],
+      ['ready_for_merge', 'Finished', 'none'],
+    ] as const)('at %s, a person’s move to %s → %s', (stage, status, kind) => {
+      const decision = at(stage, status);
+      expect(decision.kind).toBe(kind);
+      if (kind === 'return') {
+        expect(decision).toMatchObject({ forms: ['status'], status, from: stage });
+      }
+    });
+
+    it('done stays forward at both stages: a thread written before the move does not return', () => {
+      for (const stage of HUMAN_STAGES) {
+        expect(
+          at(stage, 'Finished', { forwardSeenAt: LATER, words: [thread('mr_diff', 'nit')] }).kind,
+        ).not.toBe('return');
+      }
+    });
+
+    it('approved is no longer forward at ready_for_merge: a resolvable thread beside it returns', () => {
+      expect(
+        at('ready_for_merge', 'Reviewed', {
+          forwardSeenAt: LATER,
+          words: [thread('mr_diff', 'one more thing')],
+        }),
+      ).toMatchObject({ kind: 'return', forms: ['status', 'mr_diff'] });
+    });
+
+    it('a status equal to the entry returns nothing (a change, never a state)', () => {
+      expect(at('ready_for_merge', 'Merge me').kind).toBe('none');
+      expect(at('qa', 'Reviewed', { entryStatus: 'Reviewed' }).kind).toBe('none');
+    });
+
+    it('isPass: a move or a recorded leftQa to in_review/approved at qa is never a pass', () => {
+      for (const status of ['Waiting for review', 'Reviewed']) {
+        expect(at('qa', status).kind).toBe('return');
+        // Muted by the platform's own write, the status still does not pass.
+        expect(at('qa', status, { platformStatuses: [status] }).kind).toBe('none');
+        // A recorded change out of qa into one of them licenses no later pass either.
+        expect(at('qa', 'Merge me', { entryStatus: 'Doing', leftQa: status }).kind).toBe('none');
+      }
+      // ready_for_merge, done and an unmapped status still pass, by the entry at qa or by leftQa.
+      for (const status of ['Merge me', 'Finished', 'Reopened']) {
+        expect(at('qa', status).kind).toBe('pass');
+        expect(at('qa', status, { entryStatus: 'Doing', leftQa: status }).kind).toBe('pass');
+      }
+    });
+
+    it('a late platform approved at QA after a stale first firing does not return (Amendment F.2)', () => {
+      // The stale first firing froze the entry at the in_review status; the platform's approved
+      // landed after it.
+      const stale = { entryStatus: 'Waiting for review' };
+      expect(at('qa', 'Reviewed', { ...stale, platformStatuses: ['reviewed'] })).toEqual({
+        kind: 'none',
+        seen: [],
+      });
+      // The same move with no platform write behind it is a person's return.
+      expect(at('qa', 'Reviewed', stale)).toMatchObject({ kind: 'return', forms: ['status'] });
+    });
+
+    it('applies to every return status, and a thread still returns beside a platform status', () => {
+      expect(at('ready_for_merge', 'Doing', { platformStatuses: ['Doing'] }).kind).toBe('none');
+      expect(
+        at('ready_for_merge', 'Doing', {
+          platformStatuses: ['Doing'],
+          words: [thread('mr_diff', 'rename X')],
+        }),
+      ).toMatchObject({ kind: 'return', forms: ['mr_diff'], status: null });
+    });
+
+    /** Property (3): a status the platform wrote never yields the status form and never passes. */
+    it('never returns by status nor passes on a status in platformStatuses (property)', () => {
+      const name = fc.constantFrom(
+        'Doing',
+        'Waiting for review',
+        'Reviewed',
+        'Testing',
+        'Merge me',
+        'Sent back',
+        'Finished',
+        'Backlog',
+        'Reopened',
+      );
+      const slot = fc.option(name, { nil: undefined });
+      fc.assert(
+        fc.property(
+          fc.record({
+            in_progress: slot,
+            in_review: slot,
+            approved: slot,
+            qa: slot,
+            ready_for_merge: slot,
+            done: slot,
+          }),
+          fc.array(name, { maxLength: 2 }),
+          fc.option(name, { nil: null }),
+          fc.option(name, { nil: null }),
+          fc.option(name, { nil: null }),
+          name,
+          fc.constantFrom(...HUMAN_STAGES),
+          fc.boolean(),
+          fc.array(name, { maxLength: 3 }),
+          (picked, returned, pickUpFrom, entryStatus, leftQa, status, stage, seenAtQa, more) => {
+            const lifecycle = Object.fromEntries(
+              Object.entries({ ...picked, returned }).filter(([, value]) => value !== undefined),
+            );
+            const decision = humanReturnDecision(
+              input({
+                stage,
+                slots: { lifecycle, pickUpFrom },
+                status,
+                entryStatus,
+                leftQa,
+                seenAtQa,
+                // Compared by lifecycleStatusKey, so another spelling is the same status.
+                platformStatuses: [...more, status.toUpperCase()],
+              }),
+            );
+            expect(decision.kind).not.toBe('pass');
+            if (decision.kind === 'return') {
+              expect(decision.forms).not.toContain('status');
+            }
+          },
+        ),
+      );
     });
   });
 

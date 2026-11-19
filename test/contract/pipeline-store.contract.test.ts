@@ -5,8 +5,8 @@
  * against a real PostgreSQL, which is what makes the saga's unit tier — which runs on this store —
  * a claim about the product rather than about a Map.
  */
-import { createMemoryPipelineStore } from '@platform/application';
-import type { DomainEvent } from '@platform/contracts';
+import { createMemoryPipelineStore, type IntegrationActionEntry } from '@platform/application';
+import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { runPipelineStoreContract } from './support/pipeline-store-suite.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
@@ -17,6 +17,7 @@ runPipelineStoreContract({
     // The task streams `takenOver` reads (WP-56), wired as `createPipelineHarness` wires the log.
     const log: DomainEvent[] = [];
     const actions: { taskId: string; userId: string; at: string }[] = [];
+    const audit: IntegrationActionEntry[] = [];
     return {
       store: createMemoryPipelineStore({
         taskEvents: (taskId) =>
@@ -31,6 +32,8 @@ runPipelineStoreContract({
           actions
             .filter((row) => row.taskId === taskId)
             .map((row) => ({ userId: row.userId as never, at: row.at as never })),
+        // S-28.17: the executor's audit, as PostgreSQL reads `integration_actions`.
+        integrationActions: () => audit,
       }),
       tx: { adapter: 'memory' } as never,
       projectId: PROJECT,
@@ -53,6 +56,25 @@ runPipelineStoreContract({
       otherUserId: '00000000-0000-4000-8000-0000000000c2',
       recordHumanAction: async (input) => {
         actions.push(input);
+      },
+      recordTicketTransition: async (input) => {
+        audit.push({
+          integrationId: '00000000-0000-4000-8000-0000000000d1' as Id,
+          provider: 'fake-jira',
+          projectId: PROJECT as Id,
+          taskId: input.taskId,
+          direction: 'out',
+          action: 'transition_ticket',
+          mutating: true,
+          status: input.status,
+          payload: { ticket_key: 'ACME-1', to: input.to },
+          result: null,
+          error: null,
+          durationMs: 0,
+          occurredAt: new Date(Date.now() + input.offsetMs).toISOString() as IsoDateTime,
+          redactionCount: 0,
+          attempts: 1,
+        });
       },
       cleanup: async () => {},
     };
