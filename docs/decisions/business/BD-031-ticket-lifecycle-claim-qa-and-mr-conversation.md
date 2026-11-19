@@ -222,3 +222,19 @@ The owner, on the reverse sync: *"when the ticket is in state released it should
    cancelled by the platform* (`packages/application/src/pipeline/ticket-status-recheck.ts:11-12`), by the owner's
    decision: a closed ticket means nobody wants the work, and the merge request is the people's to close or keep.
    A person's hands-off status still stops and escalates, unchanged.
+
+## Amendment (2026-11-19, the product owner's decision) — moving the ticket back to review is a return
+
+**Evidence.** At QA, a person who moved the ticket back to the review status sent the task on to *Ready for Merge*: the
+return statuses are only `returned`, `in_progress` and `pick_up_from` (`packages/domain/src/lifecycle/human-return.ts:283`),
+so any other status that is not `qa` read as *QA passed*. At *Ready for Merge*, moving the ticket back to the approved
+status read as a step **forward** (`human-return.ts:297`).
+
+**Decision** (the owner, 2026-11-19; not to be reopened; technical design in TD-029 amendment F). At a human stage — QA and
+*Ready for Merge* — a person moving the ticket back to the status mapped as **`in_review`** or **`approved`** returns the
+task to Implementation, exactly as a `returned` status does: batched by the same window, spending a human round. Moving it
+on to `ready_for_merge` or `done` stays forward. Moving it back to the `qa` status while it waits at *Ready for Merge*
+returns nothing by status, as today (the owner named review and approved only; a person who wants a change writes in a
+thread or presses *Send back*). **A status the platform wrote itself never counts**, however late it lands.
+*Rejected:* reading *back to review* as a request to re-run the agent review only — the owner's word is *a return to
+Implementation*, and a review with nothing changed would approve the same diff again.

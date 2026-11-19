@@ -550,3 +550,44 @@ owner: a released ticket must not keep an agent assigned.
 
 **Rejected.** Closing the merge request too (a write in the people's repository nobody asked for). **Residual.** A ticket
 closed by mistake cancels real work; the branch and the merge request survive for people to pick up, and the brief says so.
+
+## Amendment F (2026-11-19, the owner's decision in BD-031; S-28.17) — back to review or approved is a return
+
+**Context.** Rule 6 of `humanReturnDecision` returns on `returned`, `in_progress` or `pick_up_from` only
+(`packages/domain/src/lifecycle/human-return.ts:283-288`); `isPass` passes QA on any other mapped, non-`qa` status (`:390-414`),
+so QA → *In review* passed QA. `forwardSlotKeys` names `approved` forward at `ready_for_merge` (`:297-305`). The only guard
+against the platform's own write is *differs from `entryStatus`* (`returnsByStatusOf`, `:420-424`); `entryStatus` is frozen
+at the window's first firing (`observeEntryStatus`, `packages/application/src/pipeline/jobs.ts:2032-2061`), whose stated
+residual is a platform move landing after that firing. That was harmless while `in_review`/`approved` returned nothing; now
+it is the hazard: a retried `approved` duty (`moments.ts`: written at the last review's completion, on an unordered
+`pipeline.outbound` duty) landing at QA after a stale first read would return the task.
+
+**Decision** (amends decisions 6–9 and amendment A's rules 6–8).
+1. **The table.** Return statuses at both human stages: `returned`, `in_progress`, `pick_up_from`, **`in_review`,
+   `approved`**. Forward: `done` at both (`approved` leaves `forwardSlotKeys`). `qa` at `ready_for_merge` and
+   `ready_for_merge` at either stage: neither return nor forward — unchanged. At `qa`, `isPass` keeps its shape and simply
+   inherits the larger return set, so a move (or a recorded `leftQa`) to `in_review`/`approved` is never a pass.
+2. **The platform's own write never counts — one new input field.** `HumanReturnInput.platformStatuses: readonly string[]`:
+   the `to` of every `transition_ticket` the platform made for this task that **landed after the human stage's entry** —
+   read by the window, in its first transaction, from the executor's own audit (`integration_actions`: `task_id`,
+   `action = 'transition_ticket'`, `payload.to`, a successful status, `created_at + duration_ms` ≥ the stage attempt's
+   entry; `created_at` ≥ the horizon bounds the partitions). No migration, no new writer: the executor already records
+   every lifecycle move (`packages/application/src/pipeline/integrations.ts:1741-1765`). The status form (rule 6) returns
+   only when the status is a return status, differs from `entryStatus`, **and is not in `platformStatuses`** (compared by
+   `lifecycleStatusKey`) — for every return status, not only the two new ones. Shadow `would_have` rows moved nothing and
+   are ignored either way. A platform write that landed **before** the entry stays covered by amendment (f)'s entry rule.
+3. **Config unchanged.** The schema's pairwise distinctness of single slots and `returned` (`packages/contracts/src/config.ts`,
+   the `superRefine` after `:1180`) stays: `in_review` is also the slot the platform writes at `code_review`, and a status
+   that is both would make the reverse sync's *platform's own status* exemption and a person's return one name.
+4. `observeEntryStatus` is unchanged (its platform-slot list still names `in_review`, `approved`, `qa`: the echo of an
+   on-time write must stay the entry).
+
+**Rejected.** (a) Skipping `in_review`/`approved` writes in the lifecycle duty once the task is at a human stage —
+smaller, but a fast tail (no CI gate, QA off) reaches *Ready* before the `approved` duty fires, and a binding with no
+`ready_for_merge` slot would then leave the ticket in review. (b) Judging by the change's author — decision 6 forbids it.
+(c) A new column recording the platform's writes — the audit already is that record (BD-003).
+
+**Residuals.** A person's move back to `in_review`/`approved` **before** the window's first firing at the stage becomes
+the entry (amendment (f)) and returns nothing by status — one window (2 min) after entry; a thread or *Send back* still
+returns. A person who moves the ticket to the very status a late platform write put there in the same stage attempt is
+not heard by status.
