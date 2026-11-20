@@ -23,7 +23,16 @@
  * Everything rendered here is untrusted (BD-022) and goes through `ui/untrusted.tsx`.
  */
 import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
-import { type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  type ReactElement,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { FollowPaused, useFollowTail } from '../ui/follow-tail.js';
 import { terminalReasonLabel } from '../ui/humanize.js';
@@ -106,6 +115,12 @@ const LogRow = ({
 );
 
 /**
+ * Pauses the log's follow when the reader opens or closes a step: pinned to the end, the step they
+ * just opened would be scrolled out of view (`ui/follow-tail.tsx`). A no-op outside a view.
+ */
+const PauseFollowOnToggle = createContext<() => void>(() => {});
+
+/**
  * A disclosure row of the log — a tool call's step, a thinking block, the CLI's own start-up
  * notice. A native `<details>`, so the keyboard and the expanded state come from the browser.
  *
@@ -130,6 +145,7 @@ const Step = ({
   readonly defaultOpen?: boolean;
 }): ReactElement => {
   const [chosen, setChosen] = useState<boolean | null>(null);
+  const pauseFollow = useContext(PauseFollowOnToggle);
   const open = chosen ?? defaultOpen;
   const rendered = useRef(open);
   rendered.current = open;
@@ -146,7 +162,11 @@ const Step = ({
         }}
         className="group rounded-md"
       >
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: <summary> is the disclosure's own control; the browser gives it the keyboard. */}
         <summary
+          // A click (Enter and Space click too) runs before the browser opens the step, so the
+          // pause is in place before its new height could be pinned.
+          onClick={pauseFollow}
           className={cx(
             'flex cursor-pointer list-none items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-subtle [&::-webkit-details-marker]:hidden',
             FOCUS_RING,
@@ -425,6 +445,13 @@ export const TranscriptView = ({
   }, [jumpToEnd, jumpToLatest, scrollerRef]);
 
   const ended = endedProp || blocks.some((block) => block.kind === 'result');
+  const { pause } = follow;
+  const pauseOnToggle = useMemo(
+    () => () => {
+      pause('disclosure');
+    },
+    [pause],
+  );
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -442,7 +469,12 @@ export const TranscriptView = ({
         {/* `default` with `aria-pressed`, never the run page's beacon (S-23.23); pressing it
             pauses, and a paused log says so and offers the way back. */}
         {follow.following ? (
-          <Button aria-pressed onClick={follow.pause}>
+          <Button
+            aria-pressed
+            onClick={() => {
+              follow.pause('button');
+            }}
+          >
             Following
           </Button>
         ) : (
@@ -475,7 +507,11 @@ export const TranscriptView = ({
                 : 'No block matches that search.'}
             </p>
           ) : (
-            visible.map((block) => <BlockView key={block.id} block={block} ended={ended} />)
+            <PauseFollowOnToggle.Provider value={pauseOnToggle}>
+              {visible.map((block) => (
+                <BlockView key={block.id} block={block} ended={ended} />
+              ))}
+            </PauseFollowOnToggle.Provider>
           )}
         </div>
       </div>

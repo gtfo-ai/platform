@@ -1595,7 +1595,7 @@ Then four tabs:
   thinking stays folded under *Thinking*. The log scrolls in a pane of its own, sized to the window:
   at the bottom it follows the end and stays on the newest line as entries arrive; scroll up and it
   stays where you are, with **Paused · N new**, until you press **Jump to latest** or scroll back to
-  the end. Pressing **Following** pauses it without scrolling. The stage dialog's log does the same. Everything in it is rendered as **text** or as
+  the end. Pressing **Following**, or opening or closing a step, pauses it without scrolling. The stage dialog's log does the same. Everything in it is rendered as **text** or as
   page elements built from it — the model's Markdown is formatted (headings, lists, bold, code,
   tables), but the application has no markdown-to-HTML step anywhere, on purpose, because all of it
   — model output, tool results, file contents — is untrusted

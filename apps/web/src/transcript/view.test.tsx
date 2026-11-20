@@ -402,19 +402,42 @@ describe('TranscriptView', () => {
     expect(scroller.scrollTop).toBe(bottomOf(geometry));
   });
 
-  it('pauses from the *Following* toggle without moving the pane', () => {
+  it('pauses from the *Following* toggle without moving the pane, and focus lands on *Jump to latest*', async () => {
+    const user = userEvent.setup();
     const view = render(<TranscriptView blocks={[tool()]} />);
     const scroller = screen.getByTestId('transcript-scroller');
     const geometry = layOut(scroller, { scrollHeight: 1000, clientHeight: 200 });
     view.rerender(<TranscriptView blocks={[tool()]} />);
-    act(() => {
-      screen.getByRole('button', { name: 'Following' }).click();
-    });
-    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeTruthy();
+    // From the keyboard: the pressed button unmounts, so focus must go somewhere on purpose.
+    screen.getByRole('button', { name: 'Following' }).focus();
+    await user.keyboard('{Enter}');
+    const jump = screen.getByRole('button', { name: 'Jump to latest' });
+    expect(document.activeElement).toBe(jump);
+    // Nobody scrolled: it says only that it is paused.
+    expect(screen.getByTestId('follow-paused').textContent).toBe('Paused');
+    expect(scroller.scrollTop).toBe(800);
     geometry.scrollHeight = 1400;
     view.rerender(<TranscriptView blocks={[tool(), tool({ id: 't2', seq: 2 })]} />);
     expect(scroller.scrollTop).toBe(800);
     expect(screen.getByTestId('follow-paused').textContent).toBe('Paused · 1 new');
+  });
+
+  it('pauses when the reader opens a step, so the step stays where they opened it', async () => {
+    const user = userEvent.setup();
+    const view = render(<TranscriptView blocks={[tool(), tool({ id: 't2', seq: 2 })]} />);
+    const scroller = screen.getByTestId('transcript-scroller');
+    const geometry = layOut(scroller, { scrollHeight: 1000, clientHeight: 200 });
+    view.rerender(<TranscriptView blocks={[tool(), tool({ id: 't2', seq: 2 })]} />);
+    expect(scroller.scrollTop).toBe(800);
+
+    const step = view.container.querySelector('[data-log-step="tool"]') as HTMLDetailsElement;
+    geometry.scrollHeight = 1300; // the step's body, once open
+    await user.click(step.querySelector('summary') as HTMLElement);
+    expect(step.open).toBe(true);
+    expect(scroller.scrollTop).toBe(800);
+    expect(screen.getByTestId('follow-paused').textContent).toBe('Paused while a step is open');
+    // A step opening is not the *Following* button: focus stays on the step.
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Jump to latest' }));
   });
 
   it('counts past a trimmed window: the task page passes the run’s whole count', () => {
