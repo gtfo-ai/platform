@@ -169,9 +169,11 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // again: the window is the `mr.comment.debounce` job, which runs beside the stage executor.
     'review_threads',
     // `saveReadyHead` — the head the gates judged on the way into `ready_for_merge` (WP-79,
-    // migration 0056, backlog 267). Its **one** caller is `applyDecision`'s Ready entry
-    // (`packages/application/src/pipeline/transitions.ts`), inside the entry's own transaction;
-    // the `ready_head_check` duty reads it and never writes it.
+    // migration 0056, backlog 267). Its callers are `applyDecision`'s Ready entry
+    // (`packages/application/src/pipeline/transitions.ts`), inside the entry's own transaction, the
+    // platform merge's rebase acceptance (TD-038 amendment A) and, once per task that passed QA
+    // with no head recorded, `adoptQaPassHead` (S-28.18); the `ready_head_check` duty reads it and
+    // never writes it.
     'ready_head_sha',
     // `saveCiSettlement` — the head the CI gate last passed (WP-79 review round 2, backlog 275) and
     // the protected paths it excused provisionally (WP-102, migration 0065, Q109 (b)), in one

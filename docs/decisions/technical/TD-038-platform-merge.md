@@ -117,3 +117,38 @@ the conflict question (`mergeable`, `has_conflicts`) and, on a conflict, merges 
 after the rebase (re-runs the review tail for a change the digest proves unchanged). Trusting the provider's rebase
 without the digest (a rebase can silently change resolved lines). **Residual.** The digest ignores context lines, so a
 rebase over a default branch that changed the surrounding code passes it; the pipeline on H′ is what judges that.
+
+## Amendment B (2026-11-20, S-28.18, BACKLOG 1608) — a task that passes QA records the head the gates judged
+
+**Context.** Decision 3's fresh check requires **MR head == `tasks.ready_head_sha` == `tasks.ci_head_sha`**. The
+column is written by the Ready entry's transaction, and only a passing rebase-gate settlement supplied a head — but on
+a task with the `qa` stage (BD-031, TD-029 decision 9) the rebase gate passes to **`qa`**, and QA's pass (the
+human-return window reading that the ticket left the `qa` status) entered Ready with none. Measured on Autix
+(2026-11-20): every task that entered Ready from `qa` (AUT-6645, AUT-6640, AUT-6866, AUT-6880 — 4 of 4) held
+`ready_head_sha` null and `merge_wait = head_moved`; every platform merge that succeeded had entered Ready from
+`rebase_gate`. The page said *"the branch moved since the reviewed commit"* although nobody had pushed.
+
+**Decision.**
+
+1. **QA's pass records the head the gates judged before QA.** The rule is WP-79/WP-105's — Ready only for a head the
+   gates judged. On a pipeline that runs `ci_gate`, the rebase gate enters `qa` only for the head CI passed
+   (`rebaseAgainstCi`), and nothing writes `ci_head_sha` while the task waits at `qa`, so QA's pass records
+   `ci_head_sha` as the Ready entry's head (`packages/application/src/pipeline/qa-pass-head.ts`). Nothing new is
+   persisted and no migration is needed. The `ready_head_check` duty was not used: it re-enters `rebase_gate`, whose
+   pass leads back into `qa`, so a person would test the same commit again.
+2. **A head that moved during QA is still not merged unjudged**: the fresh check compares the live head as before,
+   and a push during QA is `head_moved` — the true sentence now.
+3. **Tasks already waiting recover without a person.** On a pipeline with `qa` enabled every Ready entry is QA's pass,
+   so the same rule answers a task stuck before this shipped: the recovery pass's `ready_merge_check` row finds a task
+   at Ready with `qa_stage`, no `ready_head_sha` and a `ci_head_sha` due, and the `ready_merge_check` duty records the
+   head once (a write conditional on the column still being null), after which the platform merge proceeds as decision
+   3 says.
+4. **No recorded head is its own wait**, `head_not_recorded`, worded *"no check recorded which commit was reviewed, so
+   the platform does not merge it unjudged — a person merges it, or Send back to review it again"*. After 1–3 it is
+   defensive on the shipped templates; a custom template with `qa` and no `ci_gate` still reaches it.
+
+**Residual.** A person's hand-back into `qa` skips the rebase gate's entry into `qa`; QA's pass then records the last
+head CI passed. The live-head comparison, the provider's "mergeable" and the approving review still hold, but the
+rebase gate's protected-path confirmation (WP-102) is not re-read for an unpushed take-over that skipped the review
+stages — BACKLOG 1609.
+

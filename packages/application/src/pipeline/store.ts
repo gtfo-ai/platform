@@ -279,7 +279,10 @@ export interface StoredTask {
    * template with no rebase gate (since WP-105 an unmoved head otherwise re-enters `rebase_gate`,
    * whose settlement records it), and `null` for every other entry — so the value always describes the **latest** Ready entry. `null`
    * is *"no gate judged a head"* (a template with its gates disabled, a row older than the column),
-   * which the `ready_head_check` duty reads exactly like a moved head.
+   * which the `ready_head_check` duty reads exactly like a moved head. QA's pass into Ready records
+   * `ci_head_sha`, the head the rebase gate agreed with on its way into `qa` (S-28.18,
+   * `qa-pass-head.ts`), and the `ready_merge_check` duty records the same once for a task that
+   * passed QA before that.
    */
   readonly readyHeadSha: string | null;
   /**
@@ -625,8 +628,9 @@ export interface TaskRepository {
    * Writes **only** `ready_head_sha` — the head the gates judged on the way into Ready (WP-79,
    * migration 0056).
    *
-   * One caller: `applyDecision`'s entry into `ready_for_merge`, inside the entry's own transaction,
-   * right after the aggregate's `save`. Narrow rather than a column of `save` because the ruling
+   * Callers: `applyDecision`'s entry into `ready_for_merge`, inside the entry's own transaction,
+   * right after the aggregate's `save`; the platform merge's rebase acceptance (TD-038 amendment A);
+   * and `adoptQaPassHead` (S-28.18), once, for a task that passed QA with no head recorded. Narrow rather than a column of `save` because the ruling
    * that created it asked for one writer, and a `save` column has thirty-odd. No version bump:
    * `save` does not name the column. `null` is written as readily as a head, so an entry that
    * judged nothing never inherits an earlier entry's head.
@@ -1358,9 +1362,10 @@ export interface TaskRepository {
   /**
    * The tasks at `ready_for_merge` whose merge check is due (S-28.13, migration 0118,
    * `pipeline/ready-merge-check.ts`): mode `normal`, a merge request recorded, and **no** check row
-   * — a task waiting since before the check existed — or a row whose `mergeable` is not `true` and
-   * whose claim is older than `staleBefore`. The most recently touched first, then id, at most
-   * `limit`.
+   * — a task waiting since before the check existed — or a row whose claim is older than
+   * `staleBefore` and whose `mergeable` is not `true`, whose platform merge has no decisive attempt
+   * for its reviewed head (S-28.15), or whose task passed QA with no reviewed head but a head CI
+   * passed (S-28.18, `qa-pass-head.ts`). The most recently touched first, then id, at most `limit`.
    */
   readyMergeCheckDue(
     tx: Transaction,

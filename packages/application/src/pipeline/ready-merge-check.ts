@@ -29,7 +29,9 @@
  *  - **the recovery pass** (`recovery/ready-merge-check.ts`): a task at Ready with **no** record —
  *    which is every task already waiting when this ships, AUT-6655 included — once, and a record
  *    that is not "mergeable" again ten minutes after its claim, so a block that clears without a
- *    signal (a pipeline that passed, an approval) clears on the page too.
+ *    signal (a pipeline that passed, an approval) clears on the page too — and, since S-28.18, a
+ *    task that passed QA with no reviewed head recorded, which this duty gives the head the gates
+ *    judged before QA, once (`adoptQaPassHead`, `qa-pass-head.ts`).
  *
  * Re-validated on fire (TD-004): the task still exists, is at `ready_for_merge`, has a merge request
  * and is not a review-only task. Every provider call is the executor's, outside every transaction;
@@ -56,6 +58,7 @@ import {
   recoverLostMergeSignal,
   whoMerges,
 } from './platform-merge.js';
+import { adoptQaPassHead } from './qa-pass-head.js';
 import { closeOwnThreads, type ReviewConversationOptions } from './review-conversation.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ReadyMergeCheck, StoredTask } from './store.js';
@@ -156,6 +159,9 @@ export const runReadyMergeCheck = async (
   ) {
     return 'not_at_ready';
   }
+  // S-28.18 (BACKLOG 1608): a task that passed QA before its Ready entry recorded a head is given
+  // the head the gates judged, once (`qa-pass-head.ts`); the recovery pass finds it due for that.
+  await adoptQaPassHead(options, taskId);
   const atReady = stored as StoredTask & { readonly mr: NonNullable<StoredTask['mr']> };
   const integrations = await integrationsForProject(
     options.integrations,

@@ -322,9 +322,12 @@ const priorityRank = priorityRankOf;
  * (`task_merge_checks`) and `t` (`tasks`), `stale` the placeholder of the stale-before instant:
  * a check that did not read "mergeable"; a task the **platform** merges with no decisive attempt
  * for its reviewed head (a merge that waited, a rebase in flight, or a lost wake-up); and a task the platform merged that is
- * still at Ready past the window (TD-038 decision 6's lost `mr.merged`).
+ * still at Ready past the window (TD-038 decision 6's lost `mr.merged`); and a task that passed QA
+ * with no reviewed head recorded but a head CI passed (S-28.18: the check records that head once,
+ * `qa-pass-head.ts`, after which this clause no longer holds).
  */
 const mergeCheckDueAgain = (stale: string): string => `c.mergeable is distinct from true
+  or (t.ready_head_sha is null and t.qa_stage and t.ci_head_sha is not null)
   or (c.merge_by = 'platform' and t.ready_head_sha is not null
       and not exists (select 1 from task_merges m
                        where m.task_id = t.id and m.head_sha = t.ready_head_sha

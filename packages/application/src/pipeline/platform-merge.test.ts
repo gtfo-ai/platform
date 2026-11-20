@@ -124,6 +124,8 @@ interface World {
   readonly mergeAnswersOpen?: boolean;
   readonly pipeline?: 'success' | 'failed' | 'running' | null;
   readonly portless?: boolean;
+  /** The task's frozen `qa_stage` (S-28.18): its Ready entry was QA's pass. */
+  readonly qa?: boolean;
 }
 
 const storedTask = (world: World): StoredTask =>
@@ -174,7 +176,7 @@ const storedTask = (world: World): StoredTask =>
     ciExcusedPaths: [],
     requestedByUserId: null,
     pipelineDial: null,
-    qaStage: false,
+    qaStage: world.qa === true,
     ticketSnapshotAt: null,
     ticketSignalAt: null,
     version: 1,
@@ -1173,3 +1175,80 @@ describe('a lost mr.merged (TD-038 decision 6)', () => {
 /** Held to the queue's payload type, so a renamed duty fails here rather than in a job. */
 const _duty: PipelineOutboundData['duty'] = 'platform_merge';
 void _duty;
+
+/**
+ * S-28.18 (BACKLOG 1608, TD-038 Amendment B): a task that entered Ready from `qa` before QA's pass
+ * recorded a head held `ready_head_sha = null`, and the platform's merge waited forever, worded as
+ * "the branch moved". The wait has its own code now, and the merge check records the head the gates
+ * judged before QA once — so AUT-6640 and its like merge without a person.
+ */
+describe('a task that passed QA with no reviewed head recorded (S-28.18)', () => {
+  const claimedLongAgo = async (w: Awaited<ReturnType<typeof setup>>) =>
+    w.memory.transaction(async (scope) =>
+      w.store.tasks.recordReadyMergeCheck(scope.tx, TASK, {
+        checkedAt: '2026-01-01T00:00:00.000Z' as IsoDateTime,
+        mergeable: true,
+        reason: null,
+        providerStatus: null,
+        unresolvedThreads: null,
+      }),
+    );
+  const dueNow = async (w: Awaited<ReturnType<typeof setup>>) =>
+    (
+      await w.memory.transaction(async (scope) =>
+        w.store.tasks.readyMergeCheckDue(scope.tx, {
+          staleBefore: '2099-01-01T00:00:00.000Z' as IsoDateTime,
+          limit: 10,
+        }),
+      )
+    ).map((row) => row.taskId);
+
+  it('waits head_not_recorded — never head_moved — when no reviewed head was recorded, and merges nothing', async () => {
+    const w = await setup({ setting: 'platform', readyHead: null });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_not_recorded');
+    expect(w.merges).toEqual([]);
+  });
+
+  it('is found by the recovery pass, gets the head CI passed recorded once, and is merged at that head', async () => {
+    const w = await setup({ setting: 'platform', readyHead: null, qa: true });
+    await claimedLongAgo(w);
+    expect(await dueNow(w)).toEqual([TASK]);
+    expect(await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options)).toBe(
+      'mergeable',
+    );
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+    expect(await w.run()).toBe('merged');
+    expect(w.merges).toEqual([{ expected: HEAD, squash: true, remove: false }]);
+  });
+
+  it('still merges nothing when the branch moved during QA: the recorded head is the judged one', async () => {
+    const w = await setup({
+      setting: 'platform',
+      readyHead: null,
+      qa: true,
+      live: { head: 'e'.repeat(40) },
+    });
+    await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options);
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_moved');
+    expect(w.merges).toEqual([]);
+  });
+
+  it('records nothing for a task without qa, or one CI never passed, and the recovery does not find it', async () => {
+    for (const world of [
+      { setting: 'platform', readyHead: null },
+      { setting: 'platform', readyHead: null, qa: true, ciHead: null },
+    ] as const) {
+      const w = await setup(world);
+      await claimedLongAgo(w);
+      expect(await dueNow(w)).toEqual([]);
+      await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options);
+      expect((await reload(w))?.readyHeadSha).toBeNull();
+      expect(await w.run()).toBe('waiting');
+      expect(await w.waitedFor()).toBe('head_not_recorded');
+      expect(w.merges).toEqual([]);
+    }
+  });
+});

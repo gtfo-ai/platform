@@ -107,6 +107,7 @@ import {
 import { type ExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
 import { prefetchObservability } from './observability-prefetch.js';
 import { ownerSyncOnRead } from './owner-sync.js';
+import { qaPassHead } from './qa-pass-head.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
 import {
@@ -2321,7 +2322,10 @@ const returnForHumanWords = async (
   );
 };
 
-/** The pass at `qa`: one `interpret` with `ticket.status.changed`, to `ready_for_merge`. */
+/**
+ * The pass at `qa`: one `interpret` with `ticket.status.changed`, to `ready_for_merge` — recording
+ * the head the gates judged before QA as the Ready entry's head (S-28.18, `qa-pass-head.ts`).
+ */
 const passQa = async (
   options: PipelineJobOptions,
   read: WindowRead,
@@ -2349,6 +2353,10 @@ const passQa = async (
       // Platform text: the status name is provider text and is not needed to say what happened.
       detail: 'the ticket left the qa status',
     });
+    // S-28.18 (BACKLOG 1608): the rebase gate entered `qa` only for the head CI passed, so that is
+    // the head this Ready entry records — without it the column was `null` and the platform's merge
+    // waited forever. Read only if the decision enters Ready.
+    const readyHeadSha = qaPassHead(pipeline, current);
     const applied = await applyDecision({
       offerClosing: { events: scope.events, broadcast: scope.broadcast },
       store: options.store,
@@ -2356,6 +2364,7 @@ const passQa = async (
       tx: scope.tx,
       stored: current,
       decision,
+      ...(readyHeadSha === null ? {} : { readyHeadSha }),
       context: {
         ids: options.ids,
         actor: { kind: 'system', component: 'pipeline' },

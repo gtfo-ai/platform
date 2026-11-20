@@ -189,9 +189,10 @@ export interface ApplyOptions {
   readonly returnReasonOriginalChars?: number | null;
   /**
    * The branch head a gate judged, recorded as `tasks.ready_head_sha` **if** this decision enters
-   * `ready_for_merge` (WP-79, PROGRESS backlog 267) — the gate settlement's head, or the
-   * `ready_head_check` duty's when it found the branch unmoved on a template that runs no rebase
-   * gate (WP-105: elsewhere an unmoved head re-enters `rebase_gate`). Every entry into Ready writes
+   * `ready_for_merge` (WP-79, PROGRESS backlog 267) — the gate settlement's head, QA's pass's
+   * (`ci_head_sha`, the head the rebase gate agreed with on its way into `qa` — S-28.18,
+   * `qa-pass-head.ts`), or the `ready_head_check` duty's when it found the branch unmoved on a
+   * template that runs no rebase gate (WP-105: elsewhere an unmoved head re-enters `rebase_gate`). Every entry into Ready writes
    * the column, `null` when this is absent, so the value always describes the latest entry; every
    * other move ignores it. `enter` below is the column's one writer.
    */

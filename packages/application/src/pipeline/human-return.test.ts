@@ -876,6 +876,22 @@ describe('(6) at qa, the stage’s three other endings', () => {
     expect(eventsOf(waiting.harness, 'task.human_return')).toHaveLength(0);
   });
 
+  /**
+   * S-28.18 (BACKLOG 1608): QA's pass entered Ready with no head, so `ready_head_sha` was null and
+   * the platform's merge waited forever ("the branch moved"). The entry records the head the rebase
+   * gate agreed with on its way into `qa` — the head CI passed.
+   */
+  it('passing QA records the head the gates judged as the Ready entry’s head', async () => {
+    const waiting = await waitingAt('qa');
+    const atQa = taskOf(waiting.harness);
+    expect(atQa.ciHeadSha).not.toBeNull();
+    later(waiting.harness);
+    await fire(waiting.harness, statusMoved(waiting, 'Finished'));
+
+    expect(at(waiting.harness)).toEqual(['ready_for_merge', 'ready_for_merge']);
+    expect(taskOf(waiting.harness).readyHeadSha).toBe(atQa.ciHeadSha);
+  });
+
   it('mr.merged leads to merged_gate', async () => {
     const waiting = await waitingAt('qa');
     await waiting.harness.publish([
