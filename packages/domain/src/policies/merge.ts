@@ -299,6 +299,30 @@ export interface ChangeDigestFile {
 export const changeDigest = (
   files: readonly ChangeDigestFile[],
   truncated: boolean,
+): string | null => digestFiles(files, truncated, false);
+
+/**
+ * **The stricter change identity for a person's rebase** (TD-038 Amendment C, review of #177):
+ * {@link changeDigest} with the **context lines kept, in order**, and only the hunk headers' line
+ * numbers dropped — `git patch-id`'s semantics. A rebase the provider made fails on a conflict, so
+ * amendment A's digest may ignore where the lines sit; a person's local rebase can move an added line
+ * (`+ if (!authorized) return;`) into another function with the same `+`/`-` lines, which this
+ * digest refuses: any changed context is a different change (`head_changed`), failing closed. A
+ * rebase over a base that changed code within the hunk's context therefore also reads as changed
+ * and a person decides. A hunk header keeps its section text (the enclosing function GitLab names).
+ */
+export const changeDigestWithContext = (
+  files: readonly ChangeDigestFile[],
+  truncated: boolean,
+): string | null => digestFiles(files, truncated, true);
+
+/** `@@ -12,3 +14,4 @@ fn()` → `@@ fn()`: the hunk's position dropped, its section text kept. */
+const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@ ?/;
+
+const digestFiles = (
+  files: readonly ChangeDigestFile[],
+  truncated: boolean,
+  withContext: boolean,
 ): string | null => {
   if (truncated || files.length === 0) {
     return null;
@@ -321,11 +345,17 @@ export const changeDigest = (
     if (patch === null && !(file.renamedFile || file.deletedFile)) {
       return null;
     }
-    const lines = (patch ?? '')
-      .split('\n')
-      // GitLab's `diff` carries hunks only (no `---`/`+++` file header lines), so every line that
-      // opens with `+` or `-` is an added or a removed line; `@@` headers and context are dropped.
-      .filter((line) => line.startsWith('+') || line.startsWith('-'));
+    const all = (patch ?? '').split('\n');
+    // GitLab's `diff` carries hunks only (no `---`/`+++` file header lines), so every line that
+    // opens with `+` or `-` is an added or a removed line; `@@` headers and context are dropped.
+    const lines = all.filter((line) => line.startsWith('+') || line.startsWith('-'));
+    // The stricter identity keeps every hunk line in order — context (` `), the no-newline marker
+    // (`\`) and each hunk header without its line numbers; only a trailing empty line is dropped.
+    const kept = withContext
+      ? all
+          .filter((line) => line !== '')
+          .map((line) => (line.startsWith('@@') ? line.replace(HUNK_HEADER, '@@ ') : line))
+      : lines;
     // No added or removed line: only a deletion, or a **pure** rename (the patch empty), is a change
     // the paths show; anything else — a binary edit, a mode change, a rename with a hidden edit — is
     // not shown by the lines, so there is no digest.
@@ -342,7 +372,7 @@ export const changeDigest = (
         file.renamedFile,
         file.oldMode ?? null,
         file.newMode ?? null,
-        lines,
+        kept,
       ]),
     );
   }

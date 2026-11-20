@@ -65,6 +65,7 @@ import { reviewVerdictDataSchema } from '@platform/contracts';
 import {
   buildEvent,
   changeDigest,
+  changeDigestWithContext,
   classifyMovedHead,
   compilePipeline,
   interpret,
@@ -628,8 +629,13 @@ const hasCiGate = (stored: StoredTask): boolean => {
 };
 
 /** The change digest of a provider's file list (amendment A); `null` when it gives none. */
-const digestOf = (files: readonly FileDiff[], truncated: boolean): string | null =>
-  changeDigest(
+const digestOf = (
+  files: readonly FileDiff[],
+  truncated: boolean,
+  /** Amendment C: a person's rebase is judged by the stricter, context-keeping identity. */
+  identity: typeof changeDigest = changeDigest,
+): string | null =>
+  identity(
     files.map((file) => ({
       oldPath: file.old_path,
       newPath: file.new_path,
@@ -966,7 +972,9 @@ export const MAX_MERGE_WAIT_DETAIL_CHARS = 200;
  * 2026-11-20: *"just rebasing should not block / reject, and should not restart the whole chain"*).
  * A person pressed the provider's *Rebase*, or rebased locally and pushed: no "before" digest was
  * recorded, so the reviewed change is read back from the provider — the merge request version whose
- * head is `tasks.ready_head_sha` — and digested with the same `changeDigest` as the live change,
+ * head is `tasks.ready_head_sha` — and digested with `changeDigestWithContext` (the context lines
+ * kept in order, only the hunk positions dropped — review of #177: a local rebase can move an added
+ * line into another function with the same `+`/`-` lines) like the live change,
  * which is read the same way: the version whose head is the live head.
  *
  *  - **Identical** — a rebase: the task stays at Ready, nothing returns, nothing is re-reviewed. The
@@ -996,7 +1004,10 @@ const judgeMovedHead = async (
     CHANGE_DIGEST_MAX_FILES,
     context,
   );
-  const reviewedDigest = reviewed === null ? null : digestOf(reviewed.files, reviewed.truncated);
+  const reviewedDigest =
+    reviewed === null
+      ? null
+      : digestOf(reviewed.files, reviewed.truncated, changeDigestWithContext);
   // The live change is read **pinned to the live head**, by its version too: the merge request's
   // diff names no head, and GitLab computes a push's version asynchronously, so right after a push
   // the diff can still be the previous version's — identical to the reviewed one — while the head
@@ -1008,7 +1019,8 @@ const judgeMovedHead = async (
     CHANGE_DIGEST_MAX_FILES,
     context,
   );
-  const liveDigest = current === null ? null : digestOf(current.files, current.truncated);
+  const liveDigest =
+    current === null ? null : digestOf(current.files, current.truncated, changeDigestWithContext);
   const kind = classifyMovedHead({
     reviewedVersionFound: reviewed !== null,
     reviewedDigest,

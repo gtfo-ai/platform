@@ -9,6 +9,7 @@ import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   type ChangeDigestFile,
   changeDigest,
+  changeDigestWithContext,
   classifyMovedHead,
   MERGE_BY_PERSON_REASONS,
   type MergeByInput,
@@ -349,5 +350,49 @@ describe('classifyMovedHead (TD-038 Amendment C)', () => {
       expect(MOVED_HEAD_WAITS).toContain(wait);
       expect(REBASE_ONLY_WAITS.has(wait)).toBe(false);
     }
+  });
+});
+
+/**
+ * Review of #177 (TD-038 Amendment C): a person's rebase is judged by the context-keeping identity.
+ * GitLab's own rebase fails on a conflict, so amendment A may ignore where the lines sit; a local
+ * rebase can move the same added line into another function.
+ */
+describe('changeDigestWithContext (TD-038 Amendment C)', () => {
+  const file = (diff: string): ChangeDigestFile => ({
+    oldPath: 'src/auth.ts',
+    newPath: 'src/auth.ts',
+    newFile: false,
+    deletedFile: false,
+    renamedFile: false,
+    diff,
+    omitted: false,
+  });
+  const GUARDED =
+    '@@ -10,3 +10,4 @@ export const deletePost = () => {\n const user = current();\n+if (!authorized) return;\n remove(post);';
+
+  it('keeps the digest when only the hunk’s line numbers move (a clean rebase)', () => {
+    const shifted =
+      '@@ -42,3 +45,4 @@ export const deletePost = () => {\n const user = current();\n+if (!authorized) return;\n remove(post);';
+    expect(changeDigestWithContext([file(GUARDED)], false)).toBe(
+      changeDigestWithContext([file(shifted)], false),
+    );
+    expect(changeDigestWithContext([file(GUARDED)], false)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('changes when the same added line sits under different context — amendment A’s digest does not', () => {
+    const moved =
+      '@@ -80,3 +80,4 @@ export const readPost = () => {\n const post = load();\n+if (!authorized) return;\n render(post);';
+    expect(changeDigestWithContext([file(moved)], false)).not.toBe(
+      changeDigestWithContext([file(GUARDED)], false),
+    );
+    // The reason the stricter identity exists: the +/- lines alone are equal.
+    expect(changeDigest([file(moved)], false)).toBe(changeDigest([file(GUARDED)], false));
+  });
+
+  it('gives no digest wherever amendment A’s gives none', () => {
+    expect(changeDigestWithContext([], false)).toBeNull();
+    expect(changeDigestWithContext([file(GUARDED)], true)).toBeNull();
+    expect(changeDigestWithContext([{ ...file(GUARDED), omitted: true }], false)).toBeNull();
   });
 });

@@ -135,6 +135,8 @@ interface World {
    * default diff unless given), `missing` (no version has that head) or `truncated` (cut).
    */
   readonly reviewedVersion?: 'missing' | 'truncated' | readonly FileDiff[];
+  /** The live head has no provider version yet (GitLab computes it asynchronously). */
+  readonly liveVersionMissing?: boolean;
 }
 
 const storedTask = (world: World): StoredTask =>
@@ -305,7 +307,7 @@ const setup = async (world: World = {}) => {
           truncated: world.reviewedVersion === 'truncated' || reviewedFiles.length > options.limit,
         };
       }
-      if (options.headSha === live.head) {
+      if (options.headSha === live.head && world.liveVersionMissing !== true) {
         return { files: live.files.map((file) => ({ ...file })), truncated: false };
       }
       return null;
@@ -1449,6 +1451,30 @@ describe('a person’s rebase at Ready (TD-038 Amendment C)', () => {
       'a reviewed version the provider cut',
       { reviewedVersion: 'truncated' },
       'head_change_unknown',
+    ],
+    [
+      'a live head whose version the provider has not computed yet',
+      { liveVersionMissing: true },
+      'head_change_unknown',
+    ],
+    [
+      // Review of #177: a local rebase moved the same +/- lines under other code. Amendment A's
+      // digest would call it identical; the person path's context-keeping identity does not.
+      'the same added and removed lines under different context',
+      {
+        reviewedVersion: [
+          {
+            new_path: 'src/a.ts',
+            old_path: 'src/a.ts',
+            diff: '@@ -40,2 +40,2 @@ export const other = () => {\n const z = 9;\n-const b = 2;\n+const b = 3;',
+            new_file: false,
+            renamed_file: false,
+            deleted_file: false,
+            omitted: false,
+          },
+        ],
+      },
+      'head_changed',
     ],
   ])('merges nothing and names why: %s', async (_name, world, wait) => {
     const w = await setup({

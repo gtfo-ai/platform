@@ -48,7 +48,7 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
   head_rebased_ci_failed:
     'the branch was rebased and the change is identical to the reviewed one, but CI failed on the rebased commit; fix or re-run the pipeline, or merge it yourself',
   head_rebase_bound:
-    'the branch was rebased again; it has been rebased 3 times since this task reached Ready because the default branch keeps moving, so the platform leaves the merge to a person — merge it yourself',
+    'the branch was rebased again; it has been rebased 3 times since this task reached Ready, so the platform leaves the merge to a person — merge it yourself',
   needs_rebase: 'the provider wants a rebase first, and the platform is asking for one',
   rebase_in_progress: 'the provider is rebasing it onto the target branch',
   rebase_pipeline: 'the pipeline on the rebased commit is running',

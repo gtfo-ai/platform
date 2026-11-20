@@ -177,8 +177,12 @@ for the rebase, because only then was a "before" digest recorded.
    the merge request version whose head commit is `ready_head_sha` (GitLab `GET /projects/:id/merge_requests/:iid/versions`
    → `head_commit_sha`, then `GET …/versions/:version_id` for its `diffs`;
    <https://docs.gitlab.com/api/merge_requests/> § "Retrieve merge request diff versions" and § "Retrieve a merge request
-   diff version", read 2026-11-20) — digests it with the **same** `changeDigest` as amendment A, and digests the live
-   change read the same way, **pinned to the live head** (the merge request's diff names no head, and GitLab computes a
+   diff version", read 2026-11-20) — digests it with a **stricter identity than amendment A's**,
+   `changeDigestWithContext` (review of #177): the context lines are kept in order and only the hunk headers' line
+   numbers are dropped (`git patch-id`'s semantics). Amendment A's digest drops context because the provider's own
+   rebase fails on a conflict; a person's local rebase can move an added line (`+ if (!authorized) return;`) into
+   another function with the same `+`/`-` lines, which only the context shows. It digests the live change the same
+   way, **pinned to the live head** (the merge request's diff names no head, and GitLab computes a
    push's version asynchronously, so right after a push the diff can still be the previous version's while the head is
    already new; a head with no version yet gives no digest and is read again on the next wake-up). New port method `getMergeRequestVersionDiff(ref, { headSha, limit })` → `{ files, truncated }`, or `null` when
    no version has that head; `truncated` when the version's `state` is not `collected` or `limit` cut it. GitLab
@@ -221,8 +225,11 @@ an unchanged commit count for a person's rebase (refuses a squash that changed n
 field the fake and a future provider need not have). A new `task_merges` outcome (`rebase_adopted`): widening the
 outcome check is a `contract` migration under TD-032, and `rebased` + `person_rebase` says the same.
 
-**Residual.** The digest ignores context lines, so a rebase over a default branch that changed the code around the change
-keeps it; the pipeline on H′ is what judges that — the residual amendment A accepts. A reviewed head older than the
+**Residual.** A person's rebase is judged with the context lines kept, so a change moved under other code is
+`head_changed`; the converse is the cost — a rebase over a default branch that changed code **within** the hunks' context
+(three lines either side) also reads as changed, and a person decides (fails closed). Code changed **outside** the context
+keeps the digest, and the pipeline on H′ is what judges that — the residual amendment A accepts. Amendment A's own
+platform-rebase path keeps its `+`/`-`-only digest. A reviewed head older than the
 provider's first page of 100 versions is not found (`head_version_missing`, a person decides). Both digests are read by
 version and pinned to their heads, and the head is read again after CI, so a push during the judgement is `head_moved`
 and judged again on the next wake-up.

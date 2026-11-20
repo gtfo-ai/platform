@@ -1340,10 +1340,12 @@ and its pipeline passed; a rebase that conflicts sends the task back to the up-t
 
 **Rebasing it yourself does not block the merge** (TD-038 Amendment C). If you press GitLab's
 *Rebase*, or rebase locally and push, the platform reads the reviewed version back from GitLab and
-compares its added and removed lines with the rebased branch. Identical: *"the branch was rebased and
+compares its added and removed lines — and the unchanged lines around them — with the rebased branch, so a line
+that moved under other code counts as a change. Identical: *"the branch was rebased and
 the change is identical to the reviewed one; waiting for CI on the rebased commit, then merging"* —
 nothing goes back to review, and once the pipeline passes the platform merges the rebased commit
-(squashing while you rebase is fine; the lines are what count). If CI fails on the rebased commit the
+(squashing while you rebase is fine; the lines are what count). A rebase onto code that changed right next to
+your change reads as changed too, and is left to you. If CI fails on the rebased commit the
 page names the failing jobs and leaves the merge to you. If the lines differ — *"the branch has new
 changes since the review, and the platform does not merge unreviewed code"* — or GitLab no longer
 shows the reviewed version, or the change is too large to compare, the platform does not merge: **Send
