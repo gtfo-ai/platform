@@ -77,6 +77,7 @@ import type {
   MergeRequest,
   MergeRequestListing,
   MergeRequestRefInput,
+  MergeRequestVersionDiff,
   MintedCredential,
   MintedRunCredential,
   PipelineStatus,
@@ -801,6 +802,31 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       { project: git.project, iid: ref.iid, limit },
       context,
       async () => git.port.getMergeRequestDiff(addressed(git, ref), { limit }),
+    );
+  },
+
+  /**
+   * The diff of the merge request **version** whose head is `headSha`, or `null` when none has it
+   * (TD-038 Amendment C: the reviewed change, read back to tell a rebase from new changes). A
+   * **read**.
+   */
+  mergeRequestVersionDiff: async (
+    ref: MergeRequestRefInput,
+    headSha: string,
+    limit: number,
+    context: CallContext,
+  ): Promise<MergeRequestVersionDiff | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'get_merge_request_version_diff',
+      { project: git.project, iid: ref.iid, head_sha: headSha, limit },
+      context,
+      async () => git.port.getMergeRequestVersionDiff(addressed(git, ref), { headSha, limit }),
     );
   },
 

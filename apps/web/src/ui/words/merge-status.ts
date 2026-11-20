@@ -35,6 +35,20 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
     'no check recorded which commit was reviewed, so the platform does not merge it unjudged — a person merges it, or Send back to review it again',
   head_moved:
     'the branch moved since the reviewed commit; a person merges it, or Send back to review the new commits',
+  // TD-038 Amendment C: a moved head the platform has read back and compared. The rebase states
+  // offer no Send back — the change is the reviewed one, so there is nothing to review.
+  head_changed:
+    'the branch has new changes since the review, and the platform does not merge unreviewed code; Send back to review them, or merge it yourself',
+  head_version_missing:
+    'the branch moved, and the provider no longer shows the reviewed version to compare it with, so the platform cannot tell a rebase from new changes and does not merge it; Send back to review it, or merge it yourself',
+  head_change_unknown:
+    'the branch moved, and the provider does not show its change in full (too large, or not computed yet), so the platform cannot prove it is the reviewed one and does not merge it; Send back to review it, or merge it yourself',
+  head_rebased_ci_pending:
+    'the branch was rebased and the change is identical to the reviewed one; waiting for CI on the rebased commit, then merging',
+  head_rebased_ci_failed:
+    'the branch was rebased and the change is identical to the reviewed one, but CI failed on the rebased commit; fix or re-run the pipeline, or merge it yourself',
+  head_rebase_bound:
+    'the branch was rebased again; it has been rebased 3 times since this task reached Ready because the default branch keeps moving, so the platform leaves the merge to a person — merge it yourself',
   needs_rebase: 'the provider wants a rebase first, and the platform is asking for one',
   rebase_in_progress: 'the provider is rebasing it onto the target branch',
   rebase_pipeline: 'the pipeline on the rebased commit is running',
@@ -53,12 +67,21 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
     'after the provider’s rebase the change is not the one reviewed — merge it yourself, or Send back',
 };
 
+/**
+ * `head_rebased_ci_failed` with the jobs that failed (TD-038 Amendment C): the jobs are provider
+ * text, redacted and bounded before they were stored, and reach the screen as text only.
+ */
+const ciFailedOnRebase = (jobs: string): string =>
+  `the branch was rebased and the change is identical to the reviewed one, but CI failed on the rebased commit: ${jobs}; fix or re-run the pipeline, or merge it yourself`;
+
 /** The sentence for who merges and what the platform waits for. */
 export const mergeWaitSentence = (
   by: 'person' | 'platform',
   waitingFor: string | null,
   provider: string,
   blockedNow: string | null,
+  /** The words beside the wait (`merge.waiting_detail`), when it carries any. */
+  detail: string | null = null,
 ): string => {
   if (by === 'person') {
     return `A person merges: ${
@@ -71,7 +94,9 @@ export const mergeWaitSentence = (
     blockedNow ??
     (waitingFor === null
       ? 'it is mergeable, and the platform is merging it'
-      : (WAITING_NOW[waitingFor] ?? waitingFor.replaceAll('_', ' ')));
+      : waitingFor === 'head_rebased_ci_failed' && detail !== null
+        ? ciFailedOnRebase(detail)
+        : (WAITING_NOW[waitingFor] ?? waitingFor.replaceAll('_', ' ')));
   return `Merging automatically when ${provider} reports it mergeable — now: ${now}.`;
 };
 
@@ -141,7 +166,11 @@ export const mergeAttemptSentence = (
         ? `${provider} answered the platform’s merge but the merge request did not read back merged — check it there, and merge it yourself or Send back.`
         : `The platform could not reach ${provider} to merge it after 3 tries — merge it yourself or Send back.`;
     case 'rebased':
-      return `The platform asked ${provider} to rebase the merge request at ${at}; it merges the rebased commit once its pipeline passes and the change is the one reviewed.`;
+      // TD-038 Amendment C: a person's rebase the platform adopted (the change digest identical, CI
+      // passed on the rebased commit) — recorded as a rebase row with this word.
+      return status === 'person_rebase'
+        ? `The branch was rebased at ${at} and the change is the one reviewed; CI passed on the rebased commit, so the platform merges that commit — nothing goes back to review.`
+        : `The platform asked ${provider} to rebase the merge request at ${at}; it merges the rebased commit once its pipeline passes and the change is the one reviewed.`;
     case 'rebase_refused':
       return `${provider} did not rebase it: ${why(status)} — rebase and merge it yourself, or Send back.`;
     case 'rebase_conflict':

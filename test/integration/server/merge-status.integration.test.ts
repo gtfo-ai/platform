@@ -120,8 +120,29 @@ describe('the merge block (S-28.15, TD-038 decision 7)', () => {
     expect(await mergeStatusFor(drizzled, taskId, 'ready_for_merge')).toEqual({
       by: 'person',
       waiting_for: 'setting_person',
+      waiting_detail: null,
       last_attempt: null,
     });
+  });
+
+  it('serves the words beside a wait at Ready, and refuses an empty one at the write (TD-038 Amendment C)', async () => {
+    const taskId = await readyTask(5);
+    await pool.query(
+      `insert into task_merge_checks (task_id, claimed_at, merge_by, merge_wait, merge_wait_detail)
+       values ($1, now(), 'platform', 'head_rebased_ci_failed', 'unit-tests, lint')`,
+      [taskId],
+    );
+    expect(await mergeStatusFor(drizzled, taskId, 'ready_for_merge')).toMatchObject({
+      waiting_for: 'head_rebased_ci_failed',
+      waiting_detail: 'unit-tests, lint',
+    });
+    const refused = await pool
+      .query(`update task_merge_checks set merge_wait_detail = '' where task_id = $1`, [taskId])
+      .then(
+        () => null,
+        (error: { constraint?: string }) => error,
+      );
+    expect(refused?.constraint).toBe('task_merge_checks_merge_wait_detail_not_empty');
   });
 
   it('serves the last attempt with the plan decision and the name of the person who approved the plan', async () => {

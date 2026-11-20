@@ -136,6 +136,81 @@ describe('who merges, on the task page (S-28.15)', () => {
     expect(view.container.textContent).not.toMatch(/approved_by_|not_required|head_moved/);
   });
 
+  /**
+   * TD-038 Amendment C: a moved head the platform read back and compared says which it is — a
+   * rebase (waiting for CI, or CI failed with the jobs named) offers no Send back, because the
+   * change is the reviewed one; new changes, no version and no digest do.
+   */
+  it.each([
+    [
+      'head_rebased_ci_pending',
+      /rebased and the change is identical.*waiting for CI on the rebased commit, then merging/,
+      false,
+    ],
+    ['head_rebase_bound', /rebased 3 times since this task reached Ready/, false],
+    [
+      'head_changed',
+      /new changes since the review.*does not merge unreviewed code; Send back/,
+      true,
+    ],
+    ['head_version_missing', /no longer shows the reviewed version.*Send back/, true],
+    ['head_change_unknown', /cannot prove it is the reviewed one.*Send back/, true],
+  ] as const)(
+    'says %s in plain words, and offers Send back only when there is something to review',
+    (wait, words, sendBack) => {
+      const said = mergeStatusLines(
+        detailWith({ by: 'platform', waiting_for: wait, last_attempt: null }),
+      );
+      expect(said?.lines[0]).toMatch(words);
+      expect(said?.lines[0]?.includes('Send back')).toBe(sendBack);
+      expect(said?.lines[0]).not.toContain(wait);
+    },
+  );
+
+  it('names the jobs that failed on the rebased commit, as text', () => {
+    const view = render(
+      <MergeStatusNotice
+        detail={detailWith({
+          by: 'platform',
+          waiting_for: 'head_rebased_ci_failed',
+          waiting_detail: 'unit-tests, <b>lint</b>',
+          last_attempt: null,
+        })}
+      />,
+    );
+    const text = view.container.querySelector('[data-merge-status]')?.textContent ?? '';
+    expect(text).toContain('CI failed on the rebased commit: unit-tests, <b>lint</b>;');
+    expect(text).not.toContain('Send back');
+    expect(view.container.querySelector('b')).toBeNull();
+    // Without the jobs the sentence still stands.
+    expect(
+      mergeStatusLines(
+        detailWith({ by: 'platform', waiting_for: 'head_rebased_ci_failed', last_attempt: null }),
+      )?.lines[0],
+    ).toContain('CI failed on the rebased commit; fix or re-run the pipeline');
+  });
+
+  it('says a person’s rebase the platform adopted, and that nothing goes back to review', () => {
+    const said = mergeStatusLines(
+      detailWith({
+        by: 'platform',
+        waiting_for: null,
+        last_attempt: {
+          ...ATTEMPT,
+          outcome: 'rebased',
+          provider_status: 'person_rebase',
+          merge_commit_sha: null,
+        },
+      }),
+    );
+    expect(said?.tone).toBe('info');
+    expect(said?.lines[1]).toMatch(
+      /^The branch was rebased at .+ and the change is the one reviewed/,
+    );
+    expect(said?.lines[1]).toContain('nothing goes back to review');
+    expect(said?.lines[1]).not.toContain('asked GitLab to rebase');
+  });
+
   it('draws nothing when the read has no merge block', () => {
     const view = render(<MergeStatusNotice detail={detailWith(null)} />);
     expect(view.container.querySelector('[data-testid="merge-status"]')).toBeNull();

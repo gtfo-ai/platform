@@ -228,6 +228,18 @@ export interface GitProviderContractContext {
    */
   readonly rebase: { readonly iid: number; readonly refusedIid: number; readonly commits: number };
   /**
+   * TD-038 Amendment C: merge request `iid` has a version whose head is `headSha`, whose diff
+   * changes `path` among `fileCount` files (more than one, so a `limit` of 1 cuts it); no version of
+   * it has `unknownHeadSha`.
+   */
+  readonly versionDiff: {
+    readonly iid: number;
+    readonly headSha: string;
+    readonly unknownHeadSha: string;
+    readonly path: string;
+    readonly fileCount: number;
+  };
+  /**
    * WP-138: the developer's `open_mr` adopts an existing open merge request only when it is the
    * platform's own. `openBranch` has exactly one open merge request (`openIid`), opened by the
    * binding's own account; `emptyBranch` has none. `pipelineIid` is the merge request a new
@@ -1210,6 +1222,37 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         // Both directions (standing rule 42): it is marked *and* it carries no patch that would
         // read as "this file changed by nothing".
         expect(excluded?.diff ?? null).toBeNull();
+      });
+    });
+
+    describe('the diff of one merge request version (TD-038 Amendment C)', () => {
+      /**
+       * The reviewed change, read back by its head: the version's files in the live diff's shape,
+       * and `null` — never another version's diff — for a head no version has.
+       */
+      it('answers the version whose head is the asked commit, and null for a head none has', async () => {
+        const { iid, headSha, unknownHeadSha, path, fileCount } = context.versionDiff;
+        const found = await port.getMergeRequestVersionDiff(mrRef(iid), { headSha, limit: 50 });
+        expect(found).not.toBeNull();
+        expect(found?.truncated).toBe(false);
+        expect(found?.files).toHaveLength(fileCount);
+        const named = found?.files.find((file) => file.new_path === path);
+        expect(named, `no entry for ${path}`).toBeDefined();
+        expect(named?.omitted).toBe(false);
+        expect(named?.diff ?? '').toMatch(/^[-+]/m);
+        expect(
+          await port.getMergeRequestVersionDiff(mrRef(iid), {
+            headSha: unknownHeadSha,
+            limit: 50,
+          }),
+        ).toBeNull();
+      });
+
+      it('says a list the caller’s limit cut is truncated, never a whole change', async () => {
+        const { iid, headSha } = context.versionDiff;
+        const cut = await port.getMergeRequestVersionDiff(mrRef(iid), { headSha, limit: 1 });
+        expect(cut?.files).toHaveLength(1);
+        expect(cut?.truncated).toBe(true);
       });
     });
 

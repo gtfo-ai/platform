@@ -65,6 +65,7 @@ import { reviewVerdictDataSchema } from '@platform/contracts';
 import {
   buildEvent,
   changeDigest,
+  classifyMovedHead,
   compilePipeline,
   interpret,
   type MergePlanDecision,
@@ -80,6 +81,7 @@ import type { InboundRecorderOptions } from '../integrations/inbound.js';
 import { recordNormalisedDelivery } from '../integrations/inbound.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import {
+  type FileDiff,
   MergeRefusedError,
   type MergeRequest,
   RebaseRefusedError,
@@ -87,7 +89,7 @@ import {
 import { isLastTry, JOB_QUEUES, type JobContext } from '../ports/jobs.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import { CI_GATE_STAGE, ciVerdictOf, manualJobPolicyFor } from './gates.js';
+import { boundedJobName, CI_GATE_STAGE, ciVerdictOf, manualJobPolicyFor } from './gates.js';
 import {
   gitReads,
   integrationsForProject,
@@ -141,7 +143,8 @@ export type PlatformMergeOutcome =
   | 'rebase_refused'
   | 'rebase_conflict'
   | 'rebase_changed'
-  | 'rebase_accepted';
+  | 'rebase_accepted'
+  | 'rebase_adopted';
 
 /** The idempotency key of the merge call: one per task and reviewed head (TD-038 decision 3). */
 export const platformMergeKey = (taskId: string, headSha: string): string =>
@@ -301,7 +304,8 @@ interface MergeStep {
   readonly settings: ProjectSettings;
   readonly causeEventId: Id;
   readonly job: Pick<JobContext, 'retries'> | undefined;
-  readonly decide: (wait: string | null) => Promise<void>;
+  /** Records the wait for the page; `detail` is platform-bounded text beside it (Amendment C). */
+  readonly decide: (wait: string | null, detail?: string | null) => Promise<void>;
 }
 
 /**
@@ -370,9 +374,13 @@ export const runPlatformMerge = async (
   if (git === null) {
     return 'no_binding';
   }
-  const decideAs = async (mergeBy: 'person' | 'platform', wait: string | null): Promise<void> => {
+  const decideAs = async (
+    mergeBy: 'person' | 'platform',
+    wait: string | null,
+    detail: string | null = null,
+  ): Promise<void> => {
     await options.unitOfWork.transaction(async (scope) =>
-      options.store.tasks.recordMergeDecision(scope.tx, taskId, { mergeBy, wait }),
+      options.store.tasks.recordMergeDecision(scope.tx, taskId, { mergeBy, wait, detail }),
     );
   };
   const reasons = mergeDecisionFor({
@@ -401,7 +409,7 @@ export const runPlatformMerge = async (
     settings,
     causeEventId: (data.cause_event_id ?? taskId) as Id,
     job,
-    decide: async (wait) => decideAs('platform', wait),
+    decide: async (wait, detail) => decideAs('platform', wait, detail ?? null),
   };
   const mr = stored.mr;
   const headSha = stored.readyHeadSha;
@@ -476,6 +484,19 @@ export const runPlatformMerge = async (
   });
   if (wait === 'needs_rebase' && headSha !== null) {
     return startRebase(step, headSha);
+  }
+  if (
+    (wait === 'head_moved' || wait === 'provider_blocked') &&
+    headSha !== null &&
+    live.state === 'opened' &&
+    live.head_sha !== headSha &&
+    (!hasCiGate(stored) || stored.ciHeadSha === headSha)
+  ) {
+    // TD-038 Amendment C: a head at Ready that is not the reviewed one is classified, never just
+    // refused — a person's rebase (the provider's button, a local rebase) is told from new changes.
+    // A provider that blocks the moved head (its pipeline still running, or failed) is asked too,
+    // so the page says what the platform knows rather than the provider's word alone.
+    return judgeMovedHead(step, headSha, live);
   }
   if (wait !== null || headSha === null || live.merge_options == null) {
     await step.decide(wait ?? 'provider_blocked');
@@ -606,32 +627,61 @@ const hasCiGate = (stored: StoredTask): boolean => {
   return ci?.enabled === true && ci.kind === 'gate';
 };
 
+/** The change digest of a provider's file list (amendment A); `null` when it gives none. */
+const digestOf = (files: readonly FileDiff[], truncated: boolean): string | null =>
+  changeDigest(
+    files.map((file) => ({
+      oldPath: file.old_path,
+      newPath: file.new_path,
+      newFile: file.new_file,
+      deletedFile: file.deleted_file,
+      renamedFile: file.renamed_file,
+      diff: file.diff ?? null,
+      omitted: file.omitted,
+      oldMode: file.old_mode ?? null,
+      newMode: file.new_mode ?? null,
+    })),
+    truncated,
+  );
+
+/** The digest of the merge request's live diff, or `null` when it cannot be known. */
+const liveDigestOf = async (step: MergeStep): Promise<string | null> => {
+  const { stored } = step.read;
+  const context = { projectId: stored.task.projectId, taskId: stored.task.id };
+  const files = await gitReads(step.integrations).mergeRequestDiff(
+    stored.mr,
+    CHANGE_DIGEST_MAX_FILES,
+    context,
+  );
+  // The diffs page holds 100 and the adapter reads one page: a list that reaches the bound may be
+  // cut, and a cut list gives no digest.
+  return files === null ? null : digestOf(files, files.length >= CHANGE_DIGEST_MAX_FILES);
+};
+
 /** The merge request's change digest and commit count, or `null` for either it cannot know. */
 const changeOf = async (
   step: MergeStep,
 ): Promise<{ readonly digest: string | null; readonly commits: number | null }> => {
   const { stored } = step.read;
   const context = { projectId: stored.task.projectId, taskId: stored.task.id };
-  const reads = gitReads(step.integrations);
-  const files = await reads.mergeRequestDiff(stored.mr, CHANGE_DIGEST_MAX_FILES, context);
-  const digest =
-    files === null
-      ? null
-      : changeDigest(
-          files.map((file) => ({
-            oldPath: file.old_path,
-            newPath: file.new_path,
-            newFile: file.new_file,
-            deletedFile: file.deleted_file,
-            renamedFile: file.renamed_file,
-            diff: file.diff ?? null,
-            omitted: file.omitted,
-            oldMode: file.old_mode ?? null,
-            newMode: file.new_mode ?? null,
-          })),
-          files.length >= CHANGE_DIGEST_MAX_FILES,
-        );
-  return { digest, commits: await reads.mergeRequestCommitCount(stored.mr, context) };
+  const digest = await liveDigestOf(step);
+  return {
+    digest,
+    commits: await gitReads(step.integrations).mergeRequestCommitCount(stored.mr, context),
+  };
+};
+
+/**
+ * Rebases recorded since the task's latest entry into Ready — the platform's and the people's
+ * together (TD-038 amendment A decision 5, Amendment C): every `task_merges` row of kind `rebase`.
+ */
+const rebasesSinceReady = (read: MergeRead): number => {
+  const since = read.readyEnteredAt === null ? Number.NaN : Date.parse(read.readyEnteredAt);
+  return read.merges.filter(
+    (merge) =>
+      merge.outcome.startsWith('rebase') &&
+      (Number.isNaN(since) || Date.parse(merge.attemptedAt) >= since),
+  ).length;
 };
 
 /**
@@ -648,12 +698,7 @@ const startRebase = async (step: MergeStep, headSha: string): Promise<PlatformMe
     await step.decide('rebase_unsupported');
     return 'waiting';
   }
-  const since = read.readyEnteredAt === null ? Number.NaN : Date.parse(read.readyEnteredAt);
-  const rebases = read.merges.filter(
-    (merge) =>
-      merge.outcome.startsWith('rebase') &&
-      (Number.isNaN(since) || Date.parse(merge.attemptedAt) >= since),
-  ).length;
+  const rebases = rebasesSinceReady(read);
   if (rebases >= MAX_REBASES_PER_READY_ENTRY) {
     await step.decide('rebase_bound');
     logger.info(
@@ -908,6 +953,166 @@ const continueRebase = async (
     causeEventId: step.causeEventId,
   });
   return 'rebase_accepted';
+};
+
+/** The provider word a person's rebase is recorded with on its `task_merges` row (Amendment C). */
+export const PERSON_REBASE_STATUS = 'person_rebase';
+
+/** The failing jobs named beside `head_rebased_ci_failed`, at most this many characters. */
+export const MAX_MERGE_WAIT_DETAIL_CHARS = 200;
+
+/**
+ * **A head at Ready that is not the reviewed one** (TD-038 Amendment C, the owner's ruling of
+ * 2026-11-20: *"just rebasing should not block / reject, and should not restart the whole chain"*).
+ * A person pressed the provider's *Rebase*, or rebased locally and pushed: no "before" digest was
+ * recorded, so the reviewed change is read back from the provider — the merge request version whose
+ * head is `tasks.ready_head_sha` — and digested with the same `changeDigest` as the live change,
+ * which is read the same way: the version whose head is the live head.
+ *
+ *  - **Identical** — a rebase: the task stays at Ready, nothing returns, nothing is re-reviewed. The
+ *    platform waits for the CI gate's own verdict on the new head (the path `continueRebase` uses:
+ *    `pipelineStatus`, `ciVerdictOf`, the manual-job policy), reads that the head is still H′, then
+ *    in one transaction, compare-and-set on `ready_head_sha`, writes `ready_head_sha = ci_head_sha =
+ *    H′` and a `task_merges` rebase row (`rebased`, `person_rebase`, the digest, `rebased_to = H′`);
+ *    the follow-up wake-up merges with `sha = H′`. The commit count is not asked — a person may
+ *    squash; the digest is the identity. Counted against {@link MAX_REBASES_PER_READY_ENTRY}.
+ *  - **Different**, **no version** for the reviewed head, **no digest** (cut, unrendered), a **red
+ *    pipeline** on H′, or the head **moved again** — no merge, and the wait says which.
+ */
+const judgeMovedHead = async (
+  step: MergeStep,
+  reviewedHead: string,
+  live: MergeRequest,
+): Promise<PlatformMergeOutcome> => {
+  const { options, read } = step;
+  const { stored } = read;
+  const logger = options.logger ?? silentLogger;
+  const taskId = stored.task.id;
+  const context = { projectId: stored.task.projectId, taskId };
+  const reads = gitReads(step.integrations);
+  const reviewed = await reads.mergeRequestVersionDiff(
+    stored.mr,
+    reviewedHead,
+    CHANGE_DIGEST_MAX_FILES,
+    context,
+  );
+  const reviewedDigest = reviewed === null ? null : digestOf(reviewed.files, reviewed.truncated);
+  // The live change is read **pinned to the live head**, by its version too: the merge request's
+  // diff names no head, and GitLab computes a push's version asynchronously, so right after a push
+  // the diff can still be the previous version's — identical to the reviewed one — while the head
+  // is already the new commit. A head with no version yet gives no digest; the next wake-up reads
+  // it again.
+  const current = await reads.mergeRequestVersionDiff(
+    stored.mr,
+    live.head_sha,
+    CHANGE_DIGEST_MAX_FILES,
+    context,
+  );
+  const liveDigest = current === null ? null : digestOf(current.files, current.truncated);
+  const kind = classifyMovedHead({
+    reviewedVersionFound: reviewed !== null,
+    reviewedDigest,
+    liveDigest,
+  });
+  if (kind !== 'rebase' || reviewedDigest === null) {
+    const wait = kind === 'rebase' ? 'head_change_unknown' : kind;
+    await step.decide(wait);
+    logger.info(
+      { task_id: taskId, reviewed_head: reviewedHead, head_sha: live.head_sha, wait },
+      'platform merge: the branch moved and its change is not shown to be the reviewed one; a person decides',
+    );
+    return 'waiting';
+  }
+  if (rebasesSinceReady(read) >= MAX_REBASES_PER_READY_ENTRY) {
+    await step.decide('head_rebase_bound');
+    return 'waiting';
+  }
+  const pipeline = await reads.pipelineStatus(live.head_sha, context);
+  if (pipeline === null) {
+    await step.decide('head_rebased_ci_pending');
+    return 'waiting';
+  }
+  const git = step.integrations.git;
+  const redact = (text: string): string =>
+    git === null ? text : git.redactor.redactText(text).value;
+  const verdict = ciVerdictOf(
+    pipeline,
+    await manualJobPolicyFor(options, stored.task.projectId, pipeline),
+    { redact, checkedAt: options.clock.now() },
+  );
+  if (verdict.kind === 'waiting') {
+    await step.decide('head_rebased_ci_pending');
+    return 'waiting';
+  }
+  if (verdict.reading.kind !== 'passed') {
+    // Provider text (job names) on its way into a stored row: redacted, then bounded (TD-012).
+    const failing = verdict.reading.kind === 'failed' ? verdict.reading.failingJobs : [];
+    const named = failing
+      .map((name) => boundedJobName(name, redact))
+      .join(', ')
+      .slice(0, MAX_MERGE_WAIT_DETAIL_CHARS);
+    await step.decide('head_rebased_ci_failed', named === '' ? null : named);
+    logger.info(
+      { task_id: taskId, head_sha: live.head_sha },
+      'platform merge: the branch was rebased and CI failed on the rebased commit; a person decides',
+    );
+    return 'waiting';
+  }
+  // "Still the head at every later read" (amendment A, decision 3, as Amendment C reuses it).
+  const headNow = await reads.mergeRequest(stored.mr, context);
+  if (headNow === null || headNow.state !== 'opened' || headNow.head_sha !== live.head_sha) {
+    await step.decide('head_moved');
+    return 'waiting';
+  }
+  const plan = read.plan.plan ?? 'not_required';
+  const adopted = await options.unitOfWork.transaction(async (scope) => {
+    const current = await options.store.tasks.load(scope.tx, taskId);
+    if (
+      current === null ||
+      current.task.state !== 'ready_for_merge' ||
+      current.task.currentStage !== READY_FOR_MERGE_STAGE ||
+      current.readyHeadSha !== reviewedHead
+    ) {
+      return false;
+    }
+    await options.store.tasks.saveReadyHead(scope.tx, taskId, live.head_sha);
+    await options.store.tasks.saveCiSettlement(scope.tx, taskId, {
+      headSha: live.head_sha,
+      excusedPaths: current.ciExcusedPaths,
+    });
+    // One rebase row per reviewed head (`(task, head, kind)`): a no-op rebase the platform settled
+    // on this head already holds it, and has already counted against the bound.
+    await options.store.tasks.recordMerge(scope.tx, {
+      taskId,
+      headSha: reviewedHead,
+      outcome: 'rebased',
+      providerStatus: PERSON_REBASE_STATUS,
+      mergeCommitSha: null,
+      planDecision: plan,
+      planApprovalId: read.plan.approvalId,
+      changeDigest: reviewedDigest,
+      commitCount: null,
+      rebasedTo: live.head_sha,
+      attemptedAt: options.clock.now() as IsoDateTime,
+      signalPasses: 0,
+    });
+    return true;
+  });
+  if (!adopted) {
+    await step.decide('head_moved');
+    return 'waiting';
+  }
+  await step.decide(null);
+  logger.info(
+    { task_id: taskId, reviewed_head: reviewedHead, head_sha: live.head_sha },
+    'platform merge: the branch was rebased, the change is the reviewed one and CI passed; the rebased commit is merged next',
+  );
+  await enqueueFollowUp(options, {
+    projectId: stored.task.projectId,
+    taskId,
+    causeEventId: step.causeEventId,
+  });
+  return 'rebase_adopted';
 };
 
 /**

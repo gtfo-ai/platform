@@ -413,6 +413,28 @@ const gitlabScript = (): Script => ({
       },
     ],
   },
+  // TD-038 Amendment C: the reviewed version's diff is somebody's source code, planted like the
+  // live diff — its paths and its patch.
+  [`GET /projects/${P}/merge_requests/7/versions`]: {
+    body: [{ id: 110, head_commit_sha: SHA, state: 'collected' }],
+  },
+  [`GET /projects/${P}/merge_requests/7/versions/110`]: {
+    body: {
+      id: 110,
+      head_commit_sha: SHA,
+      state: 'collected',
+      diffs: [
+        {
+          old_path: `src/app-${GITLAB_TOKEN}.ts`,
+          new_path: `src/app-${GITLAB_TOKEN}.ts`,
+          diff: `@@ -1 +1 @@\n-const token = 'x';\n+const token = '${GITLAB_TOKEN}';\n`,
+          new_file: false,
+          renamed_file: false,
+          deleted_file: false,
+        },
+      ],
+    },
+  },
   [`GET /projects/${P}/merge_requests/7/discussions/${DISCUSSION}`]: { body: gitlabDiscussion() },
   [`POST /projects/${P}/merge_requests/7/discussions`]: { status: 201, body: gitlabDiscussion() },
   [`POST /projects/${P}/merge_requests/7/discussions/${DISCUSSION}/notes`]: {
@@ -612,6 +634,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   is_branch_protected: 'isBranchProtected',
   branch_protection: 'branchProtection',
   get_merge_request_diff: 'getMergeRequestDiff',
+  get_merge_request_version_diff: 'getMergeRequestVersionDiff',
   instance_version: 'instanceVersion',
   verify_delivery: 'inbound.verify',
   delivery_key: 'inbound.deliveryKey',
@@ -707,6 +730,11 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     emitted.get_merge_request_rebase = await port.getMergeRequestRebase(ref);
     emitted.count_merge_request_commits = await port.countMergeRequestCommits(ref);
     emitted.get_merge_request_diff_stats = await port.getMergeRequestDiffStats(ref);
+    // TD-038 Amendment C: the reviewed version's diff, its paths and patch planted.
+    emitted.get_merge_request_version_diff = await port.getMergeRequestVersionDiff(ref, {
+      headSha: SHA,
+      limit: 10,
+    });
     // WP-138: the listing answers a merged merge request, which the open filter drops — driven so
     // the census holds; the other two answer planted provider text.
     emitted.find_open_merge_request = await port.findOpenMergeRequest(PROJECT, 'agentic/task-1');
@@ -925,6 +953,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     'authenticated_user',
     'create_merge_request_pipeline',
     'get_merge_request',
+    'get_merge_request_version_diff',
     'list_discussions',
     'get_pipeline_status',
     'get_job_log',

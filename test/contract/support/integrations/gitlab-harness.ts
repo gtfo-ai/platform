@@ -236,6 +236,15 @@ export const gitlabReplayContext = (
       options: { squash: false, remove_source_branch: true },
     },
     rebase: { iid: 39, refusedIid: 40, commits: 2 },
+    // TD-038 Amendment C: `merge-request-versions.json` records merge request 41's two versions
+    // (the newer one a rebase) and the older one's diff of two files.
+    versionDiff: {
+      iid: 41,
+      headSha: '4141414141414141414141414141414141414141',
+      unknownHeadSha: 'f'.repeat(40),
+      path: 'src/billing/totals.ts',
+      fileCount: 2,
+    },
     // WP-59: `graphql.json` records one `diffStatsSummary` answer, for merge request 7.
     diffStats: {
       iid: MR_IID,

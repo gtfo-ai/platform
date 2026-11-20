@@ -207,6 +207,17 @@ export const fileDiffSchema = z.strictObject({
 export type FileDiff = z.infer<typeof fileDiffSchema>;
 
 /**
+ * The diff of one **version** of a merge request — the change as it stood at one head commit
+ * (TD-038 Amendment C). `truncated` is the provider's own word that the list is not the whole
+ * change (GitLab's version `state` other than `collected`) or the caller's `limit` cut it; a caller
+ * that digests the change must not digest a truncated one.
+ */
+export interface MergeRequestVersionDiff {
+  readonly files: readonly FileDiff[];
+  readonly truncated: boolean;
+}
+
+/**
  * Terminal statuses come from `ciStatusSchema`; a pipeline can also still be in flight. The one
  * definition is `@platform/contracts`' `ciPipelineStatusSchema`, which the task-detail DTO's
  * `gate_wait` publishes (backlog 1078).
@@ -1199,6 +1210,26 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
     ref: MergeRequestRefInput,
     options: { readonly limit: number },
   ) => Promise<readonly FileDiff[]>;
+
+  /**
+   * **The reviewed change, read back** (TD-038 Amendment C): the files of the merge request
+   * **version** whose head commit is `headSha`, or `null` when no version of the merge request has
+   * that head. GitLab keeps one version per push: `GET …/merge_requests/:iid/versions` lists them
+   * with their `head_commit_sha`, and `GET …/versions/:version_id` answers that version's `diffs` in
+   * the same shape as {@link GitProviderPort.getMergeRequestDiff}.
+   *
+   * The `platform_merge` duty reads it when the merge request's head at Ready is not the reviewed
+   * one, digests it with the same `changeDigest` as the live diff, and so tells a rebase (identical
+   * digest) from new changes. `limit` bounds the files answered; past it, or when the provider says
+   * the version's diff was cut, `truncated` is `true`. A file the provider will not render is
+   * `omitted`, as in the live diff. A **read**, so it happens in every mode.
+   *
+   * @throws {IntegrationError} `not_found` when the merge request does not exist.
+   */
+  readonly getMergeRequestVersionDiff: (
+    ref: MergeRequestRefInput,
+    options: { readonly headSha: string; readonly limit: number },
+  ) => Promise<MergeRequestVersionDiff | null>;
 
   /** Latest pipeline for a commit, or `null` when none has run yet. */
   readonly getPipelineStatus: (project: string, headSha: string) => Promise<PipelineStatus | null>;

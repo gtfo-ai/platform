@@ -1790,11 +1790,13 @@ export const createPostgresPipelineStore = (
 
     recordMergeDecision: async (tx, taskId, decision) => {
       await sqlOf(tx).query(
-        `insert into task_merge_checks (task_id, claimed_at, merge_by, merge_wait)
-         values ($1, now(), $2, $3)
+        `insert into task_merge_checks
+           (task_id, claimed_at, merge_by, merge_wait, merge_wait_detail)
+         values ($1, now(), $2, $3, $4)
          on conflict (task_id) do update
-            set merge_by = excluded.merge_by, merge_wait = excluded.merge_wait`,
-        [taskId, decision.mergeBy, decision.wait],
+            set merge_by = excluded.merge_by, merge_wait = excluded.merge_wait,
+                merge_wait_detail = excluded.merge_wait_detail`,
+        [taskId, decision.mergeBy, decision.wait, decision.detail ?? null],
       );
     },
 
@@ -1802,13 +1804,18 @@ export const createPostgresPipelineStore = (
       const { rows } = await sqlOf(tx).query<{
         merge_by: string | null;
         merge_wait: string | null;
-      }>('select merge_by, merge_wait from task_merge_checks where task_id = $1', [taskId]);
+        merge_wait_detail: string | null;
+      }>(
+        'select merge_by, merge_wait, merge_wait_detail from task_merge_checks where task_id = $1',
+        [taskId],
+      );
       const row = rows[0];
       return row === undefined
         ? null
         : {
             mergeBy: (row.merge_by ?? null) as 'person' | 'platform' | null,
             wait: row.merge_wait,
+            detail: row.merge_wait_detail ?? null,
           };
     },
 

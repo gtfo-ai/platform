@@ -198,6 +198,20 @@ runGitProviderContract({
       outcome: 'clean',
       commitCount: 2,
     });
+    // TD-038 Amendment C (divergence 41): a merge request whose reviewed head moved on — a person's
+    // push — so the reviewed head's version is one this fake kept, not its current head.
+    const versioned = await openOn('agentic/versioned');
+    port.setDiff({
+      project: PROJECT,
+      iid: versioned.ref.iid,
+      files: [{ path: 'src/billing/totals.ts' }, { path: 'src/billing/totals.test.ts' }],
+    });
+    port.emitMergeRequestEvent({
+      event: 'mr.updated',
+      project: PROJECT,
+      iid: versioned.ref.iid,
+      headSha: 'e'.repeat(40),
+    });
     const merged = await openOn('agentic/merged');
     port.emitMergeRequestEvent({ event: 'mr.merged', project: PROJECT, iid: merged.ref.iid });
 
@@ -410,6 +424,13 @@ runGitProviderContract({
       },
       // The fake refuses a rebase of a merge request that is not open (divergence 40).
       rebase: { iid: toRebase.ref.iid, refusedIid: merged.ref.iid, commits: 2 },
+      versionDiff: {
+        iid: versioned.ref.iid,
+        headSha: versioned.head_sha,
+        unknownHeadSha: 'f'.repeat(40),
+        path: 'src/billing/totals.ts',
+        fileCount: 2,
+      },
       // Divergence 17: every merge request this fake opens carries the same stats.
       diffStats: {
         iid: existing.ref.iid,

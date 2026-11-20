@@ -105,6 +105,7 @@ import {
   type Discussion,
   type ExternalIdentity,
   egressHostOf,
+  type FileDiff,
   type GitProviderCapabilities,
   type GitProviderInboundEvent,
   type GitProviderPort,
@@ -168,7 +169,12 @@ import {
   withoutDraftPrefix,
 } from './mapping.js';
 import { gitlabMergeRequestTitle, gitlabNoteBody } from './mentions.js';
-import type { GitLabDiscussion, GitLabMergeRequest, gitlabAccessTokenSchema } from './schemas.js';
+import type {
+  GitLabDiscussion,
+  GitLabMergeRequest,
+  GitLabMergeRequestDiff,
+  gitlabAccessTokenSchema,
+} from './schemas.js';
 import { gitLabDeliveryKey, verifyGitLabDelivery } from './webhook-verify.js';
 
 /** A merge commit GitLab published, or `null` — never a value the port's sha schema refuses. */
@@ -243,6 +249,37 @@ const identityOf = (user: {
   display_name: user.name ?? user.username ?? null,
   verified: true,
 });
+
+/**
+ * One GitLab diff entry as the port's `FileDiff` — the live diff (WP-24) and a version's diff
+ * (TD-038 Amendment C) alike, so the change digest reads both the same way.
+ *
+ * `diff` is dropped for a file GitLab excluded, rather than reported as an empty patch: the page
+ * says `collapsed` means *"File diffs are excluded but can be fetched on request"* and `too_large`
+ * *"File diffs are excluded and cannot be retrieved"*, and both are "the platform was not shown this
+ * change", which the port spells `omitted: true`. An empty string would read as "this file changed
+ * by nothing". The two flags were introduced in GitLab 18.4, so an older instance reports neither
+ * and every file comes back with its patch — why `omitted` falls back to `false`.
+ */
+const toFileDiff = (file: GitLabMergeRequestDiff): FileDiff => {
+  const omitted = file.collapsed === true || file.too_large === true;
+  return {
+    new_path: file.new_path,
+    old_path: file.old_path,
+    diff: omitted ? null : (file.diff ?? null),
+    new_file: file.new_file ?? false,
+    renamed_file: file.renamed_file ?? false,
+    deleted_file: file.deleted_file ?? false,
+    omitted,
+    // TD-038 amendment A: the modes, which the change digest reads (a mode change is a change).
+    ...(typeof file.a_mode === 'string' && /^[0-7]{1,6}$/.test(file.a_mode)
+      ? { old_mode: file.a_mode }
+      : {}),
+    ...(typeof file.b_mode === 'string' && /^[0-7]{1,6}$/.test(file.b_mode)
+      ? { new_mode: file.b_mode }
+      : {}),
+  };
+};
 
 const invalidRequest = (action: string, detail: string): IntegrationError =>
   new IntegrationError('invalid_request', GITLAB_PROVIDER_ID, detail, { action });
@@ -1470,40 +1507,40 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     },
 
     /**
-     * WP-24 — § "List merge request diffs".
-     *
-     * `diff` is dropped for a file GitLab excluded, rather than reported as an empty patch: the
-     * page says `collapsed` means *"File diffs are excluded but can be fetched on request"* and
-     * `too_large` *"File diffs are excluded and cannot be retrieved"*, and both are "the platform
-     * was not shown this change", which the port spells `omitted: true`. An empty string would read
-     * as "this file changed by nothing".
-     *
-     * The two flags were introduced in GitLab 18.4, so an older instance reports neither and every
-     * file comes back with its patch — which is the behaviour this adapter had before they existed
-     * and is why `omitted` falls back to `false` rather than to "unknown".
+     * WP-24 — § "List merge request diffs", each entry mapped by `toFileDiff` (an excluded file
+     * is `omitted`, never an empty patch).
      */
     getMergeRequestDiff: async (mrRef, options) => {
       const project = projectOf(mrRef, 'get_merge_request_diff');
       const files = await client.mergeRequestDiffs(project, mrRef.iid, options.limit);
-      return files.slice(0, Math.max(0, options.limit)).map((file) => {
-        const omitted = file.collapsed === true || file.too_large === true;
-        return {
-          new_path: file.new_path,
-          old_path: file.old_path,
-          diff: omitted ? null : (file.diff ?? null),
-          new_file: file.new_file ?? false,
-          renamed_file: file.renamed_file ?? false,
-          deleted_file: file.deleted_file ?? false,
-          omitted,
-          // TD-038 amendment A: the modes, which the change digest reads (a mode change is a change).
-          ...(typeof file.a_mode === 'string' && /^[0-7]{1,6}$/.test(file.a_mode)
-            ? { old_mode: file.a_mode }
-            : {}),
-          ...(typeof file.b_mode === 'string' && /^[0-7]{1,6}$/.test(file.b_mode)
-            ? { new_mode: file.b_mode }
-            : {}),
-        };
-      });
+      return files.slice(0, Math.max(0, options.limit)).map(toFileDiff);
+    },
+
+    /**
+     * TD-038 Amendment C — § "Retrieve merge request diff versions" and § "Retrieve a merge request
+     * diff version". The newest version whose `head_commit_sha` is the asked head is read; none is
+     * `null`. A version whose `state` is not `collected` (`overflow`, `without_files`, the deprecated
+     * overflow states) is `truncated`, as is one with more files than `limit`; its `diffs` entries
+     * are mapped exactly as `getMergeRequestDiff` maps the live ones, so one digest reads both.
+     */
+    getMergeRequestVersionDiff: async (mrRef, options) => {
+      const project = projectOf(mrRef, 'get_merge_request_version_diff');
+      const versions = await client.mergeRequestVersions(project, mrRef.iid);
+      const version = versions.find((entry) => entry.head_commit_sha === options.headSha);
+      if (version === undefined) {
+        return null;
+      }
+      const detail = await client.mergeRequestVersion(project, mrRef.iid, version.id);
+      if (detail.head_commit_sha !== options.headSha) {
+        // The listing and the version disagree about the head: not the version asked for.
+        return null;
+      }
+      const limit = Math.max(0, options.limit);
+      const diffs = detail.diffs ?? [];
+      return {
+        files: diffs.slice(0, limit).map(toFileDiff),
+        truncated: detail.state !== 'collected' || diffs.length > limit,
+      };
     },
 
     getPipelineStatus: async (project, headSha): Promise<PipelineStatus | null> => {

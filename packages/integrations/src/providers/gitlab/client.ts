@@ -25,6 +25,8 @@ import {
   gitlabMemberSchema,
   gitlabMergeRequestDiffSchema,
   gitlabMergeRequestSchema,
+  gitlabMergeRequestVersionDetailSchema,
+  gitlabMergeRequestVersionSchema,
   gitlabPipelineSchema,
   gitlabProjectSchema,
   gitlabProtectedBranchSchema,
@@ -315,6 +317,21 @@ export interface GitLabClient {
     iid: number,
     limit: number,
   ): Promise<z.output<typeof gitlabMergeRequestDiffSchema>[]>;
+  /**
+   * § "Retrieve merge request diff versions" — `GET …/merge_requests/:iid/versions`, newest first
+   * (TD-038 Amendment C). One page of 100: a reviewed head older than that is not found, and a
+   * person decides.
+   */
+  mergeRequestVersions(
+    project: string,
+    iid: number,
+  ): Promise<z.output<typeof gitlabMergeRequestVersionSchema>[]>;
+  /** § "Retrieve a merge request diff version" — `GET …/versions/:version_id`, no `unidiff`. */
+  mergeRequestVersion(
+    project: string,
+    iid: number,
+    versionId: number,
+  ): Promise<z.output<typeof gitlabMergeRequestVersionDetailSchema>>;
   /** § "Create a merge request thread". */
   createDiscussion(
     project: string,
@@ -798,6 +815,29 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           path: `${mrPath(project, iid)}/diffs`,
           query: { per_page: Math.min(Math.max(1, limit), 100), page: 1 },
           action: 'get_merge_request_diff',
+        }),
+      ),
+
+    mergeRequestVersions: async (project, iid) =>
+      required(
+        z.array(gitlabMergeRequestVersionSchema),
+        'get_merge_request_version_diff',
+        http.request({
+          method: 'GET',
+          path: `${mrPath(project, iid)}/versions`,
+          query: { per_page: 100, page: 1 },
+          action: 'get_merge_request_version_diff',
+        }),
+      ),
+
+    mergeRequestVersion: async (project, iid, versionId) =>
+      required(
+        gitlabMergeRequestVersionDetailSchema,
+        'get_merge_request_version_diff',
+        http.request({
+          method: 'GET',
+          path: `${mrPath(project, iid)}/versions/${versionId}`,
+          action: 'get_merge_request_version_diff',
         }),
       ),
 

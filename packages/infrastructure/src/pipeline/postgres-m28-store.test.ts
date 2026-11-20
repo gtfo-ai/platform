@@ -292,13 +292,28 @@ describe('task_merges and the merge decision (S-28.15, migration 0119)', () => {
       mergeBy: 'platform',
       wait: 'person_words',
     });
-    expect(write.calls[0]?.values).toEqual([TASK, 'platform', 'person_words']);
+    // TD-038 Amendment C: a decision with no detail clears the last one's (`null`, never kept).
+    expect(write.calls[0]?.values).toEqual([TASK, 'platform', 'person_words', null]);
+    const failed = recording([], 1);
+    await store().tasks.recordMergeDecision(failed.tx, TASK, {
+      mergeBy: 'platform',
+      wait: 'head_rebased_ci_failed',
+      detail: 'unit-tests',
+    });
+    expect(failed.calls[0]?.values).toEqual([
+      TASK,
+      'platform',
+      'head_rebased_ci_failed',
+      'unit-tests',
+    ]);
+    expect(failed.calls[0]?.text).toMatch(/merge_wait_detail = excluded\.merge_wait_detail/);
     expect(
       await store().tasks.mergeDecisionOf(
-        recording([{ merge_by: 'person', merge_wait: 'setting_person' }]).tx,
+        recording([{ merge_by: 'person', merge_wait: 'setting_person', merge_wait_detail: null }])
+          .tx,
         TASK,
       ),
-    ).toEqual({ mergeBy: 'person', wait: 'setting_person' });
+    ).toEqual({ mergeBy: 'person', wait: 'setting_person', detail: null });
     expect(await store().tasks.mergeDecisionOf(recording([]).tx, TASK)).toBeNull();
   });
 });

@@ -76,6 +76,8 @@ interface Live {
   mergeCommit: string | null;
   rebaseFailed: boolean;
   rebaseStuck: boolean;
+  /** The pipeline on any head the double is asked about; mutable, so CI can finish mid-test. */
+  pipeline: 'success' | 'failed' | 'running' | null;
 }
 
 interface World {
@@ -128,6 +130,11 @@ interface World {
   readonly qa?: boolean;
   /** The protected paths CI excused provisionally (WP-102); none by default. */
   readonly excused?: readonly string[];
+  /**
+   * TD-038 Amendment C: the provider's version of the reviewed head (`HEAD`) — its files (the
+   * default diff unless given), `missing` (no version has that head) or `truncated` (cut).
+   */
+  readonly reviewedVersion?: 'missing' | 'truncated' | readonly FileDiff[];
 }
 
 const storedTask = (world: World): StoredTask =>
@@ -209,8 +216,24 @@ const setup = async (world: World = {}) => {
     mergeCommit: null,
     rebaseFailed: false,
     rebaseStuck: false,
+    pipeline: world.pipeline ?? null,
     ...world.live,
   };
+  /** The files of the reviewed head's version, as the review saw them (the default diff). */
+  const reviewedFiles: readonly FileDiff[] = Array.isArray(world.reviewedVersion)
+    ? world.reviewedVersion
+    : [
+        {
+          new_path: 'src/a.ts',
+          old_path: 'src/a.ts',
+          diff: PATCH,
+          new_file: false,
+          renamed_file: false,
+          deleted_file: false,
+          omitted: false,
+        },
+      ];
+  const versionReads: string[] = [];
   const merges: { expected: string; squash: boolean; remove: boolean }[] = [];
   const rebases: number[] = [];
   let counter = 0x100;
@@ -269,6 +292,24 @@ const setup = async (world: World = {}) => {
       }
       return files;
     },
+    // TD-038 Amendment C: the reviewed head's version, kept by the provider; the live head's is
+    // the live diff. Any other head has none.
+    getMergeRequestVersionDiff: async (
+      _ref: unknown,
+      options: { readonly headSha: string; readonly limit: number },
+    ) => {
+      versionReads.push(options.headSha);
+      if (options.headSha === HEAD && world.reviewedVersion !== 'missing') {
+        return {
+          files: reviewedFiles.slice(0, options.limit).map((file) => ({ ...file })),
+          truncated: world.reviewedVersion === 'truncated' || reviewedFiles.length > options.limit,
+        };
+      }
+      if (options.headSha === live.head) {
+        return { files: live.files.map((file) => ({ ...file })), truncated: false };
+      }
+      return null;
+    },
     countMergeRequestCommits: async () => live.commits,
     getMergeRequestRebase: async () => ({
       in_progress: false,
@@ -279,14 +320,28 @@ const setup = async (world: World = {}) => {
       if (world.pushDuringPipeline === true) {
         live.head = '6'.repeat(40);
       }
-      return world.pipeline === null || world.pipeline === undefined
+      return live.pipeline === null
         ? null
         : {
             id: 'p-9',
             head_sha: sha,
-            status: world.pipeline,
+            status: live.pipeline,
             url: null,
-            jobs: [],
+            // A red pipeline names the job that failed (Amendment C's page names it).
+            jobs:
+              live.pipeline === 'failed'
+                ? [
+                    {
+                      id: 'j-1',
+                      name: 'unit-tests',
+                      status: 'failed',
+                      stage: 'test',
+                      log_ref: null,
+                      allow_failure: false,
+                      web_url: null,
+                    },
+                  ]
+                : [],
             coverage_pct: null,
             finished_at: null,
           };
@@ -553,11 +608,16 @@ const setup = async (world: World = {}) => {
   const waitedFor = async () =>
     (await memory.transaction(async (scope) => store.tasks.mergeDecisionOf(scope.tx, TASK)))
       ?.wait ?? null;
+  const waitDetail = async () =>
+    (await memory.transaction(async (scope) => store.tasks.mergeDecisionOf(scope.tx, TASK)))
+      ?.detail ?? null;
   return {
     advance: (ms: number) => {
       clockMs += ms;
     },
     waitedFor,
+    waitDetail,
+    versionReads,
     options,
     memory,
     store,
@@ -579,10 +639,28 @@ const reload = async (w: Awaited<ReturnType<typeof setup>>) =>
 describe('the dangerous negatives — no merge call, and the named reason (TD-038 decision 3)', () => {
   it.each<[string, World, string, string | null]>([
     [
-      'the MR head moved since the review',
-      { setting: 'platform', plan: null, live: { head: 'e'.repeat(40) } },
+      // TD-038 Amendment C: a moved head is classified — new lines are new changes, never merged.
+      'the MR head moved since the review, with new changes',
+      {
+        setting: 'platform',
+        plan: null,
+        live: {
+          head: 'e'.repeat(40),
+          files: [
+            {
+              new_path: 'src/a.ts',
+              old_path: 'src/a.ts',
+              diff: `${PATCH}\n+const unreviewed = true;`,
+              new_file: false,
+              renamed_file: false,
+              deleted_file: false,
+              omitted: false,
+            },
+          ],
+        },
+      },
       'waiting',
-      'head_moved',
+      'head_changed',
     ],
     [
       'the reviewed head is not the CI-gated one',
@@ -1229,12 +1307,13 @@ describe('a task that passed QA with no reviewed head recorded (S-28.18)', () =>
       setting: 'platform',
       readyHead: null,
       qa: true,
-      live: { head: 'e'.repeat(40) },
+      live: { head: 'e'.repeat(40), files: [] },
     });
     await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options);
     expect((await reload(w))?.readyHeadSha).toBe(HEAD);
     expect(await w.run()).toBe('waiting');
-    expect(await w.waitedFor()).toBe('head_moved');
+    // The pushed head carries no change the lines can show: no digest, never a rebase.
+    expect(await w.waitedFor()).toBe('head_change_unknown');
     expect(w.merges).toEqual([]);
   });
 
@@ -1274,5 +1353,225 @@ describe('a task that passed QA with no reviewed head recorded (S-28.18)', () =>
       expect(await w.waitedFor()).toBe('head_not_recorded');
       expect(w.merges).toEqual([]);
     }
+  });
+});
+
+/**
+ * **A rebase never blocks the platform's merge** (S-28.23, TD-038 Amendment C, backlog 1636; the
+ * owner, 2026-11-20: *"just rebasing should not block / reject, and should not restart the whole
+ * chain"*). AUT-6640: a person pressed GitLab's *Rebase* at Ready, the head moved to an identical
+ * change, and the platform waited `head_moved` for ever. The reviewed change is read back from the
+ * provider's version of the reviewed head and digested; an identical digest is a rebase judged by CI
+ * alone, anything else is a person's — and each says which.
+ */
+describe('a person’s rebase at Ready (TD-038 Amendment C)', () => {
+  const REBASED = '9'.repeat(40);
+  const NEW_LINES: FileDiff[] = [
+    {
+      new_path: 'src/a.ts',
+      old_path: 'src/a.ts',
+      diff: `${PATCH}\n+const unreviewed = true;`,
+      new_file: false,
+      renamed_file: false,
+      deleted_file: false,
+      omitted: false,
+    },
+  ];
+  const followUps = (w: Awaited<ReturnType<typeof setup>>) =>
+    w.jobs.history.filter(
+      (request) =>
+        request.queue === JOB_QUEUES.pipelineOutbound &&
+        (request.data as unknown as PipelineOutboundData).duty === 'platform_merge',
+    );
+
+  it('identical change: waits for CI on the rebased commit, adopts it, then merges it — nothing returns', async () => {
+    // A person squashed while rebasing: one commit, not two. The digest is the identity.
+    const w = await setup({
+      setting: 'platform',
+      pipeline: 'running',
+      live: { head: REBASED, commits: 1 },
+    });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_rebased_ci_pending');
+    // Both sides read by version, each pinned to its head (Amendment C).
+    expect(w.versionReads).toEqual([HEAD, REBASED]);
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+    expect(w.merges).toEqual([]);
+
+    w.live.pipeline = 'success';
+    expect(await w.run()).toBe('rebase_adopted');
+    const adopted = await reload(w);
+    expect(adopted?.readyHeadSha).toBe(REBASED);
+    expect(adopted?.ciHeadSha).toBe(REBASED);
+    // The task never left Ready: no return, no review, no draft.
+    expect(adopted?.task.currentStage).toBe('ready_for_merge');
+    expect(adopted?.task.state).toBe('ready_for_merge');
+    expect(w.jobs.history.some((request) => request.queue === JOB_QUEUES.stageExecute)).toBe(false);
+    const [row] = await w.attempts();
+    expect(row).toMatchObject({
+      headSha: HEAD,
+      outcome: 'rebased',
+      providerStatus: 'person_rebase',
+      rebasedTo: REBASED,
+      commitCount: null,
+    });
+    expect(row?.changeDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(await w.waitedFor()).toBeNull();
+    expect(followUps(w)).toHaveLength(1);
+
+    expect(await w.run()).toBe('merged');
+    expect(w.merges).toEqual([{ expected: REBASED, squash: true, remove: false }]);
+    expect(w.rebases).toEqual([]);
+  });
+
+  it('is asked when the provider blocks the moved head too (its pipeline is still running)', async () => {
+    const w = await setup({
+      setting: 'platform',
+      pipeline: 'running',
+      live: {
+        head: REBASED,
+        mergeable: false,
+        blocker: { reason: 'pipeline', provider_status: 'ci_still_running' },
+      },
+    });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_rebased_ci_pending');
+  });
+
+  it.each<[string, World, string]>([
+    ['new lines since the review', { live: { head: REBASED, files: NEW_LINES } }, 'head_changed'],
+    [
+      'no provider version of the reviewed head',
+      { reviewedVersion: 'missing' },
+      'head_version_missing',
+    ],
+    [
+      'a reviewed version the provider cut',
+      { reviewedVersion: 'truncated' },
+      'head_change_unknown',
+    ],
+  ])('merges nothing and names why: %s', async (_name, world, wait) => {
+    const w = await setup({
+      setting: 'platform',
+      pipeline: 'success',
+      ...world,
+      live: { head: REBASED, ...world.live },
+    });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe(wait);
+    expect(w.merges).toEqual([]);
+    expect(await w.attempts()).toEqual([]);
+    const after = await reload(w);
+    expect(after?.readyHeadSha).toBe(HEAD);
+    expect(after?.task.currentStage).toBe('ready_for_merge');
+  });
+
+  it('a red pipeline on the rebased commit is a person’s, with the job that failed named', async () => {
+    const w = await setup({ setting: 'platform', pipeline: 'failed', live: { head: REBASED } });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_rebased_ci_failed');
+    expect(await w.waitDetail()).toBe('unit-tests');
+    expect(w.merges).toEqual([]);
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+    // A later wait clears the jobs: they never outlive the wait they explain.
+    w.live.pipeline = 'running';
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_rebased_ci_pending');
+    expect(await w.waitDetail()).toBeNull();
+  });
+
+  it('a head that moved again while CI was read is not adopted', async () => {
+    const w = await setup({
+      setting: 'platform',
+      pipeline: 'success',
+      pushDuringPipeline: true,
+      live: { head: REBASED },
+    });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_moved');
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+    expect(await w.attempts()).toEqual([]);
+    expect(w.merges).toEqual([]);
+  });
+
+  it('counts against the three rebases per Ready entry, the platform’s and the people’s together', async () => {
+    const w = await setup({ setting: 'platform', pipeline: 'success', live: { head: REBASED } });
+    await w.memory.transaction(async (scope) => {
+      for (let n = 0; n < MAX_REBASES_PER_READY_ENTRY; n += 1) {
+        await w.store.tasks.recordMerge(scope.tx, {
+          taskId: TASK,
+          headSha: String(n + 1).repeat(40),
+          outcome: 'rebased',
+          providerStatus: 'person_rebase',
+          mergeCommitSha: null,
+          planDecision: 'not_required',
+          planApprovalId: null,
+          changeDigest: 'a'.repeat(64),
+          commitCount: null,
+          rebasedTo: 'c'.repeat(40),
+          attemptedAt: NOW as IsoDateTime,
+          signalPasses: 0,
+        });
+      }
+    });
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_rebase_bound');
+    expect((await reload(w))?.readyHeadSha).toBe(HEAD);
+    expect(w.merges).toEqual([]);
+  });
+
+  it('the merge check wakes the duty for a moved head the provider blocks', async () => {
+    const w = await setup({
+      setting: 'platform',
+      live: {
+        head: REBASED,
+        mergeable: false,
+        blocker: { reason: 'pipeline', provider_status: 'ci_still_running' },
+      },
+    });
+    expect(await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options)).toBe(
+      'blocked',
+    );
+    expect(
+      followUps(w).map((request) => (request.data as unknown as PipelineOutboundData).task_id),
+    ).toEqual([TASK]);
+  });
+
+  /**
+   * AUT-6640 after the deploy: the task has waited `head_moved` since 2026-11-18 with the platform
+   * merging and no attempt for its reviewed head, so the recovery pass's row finds it; the merge
+   * check wakes the duty, which classifies the head, adopts it and merges — no person.
+   */
+  it('recovers a task already waiting head_moved: the recovery pass finds it and it merges', async () => {
+    const w = await setup({ setting: 'platform', pipeline: 'success', live: { head: REBASED } });
+    await w.memory.transaction(async (scope) => {
+      await w.store.tasks.recordReadyMergeCheck(scope.tx, TASK, {
+        checkedAt: '2026-01-01T00:00:00.000Z' as IsoDateTime,
+        mergeable: true,
+        reason: null,
+        providerStatus: null,
+        unresolvedThreads: null,
+      });
+      await w.store.tasks.recordMergeDecision(scope.tx, TASK, {
+        mergeBy: 'platform',
+        wait: 'head_moved',
+      });
+    });
+    const due = await w.memory.transaction(async (scope) =>
+      w.store.tasks.readyMergeCheckDue(scope.tx, {
+        staleBefore: '2099-01-01T00:00:00.000Z' as IsoDateTime,
+        limit: 10,
+      }),
+    );
+    expect(due.map((row) => row.taskId)).toEqual([TASK]);
+    expect(await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options)).toBe(
+      'mergeable',
+    );
+    expect(followUps(w)).toHaveLength(1);
+    expect(await w.run()).toBe('rebase_adopted');
+    expect(await w.run()).toBe('merged');
+    expect(w.merges).toEqual([{ expected: REBASED, squash: true, remove: false }]);
+    // Merged: no longer due for the platform's wait.
+    expect(await w.run()).toBe('already_attempted');
   });
 });

@@ -9,11 +9,14 @@ import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   type ChangeDigestFile,
   changeDigest,
+  classifyMovedHead,
   MERGE_BY_PERSON_REASONS,
   type MergeByInput,
+  MOVED_HEAD_WAITS,
   mergeByPersonReasons,
   type PlatformMergeFacts,
   platformMergeWait,
+  REBASE_ONLY_WAITS,
 } from './merge.js';
 
 const PLATFORM: MergeByInput = { setting: 'platform', providerCanMerge: true, shadow: false };
@@ -285,4 +288,66 @@ describe('changeDigest (TD-038 amendment A)', () => {
     },
     PROPERTY_TEST_TIMEOUT_MS,
   );
+});
+
+/**
+ * TD-038 Amendment C (the owner's ruling of 2026-11-20): a head at Ready that is not the reviewed
+ * one is classified by the change digest, never just refused. Only an identical digest is a rebase;
+ * every other answer is a person's, and each says which.
+ */
+describe('classifyMovedHead (TD-038 Amendment C)', () => {
+  const DIGEST = 'a'.repeat(64);
+
+  it('is a rebase only when the reviewed version exists and both digests are identical', () => {
+    expect(
+      classifyMovedHead({ reviewedVersionFound: true, reviewedDigest: DIGEST, liveDigest: DIGEST }),
+    ).toBe('rebase');
+  });
+
+  it.each<[string, Parameters<typeof classifyMovedHead>[0], string]>([
+    [
+      'the digests differ (new changes)',
+      { reviewedVersionFound: true, reviewedDigest: DIGEST, liveDigest: 'b'.repeat(64) },
+      'head_changed',
+    ],
+    [
+      'no version has the reviewed head',
+      { reviewedVersionFound: false, reviewedDigest: null, liveDigest: DIGEST },
+      'head_version_missing',
+    ],
+    [
+      // Defensive: a digest without a version is not trusted as one.
+      'no version, whatever digest a caller passes',
+      { reviewedVersionFound: false, reviewedDigest: DIGEST, liveDigest: DIGEST },
+      'head_version_missing',
+    ],
+    [
+      'the reviewed version gives no digest (cut or unrendered)',
+      { reviewedVersionFound: true, reviewedDigest: null, liveDigest: DIGEST },
+      'head_change_unknown',
+    ],
+    [
+      'the live diff gives no digest',
+      { reviewedVersionFound: true, reviewedDigest: DIGEST, liveDigest: null },
+      'head_change_unknown',
+    ],
+    [
+      // Two `null`s are not equal changes: nothing is known about either.
+      'neither side gives a digest',
+      { reviewedVersionFound: true, reviewedDigest: null, liveDigest: null },
+      'head_change_unknown',
+    ],
+  ])('is not a rebase when %s', (_name, facts, wait) => {
+    expect(classifyMovedHead(facts)).toBe(wait);
+  });
+
+  it('names only rebase states as rebase-only, so Send back is offered for every other wait', () => {
+    expect([...REBASE_ONLY_WAITS].sort()).toEqual(
+      ['head_rebase_bound', 'head_rebased_ci_failed', 'head_rebased_ci_pending'].sort(),
+    );
+    for (const wait of ['head_changed', 'head_version_missing', 'head_change_unknown']) {
+      expect(MOVED_HEAD_WAITS).toContain(wait);
+      expect(REBASE_ONLY_WAITS.has(wait)).toBe(false);
+    }
+  });
 });

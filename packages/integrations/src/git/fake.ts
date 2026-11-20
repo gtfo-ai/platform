@@ -317,6 +317,13 @@
  *     provider job that never ends) or `failed_moved` (`failed: true` and the head moved: a person
  *     pushed their own rebase while GitLab's ran). It records every request (`rebases`).
  *     `countMergeRequestCommits` answers the seeded `commitCount` (1 by default).
+ * 41. **Kinder — a version exists the moment a head does** (TD-038 Amendment C).
+ *     `getMergeRequestVersionDiff` answers the files of the current head, and of every earlier head
+ *     this fake kept when the head moved (a rebase, or `emitMergeRequestEvent` with a `headSha`):
+ *     the files as they stood then. GitLab writes a version per push **asynchronously**, so right
+ *     after a push the newest head may have none yet — a caller then reads `null`, which this fake
+ *     answers only for a head it never held. It never answers `truncated` for a version GitLab would
+ *     call `overflow`; only a `limit` below the file count cuts the list, and says so.
  */
 import {
   type BranchPushProtection,
@@ -532,6 +539,8 @@ interface StoredMergeRequest {
   base_sha: string | null;
   /** Divergence 10: what `getMergeRequestDiff` answers, seeded by `setDiff`. */
   files: FileDiff[];
+  /** Divergence 41: the files of each earlier head, kept when the head moved, newest first. */
+  versions?: { head_sha: string; files: FileDiff[] }[];
   /**
    * The account that opened it (WP-138). Absent is the fake's own bot account — every merge request
    * the port opens — and `setMergeRequestAuthor` makes one a person's.
@@ -1069,6 +1078,14 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
 
   const findMr = (project: string, iid: number): StoredMergeRequest | undefined =>
     mergeRequests.find((mr) => mr.project === project && mr.iid === iid);
+
+  /** Divergence 41: keeps the current head's files as its version, before the head moves. */
+  const keepVersion = (mr: StoredMergeRequest): void => {
+    mr.versions = [
+      { head_sha: mr.head_sha, files: mr.files.map((file) => ({ ...file })) },
+      ...(mr.versions ?? []).filter((version) => version.head_sha !== mr.head_sha),
+    ];
+  };
 
   const requireMr = (action: string, mrRef: MergeRequestRefInput): StoredMergeRequest => {
     const project = projectOf(mrRef);
@@ -1806,10 +1823,12 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       }
       if (outcome === 'failed_moved') {
         mr.rebase_failed = true;
+        keepVersion(mr);
         mr.head_sha = nextSha();
         return;
       }
       mr.rebase_failed = false;
+      keepVersion(mr);
       mr.head_sha = nextSha();
       mr.merge_blocker = null;
       if (outcome === 'changed') {
@@ -2044,6 +2063,24 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       const mr = requireMr('get_merge_request_diff', mrRef);
       // Divergence 10: `limit` is applied here, so a caller that asked for five files gets five.
       return mr.files.slice(0, Math.max(0, options.limit)).map((file) => ({ ...file }));
+    },
+
+    getMergeRequestVersionDiff: async (mrRef, options) => {
+      core.enter('get_merge_request_version_diff');
+      const mr = requireMr('get_merge_request_version_diff', mrRef);
+      // Divergence 41: the current head's files, or those kept when an earlier head moved.
+      const files =
+        options.headSha === mr.head_sha
+          ? mr.files
+          : mr.versions?.find((version) => version.head_sha === options.headSha)?.files;
+      if (files === undefined) {
+        return null;
+      }
+      const limit = Math.max(0, options.limit);
+      return {
+        files: files.slice(0, limit).map((file) => ({ ...file })),
+        truncated: files.length > limit,
+      };
     },
 
     getPipelineStatus: async (project, headSha) => {
@@ -2597,6 +2634,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
           // Stricter (standing rule 1): only a push moves a head, and a push is an update.
           throw invalidRequest(PROVIDER, 'emit', `a head moves on mr.updated, not ${input.event}`);
         }
+        keepVersion(mr);
         mr.head_sha = input.headSha;
       }
       if (input.blockingThreadsResolved !== undefined && input.event !== 'mr.updated') {

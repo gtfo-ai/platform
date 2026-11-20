@@ -390,7 +390,7 @@ export type ProviderSync = z.infer<typeof providerSyncSchema>;
  * decision 7). `by` is who merges as last decided at Ready; `waiting_for` the first reason a
  * person merges (`setting_person`, `provider_cannot_merge`, `shadow_mode`) or what the platform's
  * merge waits for at the moment of merging (`person_words`, `provider_blocked`, `head_moved`,
- * `needs_rebase`, `rebase_in_progress`, `rebase_bound`, …) — platform words the page names, never
+ * `head_rebased_ci_pending`, `head_changed`, `needs_rebase`, `rebase_in_progress`, `rebase_bound`, …) — platform words the page names, never
  * provider text; `last_attempt` the newest `task_merges` row, with the plan decision it rested on
  * and — when a person approved the plan — their name.
  */
@@ -422,6 +422,12 @@ export const taskMergeSchema = z.strictObject({
     .string()
     .regex(/^[a-z_]{1,64}$/)
     .nullable(),
+  /**
+   * TD-038 Amendment C: the words beside `waiting_for` — the CI jobs that failed on a rebased
+   * commit (`head_rebased_ci_failed`). Provider text, redacted and bounded before it was stored;
+   * rendered as text. Absent or `null` when the wait carries none.
+   */
+  waiting_detail: z.string().min(1).max(200).nullish(),
   last_attempt: taskMergeAttemptSchema.nullable(),
 });
 export type TaskMerge = z.infer<typeof taskMergeSchema>;

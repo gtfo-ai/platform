@@ -31,7 +31,10 @@
  *    that is not "mergeable" again ten minutes after its claim, so a block that clears without a
  *    signal (a pipeline that passed, an approval) clears on the page too — and, since S-28.18, a
  *    task that passed QA with no reviewed head recorded, which this duty gives the head the gates
- *    judged before QA, once (`adoptQaPassHead`, `qa-pass-head.ts`).
+ *    judged before QA, once (`adoptQaPassHead`, `qa-pass-head.ts`). A task whose merge waited
+ *    `head_moved` before TD-038 Amendment C shipped (AUT-6640: a person pressed GitLab's *Rebase*)
+ *    is due by the same row — the platform merges and no decisive attempt exists for its reviewed
+ *    head — so the first pass after the deploy wakes the duty, which now classifies the head.
  *
  * Re-validated on fire (TD-004): the task still exists, is at `ready_for_merge`, has a merge request
  * and is not a review-only task. Every provider call is the executor's, outside every transaction;
@@ -92,13 +95,19 @@ const decideMerge = async (
   const who = await whoMerges(merge, stored, input.integrations);
   // A rebase the provider wants is the platform's to ask for (TD-038 amendment A): the duty decides.
   const rebaseOnly = live?.state === 'opened' && live.merge_blocker?.reason === 'rebase';
+  // A head that is not the reviewed one is the duty's to classify (TD-038 Amendment C) whatever the
+  // provider says of it — a rebase whose pipeline runs or failed reads "not mergeable" there.
+  const headMoved =
+    live?.state === 'opened' &&
+    stored.readyHeadSha !== null &&
+    live.head_sha !== stored.readyHeadSha;
   await merge.unitOfWork.transaction(async (scope) =>
     merge.store.tasks.recordMergeDecision(scope.tx, stored.task.id, {
       mergeBy: who.by,
       wait: who.reason,
     }),
   );
-  if (who.by === 'platform' && (input.check.mergeable === true || rebaseOnly)) {
+  if (who.by === 'platform' && (input.check.mergeable === true || rebaseOnly || headMoved)) {
     // One queued wake-up per task (`platformMergeSingletonKey`), so checks do not stack merges.
     await merge.jobs.enqueue({
       queue: JOB_QUEUES.pipelineOutbound,

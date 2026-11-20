@@ -157,3 +157,72 @@ head CI passed. The protected-path confirmation is asked again (5), and the live
 "mergeable" and the approving review still hold; what is not re-read is the rebase gate's own mergeability judgement
 against the target branch and its conflict warning — BACKLOG 1623.
 
+
+## Amendment C (2026-11-20, S-28.23, BACKLOG 1636) — a rebase never blocks the platform's merge
+
+**Context.** The owner's ruling, 2026-11-20: *"just rebasing should not block / reject, and should not restart the
+whole chain."* Measured on Autix (deployed `df518f3`): AUT-6640 (MR !2801) sat at `ready_for_merge` with `merge.by =
+platform`, `ready_head_sha = ci_head_sha = 5ea853d4…` (the reviewed, CI-passed head). On 2026-11-18 a person pressed
+GitLab's **Rebase** (system note *"added 4 commits: 1 commit from branch main …"*): the head became `a568811c…`, three
+commits as before, `detailed_merge_status: mergeable`, approved in GitLab by a person. `platformMergeWait` answered
+`head_moved` for ever, and the page offered *Send back*, which re-runs code review, re-drafts the merge request and walks
+the ticket backwards. AUT-6645 earlier the same day. Amendment A accepts a rebased head only when **the platform** asked
+for the rebase, because only then was a "before" digest recorded.
+
+**Decision.**
+
+1. **A head at Ready that is not `ready_head_sha` is classified, never just refused.** When the fresh check's first
+   failing item is the head (`head_moved`), or the provider blocks a merge request whose head moved (its pipeline on the
+   new head still running or failed), the `platform_merge` duty reads the **reviewed change** back from the provider —
+   the merge request version whose head commit is `ready_head_sha` (GitLab `GET /projects/:id/merge_requests/:iid/versions`
+   → `head_commit_sha`, then `GET …/versions/:version_id` for its `diffs`;
+   <https://docs.gitlab.com/api/merge_requests/> § "Retrieve merge request diff versions" and § "Retrieve a merge request
+   diff version", read 2026-11-20) — digests it with the **same** `changeDigest` as amendment A, and digests the live
+   change read the same way, **pinned to the live head** (the merge request's diff names no head, and GitLab computes a
+   push's version asynchronously, so right after a push the diff can still be the previous version's while the head is
+   already new; a head with no version yet gives no digest and is read again on the next wake-up). New port method `getMergeRequestVersionDiff(ref, { headSha, limit })` → `{ files, truncated }`, or `null` when
+   no version has that head; `truncated` when the version's `state` is not `collected` or `limit` cut it. GitLab
+   adapter, fake (divergence 41), a case in the shared contract suite, `test/fixtures/http/gitlab/merge-request-versions.json`
+   (`documented-adapted`). Both reads go through the executor, outside every transaction.
+2. **Identical digest → a rebase.** The task stays at Ready: nothing returns, nothing is re-drafted, the ticket does not
+   move, nothing is re-reviewed. The platform waits for the CI gate's own verdict on the new head H′ (the path amendment A
+   uses: `pipelineStatus`, `ciVerdictOf`, the manual-job policy), reads that the head is still H′, then in one transaction,
+   compare-and-set on `ready_head_sha`, writes `ready_head_sha = ci_head_sha = H′` (`saveReadyHead`, `saveCiSettlement`)
+   and a `task_merges` rebase row keyed by the reviewed head (`outcome = rebased`, `provider_status = person_rebase`, the
+   digest, `rebased_to = H′`; an existing outcome, so the table's checks are unchanged). The follow-up wake-up merges
+   with `sha = H′`. The **commit count is not asked** for a person's rebase — a person may squash; the digest is the
+   identity. It counts against the same **three rebases per Ready entry** as the platform's own (amendment A, decision 5);
+   a fourth waits `head_rebase_bound`.
+3. **Anything else → no merge, said plainly**, each with its own wait code (no generic `head_moved` when the platform
+   knows more) and words in `apps/web/src/ui/words/merge-status.ts`:
+   - `head_changed` (different digest): *the branch has new changes since the review, and the platform does not merge
+     unreviewed code; Send back to review them, or merge it yourself*;
+   - `head_version_missing` (no version for the reviewed head) and `head_change_unknown` (a side gives no digest: a cut
+     list, a file the provider will not render, a binary or mode-only change, a live head whose version is not computed
+     yet): the platform cannot prove the change is the reviewed one — Send back, or merge it yourself;
+   - `head_rebased_ci_pending`: *the branch was rebased and the change is identical; waiting for CI on the rebased
+     commit, then merging*;
+   - `head_rebased_ci_failed`: *…CI failed on the rebased commit: <jobs>*, the failing jobs' names redacted and bounded
+     (TD-012) in `task_merge_checks.merge_wait_detail` (migration 0125, additive) and served as `merge.waiting_detail`;
+   - `head_moved` stays for what it says: the head moved again while the platform was judging it (or the reviewed head
+     is not the CI-gated one).
+4. **Send back is not offered for a rebase-only state** (`head_rebased_ci_pending`, `head_rebased_ci_failed`,
+   `head_rebase_bound`: nothing to review); it stays in the words for the different-digest, no-version and no-digest
+   waits.
+5. **Tasks already waiting recover without a person.** A task the platform merges with no decisive attempt for its
+   reviewed head is already due in the recovery pass's `ready_merge_check` row every ten minutes; the merge check now
+   also wakes the duty when the head moved (whatever the provider says of it), so the first pass after the deploy
+   classifies AUT-6640's head and merges it. Bounded by the row's own cadence and limit; idempotent by the
+   compare-and-set and the one rebase row per reviewed head.
+
+**Rejected.** Re-entering `ci_gate` or the review tail for a rebase (the chain restart the owner ruled out). Requiring
+an unchanged commit count for a person's rebase (refuses a squash that changed no line). Trusting GitLab's
+`patch_id_sha` instead of the platform's own digest (a second identity to keep equal to amendment A's, and a provider
+field the fake and a future provider need not have). A new `task_merges` outcome (`rebase_adopted`): widening the
+outcome check is a `contract` migration under TD-032, and `rebased` + `person_rebase` says the same.
+
+**Residual.** The digest ignores context lines, so a rebase over a default branch that changed the code around the change
+keeps it; the pipeline on H′ is what judges that — the residual amendment A accepts. A reviewed head older than the
+provider's first page of 100 versions is not found (`head_version_missing`, a person decides). Both digests are read by
+version and pinned to their heads, and the head is read again after CI, so a push during the judgement is `head_moved`
+and judged again on the next wake-up.

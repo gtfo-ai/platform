@@ -239,7 +239,13 @@ capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArt
 > force_remove_source_branch`, no `auto_merge`; `401`/`405`/`409`/`422` are `MergeRefusedError`
 > (`unauthorised`, `not_allowed`, `head_moved`, `not_mergeable`), everything else the transport's;
 > `PUT …/rebase` (`403`/`409` → `RebaseRefusedError`), progress read with
-> `include_rebase_in_progress`, the commit count off the first page of `…/commits`. With
+> `include_rebase_in_progress`, the commit count off the first page of `…/commits`. **S-28.23
+> (TD-038 Amendment C):** `getMergeRequestVersionDiff(ref, { headSha, limit })` — the diff of the
+> merge request **version** whose head is `headSha` (GitLab `GET …/versions` → `head_commit_sha`, then
+> `GET …/versions/:version_id`'s `diffs`, mapped as the live diff), `null` when no version has that
+> head, `truncated` when the version's `state` is not `collected` or `limit` cut it; a read, through
+> the executor as `get_merge_request_version_diff`. The duty reads it when the head at Ready is not
+> the reviewed one, so a person's rebase is told from new changes by the change digest. With
 > `policies.merge.by: platform` the `pipeline.outbound` duty **`platform_merge`**
 > (`pipeline/platform-merge.ts`), enqueued by `ready_merge_check` on a "mergeable" read (or a rebase
 > as the only obstacle), once more by itself when an open human-return window made it wait (after the

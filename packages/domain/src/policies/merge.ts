@@ -195,6 +195,77 @@ export const platformMergeWait = (facts: PlatformMergeFacts): PlatformMergeWait 
   return null;
 };
 
+/**
+ * **A head at Ready that is not the reviewed one, classified** (TD-038 Amendment C, the owner's
+ * ruling of 2026-11-20: *"just rebasing should not block / reject, and should not restart the whole
+ * chain"*). The `platform_merge` duty answers `head_moved` only when it knows nothing more; once it
+ * has read the reviewed change back from the provider (the merge request version whose head is
+ * `tasks.ready_head_sha`) and the live one, the moved head is one of these:
+ *
+ *  - `head_rebased_ci_pending` — the change digests are identical: a rebase. The task stays at
+ *    Ready and the platform waits for the CI gate's own verdict on the new head;
+ *  - `head_rebased_ci_failed` — a rebase, and CI failed on the rebased commit;
+ *  - `head_rebase_bound` — a rebase, and the task has already been rebased three times since it
+ *    reached Ready (the platform's rebases and a person's count together);
+ *  - `head_changed` — the digests differ: new changes nobody reviewed;
+ *  - `head_version_missing` — the provider holds no version whose head is the reviewed commit, so
+ *    the reviewed change cannot be read back to compare;
+ *  - `head_change_unknown` — either side gives no digest (a list the provider cut, a file it
+ *    would not render, a binary or mode-only change — `changeDigest`'s `null`).
+ *
+ * Only the first two are a rebase; the last three never merge and a person decides.
+ */
+export type MovedHeadWait =
+  | 'head_rebased_ci_pending'
+  | 'head_rebased_ci_failed'
+  | 'head_rebase_bound'
+  | 'head_changed'
+  | 'head_version_missing'
+  | 'head_change_unknown';
+
+/** Every {@link MovedHeadWait}, in the order of the type's docblock. */
+export const MOVED_HEAD_WAITS = [
+  'head_rebased_ci_pending',
+  'head_rebased_ci_failed',
+  'head_rebase_bound',
+  'head_changed',
+  'head_version_missing',
+  'head_change_unknown',
+] as const satisfies readonly MovedHeadWait[];
+
+/** The waits of a moved head the platform has shown to be a rebase: nothing to review. */
+export const REBASE_ONLY_WAITS: ReadonlySet<string> = new Set<MovedHeadWait>([
+  'head_rebased_ci_pending',
+  'head_rebased_ci_failed',
+  'head_rebase_bound',
+]);
+
+export interface MovedHeadFacts {
+  /** The provider holds a version whose head is the reviewed commit (`tasks.ready_head_sha`). */
+  readonly reviewedVersionFound: boolean;
+  /** `changeDigest` of that version's diff; `null` when it gives none. */
+  readonly reviewedDigest: string | null;
+  /** `changeDigest` of the merge request's live diff; `null` when it gives none. */
+  readonly liveDigest: string | null;
+}
+
+/**
+ * Is the moved head a rebase of the reviewed change (`'rebase'`), or which wait says why not
+ * (TD-038 Amendment C, decisions 1–3)? The digest is the identity: a person's rebase may squash, so
+ * the commit count is not asked (unlike the platform's own rebase, amendment A).
+ */
+export const classifyMovedHead = (
+  facts: MovedHeadFacts,
+): 'rebase' | 'head_changed' | 'head_version_missing' | 'head_change_unknown' => {
+  if (!facts.reviewedVersionFound) {
+    return 'head_version_missing';
+  }
+  if (facts.reviewedDigest === null || facts.liveDigest === null) {
+    return 'head_change_unknown';
+  }
+  return facts.reviewedDigest === facts.liveDigest ? 'rebase' : 'head_changed';
+};
+
 /** One file of a merge request's diff, as the change digest reads it (TD-038 amendment A). */
 export interface ChangeDigestFile {
   readonly oldPath: string;

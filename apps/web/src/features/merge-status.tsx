@@ -55,7 +55,15 @@ export const mergeStatusLines = (
     (merge.waiting_for === null || merge.waiting_for === 'provider_blocked')
       ? mergeBlockedWhy(blocked.reason_code, blocked.observed, blocked.unresolved_threads ?? null)
       : null;
-  const lines = [mergeWaitSentence(merge.by, merge.waiting_for, provider, blockedNow)];
+  const lines = [
+    mergeWaitSentence(
+      merge.by,
+      merge.waiting_for,
+      provider,
+      blockedNow,
+      merge.waiting_detail ?? null,
+    ),
+  ];
   if (attempt !== null) {
     lines.push(mergeAttemptSentence(attempt, provider, clock(attempt.attempted_at)));
   }

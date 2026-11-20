@@ -1,0 +1,100 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/41/versions?page=1&per_page=100",
+      "status": 200,
+      "body": [
+        {
+          "id": 112,
+          "head_commit_sha": "7e417e417e417e417e417e417e417e417e417e41",
+          "base_commit_sha": "2222222222222222222222222222222222222222",
+          "start_commit_sha": "2222222222222222222222222222222222222222",
+          "created_at": "2026-11-18T09:30:00.000Z",
+          "merge_request_id": 155016041,
+          "state": "collected",
+          "real_size": "2",
+          "patch_id_sha": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0"
+        },
+        {
+          "id": 110,
+          "head_commit_sha": "4141414141414141414141414141414141414141",
+          "base_commit_sha": "1111111111111111111111111111111111111111",
+          "start_commit_sha": "1111111111111111111111111111111111111111",
+          "created_at": "2026-11-16T14:00:00.000Z",
+          "merge_request_id": 155016041,
+          "state": "collected",
+          "real_size": "2",
+          "patch_id_sha": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-20",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve merge request diff versions\": GET /projects/:id/merge_requests/:merge_request_iid/versions, its example response a list of two version objects (id, head_commit_sha, base_commit_sha, start_commit_sha, created_at, merge_request_id, state, real_size, patch_id_sha), newest first. Values changed to merge request 41's: version 110 at the reviewed head 4141…, and version 112 the head a person's rebase produced (a later start_commit_sha, the same patch). The adapter sends per_page=100&page=1, the paging every GitLab list accepts; the page does not say whether this list pages. TD-038 Amendment C."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/41/versions/110",
+      "status": 200,
+      "body": {
+        "id": 110,
+        "head_commit_sha": "4141414141414141414141414141414141414141",
+        "base_commit_sha": "1111111111111111111111111111111111111111",
+        "start_commit_sha": "1111111111111111111111111111111111111111",
+        "created_at": "2026-11-16T14:00:00.000Z",
+        "merge_request_id": 155016041,
+        "state": "collected",
+        "real_size": "2",
+        "patch_id_sha": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+        "commits": [
+          {
+            "id": "4141414141414141414141414141414141414141",
+            "short_id": "41414141",
+            "title": "fix(totals): round once",
+            "message": "fix(totals): round once",
+            "author_name": "Dana Example",
+            "author_email": "dana@example.test",
+            "created_at": "2026-11-16T13:55:00.000Z"
+          }
+        ],
+        "diffs": [
+          {
+            "old_path": "src/billing/totals.ts",
+            "new_path": "src/billing/totals.ts",
+            "a_mode": "100644",
+            "b_mode": "100644",
+            "diff": "@@ -1,3 +1,3 @@\n-const total = lines.reduce((a, l) => a + l.total, 0);\n+const total = model.lines.reduce((a, l) => a + l.total, 0);\n",
+            "collapsed": false,
+            "too_large": false,
+            "new_file": false,
+            "renamed_file": false,
+            "deleted_file": false,
+            "generated_file": false
+          },
+          {
+            "old_path": "src/billing/totals.test.ts",
+            "new_path": "src/billing/totals.test.ts",
+            "a_mode": "0",
+            "b_mode": "100644",
+            "diff": "@@ -0,0 +1,3 @@\n+it('sums the model', () => {\n+  expect(footer(invoice)).toBe('42.00');\n+});\n",
+            "collapsed": false,
+            "too_large": false,
+            "new_file": true,
+            "renamed_file": false,
+            "deleted_file": false,
+            "generated_file": false
+          }
+        ]
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-11-20",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a merge request diff version\": GET /projects/:id/merge_requests/:merge_request_iid/versions/:version_id (no unidiff sent), its response attributes (id, head_commit_sha, base_commit_sha, start_commit_sha, state, real_size, patch_id_sha, commits, diffs with a_mode, b_mode, collapsed, too_large, deleted_file, new_file, renamed_file, generated_file, old_path, new_path, diff). The example's one LICENSE entry and three commits are replaced by merge request 41's version 110: one commit and the two files of merge-request-diffs.json's corpus, so a limit of 1 has something to cut. TD-038 Amendment C."
+      }
+    }
+  ]
+}

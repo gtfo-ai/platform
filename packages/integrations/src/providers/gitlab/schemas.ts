@@ -211,6 +211,32 @@ export const gitlabMergeRequestDiffSchema = z.object({
   a_mode: z.string().nullish(),
   b_mode: z.string().nullish(),
 });
+export type GitLabMergeRequestDiff = z.output<typeof gitlabMergeRequestDiffSchema>;
+
+/**
+ * One entry of `GET /projects/:id/merge_requests/:iid/versions`
+ * (<https://docs.gitlab.com/api/merge_requests/> § "Retrieve merge request diff versions"),
+ * retrieved 2026-11-20 — TD-038 Amendment C. `head_commit_sha` is *"The HEAD commit of the source
+ * branch"* when the version was made; `id` addresses the version. The rest is not modelled.
+ */
+export const gitlabMergeRequestVersionSchema = z.object({
+  id: z.int(),
+  head_commit_sha: z.string(),
+});
+
+/**
+ * `GET /projects/:id/merge_requests/:iid/versions/:version_id` (same page, § "Retrieve a merge
+ * request diff version"), retrieved 2026-11-20. `state` is `collected`, `overflow` or
+ * `without_files` (and deprecated `timeout`, `overflow_commits_safe_size`,
+ * `overflow_diff_files_limit`, `overflow_diff_lines_limit`): anything but `collected` is a diff the
+ * provider did not collect whole. `diffs` entries are the shape of § "List merge request diffs".
+ */
+export const gitlabMergeRequestVersionDetailSchema = z.object({
+  id: z.int(),
+  head_commit_sha: z.string(),
+  state: z.string().nullish(),
+  diffs: z.array(gitlabMergeRequestDiffSchema).nullish(),
+});
 
 /**
  * The answer to the one GraphQL query this adapter sends (WP-59, PROGRESS backlog 113):

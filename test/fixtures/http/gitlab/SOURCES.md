@@ -656,3 +656,25 @@ settings.
   (`documented-adapted`, on merge request 37's object); `403` *"Cannot push to source branch"*
   (`documented`). § "Get merge request commits" — the list of commit objects the commit count reads
   (`documented-adapted`).
+
+## Pages read for S-28.23 — `merge-request-versions.json`
+
+Retrieved **2026-11-20**, without a GitLab instance; nothing was recorded. TD-038 Amendment C reads the
+reviewed change back from GitLab when a merge request's head at Ready is not the reviewed one (a person
+pressed *Rebase*, or pushed a local rebase), so a rebase is told from new changes by the change digest.
+
+- `https://docs.gitlab.com/api/merge_requests/` § "Retrieve merge request diff versions" —
+  `GET /projects/:id/merge_requests/:merge_request_iid/versions`, a list of version objects;
+  `head_commit_sha` *"The HEAD commit of the source branch"*, `start_commit_sha` *"The HEAD commit SHA
+  of the target branch when this version of the diff was created"*, `state` one of `collected`,
+  `overflow`, `without_files` (deprecated: `timeout`, `overflow_commits_safe_size`,
+  `overflow_diff_files_limit`, `overflow_diff_lines_limit`). The page does not say whether the list
+  pages; the adapter asks for `per_page=100&page=1` and a reviewed head older than that page is not
+  found (a person decides). `documented-adapted`: the example's two versions, values changed.
+- The same page, § "Retrieve a merge request diff version" —
+  `GET …/versions/:version_id`, optional `unidiff` (not sent, so a version's `diffs` are the same
+  hunk-only text § "List merge request diffs" answers and one digest reads both); `diffs` entries carry
+  `collapsed` (*excluded but fetchable*) and `too_large` (*excluded and not retrievable*), both since
+  GitLab 18.4, which the adapter reads as `omitted`. Its requests count toward the merge request diff
+  read rate limit (behind the `merge_requests_read_diffs_rate_limit_enforce` flag, off by default).
+  `documented-adapted`: the example's one `LICENSE` entry replaced by two files of this corpus.

@@ -923,3 +923,51 @@ describe('FakeGitProvider rebase (divergence 40, TD-038 amendment A)', () => {
     expect((await port.getMergeRequest(moved.ref)).head_sha).not.toBe(moved.head_sha);
   });
 });
+
+describe('FakeGitProvider merge request versions (divergence 41, TD-038 Amendment C)', () => {
+  it('answers the files each head had, null for a head it never held, and a cut list as truncated', async () => {
+    const port = build();
+    const mr = await port.openMergeRequest({
+      project: PROJECT,
+      branch: 'agentic/versions',
+      target: 'main',
+      title: 'fix',
+      description: '',
+      draft: false,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    port.setDiff({ project: PROJECT, iid: mr.ref.iid, files: [{ path: 'src/a.ts' }] });
+    const reviewed = mr.head_sha;
+    // A person pushes a new head, whose change adds a second file.
+    port.emitMergeRequestEvent({
+      event: 'mr.updated',
+      project: PROJECT,
+      iid: mr.ref.iid,
+      headSha: 'e'.repeat(40),
+    });
+    port.setDiff({
+      project: PROJECT,
+      iid: mr.ref.iid,
+      files: [{ path: 'src/a.ts' }, { path: 'src/b.ts' }],
+    });
+    const before = await port.getMergeRequestVersionDiff(mr.ref, { headSha: reviewed, limit: 10 });
+    expect(before?.files.map((file) => file.new_path)).toEqual(['src/a.ts']);
+    expect(before?.truncated).toBe(false);
+    const now = await port.getMergeRequestVersionDiff(mr.ref, {
+      headSha: 'e'.repeat(40),
+      limit: 10,
+    });
+    expect(now?.files.map((file) => file.new_path)).toEqual(['src/a.ts', 'src/b.ts']);
+    const cut = await port.getMergeRequestVersionDiff(mr.ref, {
+      headSha: 'e'.repeat(40),
+      limit: 1,
+    });
+    expect(cut).toMatchObject({ truncated: true });
+    expect(cut?.files).toHaveLength(1);
+    expect(
+      await port.getMergeRequestVersionDiff(mr.ref, { headSha: 'f'.repeat(40), limit: 10 }),
+    ).toBeNull();
+  });
+});
