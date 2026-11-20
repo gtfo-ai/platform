@@ -2097,6 +2097,22 @@ const compiledPipelineOf = (task: CompilableTask): CompiledPipeline | null => {
 };
 
 /**
+ * Whether a *Retry stage* of the task's current stage hands a `reason` to an agent (S-28.20,
+ * backlog 1611): that stage is an **agent** stage of the task's compiled pipeline — what
+ * `retryStageCommand` asks before it records one. `false` for no stage and for a pipeline this
+ * build cannot compile, where the command would refuse too.
+ */
+export const retryTakesReasonOf = (
+  task: CompilableTask & { readonly currentStage: string | null },
+): boolean => {
+  if (task.currentStage === null) {
+    return false;
+  }
+  const stage = compiledPipelineOf(task)?.stages.find((entry) => entry.id === task.currentStage);
+  return stage?.kind === 'agent';
+};
+
+/**
  * **What a return out of this escalation would carry** (WP-152, PROGRESS backlog 491): the parked
  * gate attempt's stored failure, as a length — the box the return dialog offers. The same three
  * facts the command checks (`keepGateFeedback`): the task is `needs_human`, the stage it is at is a
@@ -2435,6 +2451,8 @@ export const findTaskDetail = async (
     taken_over: takenOver,
     human_time: humanTime,
     gate_feedback: gateFeedbackOf(task, stageRows),
+    // S-28.20: the retry command's own rule — a reason reaches a run only at an agent stage.
+    retry_takes_reason: retryTakesReasonOf(task),
     gate_wait: gateWaitOf(task, stageRows),
     last_gate_wait: lastGateWaitOf(task, stageRows),
     // S-27.2: the manual jobs the latest CI pass left unstarted.

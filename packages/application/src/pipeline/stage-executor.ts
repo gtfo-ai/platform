@@ -176,6 +176,12 @@ export interface StageRunRequest {
    */
   readonly attachedFeedback?: AttachedReturnFeedback | null;
   /**
+   * The words a person gave the *Retry stage* that opened this attempt (S-28.20, backlog 1611,
+   * `TaskRepository.retryReasonOf`), redacted at the write — absent or `null` for every other
+   * attempt. The prompt carries it as a `retry_note` block.
+   */
+  readonly retryNote?: string | null;
+  /**
    * The commit a **shadow** run's workspace is checked out at — Q82 (a), PROGRESS backlog 71.
    *
    * `null` means *"this run has no comparison base"*, which is every ordinary task and a shadow
@@ -703,6 +709,8 @@ type Admitted = {
   readonly returnCause: ReturnCause | null;
   /** WP-152: the gate's last failure a person attached to the return, `null` when none. */
   readonly attachedFeedback: AttachedReturnFeedback | null;
+  /** S-28.20: the person's words for the retry that opened this attempt, `null` when none. */
+  readonly retryNote: string | null;
   /** WP-34 / backlog 71: a shadow task's comparison base, `null` for every other task. */
   readonly checkoutBase: string | null;
   /** Backlog 467: the stage's previous attempt, when it saved unfinished work. */
@@ -1038,6 +1046,8 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         returnFeedbackOriginalChars: feedback?.originalChars ?? null,
         returnCause: feedback?.cause ?? null,
         attachedFeedback: feedback?.attached ?? null,
+        // S-28.20 (backlog 1611): a retry's reason, stored on the attempt it entered.
+        retryNote: await store.tasks.retryReasonOf(scope.tx, job.taskId, job.stage, job.attempt),
         /**
          * Q82 (a) / PROGRESS backlog **71**: the commit this run's workspace starts from.
          *
@@ -1251,6 +1261,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       returnFeedbackOriginalChars: admission.returnFeedbackOriginalChars,
       returnCause: admission.returnCause,
       attachedFeedback: admission.attachedFeedback,
+      retryNote: admission.retryNote,
       checkoutBase: admission.checkoutBase,
       previousAttempt: admission.previousAttempt,
       previousRun: admission.previousRun,

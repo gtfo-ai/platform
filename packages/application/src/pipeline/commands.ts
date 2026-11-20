@@ -1245,7 +1245,55 @@ export const cancelTaskCommand = async (
 export interface RetryStageOutcome {
   readonly attempt: number | null;
   readonly stoppedRun: { readonly runId: Id; readonly commandId: Id | null } | null;
+  /**
+   * Whether the person's `reason` was recorded for the attempt's run (S-28.20, backlog 1611):
+   * `true` exactly when one was given — a reason that cannot reach a run is refused
+   * ({@link RetryReasonNotDeliverableError}) rather than recorded as `false`.
+   */
+  readonly reasonRecorded: boolean;
 }
+
+/**
+ * A retry carried a `reason` to a stage whose attempt runs no agent — a gate, a human stage, a
+ * system stage, or `ready_for_merge`, which the request does not enter at all (S-28.20, backlog
+ * 1611). Refused, `409 retry_reason_not_deliverable`, and nothing is recorded: before S-28.20 the
+ * route dropped every retry's reason, and a person who believed they had told the agent something
+ * was told nothing (AUT-6645). The page offers no box where this would be the answer; retry
+ * without a reason, or return the task to the agent stage that should read it.
+ */
+export class RetryReasonNotDeliverableError extends Error {
+  override readonly name = 'RetryReasonNotDeliverableError';
+  readonly stage: Slug;
+
+  constructor(stage: Slug, why: string) {
+    super(
+      `a retry of "${stage}" cannot carry a reason: ${why}, so no agent would read it. Retry ` +
+        'without a reason, or return the task to the stage whose agent should read it',
+    );
+    this.stage = stage;
+  }
+}
+
+/**
+ * Why a retry of `stage` could not hand a reason to a run, or `null` when it can: the stage must be
+ * an **agent** stage of the task's compiled pipeline (S-28.20). `ready_for_merge` is a human stage on
+ * every template and is not entered by the request anyway (WP-79).
+ */
+const retryReasonBlocker = (stored: StoredTask, stage: Slug): string | null => {
+  if (stage === READY_FOR_MERGE_STAGE) {
+    return 'the request does not enter `ready_for_merge` (the platform re-checks the branch head)';
+  }
+  const entry = compilePipeline(
+    stored.task.template,
+    stored.template,
+    stored.pipelineDial,
+    stored.qaStage,
+  ).stages.find((candidate) => candidate.id === stage);
+  if (entry === undefined) {
+    return 'the stage is not in the task’s pipeline';
+  }
+  return entry.kind === 'agent' ? null : `it is a ${entry.kind} stage`;
+};
 
 /**
  * `POST /api/tasks/:task_id/retry-stage` — run the current stage again, as a new attempt.
@@ -1273,14 +1321,26 @@ export const retryStageCommand = async (
     readonly taskId: Id;
     readonly userId: Id;
     readonly stage: Slug;
+    /**
+     * The person's words for the attempt's run (S-28.20, backlog 1611): redacted here (TD-012) and
+     * stored on the entered attempt's row, which the stage executor hands the run as a `retry_note`
+     * block. Absent (or blank) is a retry without one.
+     */
+    readonly reason?: string;
     /** The stop's `run_commands` id when one is recorded; see {@link steerRunCommand}'s. */
     readonly stopCommandId?: Id;
   },
 ): Promise<RetryStageOutcome> => {
   requireJobs(deps);
+  const given = input.reason === undefined || input.reason.trim() === '' ? null : input.reason;
   return writeTask(deps, { ...input, what: 'retrying a stage' }, async (scope, stored, context) => {
     if (stored.task.currentStage !== input.stage) {
       throw new StageNotCurrentError(input.stage, stored.task.currentStage);
+    }
+    // S-28.20: refused before anything moves — a reason no agent would read is never dropped.
+    const blocker = given === null ? null : retryReasonBlocker(stored, input.stage);
+    if (blocker !== null) {
+      throw new RetryReasonNotDeliverableError(input.stage, blocker);
     }
     // Before the task row is written: `runs` then `tasks`, the order the run's ending takes. The
     // stage's run only — an ask beside it is not the attempt being retried.
@@ -1298,7 +1358,27 @@ export const retryStageCommand = async (
       cause: null,
     });
     const attempt = work !== null && 'job' in work ? work.job.attempt : null;
-    return { result: { attempt, stoppedRun }, work };
+    if (given === null) {
+      return { result: { attempt, stoppedRun, reasonRecorded: false }, work };
+    }
+    // S-28.20: on the row the entry just opened, which is the row the executor reads for this
+    // attempt. An agent stage's entry always opens one and leaves a job; anything else is a broken
+    // invariant, refused (the transaction rolls back) rather than a reason quietly lost.
+    const recorded =
+      attempt !== null &&
+      (await deps.store.tasks.recordRetryReason(scope.tx, {
+        taskId: stored.task.id,
+        stage: input.stage,
+        attempt,
+        reason: deps.redactor.redactText(given).value,
+      }));
+    if (!recorded) {
+      throw new InvariantViolationError(
+        'retry reason recorded',
+        `the retry of "${input.stage}" for task ${stored.task.id} opened no attempt row to carry its reason`,
+      );
+    }
+    return { result: { attempt, stoppedRun, reasonRecorded: true }, work };
   });
 };
 

@@ -2285,6 +2285,24 @@ describe('a project that verifies on CI (BD-025, 2026-10-05; PROGRESS backlog 46
       'A red pipeline returns the task to the Developer stage',
     );
   });
+
+  it('hands a retry’s note to the run as a retry_note block, never as return feedback (S-28.20)', async () => {
+    // Backlog 1611 (AUT-6645): the words a person typed into *Retry a stage* reach the run.
+    const note = 'The minor findings can be ignored; fix only the failing migration.';
+    const spec = await planIn(STAGES.developer, {}, { attempt: 2, retryNote: note });
+    const blocks = readDataBlocks(spec.userPrompt).blocks;
+    const notes = blocks.filter((block) => block.kind === 'retry_note');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.body).toBe(note);
+    expect(blocks.some((block) => block.kind === 'return_feedback')).toBe(false);
+    // Not one byte of it outside its block.
+    expect(spec.userPrompt.replace(note, '')).not.toContain('failing migration');
+
+    const none = await planIn(STAGES.developer, {}, { attempt: 2 });
+    expect(
+      readDataBlocks(none.userPrompt).blocks.some((block) => block.kind === 'retry_note'),
+    ).toBe(false);
+  });
 });
 
 /**

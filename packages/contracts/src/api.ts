@@ -2392,6 +2392,16 @@ export const taskDetailResponseSchema = z.strictObject({
     })
     .nullable(),
   /**
+   * Whether a *Retry stage* of the task's **current** stage would hand a `reason` to an agent
+   * (S-28.20, backlog 1611): `true` exactly when that stage is an **agent** stage of the task's
+   * compiled pipeline — the command's own rule, so the dialog offers the reason box only where the
+   * words reach a run, and a `reason` anywhere else is refused `409 retry_reason_not_deliverable`.
+   * `false` for a gate, a human stage, `ready_for_merge`, no stage, or a pipeline this build cannot
+   * compile. Optional on the wire as `manual_pause` is (the web app's fixtures predate it);
+   * `GET /api/tasks/:id` always sends it, and absent reads as `false`.
+   */
+  retry_takes_reason: z.boolean().optional(),
+  /**
    * Every return the task made, oldest first (S-25.11): {@link taskReturnSchema}. The newest is the
    * one the header and the callout word while its target stage is open; the stage timeline draws
    * each with its cause.

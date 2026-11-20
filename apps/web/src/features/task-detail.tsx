@@ -309,6 +309,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
         budgetFigures={task.paused_budget_figures}
         takenOver={takenOver}
         merged={merged}
+        currentStage={task.current_stage}
+        retryTakesReason={detail.data.retry_takes_reason === true}
         form={form}
         commands={commands}
         takeOverCommands={takeOverCommands}

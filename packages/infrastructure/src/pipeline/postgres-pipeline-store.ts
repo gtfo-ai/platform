@@ -1597,6 +1597,32 @@ export const createPostgresPipelineStore = (
       );
     },
 
+    // S-28.20 (migration 0120): the open row of the attempt the retry entered, and nothing else.
+    recordRetryReason: async (tx, entry) => {
+      const { rowCount } = await sqlOf(tx).query(
+        `update task_stages set retry_reason = $4
+          where task_id = $1 and stage = $2 and attempt = $3
+            and state = $5 and exited_at is null`,
+        [
+          entry.taskId,
+          entry.stage,
+          entry.attempt,
+          entry.reason,
+          taskStageStateSchema.parse('running'),
+        ],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
+    retryReasonOf: async (tx, taskId, stage, attempt) => {
+      const { rows } = await sqlOf(tx).query<{ retry_reason: string | null }>(
+        `select retry_reason from task_stages
+          where task_id = $1 and stage = $2 and attempt = $3`,
+        [taskId, stage, attempt],
+      );
+      return rows[0]?.retry_reason ?? null;
+    },
+
     recordStageSignature: async (tx, entry) => {
       await sqlOf(tx).query(
         `insert into task_stages (task_id, stage, attempt, state, signature, entered_at)

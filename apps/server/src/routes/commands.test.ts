@@ -25,6 +25,7 @@ import {
   ModelNotListedError,
   NoGateFeedbackError,
   OwnerChangeRefusedError,
+  RetryReasonNotDeliverableError,
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
@@ -877,6 +878,12 @@ describe('what each refusal maps to', () => {
       code: 'no_gate_feedback',
     },
     {
+      // S-28.20: a retry's reason no agent would read, refused rather than dropped.
+      error: new RetryReasonNotDeliverableError('ci_gate' as never, 'it is a gate stage'),
+      status: 409,
+      code: 'retry_reason_not_deliverable',
+    },
+    {
       error: new TaskConflictExhaustedError(TASK as never, 3, 'pausing the task'),
       status: 409,
       code: 'task_conflict',
@@ -1434,6 +1441,50 @@ describe('the routes’ own answers', () => {
     expect(ready.body).toMatchObject({ performed: true, attempt: null, stopped_run: null });
     const replayed = await post(world, path, { stage: 'refinement' }, 'retry-ready');
     expect(replayed.body).toMatchObject({ performed: false, attempt: null, stopped_run: null });
+  });
+
+  /**
+   * S-28.20 (backlog 1611, AUT-6645): the retry's `reason` reaches the command — until then this
+   * route dropped it — and the audit row says it was recorded, never the words (the command stores
+   * them redacted on the attempt's row, the module note's rule for every stored text).
+   */
+  it('passes a retry-stage’s reason to the command and audits that it was recorded (S-28.20)', async () => {
+    world.result = { attempt: 2, stoppedRun: null, reasonRecorded: true };
+    const reply = await post(
+      world,
+      `/api/tasks/${TASK}/retry-stage`,
+      { stage: 'refinement', reason: 'the minor findings can be ignored' },
+      'retry-with-reason',
+    );
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(world.calls).toHaveLength(1);
+    expect(world.calls[0]?.input).toMatchObject({
+      stage: 'refinement',
+      reason: 'the minor findings can be ignored',
+    });
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]?.params).toMatchObject({ stage: 'refinement', reason_recorded: true });
+    expect(JSON.stringify(world.actions)).not.toContain('minor findings');
+  });
+
+  it('sends no reason key for a retry-stage without one, and audits reason_recorded false', async () => {
+    await post(world, `/api/tasks/${TASK}/retry-stage`, { stage: 'refinement' }, 'retry-bare');
+    expect(world.calls[0]?.input).not.toHaveProperty('reason');
+    expect(world.actions[0]?.params).toMatchObject({ reason_recorded: false });
+  });
+
+  it('answers 409 retry_reason_not_deliverable for a reason no agent would read, and audits nothing', async () => {
+    world.throws = new RetryReasonNotDeliverableError('ci_gate' as never, 'it is a gate stage');
+    const reply = await post(
+      world,
+      `/api/tasks/${TASK}/retry-stage`,
+      { stage: 'ci_gate', reason: 'ignore the flaky job' },
+      'retry-at-gate',
+    );
+    expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe(
+      '409 retry_reason_not_deliverable',
+    );
+    expect(world.actions).toEqual([]);
   });
 
   it('gives the key back when the command refuses, and performs a retry of it', async () => {

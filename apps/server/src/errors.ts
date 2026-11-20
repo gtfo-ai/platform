@@ -26,6 +26,7 @@ import {
   ModelNotListedError,
   NoGateFeedbackError,
   OwnerChangeRefusedError,
+  RetryReasonNotDeliverableError,
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
@@ -207,6 +208,10 @@ export const commandRefusal = (
   }
   if (error instanceof StageNotInTemplateError) {
     return new HttpError(409, 'stage_not_in_template', error.message);
+  }
+  if (error instanceof RetryReasonNotDeliverableError) {
+    // S-28.20 (backlog 1611): a retry's reason no agent would read is refused, never dropped.
+    return new HttpError(409, 'retry_reason_not_deliverable', error.message);
   }
   if (error instanceof NoGateFeedbackError) {
     // WP-152 ruling (b): a ticked box with nothing behind it is refused, never dropped.

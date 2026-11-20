@@ -274,6 +274,19 @@ export interface PromptTask {
    */
   readonly attachedFeedback?: PromptAttachedFeedback | null;
   /**
+   * The words a person gave the *Retry stage* that opened this attempt (S-28.20, PROGRESS backlog
+   * 1611 — AUT-6645: a person retried a stage believing they had told the agent something, and the
+   * route had dropped it). Redacted at the write; absent or `null` for every other attempt.
+   *
+   * One `retry_note` data block, held to {@link MAX_FEEDBACK_CHARS} and announcing a cut in its
+   * marker like a return's. It is **not** a `return_feedback` block: a retry repeats the stage's work
+   * and is not a return, so the stage line says which it is and that the person's note decides
+   * where it speaks. Optional rather than required-and-nullable, like {@link previousAttempt}: it
+   * is a block the platform adds on top of a task block that is complete without it, and every
+   * caller written before S-28.20 gets exactly the prompt it had. Untrusted, every byte.
+   */
+  readonly retryNote?: string | null;
+  /**
    * The platform's own record of what has happened to this task — WP-31's ask-the-task.
    *
    * Empty for every pipeline stage, which is why it is a required array rather than an optional
@@ -1555,6 +1568,28 @@ const feedbackBlocks = (task: PromptTask): readonly DataBlock[] => {
   ];
 };
 
+/**
+ * A person's note for this retry (S-28.20), capped at {@link MAX_FEEDBACK_CHARS} with the cut in the
+ * marker. `[]` when the attempt is not a retry with a reason, or the note is empty.
+ */
+const retryNoteBlocks = (task: PromptTask): readonly DataBlock[] => {
+  const note = task.retryNote ?? null;
+  if (note === null || note === '') {
+    return [];
+  }
+  const capped = cap(note, MAX_FEEDBACK_CHARS);
+  return [
+    {
+      kind: 'retry_note',
+      attributes: cappedAttributes(capped),
+      body: capped.text,
+    },
+  ];
+};
+
+/** Whether the prompt carries a {@link retryNoteBlocks} block. */
+const hasRetryNote = (task: PromptTask): boolean => (task.retryNote ?? '') !== '';
+
 /** The field names of the artifact's schema — one source, so the prompt cannot drift from it. */
 export const artifactFieldNames = (type: ArtifactType): readonly string[] =>
   Object.keys(artifactDataSchemas[type].shape);
@@ -1699,9 +1734,21 @@ const stageLines = (task: PromptTask, stage: string): readonly string[] => {
     lines.push(
       'The task was returned to this stage: why is in the `return_feedback` block below, and that is what this attempt must address.',
     );
+  } else if (hasRetryNote(task)) {
+    // S-28.20: the person who retried the stage said why; their words are the one input to heed.
+    lines.push(
+      'A person retried this stage: this attempt repeats the stage’s work, it is not a return. They left a note for this attempt — the `retry_note` block below. Take it into account, and where it disagrees with your brief about what to do or what to leave, the person’s note decides.',
+    );
   } else if (task.attempt > 1 || previous !== null || saved !== null) {
     lines.push(
       'There is no return feedback: this attempt repeats the stage’s work, it is not a return, so do not look for findings to address.',
+    );
+  }
+  if (task.returnFeedback !== null && hasRetryNote(task)) {
+    // S-28.20: unreachable through the shipped readers (a retry's attempt is not entered by a
+    // return), stated rather than left for the model to guess if a reader ever hands it both.
+    lines.push(
+      'A person also retried this stage with a note — the `retry_note` block below; where it disagrees with the return feedback, the person’s note decides.',
     );
   }
   // Backlog 467: only when the planner found a saved attempt on this checkout.
@@ -1849,6 +1896,9 @@ const inventoryLines = (input: AssemblePromptInput, run: PromptRunFacts): readon
         ? '- the reason this stage was returned (`return_feedback` block)'
         : '- the reason this stage was returned: a person’s note and the gate’s last failure they attached (two `return_feedback` blocks)',
   );
+  if (hasRetryNote(task)) {
+    lines.push('- the note of the person who retried this stage (`retry_note` block)');
+  }
   const observability = task.observability ?? [];
   if (observability.length > 0) {
     lines.push(
@@ -1945,6 +1995,8 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     ...boundReviewChecklists(input.task.reviewChecklists ?? []).map(checklistBlock),
     // WP-152: one block, or the person's note and the gate's last failure they attached.
     ...feedbackBlocks(input.task),
+    // S-28.20: a person's note for this retry, beside where a return's reason would be.
+    ...retryNoteBlocks(input.task),
     ...input.task.record.map(recordBlock),
     // Last, so it is the nearest thing to the output contract the model reads next.
     ...(input.ask === null ? [] : [askBlock(input.ask)]),

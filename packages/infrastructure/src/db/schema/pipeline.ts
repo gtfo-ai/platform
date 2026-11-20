@@ -293,6 +293,12 @@ export const taskStages = pgTable('task_stages', {
    */
   attachedFeedbackSent: boolean('attached_feedback_sent').notNull().default(false),
   /**
+   * The words a person gave the *Retry stage* that opened this attempt (S-28.20, migration 0120),
+   * redacted: handed to the attempt's run as a `retry_note` block. Null for every other entry;
+   * non-empty when present (`task_stages_retry_reason_not_empty`).
+   */
+  retryReason: text('retry_reason'),
+  /**
    * Runs of this entry the lease sweep ended `lease_expired` (migration 0100, WP-286, TD-031 §12):
    * the first re-plans the entry, the second escalates.
    */

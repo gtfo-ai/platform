@@ -1192,6 +1192,8 @@ export const taskTextOf = (request: StageRunRequest): string =>
     request.returnFeedback ?? '',
     // WP-152: the gate's failure a person attached was the return feedback before it was kept apart.
     request.attachedFeedback?.reason ?? '',
+    // S-28.20: a retry's note says what the person wants looked at, as a return's reason does.
+    request.retryNote ?? '',
   ]
     .join('\n')
     .slice(0, MAX_TASK_TEXT_CHARS);
@@ -1869,6 +1871,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           returnFeedbackOriginalChars: request.returnFeedbackOriginalChars ?? null,
           // WP-152: the gate's last failure a person attached — a second block, `source="gate"`.
           attachedFeedback: attachedFeedbackFor(request),
+          // S-28.20 (backlog 1611): a person's words for this retry — a `retry_note` block.
+          retryNote: request.retryNote ?? null,
           // A stage is not shown the audit trail (WP-31): the record blocks are the ask's, and a
           // stage that carried them would be paying context for the platform talking to itself.
           record: [],

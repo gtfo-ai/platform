@@ -1273,6 +1273,30 @@ export interface TaskRepository {
     },
   ): Promise<void>;
   /**
+   * **Records the words a person gave a *Retry stage*** (S-28.20, backlog 1611, migration 0120) on
+   * the row of the attempt the retry entered, and answers whether it wrote one. Only the **open**
+   * row of exactly that `(task, stage, attempt)` is written (`state = 'running'`), so a retry whose
+   * entry did not open the row it names records nothing and the caller can refuse rather than drop
+   * the words. The text arrives redacted (TD-012, the command's) and non-empty; nothing is keyed on
+   * it. The one writer of `task_stages.retry_reason`.
+   */
+  recordRetryReason(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly reason: string;
+    },
+  ): Promise<boolean>;
+  /**
+   * The words a person gave the *Retry stage* that opened `stage`'s attempt `attempt`, or `null`
+   * when that attempt was not a retry with a reason (S-28.20). Read by the stage executor's
+   * admission for the attempt it runs, and handed to the run as a `retry_note` block. An attempt
+   * resumed in place (S-28.1) is the same row, so the note survives a budget pause.
+   */
+  retryReasonOf(tx: Transaction, taskId: Id, stage: Slug, attempt: number): Promise<string | null>;
+  /**
    * **Keeps a gate's last failure through a person's return** (WP-152, PROGRESS backlog 491,
    * migration 0086): moves `stage`'s attempt `attempt`'s `return_reason` (and its
    * `return_reason_original_chars`) into `attached_feedback` (and `attached_feedback_original_chars`)

@@ -62,6 +62,7 @@ import {
   ModelNotListedError,
   NoGateFeedbackError,
   pauseTaskCommand,
+  RetryReasonNotDeliverableError,
   RunNotLiveError,
   resumeTaskCommand,
   retryRunCommand,
@@ -660,6 +661,7 @@ describe('retry-stage', () => {
     expect(retried).toEqual({
       attempt: 2,
       stoppedRun: { runId: first?.runId, commandId: expect.any(String) },
+      reasonRecorded: false,
     });
     expect(harness.store.runCommandRows()).toMatchObject([
       { runId: first?.runId, instruction: { kind: 'cancel' } },
@@ -715,7 +717,11 @@ describe('retry-stage', () => {
       stage: 'refinement' as Slug,
     });
 
-    expect(outcome).toEqual({ attempt: 2, stoppedRun: { runId, commandId: null } });
+    expect(outcome).toEqual({
+      attempt: 2,
+      stoppedRun: { runId, commandId: null },
+      reasonRecorded: false,
+    });
     const run = await harness.memory.transaction(async (scope) =>
       harness.store.runs.load(scope.tx, runId),
     );
@@ -750,6 +756,7 @@ describe('retry-stage', () => {
     expect(outcome).toEqual({
       attempt: 2,
       stoppedRun: { runId, commandId: '00000000-0000-4000-8000-0000000004b1' },
+      reasonRecorded: false,
     });
     // The holder's to end, with what its session measured: the row still reads running.
     const run = await harness.memory.transaction(async (scope) =>
@@ -776,11 +783,78 @@ describe('retry-stage', () => {
       stage: 'refinement' as Slug,
     });
 
-    expect(outcome).toEqual({ attempt: 2, stoppedRun: null });
+    expect(outcome).toEqual({ attempt: 2, stoppedRun: null, reasonRecorded: false });
     const run = await harness.memory.transaction(async (scope) =>
       harness.store.runs.load(scope.tx, ask),
     );
     expect(run?.status).toBe('running');
+  });
+
+  /**
+   * S-28.20 (backlog 1611, AUT-6645): the reason a person types into *Retry a stage* reaches the
+   * new attempt's run. Until then the route dropped it — a person retried `code_review` believing
+   * they had told the agent which findings it could leave, and the agent was told nothing.
+   */
+  it('hands the person’s reason to the new attempt’s run, redacted, as a retry note (S-28.20)', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+
+    const outcome = await retryStageCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      reason: `the minor findings can be ignored (token ${PLANTED_SECRET})`,
+    });
+    expect(outcome).toMatchObject({ attempt: 2, reasonRecorded: true });
+
+    // Stored on the attempt the retry entered, redacted (TD-012) — never on the one it left.
+    const rowOf = (attempt: number) =>
+      harness.store.stageRows.findLast(
+        (row) => row.stage === 'refinement' && row.attempt === attempt,
+      );
+    expect(rowOf(2)?.retryReason).toContain('the minor findings can be ignored');
+    expect(rowOf(2)?.retryReason).not.toContain(PLANTED_SECRET);
+    expect(rowOf(1)?.retryReason ?? null).toBeNull();
+    // A retry is not a return: the attempt it left is not closed `returned`, and no round is spent.
+    expect(rowOf(1)?.state).not.toBe('returned');
+    expect(taskOf(harness).task.iterationCounters.human_rounds ?? 0).toBe(0);
+
+    await harness.drain();
+    const run = harness.specs.filter((spec) => spec.stage === 'refinement').at(-1);
+    expect(run?.attempt).toBe(2);
+    const blocks = readDataBlocks(run?.userPrompt ?? '').blocks;
+    const notes = blocks.filter((block) => block.kind === 'retry_note');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.body).toContain('the minor findings can be ignored');
+    expect(notes[0]?.body).not.toContain(PLANTED_SECRET);
+    expect(blocks.some((block) => block.kind === 'return_feedback')).toBe(false);
+    expect(run?.userPrompt).toContain('A person retried this stage');
+  });
+
+  it('hands a later retry without a reason no note of the earlier one (S-28.20)', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    await retryStageCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      reason: 'look at the login form first',
+    });
+    await harness.drain();
+    const outcome = await retryStageCommand(harness.humanCommands, {
+      taskId: task,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      // Blank is no reason: nothing is recorded, nothing refused.
+      reason: '   ',
+    });
+    expect(outcome).toMatchObject({ attempt: 3, reasonRecorded: false });
+    await harness.drain();
+    const run = harness.specs.filter((spec) => spec.stage === 'refinement').at(-1);
+    expect(run?.attempt).toBe(3);
+    expect(
+      readDataBlocks(run?.userPrompt ?? '').blocks.some((block) => block.kind === 'retry_note'),
+    ).toBe(false);
   });
 
   it('refuses a stage the task is not at, because that would be a return', async () => {
@@ -1482,6 +1556,24 @@ describe('a return out of needs_human (backlog 483)', () => {
     await expect(attempt('implementation')).rejects.toThrow(IterationLimitReachedError);
     expect(countOf(harness, 'task.escalated')).toBe(escalations);
     expect(taskOf(harness).task.iterationCounters.human_rounds).toBe(1);
+  });
+
+  it('refuses a reason at a gate, where no agent would read it, and moves nothing (S-28.20)', async () => {
+    const harness = await escalated();
+    const attempt = taskOf(harness).task.stageAttempts.ci_gate;
+    await expect(
+      retryStageCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'ci_gate' as Slug,
+        reason: 'ignore the flaky job',
+      }),
+    ).rejects.toThrow(RetryReasonNotDeliverableError);
+    // Refused before anything moved: the escalation stands and no attempt was entered.
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.stageAttempts.ci_gate).toBe(attempt);
+    expect(countOf(harness, 'task.resumed')).toBe(0);
+    expect(harness.store.stageRows.some((row) => (row.retryReason ?? null) !== null)).toBe(false);
   });
 
   it('still lets retry-stage re-enter the stopped stage, spending no round', async () => {

@@ -50,8 +50,9 @@
  * refused. `routes/kb.ts` and `routes/onboarding.ts` moved for the same reason; `scope.test.ts`
  * reads this position too, so a route that slips back is caught.
  *
- * **Free text is the client's, bounded by the contract and redacted by the command.** All nine
- * fields — a question's answer, an approval's reason, a return's reason, rework instructions,
+ * **Free text is the client's, bounded by the contract and redacted by the command.** All ten
+ * fields — a question's answer, an approval's reason, a return's reason, a retry's reason (S-28.20;
+ * dropped by this route until then), rework instructions,
  * feedback text, a hand-back summary, a steer message and the reasons on `pause` and `take-over` —
  * are untrusted (BD-022): `packages/contracts` caps each at `MAX_COMMAND_TEXT_CHARS` (a steer keeps
  * its own 10 000, which is the precedent the others were bounded against) and the application
@@ -64,8 +65,11 @@
  * beside `params: () => ({})`) and what WP-27's `/take-over` then copied. They arrive through
  * `auditResult`, already redacted by the
  * command, so the audit row still cannot become a copy of an **un**redacted sentence — which is the
- * property this paragraph has always been about. The other seven are stored by the command itself
- * and are not repeated here.
+ * property this paragraph has always been about. The other eight are stored by the command itself
+ * and are not repeated here. **Three more are accepted and still kept nowhere** — the optional
+ * `reason` on `resume`, on the task `cancel` and on `ticket-sync/retry` (BACKLOG 1612): no agent reads
+ * them, so nothing is lost to a run, but the audit row does not have them either. The run cancel's
+ * `reason` is never read, by decision (S-25.23, below).
  *
  * **One rate limit, and it is the only one in this file — and it is not held here.**
  * technical/08:137 — *"`POST /api/runs/:id/steer` limited to 1 message per 5 s per user"* — is the
@@ -745,7 +749,7 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Run the current stage again, as a new attempt',
         description:
-          'The stage must be the one the task is at: sending it somewhere else is `return-to-stage`, which counts a round and records a reason. The answer names the `attempt` the stage was entered at. **A run of the stage still in flight is stopped** (PROGRESS backlog 494), through the run cancel’s two branches without its pause: when a process holds the run’s lease the stop is recorded for it and `stopped_run.command_id` names it — the run reads `running` until that process ends it `cancelled` with the cost it measured, and the new attempt starts after it; when none does, the record is ended here and `command_id` is `null`. `stopped_run` is `null` when no run of the stage was live; an ask beside it is never stopped. The old run’s result is recorded and never completes the stage. At `ready_for_merge` (a task paused there) the request moves nothing and `attempt` is `null`: the `ready_head_check` duty re-enters `rebase_gate` for the branch head the gates judged (WP-105) and `ci_gate` otherwise (WP-79), spending no loop.',
+          'The stage must be the one the task is at: sending it somewhere else is `return-to-stage`, which counts a round and records a reason. The answer names the `attempt` the stage was entered at. **A run of the stage still in flight is stopped** (PROGRESS backlog 494), through the run cancel’s two branches without its pause: when a process holds the run’s lease the stop is recorded for it and `stopped_run.command_id` names it — the run reads `running` until that process ends it `cancelled` with the cost it measured, and the new attempt starts after it; when none does, the record is ended here and `command_id` is `null`. `stopped_run` is `null` when no run of the stage was live; an ask beside it is never stopped. The old run’s result is recorded and never completes the stage. At `ready_for_merge` (a task paused there) the request moves nothing and `attempt` is `null`: the `ready_head_check` duty re-enters `rebase_gate` for the branch head the gates judged (WP-105) and `ci_gate` otherwise (WP-79), spending no loop. **`reason` is passed to the agent that runs the new attempt** (S-28.20): redacted where it is stored (TD-012), on the attempt it entered, and handed to that attempt’s run as a `retry_note` data block; the audit row says `reason_recorded`. A stage whose attempt runs no agent — a gate, a human stage, `ready_for_merge` — cannot carry one: a `reason` there is refused `409 retry_reason_not_deliverable` and nothing is recorded.',
         tags: ['tasks'],
         params: taskParamsSchema,
         body: retryStageRequestSchema,
@@ -766,16 +770,27 @@ export const registerCommandRoutes = async (
         key: 'required',
         subject: { task_id: taskId, body },
         params: { task_id: taskId, stage: body.stage },
-        // What a replay cannot recompute: the attempt entered and the run stopped (backlog 494).
+        // What a replay cannot recompute: the attempt entered and the run stopped (backlog 494) —
+        // and whether the person's reason was recorded for that attempt's run (S-28.20). The words
+        // themselves are stored redacted by the command on the attempt's row, as a return's are on
+        // its row, and are not repeated here (module note).
         auditResult: (result) => ({
           attempt: result.attempt,
           stopped_run_id: result.stoppedRun?.runId ?? null,
           stop_command_id: result.stoppedRun?.commandId ?? null,
+          reason_recorded: result.reasonRecorded === true,
         }),
         taskId,
         perform: async (idempotencyKey: string | null) => {
           const { userId } = actorOf(request);
-          return commands().retryStage({ taskId, userId, stage: body.stage, idempotencyKey });
+          return commands().retryStage({
+            taskId,
+            userId,
+            stage: body.stage,
+            // S-28.20 (backlog 1611): until then the route dropped it, and the run never saw it.
+            ...(body.reason === undefined ? {} : { reason: body.reason }),
+            idempotencyKey,
+          });
         },
         answer: async ({ performed, result, previous }) => ({
           ...(await positionOf(taskId)),

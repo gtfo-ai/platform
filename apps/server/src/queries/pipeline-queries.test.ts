@@ -32,6 +32,7 @@ import {
   gateWaitOf,
   lastGateWaitOf,
   latestProgressOfRow,
+  retryTakesReasonOf,
   runStageOf,
   savedWorkOf,
   stageStateOf,
@@ -606,5 +607,31 @@ describe('ci_manual_started on the task detail (S-28.7)', () => {
     expect(() =>
       ciManualStartedOf([row({ ciManualStarted: [{ ...STARTED[0], job_id: 'build' }] })]),
     ).toThrow(/ci_manual_started/);
+  });
+});
+
+/**
+ * S-28.20 (backlog 1611): the task read's `retry_takes_reason` — the retry command's own rule, so
+ * the dialog offers a reason box only where the words reach an agent's run.
+ */
+describe('retry_takes_reason on the task detail (S-28.20)', () => {
+  const task = (currentStage: string | null, template = 'feature') => ({
+    template,
+    templateSnapshot: null,
+    pipelineDial: null,
+    qaStage: false,
+    currentStage,
+  });
+
+  it('is true at an agent stage of the task’s compiled pipeline', () => {
+    expect(retryTakesReasonOf(task('code_review'))).toBe(true);
+    expect(retryTakesReasonOf(task('implementation'))).toBe(true);
+  });
+
+  it('is false at a gate, a human stage, no stage, or a pipeline this build cannot compile', () => {
+    expect(retryTakesReasonOf(task('ci_gate'))).toBe(false);
+    expect(retryTakesReasonOf(task('ready_for_merge'))).toBe(false);
+    expect(retryTakesReasonOf(task(null))).toBe(false);
+    expect(retryTakesReasonOf(task('code_review', 'no_such_template'))).toBe(false);
   });
 });
