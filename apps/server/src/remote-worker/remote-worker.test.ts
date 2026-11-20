@@ -1296,6 +1296,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     const root = mkdtempSync(path.join(scratch, 'web-'));
     writeFileSync(path.join(root, 'worker.html'), '<!doctype html><div id="root"></div>');
     writeFileSync(path.join(root, 'index.html'), '<!doctype html><p>the SPA</p>');
+    writeFileSync(path.join(root, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
     writeFileSync(path.join(root, '.env'), 'NOT_SERVED=1');
     mkdirSync(path.join(root, 'assets'));
     writeFileSync(path.join(root, 'assets', 'worker-abc.js'), 'console.log(1)');
@@ -1574,9 +1575,11 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       for (const secret of [CLAUDE_TOKEN, RUN_CREDENTIAL, RUN_TOKEN, token, WORKER_CREDENTIAL]) {
         expect(state.text).not.toContain(secret);
       }
-      // The static half: the page and its asset; nothing else of the bundle.
+      // The static half: the page, its assets and its icon; nothing else of the bundle.
       expect((await ask({ path: '/' })).text).toContain('<div id="root">');
       expect((await ask({ path: '/assets/worker-abc.js' })).status).toBe(200);
+      const icon = await ask({ path: '/favicon.svg' });
+      expect([icon.status, icon.headers['content-type']]).toEqual([200, 'image/svg+xml']);
       for (const refused of [
         '/index.html',
         '/.env',

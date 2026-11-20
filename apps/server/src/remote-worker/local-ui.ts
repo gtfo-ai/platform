@@ -24,7 +24,8 @@
  *
  * The static files are public (they hold no secret) but behind the `Host` check. Which file a path
  * names is decided by the core's own guard (`web/bundle.ts`: realpath containment, no dotfile, no
- * encoded separator); only `/` (the page) and `/assets/*` are served — nothing of the SPA.
+ * encoded separator); only `/` (the page), `/assets/*` and `/favicon.svg` are served — nothing of
+ * the SPA.
  */
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -51,6 +52,9 @@ import { isUiToken } from './ui-token.js';
 
 /** The page's own file in the web bundle (`apps/web/worker.html`, Vite's second entry). */
 export const WORKER_PAGE_FILE = 'worker.html';
+
+/** The tab icon, copied from `apps/web/public/` to the bundle root beside the page. */
+const FAVICON_FILE = 'favicon.svg';
 
 /** A request body past this is refused: every local verb's body is a handful of fields. */
 export const LOCAL_BODY_MAX_BYTES = 16 * 1024;
@@ -461,6 +465,10 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
     }
     if (pathname === '/' || pathname === `/${WORKER_PAGE_FILE}`) {
       await serveFile(request, response, [WORKER_PAGE_FILE]);
+      return;
+    }
+    if (pathname === `/${FAVICON_FILE}`) {
+      await serveFile(request, response, [FAVICON_FILE]);
       return;
     }
     const segments = decodeRequestPath(pathname);
