@@ -3351,6 +3351,103 @@ describe('code-review convergence (product/04 S5)', () => {
   });
 
   /**
+   * S-28.19 (backlog 1609, AUT-6645): S5 stops a request-changes loop, so only a review that does
+   * not approve converges. Each round is reached the way the test above reaches its second one: the
+   * CI gate is parked at a running pipeline, and a scripted run changes between two publishes.
+   */
+  describe('an approving review never converges (S-28.19)', () => {
+    const parkedAtCi = (review: ReturnType<typeof completedRun>) =>
+      harnessWith({
+        runs: { ...happyRuns(), code_review: review },
+        git: {
+          getPipelineStatus: async () => ({
+            id: 'pipeline-1',
+            head_sha: 'b'.repeat(40),
+            status: 'running',
+            url: null,
+            jobs: [],
+            coverage_pct: null,
+            finished_at: null,
+          }),
+          getMergeRequest: async () => mergeRequest(false),
+        },
+      });
+    const ciSucceededFor = (harness: PipelineHarness) => () =>
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: taskOf(harness).task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'success',
+        failed_jobs: [],
+        coverage_pct: null,
+      });
+    const convergenceEscalations = (harness: PipelineHarness) =>
+      harness
+        .events()
+        .filter(
+          (entry) =>
+            entry.type === 'task.escalated' &&
+            (entry as Extract<DomainEvent, { type: 'task.escalated' }>).payload.reason ===
+              'the review reported the same findings as the previous round',
+        );
+    const minors = [
+      { ...FINDING('REV-1'), severity: 'minor' },
+      { ...FINDING('REV-2'), severity: 'minor' },
+    ];
+
+    it('advances an approve that repeats the previous approving round’s findings', async () => {
+      const harness = parkedAtCi(completedRun(REVIEW('approve', minors)));
+      // The first approve goes on to business review, which sends the task back to Implementation —
+      // the only way an approved review is reviewed again in the feature template.
+      harness.script('business_review', completedRun(ACCEPTANCE('request_changes')));
+      await harness.publish([ticketMatched()]);
+      const ciSucceeded = ciSucceededFor(harness);
+      await harness.publish([ciSucceeded()]);
+      expect(harness.specs.filter((spec) => spec.stage === 'business_review')).toHaveLength(1);
+
+      harness.script('business_review', completedRun(ACCEPTANCE('approve')));
+      await harness.publish([ciSucceeded()]);
+
+      // Rule 10: the second review ran, repeated the first one's findings, and still advanced.
+      expect(harness.specs.filter((spec) => spec.stage === 'code_review')).toHaveLength(2);
+      expect(convergenceEscalations(harness)).toHaveLength(0);
+      expect(harness.specs.filter((spec) => spec.stage === 'business_review')).toHaveLength(2);
+    });
+
+    it('advances an approve that repeats the previous request-changes round’s findings', async () => {
+      const harness = parkedAtCi(completedRun(REVIEW('request_changes', minors)));
+      await harness.publish([ticketMatched()]);
+      const ciSucceeded = ciSucceededFor(harness);
+      await harness.publish([ciSucceeded()]);
+      expect(harness.specs.filter((spec) => spec.stage === 'code_review')).toHaveLength(1);
+
+      harness.script('code_review', completedRun(REVIEW('approve', minors)));
+      await harness.publish([ciSucceeded()]);
+
+      expect(harness.specs.filter((spec) => spec.stage === 'code_review')).toHaveLength(2);
+      expect(convergenceEscalations(harness)).toHaveLength(0);
+      expect(harness.specs.filter((spec) => spec.stage === 'business_review')).toHaveLength(1);
+    });
+
+    it('still stops a request-changes round that repeats an approving round’s findings', async () => {
+      // The approving round recorded its signature, so the comparison is kept for what S5 is for.
+      const harness = parkedAtCi(completedRun(REVIEW('approve', minors)));
+      harness.script('business_review', completedRun(ACCEPTANCE('request_changes')));
+      await harness.publish([ticketMatched()]);
+      const ciSucceeded = ciSucceededFor(harness);
+      await harness.publish([ciSucceeded()]);
+
+      harness.script('code_review', completedRun(REVIEW('request_changes', minors)));
+      await harness.publish([ciSucceeded()]);
+
+      expect(harness.specs.filter((spec) => spec.stage === 'code_review')).toHaveLength(2);
+      expect(convergenceEscalations(harness)).toHaveLength(1);
+      expect(taskOf(harness).task.state).toBe('needs_human');
+    });
+  });
+
+  /**
    * WP-83 (the ruling on backlog 159's stale-artifact half), through the stage executor and the
    * real store rule rather than a request built by hand: the run a review returned is shown that
    * review's verdict, and the run a CI failure returned next is shown **no** verdict — although the

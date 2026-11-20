@@ -16,6 +16,7 @@ import {
   agentRoleSchema,
   artifactDataSchemas,
   implementationPlanDataSchema,
+  reviewVerdictDataSchema,
 } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -571,6 +572,98 @@ describe('the self-assessment cases run offline (S-28.8)', () => {
     it('passes every assertion on the correct output, which is a valid plan', () => {
       expect(expressions.length).toBeGreaterThan(0);
       expect(implementationPlanDataSchema.safeParse(correct).success).toBe(true);
+      for (const expression of expressions) {
+        expect(passes(expression, correct), expression).toBe(true);
+      }
+    });
+
+    it.each(Object.entries(wrong))('fails at least one assertion when %s', (_, output) => {
+      expect(expressions.every((expression) => passes(expression, output))).toBe(false);
+    });
+  });
+});
+
+/**
+ * S-28.19 (backlog 1609, AUT-6645): the let-stand cases run offline the same way — a verdict a
+ * correct model would give passes every `javascript` assertion, and each wrong one the row names
+ * (the accepted finding raised again because it is "still not fixed", its thread named resolved, a
+ * finding raised again without saying why) fails one. Nothing here is a claim about a model
+ * (standing rule 3).
+ */
+const LET_STAND = '2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d';
+const reviewed = (overrides: Record<string, unknown>) =>
+  verdict({ protected_path_changes_confirmed: [], ...overrides });
+const finding = (explanation: string, more: Record<string, unknown> = {}) => ({
+  id: 'REV-1',
+  severity: 'minor',
+  category: 'tests',
+  file: 'src/export/orders.ts',
+  line: 31,
+  explanation,
+  suggestion: null,
+  ...more,
+});
+
+const LET_STAND_CASE_OUTPUTS: Readonly<
+  Record<string, { readonly correct: object; readonly wrong: Readonly<Record<string, object>> }>
+> = {
+  'rev-let-stand-finding-is-not-raised-again': {
+    correct: reviewed({ verdict: 'approve', summary: 'The header row is added and tested.' }),
+    wrong: {
+      'the accepted finding raised again as still not fixed': reviewed({
+        verdict: 'approve',
+        findings: [
+          finding('Still not fixed in the diff: no test covers an order with no delivery date.'),
+        ],
+      }),
+      'the accepted thread named resolved': reviewed({
+        verdict: 'approve',
+        resolved_threads: [LET_STAND],
+      }),
+    },
+  },
+  'rev-let-stand-finding-raised-again-says-why': {
+    correct: reviewed({
+      findings: [
+        finding(
+          'Raised again: the change has since touched formatDate and dropped its null check, so an order with no delivery now throws.',
+          { severity: 'blocker', category: 'correctness' },
+        ),
+      ],
+    }),
+    wrong: {
+      'not raised': reviewed({ verdict: 'approve' }),
+      'raised without saying why': reviewed({
+        findings: [
+          finding('formatDate throws on an order with no delivery.', {
+            severity: 'blocker',
+            category: 'correctness',
+          }),
+        ],
+      }),
+    },
+  },
+};
+
+describe('the let-stand cases run offline (S-28.19)', () => {
+  const cases = ROLE_EVALS.reviewer.cases;
+  const byId = new Map(cases.map((entry) => [entry.id, entry]));
+
+  it('cover every case S-28.19 added', () => {
+    const added = cases
+      .filter((entry) => /\bS-28\.19\b/.test(entry.description))
+      .map((entry) => entry.id);
+    expect(added.sort()).toEqual(Object.keys(LET_STAND_CASE_OUTPUTS).sort());
+  });
+
+  describe.each(Object.entries(LET_STAND_CASE_OUTPUTS))('%s', (id, { correct, wrong }) => {
+    const expressions = (byId.get(id)?.assert ?? [])
+      .filter((assertion) => assertion.type === 'javascript')
+      .map((assertion) => assertion.value);
+
+    it('passes every assertion on the correct output, which is a valid verdict', () => {
+      expect(expressions.length).toBeGreaterThan(0);
+      expect(reviewVerdictDataSchema.safeParse(correct).success).toBe(true);
       for (const expression of expressions) {
         expect(passes(expression, correct), expression).toBe(true);
       }

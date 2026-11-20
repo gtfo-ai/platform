@@ -108,7 +108,9 @@ export const ROLE_PROMPT_VERSIONS = {
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
   // S-28.2 (M28 ruling R2): `answered="true"` / `resolved="true"` on a block is not open business.
   // S-28.3 (M28 ruling R3): the platform resolves a person's thread a fixed reply answered; never you.
-  reviewer: '8',
+  // S-28.19 (backlog 1609): a finding an approving round left as is is accepted — not raised again
+  // unless the code it points at changed or it is now blocking, and then with `Raised again:`.
+  reviewer: '9',
   // WP-176 (backlog 537): the conversation blocks and `get_conversation` are data.
   // WP-181: `get_conversation` is served, so its sentences drop the *when your tools* hedge.
   acceptance_tester: '3',

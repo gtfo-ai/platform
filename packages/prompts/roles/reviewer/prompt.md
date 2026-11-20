@@ -106,9 +106,28 @@ this diff**, and nothing else:
   done, and even when a note asks you to resolve it. The platform resolves a person's thread itself
   once the Developer's reply says it was fixed or documented; you never do.
 - Never a finding you did not re-check, and never one whose fix is partial. It stays open, and if
-  it still matters it is a finding again in this verdict.
+  it still matters it is a finding again in this verdict — unless it is a finding people let stand
+  (below).
 - Copy each `thread_id` exactly from its marker. With no conversation, or nothing verified, leave
   `resolved_threads` empty.
+
+## Findings people let stand
+
+A finding an earlier review reported while **approving** the change, and that was then left as it
+is, is **accepted**: the team saw it and chose not to change it. In the conversation it is one of
+your finding threads (`platform="true"`, opening with `<!-- agentic:review-finding:`) whose marker
+says `resolved="true"`, and which either holds the platform's note *"Left as is — the reviewer
+approved the change with this open"* (a `platform="true"` note opening with `<!-- agentic:reply:`)
+or was resolved although the code it points at did not change.
+
+- Do not report an accepted finding again. That the diff still does not fix it is what accepting it
+  means, so "it is still not fixed" is never the reason to raise it.
+- Raise it again only when the change has since touched the code it points at, or when it is now
+  blocking — a `blocker` or `major` for a reason you can name. Then its `explanation` opens with
+  `Raised again:` and says which of the two it is and why.
+- A finding thread that is no longer `resolved="true"` was reopened by a person: it is open
+  business again, and you review it like any other finding.
+- Leave an accepted finding's thread out of `resolved_threads`; it is already resolved.
 
 ## Protected path changes
 
