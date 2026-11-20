@@ -461,7 +461,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
     await store.recordContact({
       workerId: alice.workerId,
-      protocolVersion: 3,
+      protocolVersion: 4,
       imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
     });
     expect(await read()).toMatchObject({ claim_blockers: [], can_claim: true });
@@ -469,7 +469,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     // Another build's images than the core's — and nothing said while the core cannot name its own.
     await store.recordContact({
       workerId: alice.workerId,
-      protocolVersion: 3,
+      protocolVersion: 4,
       imageDigests: [OLD_IMAGE, EGRESS_IMAGE],
     });
     expect((await read()).claim_blockers).toEqual(['images_outdated']);
@@ -486,7 +486,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
       imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
     });
     expect((await read()).claim_blockers).toEqual(['protocol_outdated']);
-    await store.recordContact({ workerId: alice.workerId, protocolVersion: 3, imageDigests: null });
+    await store.recordContact({ workerId: alice.workerId, protocolVersion: 4, imageDigests: null });
 
     // The owner's hold: a drain's when its newest pause row says so, the owner's pause otherwise.
     const hold = async (paused: boolean, via: 'worker_ui' | 'worker_ui_drain') =>
@@ -539,7 +539,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     store.setProjectMode(OTHER, 'server_only');
     await store.recordContact({
       workerId: alice.workerId,
-      protocolVersion: 3,
+      protocolVersion: 4,
       imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
     });
     const blockers = async () => {
@@ -595,7 +595,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
     await store.recordContact({
       workerId: alice.workerId,
-      protocolVersion: 3,
+      protocolVersion: 4,
       imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
     });
     const read = async () => {

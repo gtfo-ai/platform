@@ -323,7 +323,7 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
         lastClaimedAt: null,
       });
 
-      await world.store.recordContact({ workerId: worker, protocolVersion: 3, imageDigests: [] });
+      await world.store.recordContact({ workerId: worker, protocolVersion: 4, imageDigests: [] });
       const acme = await world.addProject('acme', [owner]);
       const ops = await world.addProject('ops', [owner]);
       await world.addProject('elsewhere', []);
@@ -537,7 +537,7 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       const listed = (await world.store.listWorkers(owner)).find((row) => row.id === worker);
       expect(listed?.manuallyPausedAt).toEqual(at(5_000));
       // A connected, manually paused worker is counted paused.
-      await world.store.recordContact({ workerId: worker, protocolVersion: 3, imageDigests: null });
+      await world.store.recordContact({ workerId: worker, protocolVersion: 4, imageDigests: null });
       expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 1 });
       expect(
         await world.store.setManualPause({

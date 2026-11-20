@@ -21,7 +21,7 @@ const ready: CoreWorkerClaimFacts = {
   revoked: false,
   ownerMayAct: true,
   online: true,
-  protocolVersion: 3,
+  protocolVersion: 4,
   hold: null,
   usagePaused: false,
   heldDigests: [RUN, EGRESS],

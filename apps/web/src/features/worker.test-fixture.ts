@@ -15,7 +15,7 @@ export const workerFixture = (over: Partial<WorkerSummary> = {}): WorkerSummary 
   user: { id: USER_ID, email: 'jan@example.invalid', name: 'Jan' },
   created_at: ago(10 * 60_000),
   last_seen_at: ago(5_000),
-  protocol_version: 3,
+  protocol_version: 4,
   image_digests: [],
   state: 'active',
   revoked_at: null,

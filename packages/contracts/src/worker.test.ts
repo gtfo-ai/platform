@@ -216,11 +216,11 @@ describe('protocol versions (TD-032 decision 7)', () => {
   });
 
   it('accepts exactly the listed versions', () => {
-    expect(isAcceptedWorkerProtocol(3)).toBe(true);
     expect(isAcceptedWorkerProtocol(4)).toBe(true);
+    expect(isAcceptedWorkerProtocol(5)).toBe(true);
     expect(isAcceptedWorkerProtocol(0)).toBe(false);
-    expect(isAcceptedWorkerProtocol(2)).toBe(false);
-    expect(isAcceptedWorkerProtocol(5)).toBe(false);
+    expect(isAcceptedWorkerProtocol(3)).toBe(false);
+    expect(isAcceptedWorkerProtocol(6)).toBe(false);
   });
 
   it('reads the X-Worker-Protocol header strictly; anything else is no protocol (426)', () => {

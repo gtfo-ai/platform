@@ -64,7 +64,7 @@ const workerRow = (overrides: Partial<ProjectWorkerRow> = {}): ProjectWorkerRow 
   userName: 'Alice',
   createdAt: new Date('2026-11-05T09:00:00.000Z'),
   lastSeenAt: new Date(),
-  protocolVersion: 3,
+  protocolVersion: 4,
   imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
   state: 'active',
   revokedAt: null,
