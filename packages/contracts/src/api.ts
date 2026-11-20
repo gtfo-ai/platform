@@ -1011,12 +1011,40 @@ export const putProjectExecutionResponseSchema = z.strictObject({
  * makes the request idempotent and what lets the wizard's step 1 be re-submitted. `config` is the
  * per-project override `ProjectBinding` describes (a narrower pick-up rule, a project path).
  */
+/**
+ * How long back {@link projectBindingInboundSchema}'s `last_webhook_at` looks, in days — the read is
+ * bounded so a poll-only binding's growing `inbox` is not scanned to its start (BACKLOG 1610).
+ */
+export const BINDING_WEBHOOK_LOOKBACK_DAYS = 90;
+
+/**
+ * Whether a binding hears its provider **by webhook** (BACKLOG 1610) — a ticket's status or
+ * assignee change then reaches the platform within seconds; a poll-only binding hears it at its
+ * next poll.
+ *
+ *  - `webhook_secret`: `configured` when one of the provider's webhook secret fields is set on the
+ *    integration (so a signed delivery can be verified), `not_configured` when none is — every
+ *    delivery is then refused and only the poll is heard — and `unreadable` when a sealed
+ *    credential of the integration could not be opened, so the answer is not known. Never the value.
+ *  - `last_webhook_at`: the newest **verified** delivery of the integration in `inbox` that a
+ *    webhook brought — a poll's row (`<provider>:poll:…`) is not one — within
+ *    {@link BINDING_WEBHOOK_LOOKBACK_DAYS} days; `null` when there is none in that window.
+ *
+ * Absent on a binding whose provider has no signed webhook door this read describes (Loki, Sentry,
+ * Slack, a provider this build does not ship).
+ */
+export const projectBindingInboundSchema = z.strictObject({
+  webhook_secret: z.enum(['configured', 'not_configured', 'unreadable']),
+  last_webhook_at: isoDateTimeSchema.nullable(),
+});
+
 export const projectBindingSummarySchema = z.strictObject({
   integration_id: idSchema,
   type: integrationTypeSchema,
   provider: nonEmptyStringSchema,
   name: nonEmptyStringSchema,
   config: jsonObjectSchema,
+  inbound: projectBindingInboundSchema.optional(),
 });
 
 export const projectBindingsResponseSchema = z.strictObject({
@@ -4374,6 +4402,7 @@ export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;
 export type ReadinessResponse = z.infer<typeof readinessResponseSchema>;
 export type CreateProjectRequest = z.infer<typeof createProjectRequestSchema>;
 export type ProjectBindingSummary = z.infer<typeof projectBindingSummarySchema>;
+export type ProjectBindingInbound = z.infer<typeof projectBindingInboundSchema>;
 export type ProjectBindingsResponse = z.infer<typeof projectBindingsResponseSchema>;
 export type SetDefaultBranchRequest = z.infer<typeof setDefaultBranchRequestSchema>;
 export type ProjectRepositoryResponse = z.infer<typeof projectRepositoryResponseSchema>;

@@ -889,6 +889,49 @@ describe('the project settings page', () => {
     expect(document.body.textContent).not.toContain('A channel belongs to a chat integration');
   });
 
+  it('says per binding whether it hears its provider by webhook, and points a poll-only one at the setup guide (BACKLOG 1610)', async () => {
+    const JIRA = '00000000-0000-4000-8000-0000000000f1';
+    const GITLAB = '00000000-0000-4000-8000-0000000000f2';
+    const bindings: ProjectBindingsResponse['items'] = [
+      {
+        integration_id: GITLAB,
+        type: 'git',
+        provider: 'gitlab',
+        name: 'GitLab',
+        config: {},
+        inbound: { webhook_secret: 'configured', last_webhook_at: '2026-09-13T04:00:00.000Z' },
+      },
+      {
+        integration_id: JIRA,
+        type: 'task_management',
+        provider: 'jira-cloud',
+        name: 'Jira',
+        config: {},
+        inbound: { webhook_secret: 'not_configured', last_webhook_at: null },
+      },
+      // A provider with no webhook door says nothing about one.
+      CHAT_BINDINGS[1] as ProjectBindingsResponse['items'][number],
+    ];
+    openSection('connections');
+    render(createApp({ fetchImpl: fetchFor({}, { bindings }), realtime: false }).element);
+    const lines = await waitFor(() => {
+      const found = document.querySelectorAll<HTMLElement>('[data-binding-inbound]');
+      expect(found).toHaveLength(2);
+      return [...found];
+    });
+    expect(lines[0]?.textContent).toContain('Webhook');
+    expect(lines[0]?.textContent).toContain('Changes in GitLab arrive within seconds');
+    expect(lines[0]?.querySelector('a')).toBeNull();
+    expect(lines[1]?.textContent).toContain('Poll only');
+    expect(lines[1]?.textContent).toContain(
+      'reach the platform only at the next poll. Register the webhook and they arrive within seconds.',
+    );
+    const guide = within(lines[1] as HTMLElement).getByRole('link', {
+      name: 'Setup guide, step 4',
+    });
+    expect(guide.getAttribute('href')).toBe(`/integrations/${JIRA}?tab=setup-guide`);
+  });
+
   it('says so when no chat integration is bound, instead of offering a channel', async () => {
     render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
     await screen.findByText('Notifications');
