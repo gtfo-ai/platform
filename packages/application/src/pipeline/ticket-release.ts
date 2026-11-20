@@ -138,7 +138,9 @@ export const releaseTicket = async (
    * The claim label comes off (BACKLOG 1611) whoever held the ticket — every recorded claim added
    * it, a kept one included — and only that label: one edit naming it alone. Nothing is called when
    * the binding configured none. Best-effort like the steps above; not recorded on
-   * `ticket.released`, whose payload is the contract's.
+   * `ticket.released`, whose payload is the contract's. It removes the label **even if this claim
+   * never added it** (the add failed, or the label was configured after the claim) **or a person
+   * added the same label by hand**: the edit names the label, not who put it there.
    */
   await failingOpen(logger, taskId, 'claim_label', async () => {
     await ticketWrites(integrations).claimLabel(task.ticket, 'remove', {

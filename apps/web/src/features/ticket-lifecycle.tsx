@@ -930,7 +930,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
       <div className="max-w-sm" data-lifecycle-claim-label="">
         <Field
           label="Label a claimed ticket"
-          hint="Added to the ticket while the platform works it, removed when it lets go, so the tracker shows who is on it. No spaces, and not the pick-up label. Empty: no label. Key: claim_label."
+          hint="Added when the platform claims the ticket (only while it claims tickets). It stays on a done ticket, so the tracker records that the platform did the work, and is removed only when the task lets go of the ticket (a cancel or a Rework). No spaces, and not the pick-up label. Empty: no label. Key: claim_label."
           placeholder="agentic-working"
           value={draft.claimLabel}
           onChange={(event) => setDraft({ ...draft, claimLabel: event.target.value })}
