@@ -9,7 +9,12 @@ import { compilePipeline, FEATURE_TEMPLATE } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
-import { adoptQaPassHead, qaPassHead, qaPassHeadToAdopt } from './qa-pass-head.js';
+import {
+  adoptQaPassHead,
+  judgedQaPassHead,
+  qaPassHead,
+  qaPassHeadToAdopt,
+} from './qa-pass-head.js';
 import type { StoredTask } from './store.js';
 
 const CI_PASSED = 'b'.repeat(40);
@@ -98,11 +103,30 @@ describe('qaPassHeadToAdopt', () => {
   });
 
   it('answers nothing for a recorded head, a task without qa, a task not at Ready, or no CI head', () => {
+    // The same columns the recovery row reads, so a task it finds is a task this accepts.
     expect(qaPassHeadToAdopt(stored({ readyHeadSha: 'c'.repeat(40) }))).toBeNull();
     expect(qaPassHeadToAdopt(stored({ qaStage: false }))).toBeNull();
     expect(qaPassHeadToAdopt(stored({ at: 'qa' }))).toBeNull();
     expect(qaPassHeadToAdopt(stored({ ciHeadSha: null }))).toBeNull();
-    expect(qaPassHeadToAdopt(stored({ template: withoutCi(FEATURE_TEMPLATE) }))).toBeNull();
+  });
+});
+
+describe('judgedQaPassHead', () => {
+  const pipeline = compilePipeline('feature', FEATURE_TEMPLATE, null, true);
+  const judged = async (task: StoredTask) => {
+    const memory = new MemoryEventing();
+    const store = createMemoryPipelineStore();
+    return memory.transaction(async (scope) => judgedQaPassHead(store, scope.tx, pipeline, task));
+  };
+
+  it('is the head CI passed when CI excused no protected path', async () => {
+    expect(await judged(stored())).toBe(CI_PASSED);
+  });
+
+  it('is nothing while a path CI excused is not confirmed by the latest review (WP-102)', async () => {
+    // No Review Verdict confirms `.gitlab-ci.yml`: a hand-back into qa skipped the rebase gate that
+    // reads the confirmation, so the head is not recorded and a person decides the merge.
+    expect(await judged(stored({ ciExcusedPaths: ['.gitlab-ci.yml'] }))).toBeNull();
   });
 });
 

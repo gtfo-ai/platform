@@ -323,11 +323,14 @@ const priorityRank = priorityRankOf;
  * a check that did not read "mergeable"; a task the **platform** merges with no decisive attempt
  * for its reviewed head (a merge that waited, a rebase in flight, or a lost wake-up); and a task the platform merged that is
  * still at Ready past the window (TD-038 decision 6's lost `mr.merged`); and a task that passed QA
- * with no reviewed head recorded but a head CI passed (S-28.18: the check records that head once,
- * `qa-pass-head.ts`, after which this clause no longer holds).
+ * with no reviewed head recorded but a head CI passed and no path CI excused (S-28.18: the check
+ * records that head once, `qa-pass-head.ts`, after which this clause no longer holds — and every
+ * task it finds is one `qaPassHeadToAdopt` accepts with nothing to confirm, so it never re-reads a
+ * task the recovery refuses).
  */
 const mergeCheckDueAgain = (stale: string): string => `c.mergeable is distinct from true
-  or (t.ready_head_sha is null and t.qa_stage and t.ci_head_sha is not null)
+  or (t.ready_head_sha is null and t.qa_stage and t.ci_head_sha is not null
+      and cardinality(t.ci_excused_paths) = 0)
   or (c.merge_by = 'platform' and t.ready_head_sha is not null
       and not exists (select 1 from task_merges m
                        where m.task_id = t.id and m.head_sha = t.ready_head_sha
@@ -1131,14 +1134,17 @@ export const createPostgresPipelineStore = (
      * One column, one statement, `null` as readily as a head, and no version bump: `save` does not
      * name the column (the partition `tasks-column-ownership.test.ts` holds).
      */
-    saveReadyHead: async (tx, taskId, headSha) => {
+    saveReadyHead: async (tx, taskId, headSha, options) => {
+      const onlyIfUnset = options?.onlyIfUnset === true;
+      // S-28.18: the recovery's write is conditional in the statement itself, not read-then-write.
       const result = await sqlOf(tx).query(
-        'update tasks set ready_head_sha = $2, updated_at = now() where id = $1',
-        [taskId, headSha],
+        'update tasks set ready_head_sha = $2, updated_at = now() where id = $1 and ($3::boolean is false or ready_head_sha is null)',
+        [taskId, headSha, onlyIfUnset],
       );
-      if (result.rowCount === 0) {
+      if (result.rowCount === 0 && !onlyIfUnset) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);
       }
+      return (result.rowCount ?? 0) > 0;
     },
 
     /**

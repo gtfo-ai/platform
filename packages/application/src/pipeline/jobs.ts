@@ -107,7 +107,7 @@ import {
 import { type ExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
 import { prefetchObservability } from './observability-prefetch.js';
 import { ownerSyncOnRead } from './owner-sync.js';
-import { qaPassHead } from './qa-pass-head.js';
+import { judgedQaPassHead } from './qa-pass-head.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
 import {
@@ -2355,8 +2355,10 @@ const passQa = async (
     });
     // S-28.18 (BACKLOG 1608): the rebase gate entered `qa` only for the head CI passed, so that is
     // the head this Ready entry records — without it the column was `null` and the platform's merge
-    // waited forever. Read only if the decision enters Ready.
-    const readyHeadSha = qaPassHead(pipeline, current);
+    // waited forever. Read only if the decision enters Ready. Not when the review left protected
+    // paths CI excused unconfirmed (WP-102): a hand-back into `qa` skipped the rebase gate that
+    // reads that confirmation, so no head is recorded and a person decides the merge.
+    const readyHeadSha = await judgedQaPassHead(options.store, scope.tx, pipeline, current);
     const applied = await applyDecision({
       offerClosing: { events: scope.events, broadcast: scope.broadcast },
       store: options.store,

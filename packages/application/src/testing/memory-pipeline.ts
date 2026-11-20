@@ -511,7 +511,12 @@ export const createMemoryPipelineStore = (
     if (row === undefined || !(Date.parse(row.claimedAt) < stale)) {
       return false;
     }
-    if (stored.readyHeadSha === null && stored.qaStage && stored.ciHeadSha !== null) {
+    if (
+      stored.readyHeadSha === null &&
+      stored.qaStage &&
+      stored.ciHeadSha !== null &&
+      stored.ciExcusedPaths.length === 0
+    ) {
       // S-28.18: a task that passed QA with no reviewed head recorded, due until the check records one.
       return true;
     }
@@ -991,13 +996,22 @@ export const createMemoryPipelineStore = (
       // request no longer touches has to leave the row.
       tasks.set(taskId, clone({ ...current, riskClasses: [...classes] }));
     },
-    saveReadyHead: async (_tx, taskId, headSha) => {
+    saveReadyHead: async (_tx, taskId, headSha, options) => {
+      const onlyIfUnset = options?.onlyIfUnset === true;
       const current = tasks.get(taskId);
       if (current === undefined) {
+        if (onlyIfUnset) {
+          return false;
+        }
         throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      if (onlyIfUnset && current.readyHeadSha !== null) {
+        // S-28.18: the SQL statement's `and ready_head_sha is null`.
+        return false;
       }
       // Only this field, and `null` as readily as a head — the SQL adapter's statement (WP-79).
       tasks.set(taskId, clone({ ...current, readyHeadSha: headSha }));
+      return true;
     },
     refreezeSettings: async (_tx, taskId, frozen) => {
       const current = tasks.get(taskId);

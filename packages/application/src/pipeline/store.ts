@@ -635,9 +635,20 @@ export interface TaskRepository {
    * `save` does not name the column. `null` is written as readily as a head, so an entry that
    * judged nothing never inherits an earlier entry's head.
    *
-   * @throws when the task does not exist, like `save` and the other narrow writes.
+   * `onlyIfUnset` (S-28.18) makes the statement itself conditional — `… and ready_head_sha is
+   * null` — so the recovery's one write cannot replace a head an entry recorded meanwhile; it then
+   * answers whether it wrote, and a missing task is `false` rather than a throw. One statement
+   * either way, so the column keeps one writing statement (`tasks-column-ownership.test.ts`).
+   *
+   * @throws when the task does not exist (without `onlyIfUnset`), like `save` and the other narrow
+   * writes.
    */
-  saveReadyHead(tx: Transaction, taskId: Id, headSha: string | null): Promise<void>;
+  saveReadyHead(
+    tx: Transaction,
+    taskId: Id,
+    headSha: string | null,
+    options?: { readonly onlyIfUnset?: boolean },
+  ): Promise<boolean>;
   /**
    * Writes **only** `template`, `template_snapshot`, `iteration_limits`, `pipeline_dial`,
    * `settings_refreeze_pending = false` and `refreeze_routing = null`,
@@ -1365,7 +1376,7 @@ export interface TaskRepository {
    * — a task waiting since before the check existed — or a row whose claim is older than
    * `staleBefore` and whose `mergeable` is not `true`, whose platform merge has no decisive attempt
    * for its reviewed head (S-28.15), or whose task passed QA with no reviewed head but a head CI
-   * passed (S-28.18, `qa-pass-head.ts`). The most recently touched first, then id, at most `limit`.
+   * passed and no path CI excused (S-28.18, `qa-pass-head.ts`). The most recently touched first, then id, at most `limit`.
    */
   readyMergeCheckDue(
     tx: Transaction,
