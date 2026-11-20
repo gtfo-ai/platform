@@ -141,14 +141,19 @@ human-return window reading that the ticket left the `qa` status) entered Ready 
 3. **Tasks already waiting recover without a person.** On a pipeline with `qa` enabled every Ready entry is QA's pass,
    so the same rule answers a task stuck before this shipped: the recovery pass's `ready_merge_check` row finds a task
    at Ready with `qa_stage`, no `ready_head_sha` and a `ci_head_sha` due, and the `ready_merge_check` duty records the
-   head once (a write conditional on the column still being null), after which the platform merge proceeds as decision
-   3 says.
+   head once (a statement conditional on the column still being null), after which the platform merge proceeds as
+   decision 3 says. The row reads the same columns the recovery accepts and asks for no excused path, so it never
+   re-reads a task the recovery would refuse.
+5. **Protected paths CI excused are confirmed before a head is recorded** (review of #167). The rebase gate's
+   settlement is the one reader of the review's confirmation (WP-102), and a person's hand-back into `qa` skips it. So
+   QA's pass and the recovery both ask `confirmExcusedPaths` inside their own transaction; a path the latest review
+   did not confirm means no head is recorded, the merge waits `head_not_recorded`, and a person decides.
 4. **No recorded head is its own wait**, `head_not_recorded`, worded *"no check recorded which commit was reviewed, so
    the platform does not merge it unjudged — a person merges it, or Send back to review it again"*. After 1–3 it is
    defensive on the shipped templates; a custom template with `qa` and no `ci_gate` still reaches it.
 
 **Residual.** A person's hand-back into `qa` skips the rebase gate's entry into `qa`; QA's pass then records the last
-head CI passed. The live-head comparison, the provider's "mergeable" and the approving review still hold, but the
-rebase gate's protected-path confirmation (WP-102) is not re-read for an unpushed take-over that skipped the review
-stages — BACKLOG 1615.
+head CI passed. The protected-path confirmation is asked again (5), and the live-head comparison, the provider's
+"mergeable" and the approving review still hold; what is not re-read is the rebase gate's own mergeability judgement
+against the target branch and its conflict warning — BACKLOG 1615.
 

@@ -126,6 +126,8 @@ interface World {
   readonly portless?: boolean;
   /** The task's frozen `qa_stage` (S-28.18): its Ready entry was QA's pass. */
   readonly qa?: boolean;
+  /** The protected paths CI excused provisionally (WP-102); none by default. */
+  readonly excused?: readonly string[];
 }
 
 const storedTask = (world: World): StoredTask =>
@@ -488,7 +490,7 @@ const setup = async (world: World = {}) => {
     );
     await store.tasks.saveCiSettlement(scope.tx, TASK, {
       headSha: world.ciHead === undefined ? HEAD : world.ciHead,
-      excusedPaths: [],
+      excusedPaths: [...(world.excused ?? [])],
     });
     let version = 0;
     for (const verdict of world.verdicts ?? ['approve']) {
@@ -1233,6 +1235,28 @@ describe('a task that passed QA with no reviewed head recorded (S-28.18)', () =>
     expect((await reload(w))?.readyHeadSha).toBe(HEAD);
     expect(await w.run()).toBe('waiting');
     expect(await w.waitedFor()).toBe('head_moved');
+    expect(w.merges).toEqual([]);
+  });
+
+  /**
+   * Review of #167: a person's hand-back into `qa` skips the rebase gate, which is where the review's
+   * confirmation of the protected paths CI excused is read (WP-102). A head over unconfirmed paths is
+   * never recorded, so nothing the review did not confirm is merged by the platform.
+   */
+  it('records no head while protected paths CI excused are unconfirmed, and the platform merges nothing', async () => {
+    const w = await setup({
+      setting: 'platform',
+      readyHead: null,
+      qa: true,
+      excused: ['.gitlab-ci.yml'],
+    });
+    await claimedLongAgo(w);
+    // The recovery row never re-reads a task it would refuse.
+    expect(await dueNow(w)).toEqual([]);
+    await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options);
+    expect((await reload(w))?.readyHeadSha).toBeNull();
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('head_not_recorded');
     expect(w.merges).toEqual([]);
   });
 

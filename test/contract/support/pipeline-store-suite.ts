@@ -633,7 +633,11 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
        * once a head is recorded; a task without `qa_stage`, or with no CI head, is never due for it.
        */
       it('finds a task that passed QA with no reviewed head until one is recorded (S-28.18)', async () => {
-        const ready = async (stored: StoredTask, ciHead: string | null) => {
+        const ready = async (
+          stored: StoredTask,
+          ciHead: string | null,
+          excusedPaths: readonly string[] = [],
+        ) => {
           await store.tasks.insert(tx, stored);
           const loaded = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
           await store.tasks.save(tx, {
@@ -646,7 +650,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           });
           await store.tasks.saveCiSettlement(tx, stored.task.id, {
             headSha: ciHead,
-            excusedPaths: [],
+            excusedPaths: [...excusedPaths],
           });
           await store.tasks.recordReadyMergeCheck(tx, stored.task.id, {
             checkedAt: '2026-06-02T09:00:00.000Z' as IsoDateTime,
@@ -667,17 +671,31 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         const passedQa = task({ mr: mr(51), qaStage: true }, 'ACME-QA-1');
         const noQa = task({ mr: mr(52) }, 'ACME-QA-2');
         const noCi = task({ mr: mr(53), qaStage: true }, 'ACME-QA-3');
+        const excused = task({ mr: mr(54), qaStage: true }, 'ACME-QA-4');
         await ready(passedQa, 'b'.repeat(40));
         await ready(noQa, 'b'.repeat(40));
         await ready(noCi, null);
-        const mine = new Set([passedQa, noQa, noCi].map((s) => s.task.id));
+        // A path CI excused needs the review's confirmation, which the row cannot read: not due.
+        await ready(excused, 'b'.repeat(40), ['.gitlab-ci.yml']);
+        const mine = new Set([passedQa, noQa, noCi, excused].map((s) => s.task.id));
         const later = '2026-06-02T09:10:00.000Z' as IsoDateTime;
         const due = async () =>
           (await store.tasks.readyMergeCheckDue(tx, { staleBefore: later, limit: 10_000 }))
             .map((row) => row.taskId)
             .filter((id) => mine.has(id));
         expect(await due()).toEqual([passedQa.task.id]);
-        await store.tasks.saveReadyHead(tx, passedQa.task.id, 'b'.repeat(40));
+        // The recovery's write is conditional in the statement: it never replaces a recorded head.
+        expect(
+          await store.tasks.saveReadyHead(tx, passedQa.task.id, 'b'.repeat(40), {
+            onlyIfUnset: true,
+          }),
+        ).toBe(true);
+        expect(
+          await store.tasks.saveReadyHead(tx, passedQa.task.id, 'c'.repeat(40), {
+            onlyIfUnset: true,
+          }),
+        ).toBe(false);
+        expect((await store.tasks.load(tx, passedQa.task.id))?.readyHeadSha).toBe('b'.repeat(40));
         expect(await due()).toEqual([]);
       });
 

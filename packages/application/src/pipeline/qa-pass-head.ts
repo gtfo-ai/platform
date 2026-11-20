@@ -44,34 +44,47 @@
  * duty re-enters `rebase_gate`; the platform merge's rebase acceptance writes a head), so the same
  * rule answers it: {@link adoptQaPassHead} records `ci_head_sha` once, from the `ready_merge_check`
  * duty, and the recovery pass's `ready_merge_check` row finds such a task due
- * (`readyMergeCheckDue`: at Ready, `qa_stage`, no `ready_head_sha`, a `ci_head_sha`). The write is
- * conditional on the column still being `null`, so it happens once; afterwards the task is due
+ * (`readyMergeCheckDue`: at Ready, `qa_stage`, no `ready_head_sha`, a `ci_head_sha`, no path CI
+ * excused — the same columns {@link qaPassHeadToAdopt} reads, so the row never re-reads a task the
+ * recovery refuses). The write is conditional in its own statement (`saveReadyHead`'s
+ * `onlyIfUnset`), so it happens once and never over a recorded head; afterwards the task is due
  * only on the row's existing terms.
+ *
+ * ## The protected paths CI excused (WP-102)
+ *
+ * The rebase gate's settlement is the one reader of the review's confirmation of the paths CI
+ * excused provisionally, and a person's **hand-back into `qa`** (after a take-over) skips that
+ * settlement. So both writers ask it again inside their own transaction ({@link judgedQaPassHead},
+ * `confirmExcusedPaths`): a path the latest review did not confirm means **no head is recorded**,
+ * the platform merge waits `head_not_recorded`, and a person decides — protected-path changes
+ * nobody confirmed are never merged by the platform.
  *
  * ## The residual, stated
  *
- * A person who **hands back** into `qa` (a take-over) skips the rebase gate's entry into `qa`; QA's
- * pass then carries the last head CI passed. The platform merge still merges only that head and
- * only with the provider's "mergeable" and an approving review, so a push during the take-over is
- * `head_moved`; what is not re-read is the rebase gate's confirmation of protected paths CI excused
- * (WP-102) for an unpushed take-over that skipped the review stages. Recorded as BACKLOG 1615.
+ * A person who **hands back** into `qa` skips the rebase gate's entry into `qa`; QA's pass then
+ * carries the last head CI passed. The protected-path confirmation is asked again (above), and the
+ * platform merge still merges only that head, only with the provider's "mergeable" and an approving
+ * review, so a push during the take-over is `head_moved`. What is not re-read is the rebase gate's
+ * own mergeability judgement against the target branch (the provider's "mergeable" stands in) and
+ * its conflict warning. Recorded as BACKLOG 1615.
  */
 import type { Id } from '@platform/contracts';
 import {
   type CompiledPipeline,
   compilePipeline,
-  QA_STAGE_ID,
   READY_FOR_MERGE_STAGE,
   stageOf,
 } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { CI_GATE_STAGE } from './gates.js';
 import type { PipelineStore, StoredTask } from './store.js';
+import { confirmExcusedPaths } from './tamper-confirmation.js';
 
 /** Is `id` an enabled stage of `kind` in this pipeline? */
-const runs = (pipeline: CompiledPipeline, id: string, kind: 'gate' | 'human'): boolean => {
+const runs = (pipeline: CompiledPipeline, id: string, kind: 'gate'): boolean => {
   const stage = stageOf(pipeline, id);
   return stage?.enabled === true && stage.kind === kind;
 };
@@ -87,49 +100,76 @@ export const qaPassHead = (
 ): string | null => (runs(pipeline, CI_GATE_STAGE, 'gate') ? task.ciHeadSha : null);
 
 /**
- * May the recovery record {@link qaPassHead} for this task? At `ready_for_merge` with no recorded
- * head, on a pipeline whose `qa` stage is enabled (so its Ready entry was QA's pass), with a head to
- * record. Pure.
+ * **The head QA's pass may record, asked inside the transaction that records it.** {@link
+ * qaPassHead}, unless the paths CI excused provisionally are not confirmed by the latest review
+ * (WP-102, `confirmExcusedPaths`): the rebase gate's settlement is that confirmation's reader, and a
+ * person's hand-back into `qa` skips it — so a head over unconfirmed protected paths is not
+ * recorded, the platform merge waits `head_not_recorded`, and a person decides.
  */
-export const qaPassHeadToAdopt = (stored: StoredTask): string | null => {
-  if (
-    stored.task.state !== 'ready_for_merge' ||
-    stored.task.currentStage !== READY_FOR_MERGE_STAGE ||
-    stored.readyHeadSha !== null ||
-    !stored.qaStage
-  ) {
+export const judgedQaPassHead = async (
+  store: Pick<PipelineStore, 'artifacts'>,
+  tx: Transaction,
+  pipeline: CompiledPipeline,
+  stored: StoredTask,
+): Promise<string | null> => {
+  const head = qaPassHead(pipeline, stored);
+  if (head === null) {
     return null;
   }
-  const pipeline = compilePipeline(
-    stored.task.template,
-    stored.template,
-    stored.pipelineDial,
-    stored.qaStage,
-  );
-  return runs(pipeline, QA_STAGE_ID, 'human') ? qaPassHead(pipeline, stored) : null;
+  const confirmation = await confirmExcusedPaths(store, tx, stored);
+  return confirmation?.kind === 'unconfirmed' ? null : head;
 };
 
 /**
- * The recovery's write (S-28.18): records {@link qaPassHeadToAdopt}'s head as `ready_head_sha`, in a
- * transaction that re-reads the task, so it writes once and only while the column is still `null`.
+ * May the recovery record a head for this task? At `ready_for_merge` with no recorded head, with
+ * `qa_stage` (its Ready entry was QA's pass) and a head CI passed (so the frozen template runs
+ * `ci_gate`: nothing else writes that column). Pure, and **the same columns the recovery row reads**
+ * (`readyMergeCheckDue`'s S-28.18 clause), so a task the row finds is a task this accepts. The row
+ * also asks for no excused paths, which makes {@link judgedQaPassHead}'s confirmation vacuous for
+ * it — so it never re-reads a task the recovery refuses; a task woken otherwise (`mr_ready`, a
+ * resolution signal) has the confirmation asked.
+ */
+export const qaPassHeadToAdopt = (stored: StoredTask): string | null =>
+  stored.task.state === 'ready_for_merge' &&
+  stored.task.currentStage === READY_FOR_MERGE_STAGE &&
+  stored.readyHeadSha === null &&
+  stored.qaStage
+    ? stored.ciHeadSha
+    : null;
+
+/**
+ * The recovery's write (S-28.18): records the head as `ready_head_sha` in a transaction that
+ * re-reads the task, through a statement conditional on the column still being `null`
+ * (`saveReadyHead`'s `onlyIfUnset`), so it writes once and never over a head an entry recorded.
  * Answers the head it recorded, or `null` when it wrote nothing.
  */
 export const adoptQaPassHead = async (
   options: {
     readonly unitOfWork: UnitOfWork;
-    readonly store: Pick<PipelineStore, 'tasks'>;
+    readonly store: Pick<PipelineStore, 'tasks' | 'artifacts'>;
     readonly logger?: Logger;
   },
   taskId: Id,
 ): Promise<string | null> => {
   const adopted = await options.unitOfWork.transaction(async (scope) => {
     const current = await options.store.tasks.load(scope.tx, taskId);
-    const head = current === null ? null : qaPassHeadToAdopt(current);
+    if (current === null || qaPassHeadToAdopt(current) === null) {
+      return null;
+    }
+    const pipeline = compilePipeline(
+      current.task.template,
+      current.template,
+      current.pipelineDial,
+      current.qaStage,
+    );
+    const head = await judgedQaPassHead(options.store, scope.tx, pipeline, current);
     if (head === null) {
       return null;
     }
-    await options.store.tasks.saveReadyHead(scope.tx, taskId, head);
-    return head;
+    const wrote = await options.store.tasks.saveReadyHead(scope.tx, taskId, head, {
+      onlyIfUnset: true,
+    });
+    return wrote ? head : null;
   });
   if (adopted !== null) {
     (options.logger ?? silentLogger).info(
