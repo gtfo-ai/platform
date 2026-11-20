@@ -15,6 +15,12 @@
  * too: `formatInteger` is the number formatter, and a scan that cannot tell a `Date` from a number
  * by syntax refuses both), and any `Intl.DateTimeFormat(` — with or without `new`.
  *
+ * **A raw instant rendered as JSX** is refused too (review of PR #171): in a `.tsx` source, a JSX
+ * expression that is a bare reference ending in `_at` or `At` — `{config.data.computed_at}`,
+ * `{item.startedAt}` — prints the ISO string as it came; it goes through a `format*` call instead.
+ * An attribute (`dateTime={entry.created_at}`, `key={…}`) is not a rendering and is not matched.
+ * {@link RAW_INSTANT_NOT_AN_INSTANT} names the references whose name only looks like an instant.
+ *
  * ### What it cannot see, stated rather than implied
  *
  * - An instant written by hand — `iso.slice(0, 10)`, `getHours()` — is not a locale format and is
@@ -22,6 +28,8 @@
  *   `getHours()` for the hour, not to show it.
  * - Indirection: `const F = Intl.DateTimeFormat; new F(…)`, or `Intl['DateTimeFormat']`.
  * - A string a dependency formats (none of the application's packages renders a date today).
+ * - A raw instant inside a template literal (`${x.created_at}`), a ternary or a call that is not a
+ *   formatter, or one whose name does not end in `_at`/`At` (`deadline`, `until`).
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +43,26 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 export const TIME_FORMATTER = 'apps/web/src/ui/time.ts';
 
 const DIRECT_FORMAT = /\.toLocale(?:Time|Date)?String\s*\(|\bIntl\s*\.\s*DateTimeFormat\s*\(/g;
+
+/**
+ * A JSX child that is a bare reference ending in `_at`/`At`: not preceded by `=` (an attribute),
+ * `$` (a template literal) or a word character.
+ */
+const RAW_INSTANT = /(?<![=$\w])\{\s*([A-Za-z_$][\w$.?!]*(?:_at|At))\s*\}/g;
+
+/** References whose name ends like an instant but hold words (`, as blocked at the manual job`). */
+export const RAW_INSTANT_NOT_AN_INSTANT: readonly string[] = ['words.blockedAt'];
+
+/** Every raw instant rendered as a JSX child in `source`, by line, comments ignored. */
+export const rawInstantOffenders = (source: string): { line: number; what: string }[] => {
+  const code = withoutComments(source);
+  return [...code.matchAll(RAW_INSTANT)]
+    .filter((match) => !RAW_INSTANT_NOT_AN_INSTANT.includes(match[1] as string))
+    .map((match) => ({
+      line: code.slice(0, match.index ?? 0).split('\n').length,
+      what: `{${match[1] as string}}`,
+    }));
+};
 
 /** Every direct date or time format in `source`, by line, comments ignored. */
 export const timeFormatOffenders = (source: string): { line: number; what: string }[] => {
@@ -69,6 +97,28 @@ describe('the time-format scanner', () => {
   });
 });
 
+describe('the raw-instant scanner', () => {
+  it.each([
+    ['a snake_case instant', '<span>computed {config.data.computed_at}</span>'],
+    ['a camelCase instant', '<p>\n  {run.startedAt}\n</p>'],
+    ['an optional chain', '<dd>{worker?.last_seen_at}</dd>'],
+    ['one with spaces', '<dd>{ item.skipped_at }</dd>'],
+  ])('finds %s', (_name, source) => {
+    expect(rawInstantOffenders(source)).toHaveLength(1);
+  });
+
+  it.each([
+    ['a formatted instant', '<dd>{formatDateTime(worker.created_at)}</dd>'],
+    ['an attribute', '<time dateTime={entry.created_at}>x</time>'],
+    ['a key', '<li key={item.skipped_at}>x</li>'],
+    ['a template literal', `\`\${a.created_at}\``],
+    ['a word that ends like an instant', '<p>{words.blockedAt} x</p>'],
+    ['a name that is not an instant', '<p>{task.format}</p>'],
+  ])('passes %s', (_name, source) => {
+    expect(rawInstantOffenders(source)).toEqual([]);
+  });
+});
+
 describe('every date and time the application writes goes through ui/time.ts (S-28.21)', () => {
   const files = censusFiles(REPO_ROOT, {
     pathspecs: ['apps/web/src'],
@@ -93,5 +143,22 @@ describe('every date and time the application writes goes through ui/time.ts (S-
         ),
       );
     expect(offenders).toEqual([]);
+  });
+
+  it('renders no raw instant as a JSX child, and every exemption is still a reference somebody writes', () => {
+    const tsx = files.filter((file) => file.path.endsWith('.tsx'));
+    const offenders = tsx.flatMap((file) =>
+      rawInstantOffenders(file.contents).map(
+        (found) => `${file.path}:${found.line}: ${found.what}`,
+      ),
+    );
+    expect(offenders).toEqual([]);
+    // An exemption nobody renders any more is a hole kept open for nothing.
+    for (const name of RAW_INSTANT_NOT_AN_INSTANT) {
+      expect(
+        tsx.some((file) => withoutComments(file.contents).includes(`{${name}}`)),
+        name,
+      ).toBe(true);
+    }
   });
 });

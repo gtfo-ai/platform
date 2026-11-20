@@ -706,7 +706,9 @@ const EffectiveConfiguration = ({
             <span className="font-mono">
               hash <UntrustedText value={config.data.hash} />
             </span>
-            <span className="text-fg-muted">computed {config.data.computed_at}</span>
+            <span className="text-fg-muted">
+              computed {formatDateTime(config.data.computed_at)}
+            </span>
           </Card>
           <Card>
             <SectionHeading>Source of every key</SectionHeading>

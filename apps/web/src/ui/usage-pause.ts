@@ -3,8 +3,9 @@
  * usage limit until 14:00*. One spelling for the Workers screen, the run page and the worker's own
  * page, so a developer reads the same sentence wherever they look.
  *
- * The time is `HH:MM` on the clock in force (`ui/time.ts`, 24-hour by default, S-28.21) **in the given zone** — the organisation's on the
- * platform's screens, the browser's own on the worker's local page (the machine it runs on) — and
+ * The time is `HH:MM` on the clock in force (`ui/time.ts`, 24-hour by default, S-28.21) **in the
+ * given zone** — the organisation's on the platform's screens, the browser's own on the worker's
+ * local page (the machine it runs on) — and
  * gains the day (`Tue 4 Nov, 14:00`) when the reset is not on today's date in that zone, because a
  * weekly limit resets days later. `estimated` (the limit named no reset time, so the instant is the
  * claimant's default pause) says *until about*. A zone the browser does not know falls back to UTC
