@@ -15,6 +15,7 @@ import {
   WORKER_PATHS,
   WORKER_PROTOCOL_CLAIM_POLICY,
   WORKER_PROTOCOL_CLAIM_SCOPE,
+  WORKER_PROTOCOL_COMMIT_IDENTITY,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
@@ -198,14 +199,15 @@ const refusals = (value: unknown): string[] => {
 const SCOPE_PROJECT = '00000000-0000-4000-8000-000000029301';
 
 describe('protocol versions (TD-032 decision 7)', () => {
-  it('ships N = 4, accepting [N-1, N] without a 0 (S-26.4 bumped it)', () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(4);
-    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([3, 4]);
-    // The local UI's verbs and keys are protocol 2's, the claim scope's 3's, and the claim
-    // policy's 4's — the version N.
+  it('ships N = 5, accepting [N-1, N] without a 0 (the commit identity bumped it)', () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(5);
+    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([4, 5]);
+    // The local UI's verbs and keys are protocol 2's, the claim scope's 3's, the claim policy's
+    // 4's, and the package's commit identity 5's — the version N.
     expect(WORKER_PROTOCOL_LOCAL_UI).toBe(2);
     expect(WORKER_PROTOCOL_CLAIM_SCOPE).toBe(3);
     expect(WORKER_PROTOCOL_CLAIM_POLICY).toBe(4);
+    expect(WORKER_PROTOCOL_COMMIT_IDENTITY).toBe(5);
     expect(ACCEPTED_WORKER_PROTOCOLS).toContain(WORKER_PROTOCOL_VERSION);
     for (const version of ACCEPTED_WORKER_PROTOCOLS) {
       expect([WORKER_PROTOCOL_VERSION - 1, WORKER_PROTOCOL_VERSION]).toContain(version);

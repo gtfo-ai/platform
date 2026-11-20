@@ -56,7 +56,7 @@ describe('what the updater does with the core’s digests (TD-032 §3, §6)', ()
   });
 
   it('follows the core to an older build once its protocol range excludes this worker', () => {
-    expect(decide({ runningAt: LATE, targetAt: EARLY, accepted: [3, 4] })).toEqual({
+    expect(decide({ runningAt: LATE, targetAt: EARLY, accepted: [4, 5] })).toEqual({
       kind: 'update',
       downgrade: true,
     });

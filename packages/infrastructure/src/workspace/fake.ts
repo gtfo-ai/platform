@@ -356,6 +356,10 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       cacheKey: spec.repo === null ? null : spec.repo.cacheKey,
       controlSubPath: spec.runId,
       keepUntil: spec.keepUntil,
+      // The Docker provider's rule: on the handle exactly when the spec declared one.
+      ...(spec.repo?.commitIdentity === undefined
+        ? {}
+        : { commitIdentity: spec.repo.commitIdentity }),
     };
     this.#seen.add(spec.runId);
     this.provisions.set(spec.runId, provision);
@@ -477,6 +481,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         // Backlog 481: the Docker provider's pair, so the fake's answer has the same shape.
         { key: 'credential.useHttpPath', value: 'true' },
       ],
+      ...(handle.commitIdentity === undefined ? {} : { commitIdentity: handle.commitIdentity }),
     };
   }
 

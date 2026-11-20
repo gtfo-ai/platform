@@ -144,6 +144,58 @@ export const workspaceGitSshSchema = z.strictObject({
 });
 export type WorkspaceGitSsh = z.infer<typeof workspaceGitSshSchema>;
 
+/** The longest commit author name a git integration may declare. */
+export const MAX_GIT_COMMIT_NAME_LENGTH = 128;
+/** The longest commit author email a git integration may declare (RFC 5321's path limit). */
+export const MAX_GIT_COMMIT_EMAIL_LENGTH = 254;
+
+/**
+ * A commit author name git records **as written**: one line, no control character, no `<` or `>`
+ * (git's `ident.c` drops line breaks and angle brackets from an identity rather than refusing them,
+ * so the commit would name something other than the configured value — refused here instead), no
+ * leading or trailing whitespace (trimmed by git the same way), and at least one character that is
+ * not punctuation git strips as "crud" (a name of nothing else makes git die). It is configuration
+ * an operator writes, never a secret, and it reaches a run only as an environment value — never
+ * interpolated into a script.
+ */
+export const gitCommitNameSchema = z
+  .string()
+  .min(1)
+  .max(MAX_GIT_COMMIT_NAME_LENGTH)
+  .refine(
+    (value) => !/\p{Cc}/u.test(value),
+    'a commit author name is one line, with no control character',
+  )
+  .refine(
+    (value) => !/[<>]/.test(value),
+    'a commit author name has no < or > (git would drop them)',
+  )
+  .refine(
+    (value) => value === value.trim(),
+    'a commit author name has no leading or trailing whitespace',
+  )
+  .refine(
+    (value) => /[^\s.,:;<>"\\']/.test(value),
+    'a commit author name needs a character git does not strip (not only punctuation or spaces)',
+  );
+
+/** A commit author email: an address `z.email()` accepts, bounded, so it has no space, quote or angle bracket. */
+export const gitCommitEmailSchema = z.email().max(MAX_GIT_COMMIT_EMAIL_LENGTH);
+
+/**
+ * **Who a run's commits are by** — a git integration's declared commit identity (GitLab:
+ * `commit_author_name` + `commit_author_email`), carried to the launcher on the repository half of
+ * the spec. Absent is the platform's own `agentic <agentic@localhost>`. The launcher answers it
+ * back as the CLI's `GIT_AUTHOR_*`/`GIT_COMMITTER_*` and gives it to the export helper, both as
+ * environment, which outranks every configuration file — so a repository's own `.git/config`
+ * still cannot sign the platform's commits as somebody else.
+ */
+export const gitCommitIdentitySchema = z.strictObject({
+  name: gitCommitNameSchema,
+  email: gitCommitEmailSchema,
+});
+export type GitCommitIdentity = z.infer<typeof gitCommitIdentitySchema>;
+
 /**
  * The repository half of the spec.
  *
@@ -165,6 +217,14 @@ export const workspaceRepoSchema = z
       .regex(/^[a-z0-9][a-z0-9._-]{0,62}$/, 'expected a lowercase mirror cache key'),
     /** SSH with a deploy key (WP-146, TD-028 decision 13b); absent is HTTPS with the credential helper. */
     ssh: workspaceGitSshSchema.optional(),
+    /**
+     * Who the run's commits are by, when the git integration declares it; absent is the platform's
+     * `agentic <agentic@localhost>`. **Sent only when configured**, so a launcher of an earlier
+     * build — whose strict schema refuses the key — is never sent it unless an operator asked for
+     * it; a remote worker announcing a protocol below `WORKER_PROTOCOL_COMMIT_IDENTITY` is sent a
+     * package without it (`./worker.ts`).
+     */
+    commitIdentity: gitCommitIdentitySchema.optional(),
   })
   .refine((repo) => repo.checkoutBranch === null || repo.checkoutCommit === null, {
     message: 'a workspace checks out a branch or a commit, never both',

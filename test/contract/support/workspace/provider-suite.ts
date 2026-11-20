@@ -161,6 +161,39 @@ export const runWorkspaceProviderContractSuite = (
       });
     });
 
+    /**
+     * The commit identity (owner request, 2026-11-20): a spec that declares one gets it back on the
+     * handle and in the CLI answer — the runner's only source for `GIT_AUTHOR_*`/`GIT_COMMITTER_*` —
+     * and a spec that declares none gets neither key, so a runner of an earlier build parses both.
+     */
+    it('answers a declared commit identity on the handle and to the CLI, and no key for a spec without one', async () => {
+      await withRun(async ({ provider, handle }) => {
+        expect(Object.hasOwn(handle, 'commitIdentity')).toBe(false);
+        expect(Object.hasOwn(await provider.cliEnvironment(handle), 'commitIdentity')).toBe(false);
+      });
+      const harness = await context.provider();
+      try {
+        const repo = harness.spec.repo;
+        if (repo === null) return;
+        const identity = {
+          name: 'Agentic "Bot"',
+          email: 'service_account_group_1_ab@noreply.gitlab.com',
+        };
+        await harness.provider.updateMirror({
+          projectId: harness.spec.projectId,
+          repo,
+          credential: null,
+        });
+        const handle = await harness.provider.create(
+          ...shipped({ ...harness.spec, repo: { ...repo, commitIdentity: identity } }),
+        );
+        expect(handle.commitIdentity).toEqual(identity);
+        expect((await harness.provider.cliEnvironment(handle)).commitIdentity).toEqual(identity);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
     it('refuses to create a workspace before the mirror exists', async () => {
       const harness = await context.provider();
       try {

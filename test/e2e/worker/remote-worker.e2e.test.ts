@@ -28,9 +28,9 @@
  *     the waiting offer, takes it, and the run settles on that worker; nothing is claimed by itself.
  *     Since S-26.4 *pick only* is the claim policy, and the take makes the worker's user the task's
  *     owner (`via: pick`).
- * 11. **A version-3 worker still claims** (S-26.4, protocol 4 accepted `[3, 4]`): a worker that
- *     announces protocol 3 on every request runs a stage to completion through the core's
- *     version-3 shapes.
+ * 11. **A version-4 worker still claims** (S-26.4's case, moved one version on when protocol 5
+ *     accepted `[4, 5]`): a worker that announces protocol 4 on every request runs a stage to
+ *     completion through the core's version-4 shapes (a package without a commit identity).
  */
 import { createPublicKey, verify } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -990,18 +990,19 @@ describe('a pick-only worker and take this one (WP-293)', () => {
 });
 
 /**
- * **A version-3 worker still claims** (S-26.4, criterion 6): protocol 4 is accepted beside 3, so a
- * worker one release behind — every request it sends announcing `X-Worker-Protocol: 3` — handshakes,
+ * **A version-4 worker still claims** (S-26.4, criterion 6, moved on by protocol 5): protocol 5 is
+ * accepted beside 4, so a worker one release behind — every request it sends announcing
+ * `X-Worker-Protocol: 4` — handshakes,
  * claims the first stage by itself (its row has no policy, which reads `everything`) and settles it.
  * The core records the protocol it spoke.
  */
 describe('a worker one protocol behind (S-26.4)', () => {
-  it('claims and settles a run at protocol 3', async () => {
-    const topology = await core('worker-protocol-3');
+  it('claims and settles a run at protocol 4', async () => {
+    const topology = await core('worker-protocol-4');
     const { pipeline } = topology;
-    const laptop = await worker(topology, { name: 'v3-laptop', protocol: 3 });
+    const laptop = await worker(topology, { name: 'v4-laptop', protocol: 4 });
     await pipeline.publish([ticketMatched(pipeline)]);
-    await pipeline.waitFor('the v3 worker to settle a run it claimed', async () => {
+    await pipeline.waitFor('the v4 worker to settle a run it claimed', async () => {
       const rows = await pipeline.query<{ status: string }>(
         `select r.status::text as status from run_offers o join runs r on r.id = o.run_id
           where o.worker_id = $1 and r.status = 'completed'`,
@@ -1009,16 +1010,16 @@ describe('a worker one protocol behind (S-26.4)', () => {
       );
       return rows.length > 0;
     });
-    const sent = topology.captured.filter((request) => request.worker === 'v3-laptop');
+    const sent = topology.captured.filter((request) => request.worker === 'v4-laptop');
     expect(sent.map((request) => request.verb)).toEqual(
       expect.arrayContaining(['handshake', 'claims']),
     );
-    expect(sent.every((request) => request.headers['x-worker-protocol'] === '3')).toBe(true);
+    expect(sent.every((request) => request.headers['x-worker-protocol'] === '4')).toBe(true);
     const [row] = await pipeline.query<{ protocol_version: number }>(
       'select protocol_version from workers where id = $1',
       [laptop.workerId],
     );
-    expect(row?.protocol_version).toBe(3);
+    expect(row?.protocol_version).toBe(4);
   }, 300_000);
 });
 

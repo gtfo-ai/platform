@@ -24,6 +24,7 @@ import {
   listRunsResponseSchema,
   relayedCreateRunRequestSchema,
   workspaceCliEnvironmentSchema,
+  workspaceHandleSchema,
 } from './protocol.js';
 
 const RUN = '44444444-4444-4444-8444-444444444444';
@@ -221,6 +222,92 @@ describe('the create request’s carriage, skills and images (WP-279)', () => {
         ...body,
         spec: { ...https, skills: ['kb'] },
       }).success,
+    ).toBe(false);
+  });
+});
+
+/**
+ * The commit identity on the wire (owner request, 2026-11-20): optional in all three places it
+ * travels — the create request's `spec.repo`, the handle and the CLI answer — so a body without it is
+ * the body an earlier build sends and parses unchanged, and strict, so nothing rides beside it.
+ */
+describe('the commit identity on the wire', () => {
+  const IDENTITY = {
+    name: 'Agentic "Bot" O\'Brien 🤖',
+    email: 'service_account_group_1234_0123456789abcdef0123456789abcdef@noreply.gitlab.example',
+  };
+  const IMAGES = { run: `sha256:${'1'.repeat(64)}`, egress: `sha256:${'2'.repeat(64)}` };
+  const token = {
+    host: 'vcs.example.com',
+    username: 'oauth2',
+    password: 'fake_run_credential_push_0001',
+    scope: 'push',
+    expiresAt: '2026-11-05T00:00:00.000Z',
+  } as const;
+  const createBody = (repo: object) => {
+    const spec = workspaceSpecFixture({
+      repo: repo as never,
+      egress: { hosts: ['vcs.example.com'] },
+    });
+    return { spec, credential: token, ...provisionFixture(spec, SKILL_CATALOGUE_FIXTURE, IMAGES) };
+  };
+  const handle = {
+    runId: RUN,
+    projectId: RUN,
+    containerId: 'c',
+    sidecarContainerId: null,
+    networkId: 'n',
+    volumeName: `ws-${RUN}`,
+    cacheKey: 'acme',
+    controlSubPath: RUN,
+    keepUntil: '2026-09-13T00:00:00.000Z',
+  };
+  const answer = {
+    proxy: null,
+    home: '/tmp',
+    claudeConfigDir: '/tmp/claude',
+    path: '/usr/bin:/bin',
+    gitConfig: [],
+  };
+
+  it('round-trips through the create request, the handle and the CLI answer', () => {
+    const body = createBody({ commitIdentity: IDENTITY });
+    const parsed = createRunRequestSchema.parse(JSON.parse(JSON.stringify(body)));
+    expect(parsed.spec.repo?.commitIdentity).toEqual(IDENTITY);
+    expect(
+      workspaceHandleSchema.parse({ ...handle, commitIdentity: IDENTITY }).commitIdentity,
+    ).toEqual(IDENTITY);
+    expect(
+      workspaceCliEnvironmentSchema.parse({ ...answer, commitIdentity: IDENTITY }).commitIdentity,
+    ).toEqual(IDENTITY);
+  });
+
+  it('parses every body without it, as an earlier build sends it', () => {
+    const parsed = createRunRequestSchema.parse(createBody({}));
+    expect(Object.hasOwn(parsed.spec.repo ?? {}, 'commitIdentity')).toBe(false);
+    expect(workspaceHandleSchema.safeParse(handle).success).toBe(true);
+    expect(workspaceCliEnvironmentSchema.safeParse(answer).success).toBe(true);
+  });
+
+  it.each([
+    ['a name with a line break', { ...IDENTITY, name: 'Agentic\nGIT_DIR=/tmp' }],
+    ['a name with angle brackets', { ...IDENTITY, name: 'Agentic <root@example.test>' }],
+    ['a name of only punctuation git strips', { ...IDENTITY, name: '.,;' }],
+    ['a name with a trailing space', { ...IDENTITY, name: 'Agentic ' }],
+    ['a name past 128 characters', { ...IDENTITY, name: 'a'.repeat(129) }],
+    ['an email that is not one', { ...IDENTITY, email: 'agentic@localhost' }],
+    ['an email with a command substitution', { ...IDENTITY, email: '$(id)@example.test' }],
+    ['a name alone', { name: IDENTITY.name }],
+    ['a key beside the two', { ...IDENTITY, signingKey: 'x' }],
+  ])('refuses %s, wherever it travels', (_label, identity) => {
+    expect(createRunRequestSchema.safeParse(createBody({ commitIdentity: identity })).success).toBe(
+      false,
+    );
+    expect(workspaceHandleSchema.safeParse({ ...handle, commitIdentity: identity }).success).toBe(
+      false,
+    );
+    expect(
+      workspaceCliEnvironmentSchema.safeParse({ ...answer, commitIdentity: identity }).success,
     ).toBe(false);
   });
 });

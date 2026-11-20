@@ -362,6 +362,36 @@ describe('the workspace spec a run gets', () => {
     expect(createRunRequestSchema.safeParse(recorded.creates[0]).success).toBe(true);
   });
 
+  it('puts the binding’s declared commit identity on the create request’s repo, and no key when it declares none', async () => {
+    const identity = {
+      name: 'Agentic "Bot"',
+      email: 'service_account_group_1234_0123456789abcdef0123456789abcdef@noreply.gitlab.example',
+    };
+    const declaring: RunGitCredentialMinter = {
+      mint: async ({ scope }) => ({
+        kind: 'minted',
+        credential: {
+          username: 'oauth2',
+          password: `fake_run_credential_${scope}_0001`,
+          scope,
+          expiresAt: '2026-01-03T00:00:00.000Z',
+          commitIdentity: identity,
+          revoke: async () => {},
+        },
+      }),
+    };
+    const withIdentity = clientWith();
+    await provisionerWith(withIdentity.client, declaring).provision(runSpecFixture());
+    expect(withIdentity.recorded.creates[0]?.spec.repo?.commitIdentity).toEqual(identity);
+    expect(createRunRequestSchema.safeParse(withIdentity.recorded.creates[0]).success).toBe(true);
+    // Absent: the key is not sent at all, so a launcher of an earlier build parses the request.
+    const without = clientWith();
+    await provisionerWith(without.client).provision(runSpecFixture());
+    expect(Object.hasOwn(without.recorded.creates[0]?.spec.repo ?? {}, 'commitIdentity')).toBe(
+      false,
+    );
+  });
+
   it('asks for read for a read-only run, and carries it (the read scope’s producer, backlog 133 (2))', async () => {
     const minting = minterWith();
     const { client, recorded } = clientWith();

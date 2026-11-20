@@ -258,6 +258,35 @@ describe('cliEnvironment (WP-118)', () => {
       secretEnvNames: ['ANTHROPIC_API_KEY'],
     });
 
+  it('commits as the answer’s declared identity, which a spec cannot change; with none, as agentic', () => {
+    const declared = {
+      name: 'Agentic "Bot" $(id)',
+      email: 'service_account_group_1_ab@noreply.gitlab.com',
+    };
+    const spec = runSpecFixture({
+      env: {
+        ANTHROPIC_API_KEY: 'FAKE-wp118-model-key-not-a-credential',
+        GIT_AUTHOR_NAME: 'someone else',
+        GIT_COMMITTER_EMAIL: 'x@example.invalid',
+      },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    });
+    expect(cliEnvironment(spec, answer({ commitIdentity: declared }))).toMatchObject({
+      GIT_AUTHOR_NAME: declared.name,
+      GIT_AUTHOR_EMAIL: declared.email,
+      GIT_COMMITTER_NAME: declared.name,
+      GIT_COMMITTER_EMAIL: declared.email,
+    });
+    for (const workspace of [answer(), null]) {
+      expect(cliEnvironment(spec, workspace)).toMatchObject({
+        GIT_AUTHOR_NAME: 'agentic',
+        GIT_AUTHOR_EMAIL: 'agentic@localhost',
+        GIT_COMMITTER_NAME: 'agentic',
+        GIT_COMMITTER_EMAIL: 'agentic@localhost',
+      });
+    }
+  });
+
   it('puts the answer into the environment the SDK spawns with: proxy, HOME, CLAUDE_CONFIG_DIR, PATH', () => {
     const env = buildQueryOptions(credentialOnly(), {
       ...parts(),

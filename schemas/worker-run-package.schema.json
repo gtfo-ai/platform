@@ -17,7 +17,7 @@
       "$ref": "#/$defs/anon_e7d1fded"
     },
     "workspace": {
-      "$ref": "#/$defs/anon_2346d027"
+      "$ref": "#/$defs/anon_113d03ee"
     },
     "credential": {
       "$ref": "#/$defs/anon_e8af54fa"
@@ -213,27 +213,7 @@
       ],
       "additionalProperties": false
     },
-    "anon_16e0fe1d": {
-      "type": "object",
-      "properties": {
-        "run": {
-          "$ref": "#/$defs/anon_5e81710d"
-        },
-        "egress": {
-          "$ref": "#/$defs/anon_5e81710d"
-        }
-      },
-      "required": [
-        "run",
-        "egress"
-      ],
-      "additionalProperties": false
-    },
-    "anon_1c77b77c": {
-      "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
-    },
-    "anon_2346d027": {
+    "anon_113d03ee": {
       "type": "object",
       "properties": {
         "runId": {
@@ -264,6 +244,9 @@
                 },
                 "ssh": {
                   "$ref": "#/$defs/anon_e731877e"
+                },
+                "commitIdentity": {
+                  "$ref": "#/$defs/anon_b4bc6c22"
                 }
               },
               "required": [
@@ -403,6 +386,26 @@
       ],
       "additionalProperties": false
     },
+    "anon_16e0fe1d": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/anon_5e81710d"
+        },
+        "egress": {
+          "$ref": "#/$defs/anon_5e81710d"
+        }
+      },
+      "required": [
+        "run",
+        "egress"
+      ],
+      "additionalProperties": false
+    },
+    "anon_1c77b77c": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+    },
     "anon_5e81710d": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
@@ -479,6 +482,27 @@
     "anon_ab1f2555": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "anon_b4bc6c22": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254,
+          "format": "email",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+        }
+      },
+      "required": [
+        "name",
+        "email"
+      ],
+      "additionalProperties": false
     },
     "anon_b4ffa68c": {
       "type": "string",

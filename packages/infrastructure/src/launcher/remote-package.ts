@@ -60,6 +60,7 @@ import {
   type RunGitCredentialMinter,
   type RunWorkspaceProjectSource,
   runWorkspaceSpecFor,
+  withCommitIdentity,
   withGitSsh,
 } from './provisioner.js';
 
@@ -164,6 +165,9 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
           );
         } else {
           minted = answer.credential;
+          // The git integration's declared commit identity (absent unless declared); a worker below
+          // `WORKER_PROTOCOL_COMMIT_IDENTITY` is sent the package without it by the claims route.
+          packagedWorkspace = withCommitIdentity(packagedWorkspace, minted.commitIdentity);
           const source = minted.source ?? 'minted';
           if (source !== 'minted' && (await options.remoteRunCredential(spec)) !== 'allow') {
             await revokeQuietly(spec.runId, minted);
@@ -178,7 +182,7 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
             // TD-031 decision 5: the key never leaves the core. Its route and public key go on the
             // spec, the package carries no credential, and the worker forwards every signature to
             // `ssh-sign`. Nothing is revoked: removing the key from the project is its revocation.
-            packagedWorkspace = withGitSsh(workspace, gitSshOf(minted));
+            packagedWorkspace = withGitSsh(packagedWorkspace, gitSshOf(minted));
           } else if (source === 'minted' && scope === 'read' && minted.scope === 'push') {
             await revokeQuietly(spec.runId, minted);
             throw refusal(

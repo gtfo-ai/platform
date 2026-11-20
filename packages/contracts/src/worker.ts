@@ -29,7 +29,7 @@
  * ## Protocol versions (TD-032 decision 7)
  *
  * {@link WORKER_PROTOCOL_VERSION} is an integer independent of the build. The core accepts
- * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 4` is `[3, 4]` (S-26.4) — and answers anything
+ * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 5` is `[4, 5]` (the commit identity, 2026-11-20) — and answers anything
  * else `426`. A change ships expand → contract: the release that adds a field or a verb accepts both
  * shapes, and the release that removes the old one bumps `N`. `pnpm protocol:check`
  * (`scripts/check-protocol.ts`, a `verify:static` step) refuses a bump that is not `base + 1`, one
@@ -79,13 +79,13 @@ import {
 // ── Versions ─────────────────────────────────────────────────────────────────
 
 /** The protocol this build speaks (TD-032 decision 7). A literal: `protocol:check` reads it as text. */
-export const WORKER_PROTOCOL_VERSION = 4;
+export const WORKER_PROTOCOL_VERSION = 5;
 
 /**
  * The protocols this build's core serves: `[N-1, N]`, without a `0`. A literal for the same reason as
  * {@link WORKER_PROTOCOL_VERSION}; `worker.test.ts` holds it to the shape.
  */
-export const ACCEPTED_WORKER_PROTOCOLS = [3, 4] as const;
+export const ACCEPTED_WORKER_PROTOCOLS = [4, 5] as const;
 
 /**
  * The first protocol that carries the worker's local UI (TD-031's 2026-11-04 worker-UI amendment §5,
@@ -115,6 +115,16 @@ export const WORKER_PROTOCOL_CLAIM_SCOPE = 3;
  * `offer_not_claimable`.
  */
 export const WORKER_PROTOCOL_CLAIM_POLICY = 4;
+
+/**
+ * The first protocol whose run package may carry the git integration's **commit identity**
+ * (`workspace.repo.commitIdentity`, the commit-identity slice of 2026-11-20). A version-4 worker's
+ * strict `workspaceRepoSchema` refuses the key, so it is sent the package without it and its run
+ * commits as the platform's `agentic <agentic@localhost>` until it updates. Accepting `[4, 5]`
+ * drops version 3 (TD-031 decision 9's `[N-1, N]`): a version-3 worker is answered `426` and its
+ * updater follows the core.
+ */
+export const WORKER_PROTOCOL_COMMIT_IDENTITY = 5;
 
 /** Whether a worker announcing `version` is served by this build (else `426 upgrade_required`). */
 export const isAcceptedWorkerProtocol = (version: number): boolean =>

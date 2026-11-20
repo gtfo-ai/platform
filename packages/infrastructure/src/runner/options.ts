@@ -8,6 +8,7 @@
  */
 import type { Options, SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  GitCommitIdentity,
   RunSpec,
   WorkspaceCliEnvironment,
   WorkspaceGitConfigEntry,
@@ -17,6 +18,7 @@ import {
   CLI_ENVIRONMENT_NAMES,
   cliEnvironmentVariables,
   GIT_CONFIG_PREFIX,
+  gitIdentityEnvironment,
   numberGitConfig,
 } from '../workspace/cli-environment.js';
 import { artifactJsonSchema } from './structured-output.js';
@@ -36,7 +38,10 @@ import { artifactJsonSchema } from './structured-output.js';
  * `env: { ...frame.env }`, which **replaces** its own environment (`../runlet/shim.ts`). The whole
  * environment is {@link cliEnvironment}; this is its platform half.
  */
-export const platformEnvironment = (spec: RunSpec): Record<string, string> => ({
+export const platformEnvironment = (
+  spec: RunSpec,
+  commitIdentity?: GitCommitIdentity,
+): Record<string, string> => ({
   // technical/04 § "Hooks and policies": enforce `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`.
   CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: '1',
   // technical/04 § "Resume and take-over": the same value on resume, so the session is found.
@@ -56,17 +61,11 @@ export const platformEnvironment = (spec: RunSpec): Record<string, string> => ({
   // were denied. No developer run could commit, push or open its merge request. The same identity
   // the export helper commits a `wip:` with (`exportScript` in `../workspace/provider.ts`), as
   // environment rather than configuration: it outranks every config file, so a repository's own
-  // `.git/config` cannot sign the platform's commits as somebody else.
-  ...PLATFORM_GIT_IDENTITY,
+  // `.git/config` cannot sign the platform's commits as somebody else. Since the commit-identity
+  // slice it is the git integration's declared identity when there is one (the launcher's answer,
+  // `WorkspaceCliEnvironment.commitIdentity`), and `agentic <agentic@localhost>` otherwise.
+  ...gitIdentityEnvironment(commitIdentity),
 });
-
-/** Who the platform's commits are by — the export helper's `user.name`/`user.email`, as git's environment. */
-export const PLATFORM_GIT_IDENTITY: Readonly<Record<string, string>> = {
-  GIT_AUTHOR_NAME: 'agentic',
-  GIT_AUTHOR_EMAIL: 'agentic@localhost',
-  GIT_COMMITTER_NAME: 'agentic',
-  GIT_COMMITTER_EMAIL: 'agentic@localhost',
-};
 
 /**
  * The platform's git configuration for every git the CLI starts — numbered together with the
@@ -114,7 +113,9 @@ export const PLATFORM_GIT_CONFIG: readonly WorkspaceGitConfigEntry[] = [
  *  2. the workspace's answer — `HOME`, `CLAUDE_CONFIG_DIR`, the image's `PATH` and, when the run has
  *     a sidecar, `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` — so a spec cannot redirect the proxy or the
  *     home the launcher answered;
- *  3. {@link platformEnvironment};
+ *  3. {@link platformEnvironment}, whose `GIT_AUTHOR_*`/`GIT_COMMITTER_*` are the answer's
+ *     `commitIdentity` when it carries one (the git integration's declared identity) and
+ *     `agentic <agentic@localhost>` otherwise;
  *  4. **one** git list: the workspace's entries first (`credential.helper` and, since backlog 481,
  *     `credential.useHttpPath`), then {@link PLATFORM_GIT_CONFIG} (`core.fsmonitor` and, since
  *     backlog 488, `core.hooksPath`) — `GIT_CONFIG_COUNT=4` for an HTTPS run, 3 for a deploy-key
@@ -146,7 +147,7 @@ export const cliEnvironment = (
   return {
     ...fromSpec,
     ...(workspace === null ? {} : cliEnvironmentVariables(workspace)),
-    ...platformEnvironment(spec),
+    ...platformEnvironment(spec, workspace?.commitIdentity),
     ...numberGitConfig([...(workspace?.gitConfig ?? []), ...PLATFORM_GIT_CONFIG]),
   };
 };

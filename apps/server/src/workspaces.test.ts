@@ -186,6 +186,8 @@ describe('minting the run credential (WP-76)', () => {
       deployKeyRunCredential?: DeployKeyRunCredential;
       /** WP-137: `runs.credential_source` cannot be written. */
       failRecord?: boolean;
+      /** The integration's declared commit identity, as the loader reads it (2026-11-20). */
+      commitIdentity?: { readonly name: string; readonly email: string };
     } = {},
   ) => {
     const fake = createFakeGitProvider({
@@ -221,6 +223,7 @@ describe('minting the run credential (WP-76)', () => {
         ...(options.deployKeyRunCredential === undefined
           ? {}
           : { deployKeyRunCredential: options.deployKeyRunCredential }),
+        ...(options.commitIdentity === undefined ? {} : { commitIdentity: options.commitIdentity }),
       },
       taskManagement: null,
       communication: null,
@@ -274,6 +277,58 @@ describe('minting the run credential (WP-76)', () => {
       expect.objectContaining({ scope: 'push', revoked: true, revocations: 1 }),
     ]);
     expect(JSON.stringify(auditLog.entries)).not.toContain(answer.credential.password);
+  });
+
+  /**
+   * Owner request, 2026-11-20: the git binding's declared commit identity rides with whichever
+   * credential the binding gives — so the provisioner and the remote packager can put it on the
+   * spec — and a binding that declares none hands no key.
+   */
+  describe('the binding’s commit identity', () => {
+    const IDENTITY = {
+      name: 'Agentic',
+      email: 'service_account_group_1234_0123456789abcdef0123456789abcdef@noreply.gitlab.example',
+    };
+
+    it('rides with a minted credential, and is absent when the binding declares none', async () => {
+      const declared = harness('normal', { commitIdentity: IDENTITY });
+      const answer = await declared.minter.mint({
+        spec: declared.spec,
+        project: declared.project,
+        scope: 'push',
+        ttlSeconds: 86_400,
+      });
+      if (answer.kind !== 'minted') throw new Error('expected a credential');
+      expect(answer.credential.commitIdentity).toEqual(IDENTITY);
+      const plain = harness('normal');
+      const without = await plain.minter.mint({
+        spec: plain.spec,
+        project: plain.project,
+        scope: 'push',
+        ttlSeconds: 86_400,
+      });
+      if (without.kind !== 'minted') throw new Error('expected a credential');
+      expect(Object.hasOwn(without.credential, 'commitIdentity')).toBe(false);
+    });
+
+    it('rides with a static run credential too', async () => {
+      const { minter, spec, project } = harness('normal', {
+        minting: false,
+        commitIdentity: IDENTITY,
+        staticRunCredential: {
+          owner: 'dedicated_user',
+          username: 'agentic-runner',
+          value: 'glpat-FAKE-static-run-token-not-real-0002',
+          expiresAt: '2026-12-01T00:00:00.000Z',
+          declaredExpiry: '2026-12-01',
+          sameAsApiToken: false,
+          refusal: null,
+        },
+      });
+      const answer = await minter.mint({ spec, project, scope: 'push', ttlSeconds: 86_400 });
+      if (answer.kind !== 'minted') throw new Error('expected a credential');
+      expect(answer.credential).toMatchObject({ source: 'static', commitIdentity: IDENTITY });
+    });
   });
 
   it('registers the value with the run-scoped secrets before it is handed out', async () => {

@@ -5,7 +5,11 @@
  * composition root registers it and the `git` type has a second implementation beside the fake.
  */
 import type { AgentTooling, RateLimitPolicy } from '@platform/application';
-import type { ProviderCreateInput, ProviderRegistration } from '../../registry.js';
+import type {
+  CommitIdentityFields,
+  ProviderCreateInput,
+  ProviderRegistration,
+} from '../../registry.js';
 import {
   type StaticRunCredentialSupport,
   withoutRunOnlyFields,
@@ -119,6 +123,15 @@ export const GITLAB_STATIC_RUN_CREDENTIAL: StaticRunCredentialSupport = {
 };
 
 /**
+ * Where GitLab declares who a run's commits are by — the run token's user, so GitLab links each
+ * commit to that account by its commit email. Both or neither (`gitlabConfigSchema`'s refinement).
+ */
+export const GITLAB_COMMIT_IDENTITY: CommitIdentityFields = {
+  nameField: 'commit_author_name',
+  emailField: 'commit_author_email',
+};
+
+/**
  * What the adapter is built from: the create input **without `run_token`**, in the config and in
  * the secrets. Every construction site (the binding loader, the prober, the inbound and organisation
  * loaders) goes through the registration's `create`, so this is the one place that keeps the run
@@ -157,6 +170,8 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
   },
   // WP-137: TD-028 decision 13 — a static run credential where GitLab cannot mint.
   staticRunCredential: GITLAB_STATIC_RUN_CREDENTIAL,
+  // Who a run's commits are by (owner request, 2026-11-20): absent is `agentic <agentic@localhost>`.
+  commitIdentity: GITLAB_COMMIT_IDENTITY,
   // WP-137: declared on the **integration** (decision 13 item 1), never by a project's binding — a
   // binding overlay could otherwise switch one project of a minted account to `static`, past the
   // one-binding rule, which reads the account's document.
@@ -167,6 +182,9 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
     'run_token_expires_at',
     // WP-146: the deploy key's public half is the account's too (decision 13b item 1).
     'run_ssh_public_key',
+    // The commit identity names the account the run token pushes as, so it is the account's.
+    'commit_author_name',
+    'commit_author_email',
   ],
   create: (input) => {
     const adapter = gitlabAdapterInput(input);

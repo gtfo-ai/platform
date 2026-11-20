@@ -248,6 +248,15 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    */
   readonly staticRunCredential?: StaticRunCredentialSupport;
   /**
+   * For a `git` provider: which two config keys declare **who a run's commits are by** (GitLab:
+   * `commit_author_name` and `commit_author_email`). The binding loader reads both out of the
+   * validated document into `GitBinding.commitIdentity` — both or neither, which the provider's
+   * schema enforces. Both keys must exist in `configSchema` and neither may be a secret field,
+   * checked at registration; refused for any other type. Absent: every run commits as the
+   * platform's `agentic <agentic@localhost>`.
+   */
+  readonly commitIdentity?: CommitIdentityFields;
+  /**
    * For a `task_management` provider: its own name for the permission the ticket claim's assign
    * needs (WP-177, TD-029 decision 5) — Jira Cloud's *Assign Issues* — carried to
    * `TaskManagementBinding.assignPermission` by the binding loader, so the brief of a refused claim
@@ -257,6 +266,12 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    */
   readonly assignPermission?: string;
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
+}
+
+/** The config keys a git provider declares its commit identity under (`ProviderRegistration.commitIdentity`). */
+export interface CommitIdentityFields {
+  readonly nameField: string;
+  readonly emailField: string;
 }
 
 export type AnyProviderRegistration = {
@@ -364,6 +379,29 @@ export const createIntegrationRegistry = (
           'declares credential minting without both hints (`enable` and `shape`); the mint ' +
             'refusals would tell an operator nothing about how to fix them (WP-107)',
         );
+      }
+    }
+    const identity = registration.commitIdentity;
+    if (identity !== undefined) {
+      if (registration.type !== 'git') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `declares a commit identity but is a "${registration.type}" provider; only a git binding's runs make commits`,
+        );
+      }
+      for (const field of [identity.nameField, identity.emailField]) {
+        if (!(field in shape)) {
+          throw new ProviderRegistrationError(
+            registration.id,
+            `commit identity field "${field}" does not exist in the config schema`,
+          );
+        }
+        if (registration.secretFields.includes(field)) {
+          throw new ProviderRegistrationError(
+            registration.id,
+            `commit identity field "${field}" is a secret field; a commit identity is written into every commit the run pushes, so it is configuration`,
+          );
+        }
       }
     }
     const fixed = registration.staticRunCredential;

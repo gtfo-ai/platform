@@ -2085,3 +2085,94 @@ describe('a deploy-key run (WP-146)', () => {
     expect(https).not.toContain('GIT_SSH_KEY');
   });
 });
+
+/**
+ * Who a run's commits are by (owner request, 2026-11-20): the git integration's declared identity,
+ * carried on the spec's repository half, kept on the handle, answered to the CLI and given to the
+ * export helper — **as environment**, never as text in the helper's script. Absent, every half is
+ * `agentic <agentic@localhost>` and the wire carries no key an earlier runner would refuse.
+ */
+describe('a declared commit identity', () => {
+  /** Passes the schema, and carries every character a shell would read: quotes, `$`, backticks, `;`. */
+  const AWKWARD = {
+    name: 'O\'Brien "Bot" $(id) `uname` ; Žluťoučký kůň 🤖',
+    email: 'service_account_group_1234_0123456789abcdef0123456789abcdef@noreply.gitlab.example',
+  };
+  const identitySpec = (commitIdentity: unknown) =>
+    workspaceSpecFixture({ repo: { commitIdentity } as never });
+
+  it('keeps the identity on the handle and answers it to the CLI; absent, neither carries the key', async () => {
+    const handle = await provider.create(...provisioned(identitySpec(AWKWARD)));
+    expect(handle.commitIdentity).toEqual(AWKWARD);
+    expect((await provider.cliEnvironment(handle)).commitIdentity).toEqual(AWKWARD);
+    // A launcher that restarted answers it from the handle alone.
+    const restarted = providerWithSocketTimeout(1_000);
+    expect((await restarted.cliEnvironment(handle)).commitIdentity).toEqual(AWKWARD);
+    const { commitIdentity: _dropped, ...plain } = handle;
+    expect(Object.hasOwn(await restarted.cliEnvironment(plain), 'commitIdentity')).toBe(false);
+  });
+
+  it('creates no key on the handle for a spec that declares none', async () => {
+    const handle = await provider.create(...provisioned(workspaceSpecFixture()));
+    expect(Object.hasOwn(handle, 'commitIdentity')).toBe(false);
+    expect(Object.hasOwn(await provider.cliEnvironment(handle), 'commitIdentity')).toBe(false);
+  });
+
+  it('commits the export as the declared identity through the helper’s environment, never its script', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc\nPUSHED=no\n' }));
+    const handle = await created();
+    await provider.export(
+      { ...handle, commitIdentity: AWKWARD },
+      { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip:' },
+      null,
+    );
+    const helper = daemon.byName(`export-${FIXTURE_RUN_ID}`)?.body;
+    expect(helper?.Env).toEqual(
+      expect.arrayContaining([
+        `GIT_AUTHOR_NAME=${AWKWARD.name}`,
+        `GIT_AUTHOR_EMAIL=${AWKWARD.email}`,
+        `GIT_COMMITTER_NAME=${AWKWARD.name}`,
+        `GIT_COMMITTER_EMAIL=${AWKWARD.email}`,
+      ]),
+    );
+    const script = (helper?.Cmd ?? []).join('\n');
+    expect(script).not.toContain('Brien');
+    expect(script).not.toContain(AWKWARD.email);
+    expect(script).not.toContain('user.name');
+    expect(script).not.toContain('user.email');
+  });
+
+  it('commits an export with no declared identity as agentic <agentic@localhost>', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc\nPUSHED=no\n' }));
+    const handle = await created();
+    await provider.export(
+      handle,
+      { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip:' },
+      null,
+    );
+    expect(daemon.byName(`export-${FIXTURE_RUN_ID}`)?.body.Env).toEqual(
+      expect.arrayContaining([
+        'GIT_AUTHOR_NAME=agentic',
+        'GIT_AUTHOR_EMAIL=agentic@localhost',
+        'GIT_COMMITTER_NAME=agentic',
+        'GIT_COMMITTER_EMAIL=agentic@localhost',
+      ]),
+    );
+  });
+
+  it.each([
+    ['a line break and angle brackets', { name: 'x\n<evil@example.test>', email: AWKWARD.email }],
+    ['a command substitution as the email', { name: 'Agentic', email: '$(id)@example.test' }],
+    ['a name alone', { name: 'Agentic' }],
+  ])(
+    'refuses a spec whose identity carries %s, before any Docker object exists',
+    async (_label, identity) => {
+      await expect(provider.create(...provisioned(identitySpec(identity)))).rejects.toMatchObject({
+        code: 'invalid_spec',
+      });
+      expect(daemon.history).toEqual([]);
+    },
+  );
+});

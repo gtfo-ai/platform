@@ -203,6 +203,51 @@ describe('the static run token in a merge request read through the real GitLab a
   });
 });
 
+describe('the git binding’s commit identity (owner request, 2026-11-20)', () => {
+  it('carries the integration’s declared identity to the binding, and nothing when it declares none', async () => {
+    const declared = {
+      name: 'Agentic',
+      email: 'service_account_group_1234_0123456789abcdef0123456789abcdef@noreply.gitlab.example',
+    };
+    const withIdentity = await loaderFor({
+      bindings: [
+        gitBinding({
+          config: {
+            base_url: 'https://git.example.test',
+            project: 'acme/api',
+            commit_author_name: declared.name,
+            commit_author_email: declared.email,
+          },
+        }),
+      ],
+    }).forProject(PROJECT, outsideARun);
+    expect(withIdentity.git?.commitIdentity).toEqual(declared);
+    const without = await loaderFor({
+      bindings: [
+        gitBinding({ config: { base_url: 'https://git.example.test', project: 'acme/api' } }),
+      ],
+    }).forProject(PROJECT, outsideARun);
+    expect(without.git).not.toBeNull();
+    expect(Object.hasOwn(without.git ?? {}, 'commitIdentity')).toBe(false);
+  });
+
+  it('refuses a binding whose identity is half declared, naming the missing field', async () => {
+    await expect(
+      loaderFor({
+        bindings: [
+          gitBinding({
+            config: {
+              base_url: 'https://git.example.test',
+              project: 'acme/api',
+              commit_author_name: 'Agentic',
+            },
+          }),
+        ],
+      }).forProject(PROJECT, outsideARun),
+    ).rejects.toThrow(/commit_author_email/);
+  });
+});
+
 describe('a project with no bindings', () => {
   it('resolves to null for both, which is absent rather than broken', async () => {
     const integrations = await loaderFor({ bindings: [] }).forProject(PROJECT, outsideARun);

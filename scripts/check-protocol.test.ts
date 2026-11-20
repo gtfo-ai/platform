@@ -71,9 +71,9 @@ const scratch = (): Scratch => {
 };
 
 describe('the constants this build ships', () => {
-  it('are N = 4 accepting [3, 4] — [N-1, N] without a 0 (TD-031 decision 9; bumped by S-26.4)', () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(4);
-    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([3, 4]);
+  it('are N = 5 accepting [4, 5] — [N-1, N] without a 0 (TD-031 decision 9; bumped by the commit identity)', () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(5);
+    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([4, 5]);
   });
 
   it('are read back from the module text exactly as they are imported', () => {

@@ -426,3 +426,48 @@ describe('a communication provider’s channel declaration', () => {
     });
   });
 });
+
+describe('a git provider’s commit identity declaration (owner request, 2026-11-20)', () => {
+  const IDENTITY = { nameField: 'commit_author_name', emailField: 'commit_author_email' };
+  const gitDeclaring = (overrides: Record<string, unknown> = {}): AnyProviderRegistration =>
+    ({
+      ...registration(),
+      id: 'fake-identity-git',
+      type: 'git',
+      configSchema: z.strictObject({
+        token: z.string(),
+        commit_author_name: z.string().nullish(),
+        commit_author_email: z.string().nullish(),
+      }),
+      secretFields: ['token'],
+      create: () => {
+        throw new Error('not built in this test');
+      },
+      commitIdentity: IDENTITY,
+      ...overrides,
+    }) as AnyProviderRegistration;
+
+  it('accepts a declaration over the schema’s own non-secret keys', () => {
+    expect(() => createIntegrationRegistry([gitDeclaring()])).not.toThrow();
+  });
+
+  it.each([
+    [
+      'a key the schema lacks',
+      { commitIdentity: { ...IDENTITY, emailField: 'nope' } },
+      /commit identity field "nope" does not exist/,
+    ],
+    [
+      'a key that is a secret field',
+      { secretFields: ['token', 'commit_author_email'] },
+      /commit identity field "commit_author_email" is a secret field/,
+    ],
+    [
+      'a provider that is not git',
+      { type: 'task_management' },
+      /declares a commit identity but is a "task_management" provider/,
+    ],
+  ])('refuses %s', (_label, overrides, message) => {
+    expect(() => createIntegrationRegistry([gitDeclaring(overrides)])).toThrow(message);
+  });
+});

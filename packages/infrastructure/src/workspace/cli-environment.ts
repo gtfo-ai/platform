@@ -17,8 +17,41 @@
  * CLI, a `#!/usr/bin/env node` executable could not start at all (exit 127, no `PATH`), and the real
  * CLI retried its first model request until the wall clock stopped it, never reaching the sidecar.
  */
-import type { WorkspaceCliEnvironment, WorkspaceGitConfigEntry } from '@platform/application';
+import type {
+  GitCommitIdentity,
+  WorkspaceCliEnvironment,
+  WorkspaceGitConfigEntry,
+} from '@platform/application';
 import { WorkspaceError } from '@platform/application';
+
+/**
+ * Who the platform's commits are by when the git integration declares nobody. Not an address
+ * `gitCommitEmailSchema` accepts (`localhost` has no dot), which is why it is a constant here rather
+ * than a default anywhere an operator writes: an operator cannot configure it, only leave it.
+ */
+export const PLATFORM_COMMIT_IDENTITY: GitCommitIdentity = {
+  name: 'agentic',
+  email: 'agentic@localhost',
+};
+
+/**
+ * A commit identity as git's environment — `GIT_AUTHOR_*` and `GIT_COMMITTER_*`, both halves the
+ * same — for the CLI (`../runner/options.ts`) and the export helper (`./provider.ts`) alike.
+ * Environment, never `user.name`/`user.email` in a file and never text in a script: it outranks
+ * every configuration file git reads (a repository's own `.git/config` included), and a declared
+ * name with a quote or a `$` in it is a value git reads, never shell the helper parses.
+ */
+export const gitIdentityEnvironment = (
+  identity: GitCommitIdentity | undefined,
+): Record<string, string> => {
+  const { name, email } = identity ?? PLATFORM_COMMIT_IDENTITY;
+  return {
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
+  };
+};
 
 /** The variable names {@link cliEnvironmentVariables} writes, git's aside. */
 export const CLI_ENVIRONMENT_NAMES = [

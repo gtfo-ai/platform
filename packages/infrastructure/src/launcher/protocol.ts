@@ -47,6 +47,7 @@ import type {
 } from '@platform/application';
 import {
   existingProtectedPathsSchema,
+  gitCommitIdentitySchema,
   MAX_EXISTING_PROTECTED_PATHS,
   MAX_LABELLED_RUNS,
   MAX_OPAQUE_TRACKED_PATHS,
@@ -180,6 +181,8 @@ export const workspaceHandleSchema: z.ZodType<WorkspaceHandle> = z.strictObject(
   keepUntil: isoDateTimeSchema,
   // WP-146: a deploy-key run's SSH route, absent for HTTPS.
   gitSsh: workspaceGitSshSchema.optional(),
+  // The run's declared commit identity, absent for the platform's own (and from a runner that sent none).
+  commitIdentity: gitCommitIdentitySchema.optional(),
 });
 
 /**
@@ -279,6 +282,12 @@ export const workspaceCliEnvironmentSchema: z.ZodType<WorkspaceCliEnvironment> =
     .refine((value) => !/[\r\n]/.test(value) && !value.includes('\0'), 'one line')
     .nullable()
     .optional(),
+  /**
+   * The commit identity for the CLI's `GIT_AUTHOR_*`/`GIT_COMMITTER_*` — the spec's
+   * `repo.commitIdentity`, answered back so the export helper and the CLI read one value. Present
+   * only when the spec carried one; absent (every earlier launcher) is `agentic <agentic@localhost>`.
+   */
+  commitIdentity: gitCommitIdentitySchema.optional(),
 });
 
 // ── Requests ─────────────────────────────────────────────────────────────────

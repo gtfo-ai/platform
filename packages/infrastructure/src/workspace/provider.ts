@@ -65,6 +65,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   ExistingProtectedPaths,
+  GitCommitIdentity,
   LabelledRunWorkspace,
   Logger,
   PurgedControlDirectory,
@@ -104,7 +105,11 @@ import {
   runImagesSchema,
   runSkillsSchema,
 } from '@platform/contracts';
-import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
+import {
+  cliEnvironmentVariables,
+  gitIdentityEnvironment,
+  numberGitConfig,
+} from './cli-environment.js';
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
 import type {
   DockerEngine,
@@ -466,8 +471,9 @@ export const exportScript = (input: {
     // failed`, which reads like a network fault.
     'g config --file "$GIT_CONFIG_GLOBAL" --add safe.directory "$MIRROR"',
     'g config --file "$GIT_CONFIG_GLOBAL" core.hooksPath /dev/null',
-    'g config --file "$GIT_CONFIG_GLOBAL" user.email agentic@localhost',
-    'g config --file "$GIT_CONFIG_GLOBAL" user.name agentic',
+    // No `user.name`/`user.email` here: the identity is the helper's `GIT_AUTHOR_*`/`GIT_COMMITTER_*`
+    // environment (`gitIdentityEnvironment`), which outranks every configuration file and keeps a
+    // declared name out of this script's text — nothing an operator wrote is ever parsed as shell.
     'ORIGIN_URL="$(g config --file "$MIRROR/config" --get remote.origin.url)"',
     'OBJECT_FORMAT="$(g config --file "$MIRROR/config" --get extensions.objectformat || true)"',
     'chmod u+rwx /work/repo/.git',
@@ -1312,9 +1318,16 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       const sidecarHost = await this.#startSidecar(spec, made, images.egress);
 
       const gitSsh = spec.repo?.ssh;
+      const commitIdentity = spec.repo?.commitIdentity;
       const env = this.#runContainerEnv(
         spec,
-        this.#runCliEnvironment(spec.runId, sidecarHost !== null, gitSsh, imagePath),
+        this.#runCliEnvironment(
+          spec.runId,
+          sidecarHost !== null,
+          gitSsh,
+          imagePath,
+          commitIdentity,
+        ),
       );
       made.container = await this.#engine.createContainer(
         names.container,
@@ -1345,6 +1358,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         controlSubPath: spec.runId,
         keepUntil: spec.keepUntil,
         ...(gitSsh === undefined ? {} : { gitSsh }),
+        ...(commitIdentity === undefined ? {} : { commitIdentity }),
       };
     } catch (error) {
       // Either a handle or nothing: a half-created run whose container is up is a container
@@ -1909,6 +1923,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     hasSidecar: boolean,
     gitSsh: WorkspaceGitSsh | undefined,
     imagePath: string,
+    commitIdentity: GitCommitIdentity | undefined,
   ): WorkspaceCliEnvironment {
     const proxyUrl = egressProxyUrl(egressContainerName(runId));
     if (gitSsh !== undefined && !hasSidecar) {
@@ -1950,6 +1965,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
               proxyUrl,
               connectCommand: this.#runletCommand('connect'),
             }),
+      // Answered only when the spec declared one, so a runner of an earlier build — which sent
+      // none — is never answered a key its strict schema refuses.
+      ...(commitIdentity === undefined ? {} : { commitIdentity }),
     };
   }
 
@@ -1996,6 +2014,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       handle.sidecarContainerId !== null,
       handle.gitSsh,
       imagePath,
+      handle.commitIdentity,
     );
   }
 
@@ -2609,6 +2628,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const { mounts: helperGitMounts, ...helperGitEnv } = this.#gitCredentialEnv(credential, {
       BRANCH: request.branch,
       COMMIT_MESSAGE: request.commitMessage,
+      // Who the `wip:` commit is by: the run's declared identity, or the platform's own.
+      ...gitIdentityEnvironment(handle.commitIdentity),
       // Nothing but the platform's configuration is read (WP-75): no system file, and a global
       // file the script writes itself. The credential helper travels as `GIT_CONFIG_COUNT`
       // (command scope), which neither variable touches.

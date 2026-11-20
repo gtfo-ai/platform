@@ -696,6 +696,13 @@ worker_ui}` in the claim's transaction. The page proxies them as `GET`/`POST /ap
 on the worker (`409 no_free_slot` there, before the core is asked). `GET /api/workers` publishes each
 worker's `claim_projects` (`null`, `[]`, or `[{id, key}]`), which the Workers screen shows read only.
 
+**Protocol 5 — the run package's commit identity (owner request, 2026-11-20).** `WORKER_PROTOCOL_VERSION
+= 5`, accepted `[4, 5]` (a version-3 worker is now `426` at the protocol check). No new verb: a claimed
+package's `workspace.repo.commitIdentity` — the git integration's declared `commit_author_name` and
+`commit_author_email`, present only when declared — is sent at protocol 5 and stripped for a version-4
+worker, whose strict `workspaceRepoSchema` refuses the key (`packageFor` in
+`apps/server/src/routes/worker/protocol.ts`); that worker's run commits as `agentic <agentic@localhost>`.
+
 **Protocol 4 — what a machine takes, and a pick that assigns (S-26.4, TD-031's 2026-11-06 amendment
 items 6–7, BD-032's 2026-11-06 amendment).** `WORKER_PROTOCOL_VERSION = 4`, accepted `[3, 4]` (a
 version-2 worker is now `426` at the protocol check). No new verb: a worker's **claim policy**
@@ -938,8 +945,8 @@ token travels in the package and a deploy key never does (the package carries th
 key; the worker signs through `ssh-sign`).
 
 **The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`, WP-285 `pause`, WP-287 `update-report` — one `human_actions` row `worker.update` under the worker's user, the newest shown as the Workers screen's `last_update`):
-`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (4 since S-26.4), `ACCEPTED_WORKER_PROTOCOLS`
-(`[N-1, N]`, today `[3, 4]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
+`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (5 since the commit identity), `ACCEPTED_WORKER_PROTOCOLS`
+(`[N-1, N]`, today `[4, 5]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two
 spellings, each stated there: the **HTTP DTOs are snake_case**, the house rule; the **run package**
 (`runPackageSchema`, the `200` of `claims`, published as `schemas/worker-run-package.schema.json`) is

@@ -27,7 +27,14 @@
  * The place that answers "a transaction is open" is `events/open-transaction.ts`, which has the
  * measurement and the honest list of what the mechanism cannot see.
  */
-import type { DiffStats, ExternalIdentity, Id, JsonObject, TaskMode } from '@platform/contracts';
+import type {
+  DiffStats,
+  ExternalIdentity,
+  GitCommitIdentity,
+  Id,
+  JsonObject,
+  TaskMode,
+} from '@platform/contracts';
 import { isPlatformMergeRequestNote, opensWithPlatformCommentMarker } from '@platform/domain';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import {
@@ -157,6 +164,13 @@ export interface GitBinding {
    * dependency gate's search, and by nothing else: the adapter is built without the private key.
    */
   readonly deployKeyRunCredential?: DeployKeyRunCredential;
+  /**
+   * Who a run's commits are by — the integration's declared commit identity (GitLab:
+   * `commit_author_name` + `commit_author_email`), present exactly when it declares both. Read by
+   * the run-credential minter, which hands it to the workspace beside the credential; absent is the
+   * platform's `agentic <agentic@localhost>`. Configuration, never a secret.
+   */
+  readonly commitIdentity?: GitCommitIdentity;
 }
 
 /**

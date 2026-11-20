@@ -75,7 +75,7 @@ import type {
   WorkspaceSpec,
 } from '@platform/application';
 import { silentLogger, WorkspaceError } from '@platform/application';
-import { type RunSavedWork, shaSchema } from '@platform/contracts';
+import { type GitCommitIdentity, type RunSavedWork, shaSchema } from '@platform/contracts';
 import { createRunletSpawn } from '../runlet/spawn-adapter.js';
 import type {
   ProvisionedRunWorkspace,
@@ -139,6 +139,13 @@ export interface MintedRunGitCredential {
    * key go on the spec.
    */
   readonly ssh?: { readonly publicKey: string; readonly route: SshGitRoute };
+  /**
+   * Who the run's commits are by, when the git integration that gave this credential declares it
+   * (GitLab: `commit_author_name` + `commit_author_email`) — the account the credential pushes as,
+   * which is why it rides with the credential: the same binding answers both. Absent is the
+   * platform's `agentic <agentic@localhost>`. {@link withCommitIdentity} puts it on the spec.
+   */
+  readonly commitIdentity?: GitCommitIdentity;
   /**
    * Revokes it at the provider, through the executor. The provisioner calls it exactly once. A
    * static credential's is a no-op: nothing was minted, and it lives to its declared expiry.
@@ -338,7 +345,8 @@ export const createLauncherRunWorkspaceProvisioner = (
       // on the run's egress list — for this run only — and this process holds the signer. A key
       // that does not parse refuses the run before the create, and the key is never sent instead.
       let signer: DeployKeySigner | null = null;
-      let runSpec = workspaceSpec;
+      // The git integration's declared commit identity, when it declares one (absent otherwise).
+      let runSpec = withCommitIdentity(workspaceSpec, minted?.commitIdentity);
       if (minted?.source === 'deploy_key') {
         try {
           const gitSsh = gitSshOf(minted);
@@ -346,7 +354,7 @@ export const createLauncherRunWorkspaceProvisioner = (
             privateKey: minted.password,
             publicKey: gitSsh.publicKey,
           });
-          runSpec = withGitSsh(workspaceSpec, gitSsh);
+          runSpec = withGitSsh(runSpec, gitSsh);
         } catch (error) {
           await revokeOnce();
           throw error instanceof WorkspaceError
@@ -715,3 +723,18 @@ export const withGitSsh = (spec: WorkspaceSpec, gitSsh: WorkspaceGitSsh): Worksp
     },
   };
 };
+
+/**
+ * The spec of a run whose git integration declares a commit identity: its repository carries it,
+ * and the launcher answers it as the CLI's `GIT_AUTHOR_*`/`GIT_COMMITTER_*` and gives it to the
+ * export helper. **Set only when declared** — an absent identity leaves the spec without the key, so
+ * a launcher of an earlier build (whose strict schema refuses it) is sent it only when an operator
+ * configured one. A spec with no checkout has no commit to author and is returned unchanged.
+ */
+export const withCommitIdentity = (
+  spec: WorkspaceSpec,
+  commitIdentity: GitCommitIdentity | undefined,
+): WorkspaceSpec =>
+  spec.repo === null || commitIdentity === undefined
+    ? spec
+    : { ...spec, repo: { ...spec.repo, commitIdentity } };

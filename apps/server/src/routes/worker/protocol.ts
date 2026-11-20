@@ -22,7 +22,8 @@
  *   POST /api/worker/v1/offers/:id/claim        worker credential, protocol ≥ 3 (WP-293)
  *
  * Protocol 4 (S-26.4) adds no verb: the claim policy's fields on the handshake, `claim-scope`,
- * `offers` and the pick (`pick-verbs.ts`), accepted beside protocol 3 (`[3, 4]`).
+ * `offers` and the pick (`pick-verbs.ts`). Protocol 5 adds no verb either: a claimed package's
+ * `workspace.repo.commitIdentity`, stripped for a version-4 worker (`packageFor`); accepted `[4, 5]`.
  *
  * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
  * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
@@ -82,6 +83,7 @@ import {
   WORKER_PATHS,
   WORKER_PROTOCOL_CLAIM_POLICY,
   WORKER_PROTOCOL_CLAIM_SCOPE,
+  WORKER_PROTOCOL_COMMIT_IDENTITY,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
@@ -487,16 +489,24 @@ export const registerWorkerProtocolRoutes = async (
 
   /**
    * A claimed package as the request's protocol reads it: a version-1 worker's strict package schema
-   * refuses the display block (the worker-UI amendment §5). Version 1 is no longer accepted since
-   * protocol 3 (WP-293), so this holds only while a build accepting it could reach here.
+   * refuses the display block (the worker-UI amendment §5) — version 1 is no longer accepted since
+   * protocol 3 (WP-293), so that half holds only while a build accepting it could reach here — and a
+   * worker below {@link WORKER_PROTOCOL_COMMIT_IDENTITY} refuses `workspace.repo.commitIdentity`,
+   * so it is sent the package without it and its run commits as `agentic <agentic@localhost>`.
    */
-  const packageFor = <P extends { readonly display?: unknown }>(
+  const packageFor = (
     request: FastifyRequest,
-    pkg: P,
-  ): P => {
-    if (protocolOf(request) >= WORKER_PROTOCOL_LOCAL_UI) return pkg;
-    const { display: _display, ...v1Package } = pkg;
-    return v1Package as P;
+    pkg: z.output<typeof runPackageSchema>,
+  ): z.output<typeof runPackageSchema> => {
+    const protocol = protocolOf(request);
+    let answered = pkg;
+    if (protocol < WORKER_PROTOCOL_COMMIT_IDENTITY && answered.workspace.repo !== null) {
+      const { commitIdentity: _commitIdentity, ...repo } = answered.workspace.repo;
+      answered = { ...answered, workspace: { ...answered.workspace, repo } };
+    }
+    if (protocol >= WORKER_PROTOCOL_LOCAL_UI) return answered;
+    const { display: _display, ...v1Package } = answered;
+    return v1Package;
   };
 
   /**

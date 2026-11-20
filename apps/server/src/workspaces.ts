@@ -61,7 +61,7 @@ import {
   startOrphanWorkspaceReaper,
   WorkspaceError,
 } from '@platform/application';
-import { taskModeSchema } from '@platform/contracts';
+import { type GitCommitIdentity, taskModeSchema } from '@platform/contracts';
 import {
   launcher as launcherAdapters,
   recovery as recoveryAdapters,
@@ -182,17 +182,23 @@ export const createRunGitCredentialMinter = (options: {
         mode,
       };
       let minted: Awaited<ReturnType<ReturnType<typeof runCredentialWrites>['mint']>>;
+      // Who the run's commits are by — the git integration's declared identity, read off the same
+      // binding the credential comes from (absent: the platform's `agentic <agentic@localhost>`).
+      let commitIdentity: GitCommitIdentity | undefined;
       try {
-        minted = await runCredentialWrites(
-          await integrationsForProject(options.integrations, spec.projectId, noRunScopedSecrets()),
-          {
-            // WP-114, backlog 386: read after the mint's audit row committed, on the pool (no open
-            // transaction), so a retire that committed first is seen and the token is revoked in hand.
-            isRetired: async (integrationId) => (await retiredAtOf(integrationId)) !== null,
-            // WP-137: a static run credential's declared expiry is checked against this.
-            now: options.now,
-          },
-        ).mint({
+        const integrations = await integrationsForProject(
+          options.integrations,
+          spec.projectId,
+          noRunScopedSecrets(),
+        );
+        commitIdentity = integrations.git?.commitIdentity;
+        minted = await runCredentialWrites(integrations, {
+          // WP-114, backlog 386: read after the mint's audit row committed, on the pool (no open
+          // transaction), so a retire that committed first is seen and the token is revoked in hand.
+          isRetired: async (integrationId) => (await retiredAtOf(integrationId)) !== null,
+          // WP-137: a static run credential's declared expiry is checked against this.
+          now: options.now,
+        }).mint({
           ...context,
           scope: mode === 'shadow' ? 'read' : scope,
           branchPatterns: project.branchPatterns,
@@ -231,6 +237,7 @@ export const createRunGitCredentialMinter = (options: {
             scope: fixed.scope,
             expiresAt: fixed.expiresAt,
             source: 'static',
+            ...(commitIdentity === undefined ? {} : { commitIdentity }),
             // Nothing to revoke: no call was made, and the token lives to its declared expiry
             // (decision 13 item 5). No `revoke_credential` row is written, so the recovery pass —
             // which starts from `mint_credential` rows — never finds this run. The provisioner calls
@@ -264,6 +271,7 @@ export const createRunGitCredentialMinter = (options: {
             expiresAt: until,
             source: 'deploy_key',
             ssh: { publicKey: key.publicKey, route: key.route },
+            ...(commitIdentity === undefined ? {} : { commitIdentity }),
             // Nothing to revoke per run: removing the key from the project is the revocation
             // (decision 13b item 8). The run's registry entry goes with the run.
             revoke: async () => {
@@ -318,6 +326,7 @@ export const createRunGitCredentialMinter = (options: {
           scope: credential.scope,
           expiresAt: credential.expiresAt,
           source: 'minted',
+          ...(commitIdentity === undefined ? {} : { commitIdentity }),
           revoke,
         },
       };

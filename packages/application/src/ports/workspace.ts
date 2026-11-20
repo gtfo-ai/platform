@@ -43,6 +43,7 @@
  */
 import type {
   ExistingProtectedPaths,
+  GitCommitIdentity,
   RunImages,
   RunSkills,
   WorkspaceEgress,
@@ -55,6 +56,7 @@ import type {
 import {
   egressHostSchema,
   existingProtectedPathsSchema,
+  gitCommitIdentitySchema,
   MAX_EXISTING_PROTECTED_PATHS,
   MAX_OPAQUE_TRACKED_PATHS,
   MAX_TRACKED_ENTRIES,
@@ -83,6 +85,7 @@ import * as z from 'zod';
 // Re-exported here so every importer of this port is unchanged.
 export type {
   ExistingProtectedPaths,
+  GitCommitIdentity,
   RunImages,
   RunSkills,
   WorkspaceEgress,
@@ -95,6 +98,7 @@ export type {
 export {
   egressHostSchema,
   existingProtectedPathsSchema,
+  gitCommitIdentitySchema,
   MAX_EXISTING_PROTECTED_PATHS,
   MAX_OPAQUE_TRACKED_PATHS,
   MAX_TRACKED_ENTRIES,
@@ -194,6 +198,13 @@ export interface WorkspaceHandle {
    * HTTPS.
    */
   readonly gitSsh?: WorkspaceGitSsh;
+  /**
+   * The run's declared commit identity (`WorkspaceRepo.commitIdentity`), so `cliEnvironment` and
+   * `export` — both derived from the handle — answer it after a launcher restart. Absent is the
+   * platform's `agentic <agentic@localhost>`; on the wire only when present, so a runner of an
+   * earlier build, which never sends one, is never answered one.
+   */
+  readonly commitIdentity?: GitCommitIdentity;
 }
 
 /**
@@ -257,6 +268,12 @@ export interface WorkspaceCliEnvironment {
    * Optional on the wire, absent is `null`, so a launcher of an earlier build still parses.
    */
   readonly gitSshCommand?: string | null;
+  /**
+   * The commit identity the CLI's git uses (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`), the same one the
+   * export helper commits with — present only for a run whose git integration declares one, so a
+   * runner of an earlier build is never answered the key; absent is `agentic <agentic@localhost>`.
+   */
+  readonly commitIdentity?: GitCommitIdentity;
 }
 
 // ── Export and retention ─────────────────────────────────────────────────────

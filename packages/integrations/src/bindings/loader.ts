@@ -109,8 +109,18 @@ import {
   noSecretsRedactor,
   secretPlaceholder,
 } from '@platform/application';
-import type { Id, IntegrationType, JsonObject } from '@platform/contracts';
-import type { IntegrationPortByType, IntegrationRegistry } from '../registry.js';
+import {
+  type GitCommitIdentity,
+  gitCommitIdentitySchema,
+  type Id,
+  type IntegrationType,
+  type JsonObject,
+} from '@platform/contracts';
+import type {
+  CommitIdentityFields,
+  IntegrationPortByType,
+  IntegrationRegistry,
+} from '../registry.js';
 import { deployKeyRunCredentialOf, staticRunCredentialOf } from '../static-run-credential.js';
 
 /**
@@ -391,7 +401,31 @@ interface Built<TType extends IntegrationType> {
   readonly deployKeyRunCredential?: DeployKeyRunCredential;
   /** The registration's claim permission name (WP-177); absent for a provider that declares none. */
   readonly assignPermission?: string;
+  /** The integration's declared commit identity; absent unless it declares both halves. */
+  readonly commitIdentity?: GitCommitIdentity;
 }
+
+/**
+ * The commit identity a git integration declares, read out of the **validated** document under the
+ * keys its registration names — `undefined` unless both are non-empty strings (the provider's schema
+ * refuses one without the other, so "neither" is the only other state it can reach). Parsed again by
+ * the one schema the workspace spec carries it under, so a value that reached here past a provider
+ * schema kinder than it is refused at the load rather than at the launcher.
+ */
+export const commitIdentityOf = (
+  fields: CommitIdentityFields | undefined,
+  config: Readonly<Record<string, unknown>>,
+): GitCommitIdentity | undefined => {
+  if (fields === undefined) {
+    return undefined;
+  }
+  const name = config[fields.nameField];
+  const email = config[fields.emailField];
+  if (typeof name !== 'string' || name === '' || typeof email !== 'string' || email === '') {
+    return undefined;
+  }
+  return gitCommitIdentitySchema.parse({ name, email });
+};
 
 /**
  * The channel a communication binding names, out of the config the provider's schema just accepted.
@@ -608,8 +642,14 @@ export const createPipelineIntegrationsLoader = (
               ...declaredKey,
               redactedAs: secretPlaceholder(secretName(binding, deployKeyField)),
             };
+      // The commit identity, when the integration declares one (configuration, never a secret).
+      const commitIdentity = commitIdentityOf(
+        registration.commitIdentity,
+        parsed.data as Readonly<Record<string, unknown>>,
+      );
       return {
         ...channels,
+        ...(commitIdentity === undefined ? {} : { commitIdentity }),
         providerName: providerNameOf(registration.displayName),
         ...(mintingHints === undefined ? {} : { mintingHints }),
         ...(assignPermission === undefined ? {} : { assignPermission }),
@@ -814,6 +854,10 @@ export const createPipelineIntegrationsLoader = (
                 ...(git.built.deployKeyRunCredential === undefined
                   ? {}
                   : { deployKeyRunCredential: git.built.deployKeyRunCredential }),
+                // Who the project's runs commit as, when the integration declares it.
+                ...(git.built.commitIdentity === undefined
+                  ? {}
+                  : { commitIdentity: git.built.commitIdentity }),
               },
         taskManagement:
           taskManagement === null

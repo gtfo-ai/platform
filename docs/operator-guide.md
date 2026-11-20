@@ -434,7 +434,8 @@ user).
   quotes untrusted text carries up to 1 KiB of it, redacted for secrets but not for meaning.
   The DSN names a host the developer chose: the worker sends its errors there and nowhere else.
 - *What this machine takes* and *Take this one* (WP-293, protocol 3; S-26.4, protocol 4 — a
-  core accepts `[3, 4]`, so a worker image older than protocol 3 must be updated first): the owner's
+  core accepts `[4, 5]` since protocol 5 (the commit identity), so a worker image older than
+  protocol 4 must be updated first): the owner's
   **claim scope** (every project or named projects) is stored on the core in `workers.claim_project_ids`
   and its **claim policy** (*my tasks and unassigned ones* — the default for a new machine —, *only my
   tasks*, *everything*, *only what I pick*) in `workers.claim_policy` (migration 0108); both only narrow
@@ -1816,6 +1817,18 @@ Stated here so an operator meets them in a document rather than in production:
   counted in the database whichever API replica answers) — but the core then signs for that run, whose
   reach is every project the key is enabled on; neither is revoked per run. A minted credential needs no
   opt-in. This is Q124, built as its recommendation (a), still open with the owner.
+- **Who a run's commits are by** (owner request, 2026-11-20). By default every commit a run makes —
+  the agent's own and the export's `wip:` — is authored and committed as `agentic <agentic@localhost>`,
+  which GitLab links to nobody. Set **both** `commit_author_name` and `commit_author_email` on the
+  GitLab integration (**Edit configuration**, or `PATCH /api/integrations/:id`; account-level, not
+  secrets) and every run of its projects commits as that identity instead. Use the **run token's
+  user's commit email** — for a service account, the `…@noreply.gitlab.com` address on its profile —
+  so GitLab links the commits to that account. One without the other is refused, naming the other; a
+  name with `<`, `>`, a line break or a control character, and an email `z.email()` does not accept,
+  are refused at the write. The identity reaches the run as git's `GIT_AUTHOR_*`/`GIT_COMMITTER_*`
+  environment (the CLI's and the export helper's), which outranks the repository's own
+  `.git/config`. A remote worker on worker protocol 4 (an image older than this build) is sent the run
+  without it and commits as `agentic` until its updater follows the core.
 - **`docker compose up` cannot pull the published images** without the retagging step in §2, because
   `compose.yml` names them without a registry.
 - **`compose.yml` passes the `app` service a fixed list of variables**, so `.env` is not the app's

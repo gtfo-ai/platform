@@ -213,6 +213,45 @@ describe('the remote run package (WP-281)', () => {
     expect(minted.revoked()).toBe(0);
   });
 
+  it('carries the binding’s declared commit identity on the workspace repo — with a deploy key too — and no key when none is declared', async () => {
+    const identity = {
+      name: 'Agentic',
+      email: 'service_account_group_1234_0123456789abcdef0123456789abcdef@noreply.gitlab.example',
+    };
+    const declared = await build(
+      packager(async () => ({
+        kind: 'minted',
+        credential: credential({ commitIdentity: identity }),
+      })),
+    );
+    const pkg = runPackageSchema.parse(declared.kind === 'package' ? declared.package : null);
+    expect(pkg.workspace.repo?.commitIdentity).toEqual(identity);
+    // `withGitSsh` builds on the identity's spec rather than replacing it.
+    const ssh = await build(
+      packager(
+        async () => ({
+          kind: 'minted',
+          credential: credential({
+            source: 'deploy_key',
+            username: 'git',
+            password: FAKE_DEPLOY_KEY.privateKey,
+            ssh: { publicKey: FAKE_DEPLOY_KEY.publicKey, route: ROUTE },
+            commitIdentity: identity,
+          }),
+        }),
+        { optIn: 'allow', host: 'gitlab.com' },
+      ),
+    );
+    const sshPkg = runPackageSchema.parse(ssh.kind === 'package' ? ssh.package : null);
+    expect(sshPkg.workspace.repo?.commitIdentity).toEqual(identity);
+    expect(sshPkg.workspace.repo?.ssh?.connectHost).toBe('altssh.gitlab.com');
+    const plain = await build(packager(async () => ({ kind: 'minted', credential: credential() })));
+    expect(
+      plain.kind === 'package' &&
+        Object.hasOwn(plain.package.workspace.repo ?? {}, 'commitIdentity'),
+    ).toBe(false);
+  });
+
   it('refuses a writing run whose binding can mint nothing, terminal and by name', async () => {
     const refused = build(
       packager(async () => ({

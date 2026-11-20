@@ -66,7 +66,6 @@ import {
   workerOffersResponseSchema,
   workerReleaseResponseSchema,
   workerRunCancelResponseSchema,
-  workerSettingsSchema,
   workerSpawnResponseSchema,
   workerSshSignResponseSchema,
   workerToolCallResponseSchema,
@@ -250,6 +249,8 @@ const world = async (
     ) => Promise<ReadonlyMap<string, boolean>>;
     /** Why a ready machine runs nothing (S-28.6); absent, `null` — none composed. */
     readonly workerIdle?: WorkerIdleReader;
+    /** The git integration's declared commit identity the minter hands over (protocol 5); absent, none. */
+    readonly commitIdentity?: { readonly name: string; readonly email: string };
   } = {},
 ): Promise<World> => {
   const store = createMemoryWorkerStore();
@@ -321,6 +322,9 @@ const world = async (
               scope,
               expiresAt: '2026-06-02T09:00:00.000Z',
               source: 'minted',
+              ...(options.commitIdentity === undefined
+                ? {}
+                : { commitIdentity: options.commitIdentity }),
               revoke: async () => {},
             },
           };
@@ -1727,7 +1731,7 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
   const asV1 = (secret: string) => ({ authorization: `Bearer ${secret}`, ...V1 });
   /** The version-1 shapes, strict: what a version-1 worker parses with (TD-031's amendment §5). */
 
-  it('refuses a version-1 worker at the protocol check (accepted [3, 4] since S-26.4)', async () => {
+  it('refuses a version-1 worker at the protocol check (accepted [4, 5] since the commit identity)', async () => {
     const w = await world();
     for (const verb of [WORKER_PATHS.handshake, WORKER_PATHS.claims] as const) {
       const response = await w.app.inject({
@@ -1737,7 +1741,7 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
         payload: bodies(1)[verb],
       });
       expect(`${verb} ${response.statusCode}`).toBe(`${verb} 426`);
-      expect(workerUpgradeRequiredBodySchema.parse(response.json()).accepted).toEqual([3, 4]);
+      expect(workerUpgradeRequiredBodySchema.parse(response.json()).accepted).toEqual([4, 5]);
     }
   });
 
@@ -1768,7 +1772,7 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
       });
       expect(`${verb} ${response.statusCode}`).toBe(`${verb} 426`);
       // Since protocol 3 the generic check refuses version 1 first; the verbs' own gate at 2 is
-      // unreachable while the accepted range is [3, 4], and stays for the range it was written for.
+      // unreachable while the accepted range is [4, 5], and stays for the range it was written for.
       const body = workerUpgradeRequiredBodySchema.parse(response.json());
       expect(body.error.message).toContain('worker protocol 1');
     }
@@ -1974,6 +1978,7 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
 describe('the worker protocol (WP-293): protocol 3, the claim scope and take this one', () => {
   const V2 = { 'x-worker-protocol': '2' };
   const V3 = { 'x-worker-protocol': '3' };
+  const V4 = { 'x-worker-protocol': '4' };
   /** A foreign project: nobody here may take its runs. */
   const ELSEWHERE = '00000000-0000-4000-8000-0000000293e1';
   /** The four new verbs, each with its method and a valid body. */
@@ -2042,12 +2047,10 @@ describe('the worker protocol (WP-293): protocol 3, the claim scope and take thi
       payload: { image_digests: HELD },
     });
 
-  it('protocol 4 is current and accepts [3, 4]; a version-3 handshake carries no claim_policy, and says pick only as []', async () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(4);
-    expect([...ACCEPTED_WORKER_PROTOCOLS]).toEqual([3, 4]);
+  it('protocol 5 is current and accepts [4, 5]; a version-4 handshake still carries claim_policy, and versions 2 and 3 are refused 426', async () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(5);
+    expect([...ACCEPTED_WORKER_PROTOCOLS]).toEqual([4, 5]);
     const w = await world();
-    // The version-3 shape, strict: what a version-3 worker parses with.
-    const v3Settings = workerSettingsSchema.omit({ claim_policy: true });
     const handshakeAt = (headers: Record<string, string>) =>
       w.app.inject({
         method: 'POST',
@@ -2055,22 +2058,18 @@ describe('the worker protocol (WP-293): protocol 3, the claim scope and take thi
         headers: { authorization: `Bearer ${w.alice.credential}`, ...headers },
         payload: bodies(1)[WORKER_PATHS.handshake],
       });
-    const v3 = await handshakeAt(V3);
-    expect(v3.statusCode).toBe(200);
-    const v3Worker = v3.json().worker;
-    expect(v3Settings.safeParse(v3Worker).success).toBe(true);
-    expect(Object.hasOwn(v3Worker, 'claim_policy')).toBe(false);
-    expect(v3Worker.claim_project_ids).toBeNull();
-    const v4 = workerHandshakeResponseSchema.parse((await handshakeAt(PROTOCOL)).json()).worker;
+    const v4 = workerHandshakeResponseSchema.parse((await handshakeAt(V4)).json()).worker;
     expect(v4).toMatchObject({ claim_project_ids: null, claim_policy: 'mine_and_unassigned' });
     expect((await setPickOnly(w)).statusCode).toBe(200);
-    // Pick only reaches a version-3 worker in its own spelling, and a version-4 one as the policy.
-    expect((await handshakeAt(V3)).json().worker.claim_project_ids).toEqual([]);
     expect(
       workerHandshakeResponseSchema.parse((await handshakeAt(PROTOCOL)).json()).worker,
     ).toMatchObject({ claim_project_ids: null, claim_policy: 'pick_only' });
-    // Protocol 2 is no longer served: the generic check refuses it before anything else.
-    expect((await handshakeAt(V2)).statusCode).toBe(426);
+    // Protocols 2 and 3 are no longer served: the generic check refuses them before anything else.
+    for (const old of [V2, V3]) {
+      const refused = await handshakeAt(old);
+      expect(refused.statusCode).toBe(426);
+      expect(workerUpgradeRequiredBodySchema.parse(refused.json()).accepted).toEqual([4, 5]);
+    }
   });
 
   it('refuses all four verbs at protocol 2 with 426, before the credential is read', async () => {
@@ -2192,9 +2191,13 @@ describe('the worker protocol (WP-293): protocol 3, the claim scope and take thi
     const strictBefore = workerClaimScopeResponseSchema.omit({ unassigned_has_taker: true });
     expect(strictBefore.safeParse(await read(url(WORKER_PATHS.claimScope))).success).toBe(true);
     expect(asked).toEqual([]);
-    // Nor at protocol 3, asked or not.
-    const v3 = await read(takersUrl, { authorization: `Bearer ${w.alice.credential}`, ...V3 });
-    expect(v3).not.toHaveProperty('unassigned_has_taker');
+    // Protocol 3 is not served since protocol 5: refused before the answer is computed.
+    const v3 = await w.app.inject({
+      method: 'GET',
+      url: takersUrl,
+      headers: { authorization: `Bearer ${w.alice.credential}`, ...V3 },
+    });
+    expect(v3.statusCode).toBe(426);
     expect(asked).toEqual([]);
     // Asked: for the asking worker, over the projects the read lists, and only those keys.
     const answer = workerClaimScopeResponseSchema.parse(await read(takersUrl));
@@ -2218,58 +2221,25 @@ describe('the worker protocol (WP-293): protocol 3, the claim scope and take thi
     );
   });
 
-  it('a version-3 worker’s [] is stored as pick_only over every project; its other writes leave the policy (S-26.4)', async () => {
+  it('a version-3 worker’s claim-scope read and write are refused 426 since protocol 5, and change nothing', async () => {
     const w = await world();
-    const setV3 = (ids: readonly string[] | null) =>
-      w.app.inject({
-        method: 'PUT',
-        url: url(WORKER_PATHS.claimScope),
-        headers: { authorization: `Bearer ${w.alice.credential}`, ...V3 },
-        payload: { claim_project_ids: ids },
-      });
-    const policyRows = () => w.store.audit.filter((row) => row.action === 'worker.claim_policy');
-    const v3Set = workerClaimScopeSetResponseSchema.omit({ claim_policy: true });
-    const legacy = await setV3([]);
-    expect(legacy.statusCode).toBe(200);
-    // The version-3 answer, strict, in its own spelling of pick only.
-    expect(v3Set.parse(legacy.json())).toEqual({ claim_project_ids: [], performed: true });
-    expect(w.store.worker(w.alice.workerId)).toMatchObject({
-      claimProjects: null,
-      claimPolicy: 'pick_only',
+    const before = w.store.worker(w.alice.workerId);
+    const write = await w.app.inject({
+      method: 'PUT',
+      url: url(WORKER_PATHS.claimScope),
+      headers: { authorization: `Bearer ${w.alice.credential}`, ...V3 },
+      payload: { claim_project_ids: [] },
     });
-    expect(policyRows()).toEqual([
-      {
-        userId: ALICE,
-        action: 'worker.claim_policy',
-        params: {
-          worker_id: w.alice.workerId,
-          claim_policy: 'pick_only',
-          project_ids: null,
-          via: 'worker_ui',
-        },
-      },
-    ]);
-    // A repeat is a repeat; a project list leaves the policy as it was.
-    expect((await setV3([])).json()).toMatchObject({ performed: false });
-    expect(v3Set.parse((await setV3([PROJECT])).json())).toEqual({
-      claim_project_ids: [],
-      performed: true,
-    });
-    expect(w.store.worker(w.alice.workerId)).toMatchObject({
-      claimProjects: [{ id: PROJECT, key: 'ACME' }],
-      claimPolicy: 'pick_only',
-    });
-    expect(policyRows()).toHaveLength(1);
-    const v3Read = await w.app.inject({
+    expect(write.statusCode).toBe(426);
+    expect(workerUpgradeRequiredBodySchema.parse(write.json()).accepted).toEqual([4, 5]);
+    expect(w.store.worker(w.alice.workerId)).toEqual(before);
+    expect(w.store.audit.filter((row) => row.action === 'worker.claim_policy')).toEqual([]);
+    const read = await w.app.inject({
       method: 'GET',
       url: url(WORKER_PATHS.claimScope),
       headers: { authorization: `Bearer ${w.alice.credential}`, ...V3 },
     });
-    expect(
-      workerClaimScopeResponseSchema
-        .omit({ claim_policy: true, policy_skipped_offers: true })
-        .parse(v3Read.json()).claim_project_ids,
-    ).toEqual([]);
+    expect(read.statusCode).toBe(426);
   });
 
   it('a pick-only worker claims nothing by itself, lists the offer, takes it — one audit row — and a second take is 409', async () => {
@@ -2400,6 +2370,7 @@ describe('the worker protocol (WP-293): protocol 3, the claim scope and take thi
  */
 describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick that assigns', () => {
   const V3 = { 'x-worker-protocol': '3' };
+  const V4 = { 'x-worker-protocol': '4' };
   const OWNED_AT = '2026-06-01T10:00:00.000Z';
   const offers = async (w: World, headers: Record<string, string> = bearer(w.alice.credential)) => {
     await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
@@ -2435,7 +2406,7 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
     );
   };
 
-  it('offers carry owner, mine, as_of and policy_skipped_offers at protocol 4, and none of them at 3', async () => {
+  it('offers carry owner, mine, as_of and policy_skipped_offers at protocol 4, and protocol 3 is refused 426', async () => {
     const w = await world();
     w.store.seedPolicySkippedOffers(w.alice.workerId, 2);
     const v4 = workerOffersResponseSchema.parse(await offers(w));
@@ -2447,15 +2418,18 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
       mine: false,
       automatic: true,
     });
-    const strictV3 = workerOffersResponseSchema
-      .omit({ as_of: true, policy_skipped_offers: true })
-      .extend({
-        offers: workerOffersResponseSchema.shape.offers.element
-          .omit({ owner: true, mine: true })
-          .array(),
-      });
-    const v3 = await offers(w, { authorization: `Bearer ${w.alice.credential}`, ...V3 });
-    expect(strictV3.safeParse(v3).success).toBe(true);
+    // A version-4 worker (N-1 since protocol 5) is answered every key; version 3 is not served.
+    expect(
+      workerOffersResponseSchema.parse(
+        await offers(w, { authorization: `Bearer ${w.alice.credential}`, ...V4 }),
+      ).policy_skipped_offers,
+    ).toBe(2);
+    const v3 = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.offers),
+      headers: { authorization: `Bearer ${w.alice.credential}`, ...V3 },
+    });
+    expect(v3.statusCode).toBe(426);
     // Bob's task: listed as his to Alice, and Alice's *mine* only once it is hers.
     await ownedByBob(w);
     const owned = workerOffersResponseSchema.parse(await offers(w)).offers[0];
@@ -2478,9 +2452,13 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
         .array(),
     });
     expect(strictBefore.safeParse(await list(url(WORKER_PATHS.offers))).success).toBe(true);
-    // Nor at protocol 3, asked or not.
-    const v3 = await list(heldQuery, { authorization: `Bearer ${w.alice.credential}`, ...V3 });
-    expect(v3.offers[0]).not.toHaveProperty('held_elsewhere');
+    // Protocol 3 is not served since protocol 5, asked or not.
+    const v3 = await w.app.inject({
+      method: 'GET',
+      url: heldQuery,
+      headers: { authorization: `Bearer ${w.alice.credential}`, ...V3 },
+    });
+    expect(v3.statusCode).toBe(426);
     // Asked: nobody holds the ticket yet.
     expect(workerOffersResponseSchema.parse(await list(heldQuery)).offers[0]).toMatchObject({
       run_id: w.runId,
@@ -2537,12 +2515,13 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
       ).success,
     ).toBe(true);
     expect(asked).toEqual([]);
-    // Nor at protocol 3, asked or not.
-    const v3 = await list(`${url(WORKER_PATHS.offers)}?${WORKER_OFFERS_QUERY}`, {
-      authorization: `Bearer ${w.alice.credential}`,
-      'x-worker-protocol': '3',
+    // Protocol 3 is not served since protocol 5: refused before the answer is computed.
+    const v3 = await w.app.inject({
+      method: 'GET',
+      url: `${url(WORKER_PATHS.offers)}?${WORKER_OFFERS_QUERY}`,
+      headers: { authorization: `Bearer ${w.alice.credential}`, 'x-worker-protocol': '3' },
     });
-    expect(v3).not.toHaveProperty('idle_reason');
+    expect(v3.statusCode).toBe(426);
     expect(asked).toEqual([]);
     // Asked, as this build's worker asks: for the asking worker alone.
     const answer = workerOffersResponseSchema.parse(
@@ -2563,7 +2542,7 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
     expect(response.json()).not.toHaveProperty('idle_reason');
   });
 
-  it('refuses a pick of another person’s task by its as_of, naming the owner — and offer_not_claimable at protocol 3', async () => {
+  it('refuses a pick of another person’s task by its as_of, naming the owner — and refuses protocol 3 with 426', async () => {
     const w = await world();
     await ownedByBob(w);
     const taken = await pickAs(w, { as_of: '2026-06-01T09:30:00.000Z' });
@@ -2575,8 +2554,7 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
     // No list instant: it was already somebody's.
     expect((await pickAs(w, {})).json().error.code).toBe('task_owned_by_another');
     const v3 = await pickAs(w, {}, { authorization: `Bearer ${w.alice.credential}`, ...V3 });
-    expect(v3.statusCode).toBe(409);
-    expect(v3.json().error.code).toBe('offer_not_claimable');
+    expect(v3.statusCode).toBe(426);
     // Nothing was claimed by any of them, and the task is still Bob's.
     expect(w.takes).toEqual([]);
     expect(w.harness.store.offerRows().find((row) => row.runId === w.runId)?.state).toBe('open');
@@ -2609,5 +2587,49 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
     expect(w.assigned).toEqual([null]);
     expect(w.harness.store.ownershipOf(taskOf(w)).ownerUserId).toBeNull();
     expect(w.harness.types()).not.toContain('task.owner.changed');
+  });
+});
+
+/**
+ * Protocol 5 (owner request, 2026-11-20): a claimed package carries the git integration's declared
+ * commit identity as `workspace.repo.commitIdentity` — to a version-5 worker only. A version-4
+ * worker's strict `workspaceRepoSchema` refuses the key, so it is answered the package without it
+ * (`packageFor`) and its run commits as `agentic <agentic@localhost>`.
+ */
+describe('the worker protocol: protocol 5, the run package’s commit identity', () => {
+  const IDENTITY = {
+    name: 'Agentic "Bot" O\'Brien',
+    email: 'service_account_group_1234_0123456789abcdef0123456789abcdef@noreply.gitlab.example',
+  };
+  const claimAt = async (w: World, protocol: string) => {
+    const response = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.claims),
+      headers: { authorization: `Bearer ${w.alice.credential}`, 'x-worker-protocol': protocol },
+      payload: bodies(1)[WORKER_PATHS.claims],
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json();
+  };
+
+  it('sends the declared identity at protocol 5', async () => {
+    const w = await world({ commitIdentity: IDENTITY });
+    const pkg = runPackageSchema.parse(await claimAt(w, '5'));
+    expect(pkg.workspace.repo?.commitIdentity).toEqual(IDENTITY);
+  });
+
+  it('strips it for a version-4 worker, whose package is otherwise the same', async () => {
+    const w = await world({ commitIdentity: IDENTITY });
+    const v4 = await claimAt(w, '4');
+    expect(Object.hasOwn(v4.workspace.repo, 'commitIdentity')).toBe(false);
+    // What a version-4 worker parses with: this build's schema minus the key, strict.
+    expect(runPackageSchema.safeParse(v4).success).toBe(true);
+    expect(v4.display).toEqual(DISPLAY);
+  });
+
+  it('sends no key at all when the integration declares none', async () => {
+    const w = await world();
+    const pkg = await claimAt(w, '5');
+    expect(Object.hasOwn(pkg.workspace.repo, 'commitIdentity')).toBe(false);
   });
 });
