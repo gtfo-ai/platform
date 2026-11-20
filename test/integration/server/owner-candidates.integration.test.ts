@@ -19,7 +19,7 @@ import {
   setTaskOwnerCommand,
   type Transaction,
 } from '@platform/application';
-import type { Id, IsoDateTime, Slug } from '@platform/contracts';
+import type { Id, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
 import { db, eventing, pipeline } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -31,10 +31,11 @@ import { findProjectRole } from '../../../apps/server/src/queries/identity-queri
 import { findOwnerCandidates } from '../../../apps/server/src/queries/owner-candidate-queries.js';
 import { ownerCandidateWriteBack } from '../../../apps/server/src/queries/pipeline-queries.js';
 import { registerOwnerCandidateRoutes } from '../../../apps/server/src/routes/owner-candidates.js';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
-const NOW = '2026-11-07T09:00:00.000Z' as IsoDateTime;
+const NOW = recentInstant();
 
 /**
  * Fastify and its zod compilers, resolved **from `apps/server`**, which is the package that depends

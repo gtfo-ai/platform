@@ -27,7 +27,7 @@ import {
   MAX_TASK_STOP_RECORDED_CHARS,
   runRecordSchema,
 } from '@platform/contracts';
-import { SHIPPED_TEMPLATES } from '@platform/domain';
+import { addMs, SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   broadcast as broadcastAdapter,
   db,
@@ -1037,17 +1037,17 @@ describe('the task projection', () => {
     };
 
     const stuck = await taskAt('ESC-1', 'needs_human');
-    await escalated(stuck, 1, '2026-11-05T13:00:00Z', {
+    await escalated(stuck, 1, addMs(AT as IsoDateTime, -2 * 3_600_000), {
       reason: 'the approval expired',
       blocker_brief: 'Nobody decided the plan approval in time.',
     });
     const long = `The ticket is assigned to somebody else. ${'x'.repeat(1_200)}`;
-    await escalated(stuck, 2, '2026-11-05T14:00:00Z', {
+    await escalated(stuck, 2, addMs(AT as IsoDateTime, -3_600_000), {
       reason: 'ticket_assigned_elsewhere',
       blocker_brief: long,
     });
     expect((await findTaskDetail(drizzled, stuck))?.escalation).toEqual({
-      at: '2026-11-05T14:00:00.000Z',
+      at: addMs(AT as IsoDateTime, -3_600_000),
       reason: 'ticket_assigned_elsewhere',
       brief: long.slice(0, 1_000),
       brief_original_chars: long.length,
@@ -1055,7 +1055,7 @@ describe('the task projection', () => {
 
     // A task that left the escalation (resumed, retried) is not waiting on it.
     const moving = await taskAt('ESC-2', 'active');
-    await escalated(moving, 1, '2026-11-05T13:00:00Z', {
+    await escalated(moving, 1, addMs(AT as IsoDateTime, -2 * 3_600_000), {
       reason: 'the approval expired',
       blocker_brief: 'Nobody decided the plan approval in time.',
     });
@@ -1063,7 +1063,9 @@ describe('the task projection', () => {
 
     // Half a reason is no reason: an escalation written with no brief publishes none.
     const briefless = await taskAt('ESC-3', 'needs_human');
-    await escalated(briefless, 1, '2026-11-05T13:00:00Z', { reason: 'the approval expired' });
+    await escalated(briefless, 1, addMs(AT as IsoDateTime, -2 * 3_600_000), {
+      reason: 'the approval expired',
+    });
     expect((await findTaskDetail(drizzled, briefless))?.escalation).toBeNull();
   });
 
@@ -1100,11 +1102,12 @@ describe('the task projection', () => {
     ) => {
       await pool.query(
         `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
-         values ('task', $1, 1, 'task.cancelled', $2::jsonb, $3::jsonb, '2026-11-10T10:00:00Z')`,
+         values ('task', $1, 1, 'task.cancelled', $2::jsonb, $3::jsonb, $4)`,
         [
           taskId,
           JSON.stringify({ project_id: project.id, task_id: taskId, outcome }),
           JSON.stringify(actor),
+          AT,
         ],
       );
     };
@@ -1113,7 +1116,7 @@ describe('the task projection', () => {
     const automatic = await taskAt('CAN-1', 'cancelled');
     await cancelledEvent(automatic, { kind: 'system', component: 'pipeline' }, outcome);
     expect((await findTaskDetail(drizzled, automatic))?.cancellation).toEqual({
-      at: '2026-11-10T10:00:00.000Z',
+      at: AT,
       outcome,
       outcome_original_chars: null,
       automatic: true,
@@ -1191,28 +1194,28 @@ describe('the task projection', () => {
 
     // The title the platform read, so one row's `ticket_title` is the snapshot's and not `null`.
     const held = await taskAt('ESR-1', 'needs_human', jane, 'Log in with a passkey');
-    await escalated(held, 1, '2026-11-05T13:00:00Z', {
+    await escalated(held, 1, addMs(AT as IsoDateTime, -2 * 3_600_000), {
       reason: 'run_failed',
       blocker_brief: 'The run failed.',
     });
-    await escalated(held, 2, '2026-11-05T14:00:00Z', {
+    await escalated(held, 2, addMs(AT as IsoDateTime, -3_600_000), {
       reason: 'ticket_assigned_elsewhere',
       blocker_brief: 'The ticket is assigned to somebody else.',
     });
     const approval = await taskAt('ESR-2', 'needs_human');
-    await escalated(approval, 1, '2026-11-05T12:00:00Z', {
+    await escalated(approval, 1, addMs(AT as IsoDateTime, -3 * 3_600_000), {
       reason: 'approval_expired',
       blocker_brief: 'Nobody decided the plan approval in time.',
     });
     // Left the escalation: history, not why it waits.
     const moving = await taskAt('ESR-3', 'active');
-    await escalated(moving, 1, '2026-11-05T13:00:00Z', {
+    await escalated(moving, 1, addMs(AT as IsoDateTime, -2 * 3_600_000), {
       reason: 'run_failed',
       blocker_brief: 'The run failed.',
     });
     // Half a reason is no reason.
     const briefless = await taskAt('ESR-4', 'needs_human');
-    await escalated(briefless, 1, '2026-11-05T15:00:00Z', { reason: 'run_failed' });
+    await escalated(briefless, 1, AT, { reason: 'run_failed' });
 
     const page = await listProjectTasks(drizzled, project.id, { limit: 50 });
     const reasons = new Map(page?.items.map((item) => [item.ticket.key, item.escalation_reason]));
@@ -1257,7 +1260,7 @@ describe('the task projection', () => {
       ticket_title: 'Log in with a passkey',
       current_stage: 'refinement',
       reason: 'ticket_assigned_elsewhere',
-      at: '2026-11-05T14:00:00.000Z',
+      at: addMs(AT as IsoDateTime, -3_600_000),
       tracker_assignee: { display_name: 'Jane Example', user_id: null },
       unlinked_assignee: { display_name: 'Jane Example' },
     });
@@ -1269,7 +1272,7 @@ describe('the task projection', () => {
     expect(ours.find((row) => row.task_id === briefless)).toMatchObject({
       reason: null,
       ticket_title: null,
-      at: '2026-11-05T15:00:00.000Z',
+      at: AT,
     });
 
     // **Bounded** (the review of #117): at most `limit` rows, the oldest waits first, and the

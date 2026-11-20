@@ -36,15 +36,16 @@ import {
   type Transaction,
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
-import { FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
+import { addMs, FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
 import { eventing, pipeline } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
-const NOW = '2026-11-05T09:00:00.000Z' as IsoDateTime;
-const PAST = '2026-11-05T08:00:00.000Z' as IsoDateTime;
-const LONG_AGO = '2026-11-05T07:00:00.000Z' as IsoDateTime;
+const NOW = recentInstant();
+const PAST = addMs(NOW, -3_600_000);
+const LONG_AGO = addMs(NOW, -2 * 3_600_000);
 const FUTURE = '2099-01-01T00:00:00.000Z' as IsoDateTime;
 const RUN_DIGEST = `sha256:${'c'.repeat(64)}`;
 const EGRESS_DIGEST = `sha256:${'d'.repeat(64)}`;
@@ -280,7 +281,7 @@ const workerClaim = (
   eligibility: options.runId === undefined ? {} : { runId: options.runId },
   claimantKind: 'worker',
   owner: `worker:${workerId}`,
-  expiresAt: '2026-11-05T09:10:00.000Z' as IsoDateTime,
+  expiresAt: addMs(NOW, 10 * 60_000),
   now: NOW,
   worker: {
     workerId,
@@ -464,8 +465,8 @@ describe('the list is the claim (WP-293, the claim-scope amendment §4)', () => 
     const bob = await user([a]);
     const w = await worker(alice, [a]);
     const fixtures: Id[] = [
-      await offered(a, { offeredAt: '2026-11-05T08:10:00.000Z' as IsoDateTime }),
-      await offered(b, { offeredAt: '2026-11-05T08:05:00.000Z' as IsoDateTime }),
+      await offered(a, { offeredAt: addMs(NOW, -50 * 60_000) }),
+      await offered(b, { offeredAt: addMs(NOW, -55 * 60_000) }),
       await offered(a, { routing: workersRouting({ workersFrom: FUTURE }) }),
       await offered(a, {
         routing: workersRouting({ serverFrom: PAST, workersFrom: FUTURE }),
@@ -545,7 +546,7 @@ describe('one winner when a pick races the server and another worker (WP-293)', 
               eligibility: { runId },
               claimantKind: 'server',
               owner: 'server:race',
-              expiresAt: '2026-11-05T09:10:00.000Z' as IsoDateTime,
+              expiresAt: addMs(NOW, 10 * 60_000),
               now: NOW,
             }),
             claimOn(workerClaim(other, { runId })),

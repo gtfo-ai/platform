@@ -39,6 +39,7 @@ import {
 import type { Id, IsoDateTime, Slug, WorkerClaimPolicy } from '@platform/contracts';
 import { WORKER_CLAIM_POLICIES } from '@platform/contracts';
 import {
+  addMs,
   claimPolicyTakes,
   FEATURE_TEMPLATE,
   type OfferRouting,
@@ -49,11 +50,12 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import { createPostgresWorkerStore } from '../../../apps/server/src/queries/worker-queries.js';
+import { recentInstant } from '../../support/recent-instant.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
-const NOW = '2026-11-07T09:00:00.000Z' as IsoDateTime;
-const PAST = '2026-11-07T08:00:00.000Z' as IsoDateTime;
+const NOW = recentInstant();
+const PAST = addMs(NOW, -3_600_000);
 const FUTURE = '2099-01-01T00:00:00.000Z' as IsoDateTime;
 const RUN_DIGEST = `sha256:${'c'.repeat(64)}`;
 const EGRESS_DIGEST = `sha256:${'d'.repeat(64)}`;
@@ -355,7 +357,7 @@ const workerClaim = (
   eligibility: options.runId === undefined ? {} : { runId: options.runId },
   claimantKind: 'worker',
   owner: `worker:${workerId}`,
-  expiresAt: '2026-11-07T09:10:00.000Z' as IsoDateTime,
+  expiresAt: addMs(NOW, 10 * 60_000),
   now: options.now ?? NOW,
   worker: {
     workerId,
@@ -769,8 +771,8 @@ describe('picks through RemoteRuns.claim (S-26.4, criterion 4)', () => {
   it('refuses another person’s task by the list’s as_of, naming the owner, and claims nothing', async () => {
     const { me, other, taskId, runId } = await arrange('another’s');
     const w = await worker(me, { policy: 'everything' });
-    const before = '2026-11-07T07:00:00.000Z' as IsoDateTime;
-    const after = '2026-11-07T08:30:00.000Z' as IsoDateTime;
+    const before = addMs(NOW, -2 * 3_600_000);
+    const after = addMs(NOW, -30 * 60_000);
     const answers = await withRemote(async (remote) => [
       await remote.claim(pickInput(w, runId, before)),
       await remote.claim(pickInput(w, runId, after)),
