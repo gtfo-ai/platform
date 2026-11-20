@@ -223,7 +223,13 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
   const top: TranscriptBlock[] = [];
   const drafts = new Map<string, ToolDraft>();
   /** Coalesced partials waiting for the assistant message that will replace them. */
-  let pending = new Map<number, { block: ContentBlock; seq: number; at: string }>();
+  // `firstSeq` names the row: the partials of one block arrive with a new `seq` each, and an id
+  // made of the latest remounted the streaming row on every frame (S-28.22), resetting a disclosure
+  // the reader had opened.
+  let pending = new Map<
+    number,
+    { block: ContentBlock; seq: number; firstSeq: number; at: string }
+  >();
 
   const sink = (event: TranscriptEvent): TranscriptBlock[] => {
     const parent = event.parent_tool_use_id;
@@ -241,13 +247,13 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
       return;
     }
     const entries = [...pending.entries()].sort(([left], [right]) => left - right);
-    for (const [index, { block, seq, at }] of entries) {
+    for (const [index, { block, seq, firstSeq, at }] of entries) {
       const { blocks, tools } = contentToBlocks([block], seq, at, true);
       for (const tool of tools) {
         drafts.set(tool.block.toolUseId, tool);
       }
       for (const item of blocks) {
-        top.push({ ...item, id: `${seq}:stream:${index}` } as TranscriptBlock);
+        top.push({ ...item, id: `${firstSeq}:stream:${index}` } as TranscriptBlock);
       }
     }
     pending = new Map();
@@ -259,6 +265,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
         pending.set(event.block_index, {
           block: event.block,
           seq: event.seq,
+          firstSeq: pending.get(event.block_index)?.firstSeq ?? event.seq,
           at: event.last_delta_at,
         });
         break;

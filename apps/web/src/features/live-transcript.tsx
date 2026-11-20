@@ -62,6 +62,7 @@ export const LiveTranscript = ({ runId }: { readonly runId: string }): ReactElem
       ) : null}
       <TranscriptView
         blocks={shown}
+        total={total}
         emptyHint="Nothing yet. Entries appear here as the agent works — the stream is live."
       />
     </div>
