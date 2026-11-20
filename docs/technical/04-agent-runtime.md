@@ -388,6 +388,16 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > the person's note decides where the two disagree. A return with one block names no source: the row
 > it is read from does not record who wrote it (PROGRESS backlog 353).
 >
+> **Amended 2026-11-20 (S-28.20, backlog 1611) — a retry's note is a `retry_note` block.** The
+> reason a person gives *Retry stage* (`POST /api/tasks/:id/retry-stage`, technical/08) is redacted by
+> the command, stored on the attempt the retry entered (`task_stages.retry_reason`, technical/03) and
+> read by the stage executor for that attempt; the prompt carries it as one `retry_note` data block,
+> bounded by `MAX_FEEDBACK_CHARS` with its cut in the marker. It is not a `return_feedback` block: a
+> retry repeats the stage's work and is not a return, and the task section says so — *a person
+> retried this stage and left a note; where it disagrees with your brief, the note decides* — instead
+> of *there is no return feedback*. Only an agent stage's retry may carry one; elsewhere the command
+> refuses it (`409 retry_reason_not_deliverable`).
+>
 > The CI gate's reason also names the paths of a failed **tamper check** (BD-024 §2), which the gate computes as part of its
 > read — its second half, the Code review's confirmation of a declared change, in the rebase gate's
 > settlement since WP-102 (technical/02 has its inputs and endings); the workspace's path guard below enforces protected

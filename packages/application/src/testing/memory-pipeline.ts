@@ -165,6 +165,8 @@ interface StageRow {
   attachedFeedbackOriginalChars: number | null;
   /** Whether the next run is handed `attachedFeedback` (migration 0086). */
   attachedFeedbackSent: boolean;
+  /** The person's words for the retry that opened this attempt (S-28.20, migration 0120). */
+  retryReason?: string | null;
   /** The ticket's status at this human stage's entry (WP-178 review, migration 0089). */
   entryTicketStatus?: string | null;
   /** Whether the window saw the ticket at the `qa` slot during this entry (migration 0089). */
@@ -1330,7 +1332,18 @@ export const createMemoryPipelineStore = (
         })),
     recordStageEntered: async (_tx, entry) => {
       sequence += 1;
+      // The SQL upsert keeps `retry_reason` when an attempt is re-entered in place (S-28.1), so a
+      // retry's note survives a budget pause; this store appends a row, so it carries the note over.
+      const reentered = [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === entry.taskId &&
+            candidate.stage === entry.stage &&
+            candidate.attempt === entry.attempt,
+        );
       stages.push({
+        retryReason: reentered?.retryReason ?? null,
         taskId: entry.taskId,
         stage: entry.stage,
         attempt: entry.attempt,
@@ -1463,6 +1476,37 @@ export const createMemoryPipelineStore = (
      * reason moves with its cut length and the person's choice, and a row that is open, closed
      * another way or holds no (or an empty) reason moves nothing.
      */
+    // S-28.20 (migration 0120): the open row of the attempt the retry entered, as the SQL writes it.
+    recordRetryReason: async (_tx, entry) => {
+      if (entry.reason === '') {
+        // The SQL check `task_stages_retry_reason_not_empty`.
+        throw new PipelineStoreError(
+          `task_stages ${entry.taskId}/${entry.stage}#${String(entry.attempt)}: retry_reason must not be empty`,
+        );
+      }
+      const row = [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === entry.taskId &&
+            candidate.stage === entry.stage &&
+            candidate.attempt === entry.attempt,
+        );
+      if (row === undefined || row.state !== 'running' || row.exitedAt !== null) {
+        return false;
+      }
+      row.retryReason = entry.reason;
+      return true;
+    },
+    retryReasonOf: async (_tx, taskId, stage, attempt) =>
+      [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === taskId &&
+            candidate.stage === stage &&
+            candidate.attempt === attempt,
+        )?.retryReason ?? null,
     attachReturnReason: async (_tx, entry) => {
       const row = [...stages]
         .reverse()

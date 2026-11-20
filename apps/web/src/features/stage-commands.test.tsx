@@ -15,7 +15,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { retryOutcomeText } from './task-dialogs.js';
+import { retryDescription, retryOutcomeText } from './task-dialogs.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -499,6 +499,65 @@ describe('the stage picker (S-23.22)', () => {
     const details = alert.querySelector('details');
     expect(details?.open).toBe(false);
     expect(details?.textContent).toContain('loop ci_fix of task');
+  });
+});
+
+/**
+ * S-28.20 (backlog 1611, AUT-6645): the *Retry a stage* dialog says where its reason goes, and offers
+ * the box only where the words reach an agent — the task read's `retry_takes_reason` at the current
+ * stage. Before S-28.20 the box was offered everywhere and the route dropped what was typed into it.
+ */
+describe('a retry’s reason (S-28.20)', () => {
+  const atAgentStage = (): TaskDetailResponse => {
+    const detail = escalatedAtCi('active');
+    return {
+      ...detail,
+      task: { ...detail.task, current_stage: 'implementation' },
+      retry_takes_reason: true,
+    };
+  };
+
+  it('says the reason is passed to the agent and sends it at an agent stage', async () => {
+    const sent: Sent[] = [];
+    const user = userEvent.setup();
+    render(createApp({ fetchImpl: fetchFor(atAgentStage(), sent), realtime: false }).element);
+    const dialog = await openStageDialog(user, 'Retry stage…');
+    expect(dialog.textContent).toContain(retryDescription(true));
+    expect(retryDescription(true)).toContain('passed to the agent that runs the stage');
+    await user.type(within(dialog).getByLabelText('Reason'), 'the minor findings can be ignored');
+    await user.click(screen.getByRole('button', { name: 'Retry stage' }));
+    await waitFor(() => {
+      expect(sent.find((entry) => entry.path.endsWith('/retry-stage'))?.body).toEqual({
+        stage: 'implementation',
+        reason: 'the minor findings can be ignored',
+      });
+    });
+  });
+
+  it('offers no box at a stage no agent runs, says why, and sends no reason', async () => {
+    const sent: Sent[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({ fetchImpl: fetchFor(escalatedAtCi('needs_human'), sent), realtime: false })
+        .element,
+    );
+    // Words typed for a Return first must never ride on the retry (the field is shared).
+    await openStageDialog(user, 'Return to stage…');
+    await user.type(screen.getByLabelText('Reason'), 'words meant for a return');
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    const dialog = await openStageDialog(user, 'Retry stage…');
+    expect(within(dialog).queryByLabelText('Reason')).toBeNull();
+    expect(dialog.textContent).toContain(retryDescription(false));
+    expect(retryDescription(false)).toContain('runs no agent');
+    await user.click(screen.getByRole('button', { name: 'Retry stage' }));
+    await waitFor(() => {
+      expect(sent.find((entry) => entry.path.endsWith('/retry-stage'))?.body).toEqual({
+        stage: 'ci_gate',
+      });
+    });
   });
 });
 

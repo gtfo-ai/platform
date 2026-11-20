@@ -114,10 +114,14 @@ export interface TaskCommands {
     readonly taskId: string;
     readonly userId: string;
     readonly stage: string;
+    /** S-28.20: the person's words for the new attempt's run; absent for none. */
+    readonly reason?: string;
     readonly idempotencyKey: string | null;
   }): Promise<{
     readonly attempt: number | null;
     readonly stoppedRun: { readonly runId: string; readonly commandId: string | null } | null;
+    /** S-28.20: whether `reason` was recorded for the attempt's run. */
+    readonly reasonRecorded: boolean;
   }>;
   returnToStage(input: {
     readonly taskId: string;
@@ -318,6 +322,7 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         taskId: id(input.taskId),
         userId: id(input.userId),
         stage: slug(input.stage),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
         ...(input.idempotencyKey === null
           ? {}
           : {

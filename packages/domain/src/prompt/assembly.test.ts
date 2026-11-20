@@ -433,6 +433,74 @@ describe('untrusted text in the assembled prompt', () => {
 });
 
 /**
+ * **A retry's note reaches the run** (S-28.20, backlog 1611, AUT-6645): the words a person gave
+ * *Retry stage* are one `retry_note` block — inside a data block like every untrusted string, capped
+ * with the cut in the marker — and the task section says the attempt is a retry with a note rather
+ * than *there is no return feedback*.
+ */
+describe('a retry note (S-28.20)', () => {
+  const taskWith = (retryNote: string | null) => ({
+    stage: 'code_review',
+    attempt: 2,
+    ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/x' },
+    ticketSnapshot: null,
+    reviewSubject: null,
+    historySample: null,
+    artifacts: [],
+    returnFeedback: null,
+    retryNote,
+    record: [],
+    reviewChecklists: [],
+    observability: [],
+  });
+  const promptOf = (retryNote: string | null) =>
+    assemblePrompt(inputWith(BENIGN_TEXT, { task: taskWith(retryNote) })).userPrompt;
+
+  it('carries the note byte-identical in one retry_note block and says what it is', () => {
+    const note = 'The minor findings can be ignored; fix only the SQL injection.';
+    const prompt = promptOf(note);
+    const parsed = readDataBlocks(prompt);
+    const notes = parsed.blocks.filter((block) => block.kind === 'retry_note');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.body).toBe(note);
+    expect(notes[0]?.attributes.truncated).toBeUndefined();
+    expect(parsed.blocks.some((block) => block.kind === 'return_feedback')).toBe(false);
+    const voice = parsed.platformVoice.join('');
+    expect(voice).toContain('A person retried this stage');
+    expect(voice).toContain('`retry_note` block');
+    expect(voice).not.toContain('There is no return feedback');
+    // The note is data, never the platform's voice.
+    expect(voice).not.toContain('SQL injection');
+  });
+
+  it('keeps hostile text inside the block and leaves the platform voice unchanged', () => {
+    const benign = readDataBlocks(promptOf('fix the typo'));
+    const hostile = readDataBlocks(promptOf(HOSTILE_TEXT));
+    expect(hostile.platformVoice).toEqual(benign.platformVoice);
+    expect(hostile.blocks.map((block) => block.kind)).toEqual(
+      benign.blocks.map((block) => block.kind),
+    );
+  });
+
+  it('caps a long note and announces the cut in the marker', () => {
+    const block = readDataBlocks(promptOf('n'.repeat(MAX_FEEDBACK_CHARS + 7))).blocks.find(
+      (entry) => entry.kind === 'retry_note',
+    );
+    expect(block?.body).toHaveLength(MAX_FEEDBACK_CHARS);
+    expect(block?.attributes.truncated).toBe('true');
+    expect(block?.attributes.original_chars).toBe(String(MAX_FEEDBACK_CHARS + 7));
+  });
+
+  it('emits no block, and the old sentence, for an attempt with no note', () => {
+    for (const note of [null, '']) {
+      const parsed = readDataBlocks(promptOf(note));
+      expect(parsed.blocks.some((block) => block.kind === 'retry_note')).toBe(false);
+      expect(parsed.platformVoice.join('')).toContain('There is no return feedback');
+    }
+  });
+});
+
+/**
  * **A cut made before the assembler is announced by it** (WP-81): the CI gate bounds a failing job's
  * log to its head and tail before the return reason is stored, and records the uncut length beside
  * it. The block renders that cut exactly like its own — in the marker, never in the body.

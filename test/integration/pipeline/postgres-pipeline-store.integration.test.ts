@@ -324,3 +324,76 @@ describe('task_stages.attached_feedback (migration 0086)', () => {
     }
   });
 });
+
+/**
+ * **A retry's reason is kept on the attempt it entered** (S-28.20, backlog 1611, migration 0120):
+ * written only on the open row of exactly that attempt, read back for it, kept by an in-place
+ * re-entry of the same attempt (S-28.1's upsert), and an empty text is refused by the database.
+ */
+describe('task_stages.retry_reason (migration 0120)', () => {
+  it('writes the open attempt only, survives an in-place re-entry, and refuses an empty text', async () => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    await client.query('begin');
+    try {
+      const { rows } = await client.query<{ id: string }>(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                            current_stage)
+         values ($1, 'fake-jira', 'RETRY-1', 'https://jira.example.test/browse/RETRY-1', 'feature',
+                 'active', 'code_review') returning id`,
+        [projectId],
+      );
+      const taskId = rows[0]?.id as Id;
+      const store = pipeline.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      const enter = (attempt: number) =>
+        store.tasks.recordStageEntered(tx, {
+          taskId,
+          stage: 'code_review',
+          attempt,
+          causedByEventId: null,
+        });
+      const record = (attempt: number, reason: string) =>
+        store.tasks.recordRetryReason(tx, { taskId, stage: 'code_review', attempt, reason });
+
+      await enter(1);
+      await store.tasks.closeOpenStage(tx, {
+        taskId,
+        stage: 'code_review',
+        attempt: 1,
+        outcome: 'superseded',
+        reason: 'a new attempt was entered',
+      });
+      await enter(2);
+      // A closed attempt and an attempt with no row record nothing.
+      expect(await record(1, 'too late')).toBe(false);
+      expect(await record(3, 'not entered')).toBe(false);
+      expect(await record(2, 'the minor findings can be ignored')).toBe(true);
+      expect(await store.tasks.retryReasonOf(tx, taskId, 'code_review', 2)).toBe(
+        'the minor findings can be ignored',
+      );
+      expect(await store.tasks.retryReasonOf(tx, taskId, 'code_review', 1)).toBeNull();
+      // S-28.1: a paused attempt that never ran is re-entered in place — the note stays with it.
+      await enter(2);
+      expect(await store.tasks.retryReasonOf(tx, taskId, 'code_review', 2)).toBe(
+        'the minor findings can be ignored',
+      );
+
+      await client.query('savepoint attempt');
+      const refused = (await client
+        .query(`update task_stages set retry_reason = '' where task_id = $1 and attempt = 2`, [
+          taskId,
+        ])
+        .then(
+          () => null,
+          (caught: unknown) => caught,
+        )) as { code?: string; constraint?: string } | null;
+      await client.query('rollback to savepoint attempt');
+      expect(refused?.code).toBe('23514');
+      expect(refused?.constraint).toBe('task_stages_retry_reason_not_empty');
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+  });
+});

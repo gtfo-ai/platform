@@ -84,6 +84,16 @@ export const retryOutcomeText = (answer: RetryStageResponse): string => {
 };
 
 /**
+ * What the *Retry a stage* dialog says it does (S-28.20, backlog 1611): where the reason goes when
+ * there is a box for one, and why there is none otherwise — the words of AUT-6645, where a person
+ * typed a note the platform then dropped, are the reason this says where they go.
+ */
+export const retryDescription = (carriesReason: boolean): string =>
+  carriesReason
+    ? 'Runs the stage again as a new attempt. Your reason, if you give one, is passed to the agent that runs the stage. It costs a run; a run of the stage still in flight is stopped first.'
+    : 'Runs the stage again as a new attempt. This stage runs no agent, so there is no one to pass a reason to: to tell an agent something, return the task to its stage instead. A run of the stage still in flight is stopped first.';
+
+/**
  * The stage *Retry stage*'s picker starts on: the task's **current** stage when it has entered it —
  * Retry "runs the current stage again" (user guide § 4) — else the first it entered (S-23.22; it used
  * to be the first always, so Retry offered Refinement on a task at Code review). Return and Rework
@@ -291,6 +301,8 @@ export const TaskDialogs = ({
   budgetFigures = null,
   takenOver,
   merged,
+  currentStage = null,
+  retryTakesReason = false,
   form,
   commands,
   takeOverCommands,
@@ -305,6 +317,13 @@ export const TaskDialogs = ({
   readonly budgetFigures?: PausedBudgetFigures | null;
   readonly takenOver: TakenOver | null;
   readonly merged: boolean;
+  /** The task's current stage — the one stage a retry may name. */
+  readonly currentStage?: string | null;
+  /**
+   * The task read's `retry_takes_reason` (S-28.20): the current stage runs an agent, so a retry's
+   * reason reaches it. Absent reads as `false`, and the dialog offers no box.
+   */
+  readonly retryTakesReason?: boolean;
   readonly form: StageCommandForm;
   readonly commands: TaskCommands;
   readonly takeOverCommands: TakeOverCommands;
@@ -312,6 +331,10 @@ export const TaskDialogs = ({
   const close = (): void => {
     onOpenChange(null);
   };
+  // S-28.20 (backlog 1611): the box is offered only where the words reach an agent — the current
+  // stage, when it is an agent stage. Anywhere else a reason would be refused, and before S-28.20
+  // it was silently dropped, so there is no box to type one into.
+  const retryCarriesReason = retryTakesReason && form.retrySelected === currentStage;
   const shown = (dialog: TaskDialog) => ({
     open: open === dialog,
     onOpenChange: (next: boolean) => {
@@ -339,7 +362,7 @@ export const TaskDialogs = ({
       <Dialog
         {...shown('retry')}
         title="Retry a stage"
-        description="Runs the stage again, optionally with a reason. It costs a run; a run of the stage still in flight is stopped first."
+        description={retryDescription(retryCarriesReason)}
       >
         <form
           className="flex flex-col gap-3"
@@ -348,22 +371,28 @@ export const TaskDialogs = ({
             commands.retryStage.mutate(
               {
                 stage: form.retrySelected,
-                ...(form.reason.trim() === '' ? {} : { reason: form.reason }),
+                // Sent only with the box on screen: the field is shared with Return and Rework,
+                // and words typed there must never ride on a retry that has no box.
+                ...(!retryCarriesReason || form.reason.trim() === ''
+                  ? {}
+                  : { reason: form.reason }),
               },
               { onSuccess: close },
             );
           }}
         >
           <StagePicker form={form} value={form.retrySelected} />
-          <input
-            aria-label="Reason"
-            value={form.reason}
-            onChange={(event) => {
-              form.setReason(event.target.value);
-            }}
-            placeholder="Reason (optional)"
-            className={INPUT}
-          />
+          {retryCarriesReason ? (
+            <input
+              aria-label="Reason"
+              value={form.reason}
+              onChange={(event) => {
+                form.setReason(event.target.value);
+              }}
+              placeholder="Note for the agent (optional)"
+              className={INPUT}
+            />
+          ) : null}
           <Submit label="Retry stage" disabled={commands.retryStage.isPending} />
           {commands.retryStage.isError ? <StageRefused error={commands.retryStage.error} /> : null}
         </form>

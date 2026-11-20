@@ -238,6 +238,17 @@
 > is unchanged: it still refuses a run that has not ended (`run_not_live`), which is the honest
 > answer to "retry this run" while it runs.
 >
+> **Amended 2026-11-20 (S-28.20, backlog 1611, AUT-6645) — a retry's `reason` reaches the run.**
+> `retryStageRequestSchema` has accepted an optional `reason` since WP-15i and the task page offered a
+> box for it, but the route dropped it: not stored, not audited, never seen by an agent. It is now
+> redacted by the command (TD-012), stored on the attempt the retry entered
+> (`task_stages.retry_reason`, technical/03, migration 0120) and handed to that attempt's run as a
+> `retry_note` data block (technical/04); the audit row records `reason_recorded`. A stage whose
+> attempt runs no agent (a gate, a human stage, `ready_for_merge`) cannot carry one, so a `reason`
+> there is refused `409 retry_reason_not_deliverable` with nothing recorded, and `GET /api/tasks/:id`
+> publishes `retry_takes_reason` (the current stage is an agent stage of the task's compiled
+> pipeline) so the dialog offers the box only where it is delivered.
+>
 > What is still unbuilt on those rows: `PATCH /api/projects/:id`. **WP-100 removed
 > `PATCH /api/integrations/:id`**: the create parses `config` with the provider's schema, and a row
 > written before it — whose configuration every binding load would refuse — publishes a
