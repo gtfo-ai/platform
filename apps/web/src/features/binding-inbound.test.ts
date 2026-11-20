@@ -12,7 +12,18 @@ describe('inboundWords', () => {
       last_webhook_at: null,
     });
     expect(words).toMatchObject({ badge: 'Poll only', tone: 'warning', guide: true });
-    expect(words.sentence).toContain('Changes made in Jira — a status, an assignee —');
+    expect(words.sentence).toContain('Changes made in Jira — a status or assignee change —');
+  });
+
+  it('says what a GitLab webhook carries, in GitLab’s own terms', () => {
+    const words = inboundWords('gitlab', {
+      webhook_secret: 'not_configured',
+      last_webhook_at: null,
+    });
+    expect(words.sentence).toContain(
+      'Changes made in GitLab — a merge request opened, merged or closed, or a review note —',
+    );
+    expect(words.sentence).not.toContain('assignee');
   });
 
   it('says a configured webhook that never arrived should be checked, and offers the guide', () => {

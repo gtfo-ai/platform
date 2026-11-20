@@ -23,6 +23,12 @@ const WEBHOOK_STEP: Readonly<Record<string, string>> = {
   gitlab: 'step 3',
 };
 
+/** What a webhook from the provider carries, in a person's words; an unknown one says "changes". */
+const CHANGES_WORD: Readonly<Record<string, string>> = {
+  'jira-cloud': 'a status or assignee change',
+  gitlab: 'a merge request opened, merged or closed, or a review note',
+};
+
 /** The provider's name in a sentence; an unknown provider is "the provider", never its id. */
 const PROVIDER_WORD: Readonly<Record<string, string>> = {
   'jira-cloud': 'Jira',
@@ -52,7 +58,7 @@ export const inboundWords = (provider: string, inbound: ProjectBindingInbound): 
     return {
       badge: 'Poll only',
       tone: 'warning',
-      sentence: `Changes made in ${word} — a status, an assignee — reach the platform only at the next poll. Register the webhook and they arrive within seconds.`,
+      sentence: `Changes made in ${word} — ${CHANGES_WORD[provider] ?? 'any change'} — reach the platform only at the next poll. Register the webhook and they arrive within seconds.`,
       guide: true,
     };
   }

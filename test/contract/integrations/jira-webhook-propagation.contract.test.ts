@@ -14,7 +14,9 @@
  *    pipeline — the harness's handlers, outbound jobs and stage executor;
  *  - and the assertion is the effect: the task's owner moves to the new assignee (`owner_sync`,
  *    S-26.1), and a ticket a person moved to Done cancels its task (`ticket_status_recheck`,
- *    S-28.5/S-28.14) — with **no poll job** anywhere in what ran.
+ *    S-28.5/S-28.14) — inside `harness.publish`, the delivery's own dispatch and the jobs it
+ *    enqueued. The harness schedules no ticket poll at all, so nothing but the delivery can have
+ *    moved either.
  *
  * How a poll-detected change flows, for comparison (`pipeline/ticket-poll.ts`): the poll re-reads a
  * live task's ticket and records `ticket.updated` with **no** changed fields. The webhook's
@@ -34,7 +36,6 @@ import { domainEventSchemasByType } from '@platform/contracts';
 import { ticketStatusPolicyOf } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../../../packages/application/src/integrations/redaction.js';
-import { JOB_QUEUES } from '../../../packages/application/src/ports/jobs.js';
 import {
   createPipelineHarness,
   type PipelineHarness,
@@ -237,17 +238,8 @@ const intakeByWebhook = async (
   return { taskId: stored.task.id };
 };
 
-/** Whether any ticket poll ran or was asked for — the webhook path must need none. */
-const polled = (harness: PipelineHarness): boolean =>
-  harness.jobs.history.some(
-    (job) =>
-      job.queue === JOB_QUEUES.ticketPoll ||
-      (job.queue === JOB_QUEUES.pipelineOutbound &&
-        String((job.data as { duty?: unknown }).duty ?? '').includes('poll')),
-  );
-
 describe('a Jira webhook moves the platform from the delivery (BACKLOG 1610)', () => {
-  it('an assignee change in the changelog moves the task’s owner, with one ticket read and no poll', async () => {
+  it('an assignee change in the changelog moves the task’s owner, with one ticket read', async () => {
     const state: TicketState = { assignee: ALICE_ACCOUNT, status: 'To Do', category: 'todo' };
     const ticket = tracker(state);
     const harness = harnessFor(ticket.port);
@@ -289,10 +281,9 @@ describe('a Jira webhook moves the platform from the delivery (BACKLOG 1610)', (
       previous_owner_user_id: ALICE,
       via: 'tracker_sync',
     });
-    expect(polled(harness)).toBe(false);
   });
 
-  it('a status change to Done in the changelog cancels a task that never ran, with no poll', async () => {
+  it('a status change to Done in the changelog cancels a task that never ran', async () => {
     const state: TicketState = { assignee: null, status: 'To Do', category: 'todo' };
     const ticket = tracker(state);
     const harness = harnessFor(ticket.port);
@@ -326,7 +317,6 @@ describe('a Jira webhook moves the platform from the delivery (BACKLOG 1610)', (
     const cancelled = harness.events().filter((event) => event.type === 'task.cancelled');
     const outcome = (cancelled.at(-1)?.payload as { outcome?: unknown } | undefined)?.outcome;
     expect(String(outcome)).toContain('ACME-1 was moved to "Done" in the tracker by Alice Example');
-    expect(polled(harness)).toBe(false);
   });
 
   it('a change that is neither assignee nor status leaves the owner and the task as they were', async () => {

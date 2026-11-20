@@ -106,13 +106,14 @@ what the URL below is built from. With no public URL, skip to step 5 and switch 
 4. **Events:** tick *Issue: created*, *Issue: updated*, *Issue: deleted* and *Comment: created*.
    **Assignee and status changes need *Issue: updated*** — Jira sends both as an update — and with
    it they take effect within seconds: a new assignee becomes the task's owner, and a ticket a
-   person moves to a finished status stops its task. *Issue: updated* is also what tells the
-   platform a ticket was edited: a task whose ticket changes is shown the new text at its next
-   agent stage, and without the event it keeps the text it read when it started. Without the
-   webhook, all of this waits for the next poll (step 5). *Issue: deleted* is not acted on yet: the
-   delivery log records it as "not handled by this provider", as it does every other event, which
-   nothing else uses. The project's *Connections* settings say per binding whether its webhook is
-   set up and when the last one arrived.
+   person moves to a finished status stops its task while an agent is working on it (a task at QA
+   or Ready for merge, or past the merge, is left for a person — section 5). *Issue: updated* is also
+   what tells the platform a ticket was edited: a task whose ticket changes is shown the new text at
+   its next agent stage, and without the event it keeps the text it read when it started. Without
+   the webhook, all of this waits for the next poll (section 5). *Issue: deleted* is not acted on
+   yet: the delivery log records it as "not handled by this provider", as it does every other event,
+   which nothing else uses. The project's *Connections* settings say per binding whether its webhook
+   is set up and when the last one arrived.
 5. **JQL filter** (recommended): `project = ACME` — Jira warns that an empty filter sends events for
    every issue in the site, which is more data than the platform needs or should see.
 
