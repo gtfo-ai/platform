@@ -513,6 +513,10 @@ export const createMemoryPipelineStore = (
     if (row === undefined || !(Date.parse(row.claimedAt) < stale)) {
       return false;
     }
+    if (stored.readyHeadSha === null && stored.qaStage && stored.ciHeadSha !== null) {
+      // S-28.18: a task that passed QA with no reviewed head recorded, due until the check records one.
+      return true;
+    }
     const attempts = [...taskMerges.values()].filter((merge) => merge.taskId === stored.task.id);
     if (
       attempts.some((merge) => merge.outcome === 'merged' && Date.parse(merge.attemptedAt) < stale)

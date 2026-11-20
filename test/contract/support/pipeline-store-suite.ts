@@ -628,6 +628,60 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * S-28.18 (BACKLOG 1608): a task that passed QA with no reviewed head but a head CI passed is
+       * due again although its check read mergeable — the check records the head once — and is not
+       * once a head is recorded; a task without `qa_stage`, or with no CI head, is never due for it.
+       */
+      it('finds a task that passed QA with no reviewed head until one is recorded (S-28.18)', async () => {
+        const ready = async (stored: StoredTask, ciHead: string | null) => {
+          await store.tasks.insert(tx, stored);
+          const loaded = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+          await store.tasks.save(tx, {
+            ...loaded,
+            task: {
+              ...loaded.task,
+              state: 'ready_for_merge',
+              currentStage: 'ready_for_merge' as Slug,
+            },
+          });
+          await store.tasks.saveCiSettlement(tx, stored.task.id, {
+            headSha: ciHead,
+            excusedPaths: [],
+          });
+          await store.tasks.recordReadyMergeCheck(tx, stored.task.id, {
+            checkedAt: '2026-06-02T09:00:00.000Z' as IsoDateTime,
+            mergeable: true,
+            reason: null,
+            providerStatus: null,
+            unresolvedThreads: null,
+          });
+        };
+        const mr = (iid: number) => ({
+          provider: 'fake-git',
+          project_path: 'acme/api',
+          iid,
+          url: `https://git.example.test/acme/api/-/merge_requests/${iid}`,
+          branch: `agentic/acme-${iid}`,
+          head_sha: 'b'.repeat(40),
+        });
+        const passedQa = task({ mr: mr(51), qaStage: true }, 'ACME-QA-1');
+        const noQa = task({ mr: mr(52) }, 'ACME-QA-2');
+        const noCi = task({ mr: mr(53), qaStage: true }, 'ACME-QA-3');
+        await ready(passedQa, 'b'.repeat(40));
+        await ready(noQa, 'b'.repeat(40));
+        await ready(noCi, null);
+        const mine = new Set([passedQa, noQa, noCi].map((s) => s.task.id));
+        const later = '2026-06-02T09:10:00.000Z' as IsoDateTime;
+        const due = async () =>
+          (await store.tasks.readyMergeCheckDue(tx, { staleBefore: later, limit: 10_000 }))
+            .map((row) => row.taskId)
+            .filter((id) => mine.has(id));
+        expect(await due()).toEqual([passedQa.task.id]);
+        await store.tasks.saveReadyHead(tx, passedQa.task.id, 'b'.repeat(40));
+        expect(await due()).toEqual([]);
+      });
+
+      /**
        * S-28.15 (TD-038 decisions 5–6, amendment A): one decisive attempt per task and head; a
        * rebase row settles once; signal passes count only on a `merged` row; and a task the
        * platform merges with no decisive attempt for its reviewed head is due again.

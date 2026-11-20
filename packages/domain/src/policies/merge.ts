@@ -90,8 +90,15 @@ export const mergeByPersonReasons = (input: MergeByInput): readonly MergeByPerso
  *    blocker, or `mergeable` not `true` (S-28.13's read: pipeline, conflicts, threads, approvals);
  *  - `merge_settings_unknown` — the provider did not say whether a merge squashes or removes the
  *    branch, so the platform cannot pass the repository's own settings back (TD-038 decision 4);
+ *  - `head_not_recorded` — no reviewed head was recorded at the task's Ready entry
+ *    (`tasks.ready_head_sha` is `null`), so there is nothing to compare the merge request's head
+ *    with. Its own code since S-28.18 (BACKLOG 1608): until then it read `head_moved`, and the page
+ *    said "the branch moved" for tasks nobody had pushed to — every task that passed QA. QA's pass
+ *    now records the head the gates judged and the `ready_merge_check` duty records it once for a
+ *    task that passed QA before, so on a shipped template this is defensive; a custom template
+ *    with no CI gate still reaches it, and a person merges;
  *  - `head_moved` — the merge request's head is not `tasks.ready_head_sha`, or (on a pipeline with a
- *    CI gate) that is not `tasks.ci_head_sha`, or no head was recorded;
+ *    CI gate) that is not `tasks.ci_head_sha`;
  *  - `needs_rebase` — every item above holds and the provider's only obstacle is a rebase
  *    (TD-038 amendment A): the duty may ask the provider to rebase.
  */
@@ -106,6 +113,7 @@ export type PlatformMergeWait =
   | 'merge_request_not_open'
   | 'provider_blocked'
   | 'merge_settings_unknown'
+  | 'head_not_recorded'
   | 'head_moved'
   | 'needs_rebase';
 
@@ -172,8 +180,10 @@ export const platformMergeWait = (facts: PlatformMergeFacts): PlatformMergeWait 
   if (!mr.optionsKnown) {
     return 'merge_settings_unknown';
   }
+  if (facts.readyHeadSha === null) {
+    return 'head_not_recorded';
+  }
   if (
-    facts.readyHeadSha === null ||
     mr.headSha !== facts.readyHeadSha ||
     (facts.hasCiGate && facts.ciHeadSha !== facts.readyHeadSha)
   ) {

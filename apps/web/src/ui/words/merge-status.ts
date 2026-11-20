@@ -30,6 +30,9 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
   provider_blocked: 'the provider does not report it mergeable yet',
   merge_settings_unknown:
     'the provider did not say whether a merge squashes it, so the platform cannot use the repository’s own settings',
+  // S-28.18 (BACKLOG 1608): no reviewed commit was recorded — nobody pushed, so not "moved".
+  head_not_recorded:
+    'no check recorded which commit was reviewed, so the platform does not merge it unjudged — a person merges it, or Send back to review it again',
   head_moved:
     'the branch moved since the reviewed commit; a person merges it, or Send back to review the new commits',
   needs_rebase: 'the provider wants a rebase first, and the platform is asking for one',

@@ -464,6 +464,14 @@ const qaPasses = async (pipeline: PipelineE2E): Promise<void> => {
     await nudgeWindow(pipeline);
     return (await pipeline.task()).current_stage === 'ready_for_merge';
   });
+  // S-28.18 (BACKLOG 1608): the Ready entry records the head the gates judged before QA — the head
+  // CI passed — so the platform's merge has a reviewed head to compare (it was null).
+  const [heads] = await pipeline.query<{ ready: string | null; ci: string | null }>(
+    'select ready_head_sha as ready, ci_head_sha as ci from tasks where id = $1',
+    [(await pipeline.task()).id],
+  );
+  expect(heads?.ready).not.toBeNull();
+  expect(heads?.ready).toBe(heads?.ci);
 };
 
 /** A person merges; the provider's merge hook arrives. */
