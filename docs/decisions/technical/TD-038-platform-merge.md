@@ -150,5 +150,5 @@ human-return window reading that the ticket left the `qa` status) entered Ready 
 **Residual.** A person's hand-back into `qa` skips the rebase gate's entry into `qa`; QA's pass then records the last
 head CI passed. The live-head comparison, the provider's "mergeable" and the approving review still hold, but the
 rebase gate's protected-path confirmation (WP-102) is not re-read for an unpushed take-over that skipped the review
-stages — BACKLOG 1609.
+stages — BACKLOG 1615.
 
