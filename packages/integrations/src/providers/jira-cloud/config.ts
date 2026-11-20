@@ -26,6 +26,19 @@ import {
 import * as z from 'zod';
 import { DEFAULT_WEBHOOK_MAX_AGE_MS } from './webhook.js';
 
+/** The longest label this binding accepts (Jira's label field is bounded at 255 characters). */
+export const MAX_JIRA_LABEL_LENGTH = 255;
+
+/**
+ * A Jira label: Jira does not accept a label containing a space, so a label with any whitespace
+ * is refused here, when the binding is saved, rather than by the tracker at the first claim.
+ */
+export const jiraLabelSchema = z
+  .string()
+  .min(1)
+  .max(MAX_JIRA_LABEL_LENGTH)
+  .regex(/^\S+$/, { message: 'a Jira label cannot contain spaces' });
+
 export const jiraCloudConfigSchema = z
   .strictObject({
     /**
@@ -64,6 +77,16 @@ export const jiraCloudConfigSchema = z
      */
     pickup_label: nonEmptyStringSchema.nullish().default('agentic'),
     /**
+     * The label the platform puts on a ticket **while a task holds it** (BACKLOG 1611): added when
+     * the task claims the ticket, removed when it releases it, so a person reading Jira sees that the
+     * platform is working it. Off (`null`) by default. One edit-issue `update` operation, never a
+     * rewrite of the ticket's labels, so every other label stays as it is.
+     *
+     * Never the pick-up label (refused below, compared case-insensitively as JQL compares labels): a
+     * label the claim adds must not be a label the pick-up rule matches on.
+     */
+    claim_label: jiraLabelSchema.nullish().default(null),
+    /**
      * The lifecycle's **`pick_up_from`** slot (TD-029 decision 1): it stays here, beside `lifecycle`,
      * rather than moving into the block, so a binding written before M10 means what it meant.
      */
@@ -97,6 +120,18 @@ export const jiraCloudConfigSchema = z
     request_timeout_ms: z.int().positive().default(20_000),
   })
   .superRefine((binding, ctx) => {
+    if (
+      typeof binding.claim_label === 'string' &&
+      typeof binding.pickup_label === 'string' &&
+      binding.claim_label.toLowerCase() === binding.pickup_label.toLowerCase()
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['claim_label'],
+        message:
+          'claim_label names the label pickup_label names; the label a claim adds cannot be the label tickets are picked up by — choose another (e.g. "agentic-working")',
+      });
+    }
     const pickup = binding.pickup_status;
     const lifecycle = binding.lifecycle;
     if (typeof pickup !== 'string' || lifecycle === undefined) {

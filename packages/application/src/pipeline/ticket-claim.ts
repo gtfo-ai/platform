@@ -70,6 +70,8 @@
  *
  * ## Failures
  *
+ * - The claim label (BACKLOG 1611) is added after the claim is recorded held, when the binding
+ *   configured one; its failure is audited and logged and never refuses the claim (`addClaimLabel`).
  * - The `in_progress` move failing does not refuse the claim: it is a lifecycle write, and a
  *   failed lifecycle write never blocks a stage (TD-029 decision 4); it is logged, and the claim
  *   records `in_progress_written: false`.
@@ -322,8 +324,44 @@ export const ensureTicketClaim = async (
       code: null,
     });
   }
-  await recordClaim(options, stored, request, attempt);
+  if (await recordClaim(options, stored, request, attempt)) {
+    await addClaimLabel(options, integrations, stored, request);
+  }
   return PROCEED;
+};
+
+/**
+ * **The claim label** (BACKLOG 1611): once the claim is recorded, the binding's `claim_label` —
+ * when it configured one — is added to the ticket, so a person reading the tracker sees the
+ * platform working it. Every recorded claim adds it: an assign, a linked member's ticket kept, and
+ * a ticket kept for a person's *Take* (`held_by: 'platform_owner'`). One key per stage entry, as
+ * the claim's own writes. **Best-effort**, as the `in_progress` move: a failure is audited by the
+ * executor and logged, and never refuses the claim or stops the stage.
+ */
+const addClaimLabel = async (
+  options: TaskTransactionOptions,
+  integrations: PipelineIntegrations,
+  stored: StoredTask,
+  request: TicketClaimRequest,
+): Promise<void> => {
+  const { task } = stored;
+  try {
+    await ticketWrites(integrations).claimLabel(task.ticket, 'add', {
+      projectId: task.projectId,
+      taskId: task.id,
+      mode: task.mode,
+      causeEventId: null,
+      idempotencyKey: `ticket_claim_label:${task.id}:${request.stage}:${String(request.attempt)}`,
+    });
+  } catch (error) {
+    if (error instanceof TransactionOpenError) {
+      throw error;
+    }
+    (options.logger ?? silentLogger).warn(
+      { task_id: task.id, stage: request.stage, err: error },
+      'the claim could not add the claim label to the ticket; the claim stands and the stage runs',
+    );
+  }
 };
 
 /**
@@ -612,13 +650,16 @@ const moveToInProgress = async (
   }
 };
 
-/** The claim held: the record and `ticket.claimed`, in one transaction on the task's stream. */
+/**
+ * The claim held: the record and `ticket.claimed`, in one transaction on the task's stream.
+ * Answers whether the claim was recorded **held** — `false` for a task that stopped meanwhile.
+ */
 const recordClaim = async (
   options: TaskTransactionOptions,
   stored: StoredTask,
   request: TicketClaimRequest,
   attempt: ClaimAttempt,
-): Promise<void> => {
+): Promise<boolean> => {
   const { task } = stored;
   const record: StoredTicketClaim = {
     account_id: attempt.self.external_id.slice(0, 255),
@@ -633,7 +674,7 @@ const recordClaim = async (
   };
   /** Whether the binding's account now holds the ticket because of this claim's assign. */
   const assigned = !attempt.shadow && attempt.heldBy === null;
-  const stopped = await inTaskTransaction(
+  const outcome = await inTaskTransaction(
     options,
     task.id,
     'recording the ticket claim',
@@ -703,10 +744,10 @@ const recordClaim = async (
         },
       }) as DomainEvent;
       await scope.events.append([event]);
-      return null;
+      return 'held' as const;
     },
   );
-  if (stopped === 'stopped') {
+  if (outcome === 'stopped') {
     // After the commit, as every enqueue (TD-004): the claim the duty reads is committed first.
     // `releaseRequest`'s shape (`ticket-lifecycle.ts`), written out here because importing it
     // (or `enqueueOutbound`) from there closes a module cycle through `jobs.ts`.
@@ -722,6 +763,7 @@ const recordClaim = async (
       },
     });
   }
+  return outcome === 'held';
 };
 
 /** The platform's own words for a refusal: the escalation's brief. No provider text but the key. */

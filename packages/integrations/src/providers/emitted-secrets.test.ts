@@ -1136,6 +1136,8 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   upsert_workpad: 'upsertWorkpad',
   add_comment: 'addComment',
   set_labels: 'setLabels',
+  // BACKLOG 1611: pure, off the config — the label is config text.
+  claim_label: 'claimLabel',
   link_merge_request: 'linkMergeRequest',
   create_ticket: 'createTicket',
   resolve_identity: 'resolveIdentity',
@@ -1174,6 +1176,8 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
         pickup_label: 'agentic',
         // WP-87: switched on, so `pollPlan()` answers a plan rather than a `null` that emits nothing.
         poll_enabled: true,
+        // BACKLOG 1611: set, so `claimLabel()` answers a label rather than a `null`.
+        claim_label: 'agentic-working',
       },
       secrets: { api_token: JIRA_TOKEN, webhook_secret: JIRA_WEBHOOK_SECRET },
       redactor: noSecretsRedactor(),
@@ -1197,6 +1201,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     emitted.add_comment = await port.addComment(ref, `the token is ${JIRA_TOKEN}`);
     emitted.upsert_workpad = await port.upsertWorkpad(ref, 'workpad', `plan: ${JIRA_TOKEN}`);
     emitted.set_labels = await port.setLabels(ref, [`added-${JIRA_TOKEN}`], []);
+    emitted.claim_label = port.claimLabel();
     emitted.create_ticket = await port.createTicket({
       project_key: 'ACME',
       issue_type: 'Task',

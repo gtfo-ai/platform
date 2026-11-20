@@ -146,6 +146,18 @@ a label and pointing the URL at a domain that does not exist changed no test at 
   stored issues stay whole, because they are the site's state, and the projection happens when
   one is served. Not measured against a live site (no row calls a real Jira).
 
+- `https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json` again, `info.version`
+  `1001.0.0-SNAPSHOT-eac1257d8e1582ed7dd2a97a93dbea3c277d24be`, retrieved **2026-11-20** for BACKLOG
+  1611 (the claim label): `editIssue`, `PUT /rest/api/3/issue/{issueIdOrKey}` — *"The edits to the
+  issue's fields are defined using `update` and `fields`"*; the request example's `update.labels` is
+  `[{"add": "triaged"}, {"remove": "blocker"}]`; permission *Browse projects* and *Edit issues*;
+  `204` *"Returned if the request is successful."* with no body. →
+  `edit-issue-claim-label-add.json` and `edit-issue-claim-label-remove.json` (`documented`: the
+  example's one `labels` operation each, the label this corpus's claim label, the key the contract
+  suite's ticket). `setLabels` sends only `update` operations naming the labels it changes, never
+  `fields.labels`, so a person's labels are never restated; `jira-cloud.contract.test.ts` holds the
+  claim label's add and remove to these two requests. Not measured against a live site.
+
 ## What is deliberately **not** in a fixture
 
 - **Signatures.** A webhook fixture carries the delivery headers Atlassian documents but no

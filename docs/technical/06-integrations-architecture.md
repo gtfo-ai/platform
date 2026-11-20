@@ -14,7 +14,8 @@ pollPlan() -> {rule, interval_seconds} | null        # WP-87: the binding's own 
 transition(ref, targetStatusName, fields?) -> {changed, from, to}   # resolves at runtime; already there = {changed:false}; unknown target fails loudly
 upsertWorkpad(ref, markerId, markdown) -> CommentRef # edit in place (BD-023); Jira finds it by paging the thread (WP-111)
 addComment(ref, markdown) -> CommentRef              # questions, linter output
-setLabels(ref, add[], remove[])
+setLabels(ref, add[], remove[]) -> labels          # edits the named labels only, never rewrites the set (BACKLOG 1611)
+claimLabel() -> string | null                        # BACKLOG 1611: the binding's claim_label; added at a claim, removed at a release (best-effort, executor)
 linkMergeRequest(ref, mrUrl)
 createTicket(draft) -> TicketRef                     # scope-creep valve, epic split
 resolveIdentity(providerUserId|email) -> UserIdentity

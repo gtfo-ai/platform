@@ -583,11 +583,25 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
     options?: { readonly markerId?: string | null },
   ) => Promise<CommentRef>;
 
+  /**
+   * Adds `add` and removes `remove`, **leaving every other label as it is** — an edit of the named
+   * labels, never a rewrite of the ticket's whole set (BACKLOG 1611: the claim label is added and
+   * removed beside labels people put on the ticket). Adding a label already there or removing one
+   * that is not is no write. Answers the ticket's labels afterwards. A mutation, through the
+   * executor.
+   */
   readonly setLabels: (
     ref: TicketRefInput,
     add: readonly string[],
     remove: readonly string[],
   ) => Promise<readonly string[]>;
+
+  /**
+   * The label this binding puts on a ticket while a task holds it (BACKLOG 1611), from binding
+   * configuration — Jira's `claim_label` — or `null` when the binding configured none, which is
+   * every provider's default. Never the label the pick-up rule matches on. Not a provider call.
+   */
+  readonly claimLabel: () => string | null;
 
   readonly linkMergeRequest: (ref: TicketRefInput, mrUrl: string) => Promise<void>;
 

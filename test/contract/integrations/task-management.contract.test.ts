@@ -146,6 +146,18 @@ const fakeHarness: TaskManagementContractHarness = {
         }),
         intervalSeconds: POLL_INTERVAL_SECONDS,
       },
+      // BACKLOG 1611: a second labelled ticket, so the edit has a label of somebody else's to keep.
+      claimLabel: {
+        port: createFakeTaskManagement({
+          integrationId: INTEGRATION_ID,
+          claimLabel: 'agentic-working',
+          tickets: [
+            { key: 'FAKE-1', title: 'The claimed ticket', labels: [PICKUP_LABEL, 'customer-x'] },
+          ],
+        }),
+        label: 'agentic-working',
+        ticket,
+      },
       lifecycle: {
         expectedCategories: {
           'To pick up': 'todo',

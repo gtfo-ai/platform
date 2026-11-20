@@ -1462,6 +1462,8 @@ const stubTaskManagement = (
         // No declared scope, as a binding with no `project_keys` (WP-122): a test that wants one
         // overrides it.
         ticketScope: () => ({ kind: 'unscoped' }),
+        // BACKLOG 1611: no claim label, every provider's default; a case about it overrides both.
+        claimLabel: () => null,
         upsertWorkpad: async () => ({
           provider: 'fake-jira',
           ticket_key: 'ACME-1',

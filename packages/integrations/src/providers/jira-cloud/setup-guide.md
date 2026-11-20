@@ -51,7 +51,7 @@ In the project's **Project settings → People / Permissions**, the account need
 | Browse projects | reading tickets, and searching them — the poll (step 5) and the history bootstrap — and reading the project's statuses (step 6) |
 | Assign issues | the claim: assigning a ticket to this account when work starts, and unassigning it only if this account still holds it; and, with `lifecycle.assign_owner` on, **writing the owner back**: assigning the ticket to the person a maintainer or a pick made its owner on the platform |
 | Add comments | the workpad and questions |
-| Edit issues | labels |
+| Edit issues | labels — including the optional `claim_label`, added when a task claims a ticket and removed when it lets go |
 | Transition issues | status changes; without it Jira lists no transitions at all |
 | Link issues | linking the merge request |
 | Create issues | the scope-creep valve and epic splitting (only if you enable them) |
@@ -75,6 +75,7 @@ it out: the platform reports the missing capability instead of failing halfway t
 | `webhook_secret` | `FAKE-jira-webhook-secret-0123456789` | **Secret.** Needed for the webhook (step 4); leave it unset on a binding that only polls |
 | `project_keys` | `["ACME"]` | Deliveries for any other project are ignored and recorded as such |
 | `pickup_label` | `agentic` | The label that means "this ticket is for the platform" (product/19 §6) |
+| `claim_label` | `agentic-working` | Optional, off by default. Added to a ticket while a task holds it and removed when the task lets go (cancel, *Rework*), so Jira shows the platform is working on it. No spaces, and never the `pickup_label`. The account needs *Edit Issues*; a refused edit is logged and audited and never stops the task |
 | `poll_enabled` | `true` | Poll Jira for the pick-up rule instead of (or beside) the webhook — step 5. Off by default |
 | `poll_interval_seconds` | `60` | Seconds between two polls of this binding; 30 to 86400, default 60 |
 

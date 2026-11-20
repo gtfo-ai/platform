@@ -8,6 +8,7 @@
  * quote change the query.
  */
 import { describe, expect, it } from 'vitest';
+import { jiraCloudConfigSchema } from './config.js';
 import {
   buildJql,
   describeTargets,
@@ -131,5 +132,17 @@ describe('pickupRuleOf', () => {
     expect(pickupRuleOf({ pickup_label: 'agentic' })).toEqual({ kind: 'label', label: 'agentic' });
     expect(pickupRuleOf({ pickup_label: null, pickup_status: null })).toEqual({ kind: 'none' });
     expect(pickupRuleOf({})).toEqual({ kind: 'none' });
+  });
+
+  it('never picks up by the claim label (BACKLOG 1611)', () => {
+    const config = jiraCloudConfigSchema.parse({
+      site_url: 'https://acme-example.atlassian.net',
+      user_email: 'agentic-bot@example.test',
+      api_token: 'FAKE-jira-api-token-0123456789',
+      claim_label: 'agentic-working',
+    });
+    expect(pickupRuleOf(config)).toEqual({ kind: 'label', label: 'agentic' });
+    // With label pick-up off, the claim label does not become the rule either.
+    expect(pickupRuleOf({ ...config, pickup_label: null })).toEqual({ kind: 'none' });
   });
 });

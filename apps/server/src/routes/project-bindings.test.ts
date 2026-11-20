@@ -423,6 +423,25 @@ describe('PUT /api/projects/:id/bindings checks the lifecycle block first (WP-18
     expect(statusReads).toBe(0);
   });
 
+  it('saves a claim_label, and refuses one that is the pick-up label (BACKLOG 1611)', async () => {
+    world.tracker = 'unreachable';
+    const saved = await putBindings({ claim_label: 'agentic-working' });
+    expect(saved.statusCode).toBe(200);
+    expect(stored.get(JIRA)).toEqual({ claim_label: 'agentic-working' });
+
+    const before = new Map(stored);
+    // `pickup_label` defaults to `agentic`, so naming it as the claim label is the clash.
+    const clash = await putBindings({ claim_label: 'Agentic' });
+    expect(clash.statusCode).toBe(400);
+    expect(clash.json().error.code).toBe('invalid_binding_config');
+    expect(JSON.stringify(clash.json().error)).toContain('claim_label');
+    const spaced = await putBindings({ claim_label: 'agentic working' });
+    expect(spaced.statusCode).toBe(400);
+    expect(spaced.json().error.code).toBe('invalid_binding_config');
+    expect(stored).toEqual(before);
+    expect(statusReads).toBe(0);
+  });
+
   it('refuses what the write refuses before it asks the tracker anything', async () => {
     // A host outside APP_INTEGRATION_HOSTS: refused by the write's own check, never read.
     const elsewhere = await putBindings({ ...MAPPED, site_url: 'https://elsewhere.example.test' });

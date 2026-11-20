@@ -153,6 +153,12 @@ const createJiraContext = async (): Promise<TaskManagementContractContext> => {
         .adapter,
       intervalSeconds: 90,
     },
+    // BACKLOG 1611: the replay's ACME-1 carries the pick-up label.
+    claimLabel: {
+      port: createJiraBinding({ config: { claim_label: 'agentic-working' } }).adapter,
+      label: 'agentic-working',
+      ticket: JIRA_TICKET,
+    },
     /**
      * WP-172: the lifecycle members against the documented J1 document
      * (`project-statuses-acme.json`, invented neutral names) and the double's assignee.
@@ -339,6 +345,45 @@ describe('jira-cloud — reaching the provider', () => {
       expect(writes.map(({ method, path, body }) => ({ method, path, body }))).toEqual([request]);
       expect((await binding.port.readTicket(JIRA_TICKET)).assignee?.external_id).toBe(accountId);
       expect(binding.audit.entriesFor('assign_to').map((entry) => entry.status)).toEqual(['ok']);
+    });
+  });
+
+  describe('the claim label’s requests are editIssue’s documented update operations (BACKLOG 1611)', () => {
+    it.each([
+      ['add', 'edit-issue-claim-label-add.json'],
+      ['remove', 'edit-issue-claim-label-remove.json'],
+    ] as const)(
+      '%s sends %s’s request and nothing that restates the other labels',
+      async (change, name) => {
+        const request = loadJiraFixture(name).request;
+        if (request === undefined) {
+          throw new Error('the editIssue fixture records the request it documents');
+        }
+        const labelled = createJiraBinding({ config: { claim_label: 'agentic-working' } });
+        const label = labelled.adapter.claimLabel();
+        expect(label).toBe('agentic-working');
+        if (change === 'remove') {
+          // On the ticket first, so the removal has something to remove.
+          await labelled.port.setLabels(JIRA_TICKET, [label as string], []);
+        }
+        const from = labelled.replay.requests.length;
+        const labels = await labelled.port.setLabels(
+          JIRA_TICKET,
+          change === 'add' ? [label as string] : [],
+          change === 'remove' ? [label as string] : [],
+        );
+        const writes = labelled.replay.requests
+          .slice(from)
+          .filter((recorded) => recorded.method !== 'GET');
+        expect(writes.map(({ method, path, body }) => ({ method, path, body }))).toEqual([request]);
+        // The pick-up label the ticket carried is still there either way.
+        expect(labels).toContain(JIRA_PICKUP_LABEL);
+        expect(labels.includes('agentic-working')).toBe(change === 'add');
+      },
+    );
+
+    it('answers no claim label for a binding that configured none', () => {
+      expect(binding.adapter.claimLabel()).toBeNull();
     });
   });
 

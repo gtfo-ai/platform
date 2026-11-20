@@ -107,6 +107,18 @@ export interface TaskManagementContractContext {
    */
   readonly polling: { readonly port: TaskManagementPort; readonly intervalSeconds: number };
   /**
+   * The same provider built with a **claim label** in its binding configuration, the label, and
+   * that port's ticket (BACKLOG 1611). An obligation of the contract (standing rule 23): the claim
+   * adds the label and the release removes it through `setLabels`, so a provider that answered a
+   * label nobody configured, or whose edit rewrote the ticket's other labels, would label tickets
+   * nobody claimed or strip a person's labels. The ticket carries {@link pickupLabel}.
+   */
+  readonly claimLabel: {
+    readonly port: TaskManagementPort;
+    readonly label: string;
+    readonly ticket: TicketRefInput;
+  };
+  /**
    * The ticket lifecycle's half (WP-171), **required** when the provider declares any of the four
    * lifecycle flags and unread otherwise — a provider that declares none is held to the refusal
    * branch alone. The context's `ticket` starts **unassigned**.
@@ -724,6 +736,38 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         expect(labels).not.toContain(context.pickupLabel);
         const ticket = await port.readTicket(context.ticket);
         expect(ticket.labels).toContain('agentic:refinement');
+      });
+
+      it('answers no claim label for a binding that configured none (BACKLOG 1611)', () => {
+        expect(context.port.claimLabel()).toBeNull();
+      });
+
+      it('adds the claim label and removes it again, leaving every other label (BACKLOG 1611)', async () => {
+        const { port: labelled, label, ticket } = context.claimLabel;
+        expect(labelled.claimLabel()).toBe(label);
+        expect(label).not.toBe(context.pickupLabel);
+        const before = (await labelled.readTicket(ticket)).labels;
+        expect(before).toContain(context.pickupLabel);
+        expect(before).not.toContain(label);
+
+        const added = await labelled.setLabels(ticket, [label], []);
+        expect(added).toContain(label);
+        expect(added).toEqual(expect.arrayContaining([...before]));
+        expect((await labelled.readTicket(ticket)).labels).toEqual(
+          expect.arrayContaining([...before, label]),
+        );
+        // Adding it again is no change.
+        expect([...(await labelled.setLabels(ticket, [label], []))].sort()).toEqual(
+          [...added].sort(),
+        );
+
+        const removed = await labelled.setLabels(ticket, [], [label]);
+        expect([...removed].sort()).toEqual([...before].sort());
+        expect([...(await labelled.readTicket(ticket)).labels].sort()).toEqual([...before].sort());
+        // Removing it again is no change either.
+        expect([...(await labelled.setLabels(ticket, [], [label]))].sort()).toEqual(
+          [...before].sort(),
+        );
       });
 
       it('links a merge request and does not duplicate the link', async () => {
