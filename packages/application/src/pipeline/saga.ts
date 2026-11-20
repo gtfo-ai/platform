@@ -137,7 +137,7 @@ import {
   ESCALATED_OUTCOME,
   resumeAtStage,
 } from './transitions.js';
-import { reviewFindingSignature, verdictReturnReason } from './verdicts.js';
+import { reviewFindingSignature, stageVerdict, verdictReturnReason } from './verdicts.js';
 import { statusMappingHandler, workpadHandler } from './workpad.js';
 
 export interface PipelineSagaOptions {
@@ -1022,6 +1022,13 @@ const stageCompletedHandler = (options: PipelineSagaOptions): EventHandler => ({
  *
  * The signature comes from the review's structured findings, never from its prose, so a model that
  * rewords the same finding twice is still recognised as the same round.
+ *
+ * **Only a review that does not approve can converge** (S-28.19, backlog 1609). S5 stops a
+ * request-changes loop: its brief says *"another Implementation pass would change nothing"*, and an
+ * approving review starts no Implementation pass — it advances. On AUT-6645 two approving reviews
+ * with the same two `minor` findings parked the task at `needs_human` instead of advancing it to
+ * `business_review`. An approving round still records its signature, so a later request-changes
+ * round that repeats it is compared as before.
  */
 const convergenceEscalation = async (
   options: PipelineSagaOptions,
@@ -1050,13 +1057,24 @@ const convergenceEscalation = async (
     'code_review',
     5,
   );
-  if (!isRepeatOfPreviousRound(previous, signature)) {
+  const repeat = isRepeatOfPreviousRound(previous, signature);
+  if (!repeat) {
     await options.store.tasks.recordStageSignature(context.scope.tx, {
       taskId: stored.task.id,
       stage,
       attempt: stored.task.stageAttempts[stage] ?? 1,
       signature,
     });
+  }
+  // `stageVerdict` maps an unrecognised verdict to null, which is not an approval: it converges
+  // like `request_changes`, and the interpreter escalates it anyway.
+  const approves =
+    stageVerdict({
+      artifactType: 'ReviewVerdict',
+      data: latest.data,
+      attemptOnLowConfidence: false,
+    }) === 'approve';
+  if (!repeat || approves) {
     return false;
   }
   const escalated = escalateTask(
