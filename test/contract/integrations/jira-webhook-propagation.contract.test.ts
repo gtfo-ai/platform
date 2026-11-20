@@ -316,7 +316,7 @@ describe('a Jira webhook moves the platform from the delivery (BACKLOG 1610)', (
     expect(after?.task.state).toBe('cancelled');
     const cancelled = harness.events().filter((event) => event.type === 'task.cancelled');
     const outcome = (cancelled.at(-1)?.payload as { outcome?: unknown } | undefined)?.outcome;
-    expect(String(outcome)).toContain('ACME-1 was moved to "Done" in the tracker by Alice Example');
+    expect(String(outcome)).toContain('ACME-1 was moved to "Done" in Jira by Alice Example');
   });
 
   it('a change that is neither assignee nor status leaves the owner and the task as they were', async () => {
