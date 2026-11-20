@@ -18,6 +18,7 @@
  */
 import type { TranscriptBlock } from '../../transcript/blocks.js';
 import { type Activity, toolActivityLabel } from '../../ui/activity.js';
+import { formatTime } from '../../ui/time.js';
 
 export type RowState = 'current' | 'done' | 'error' | 'needs_you';
 
@@ -245,10 +246,5 @@ export const logLines = (blocks: readonly TranscriptBlock[]): readonly LogLine[]
   return lines.slice(-LOG_LINE_LIMIT);
 };
 
-/** "4:39 PM": the activity row's time, in the reader's locale-independent English (technical/09). */
-export const clockTime = (iso: string): string => {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime())
-    ? ''
-    : new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(at);
-};
+/** "16:39": the activity row's time, on the clock in force (`ui/time.ts`, S-28.21). */
+export const clockTime = (iso: string): string => formatTime(iso);

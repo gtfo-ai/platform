@@ -143,19 +143,8 @@ export const formatSamples = (id: StatMetricId, samples: number): string => {
   return `From ${formatInteger(samples)} ${samples === 1 ? one : many}`;
 };
 
-const CIVIL_DATE = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' });
-
-/**
- * A civil date (`2026-09-10`) the way every other screen writes a date — *"Sep 10, 2026"* — read
- * at UTC midnight and formatted in UTC, so the reader's own zone never moves it a day. A value
- * that is not a date is shown as it came.
- */
-export const formatCivilDate = (day: string): string => {
-  const at = new Date(`${day}T00:00:00.000Z`);
-  return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(at.getTime())
-    ? CIVIL_DATE.format(at)
-    : day;
-};
+/** A civil date as every screen writes one (*"Sep 10, 2026"*) — `ui/time.ts` since S-28.21. */
+export { formatCivilDate } from '../ui/time.js';
 
 /**
  * The screen's sections, in reading order, and the metrics each holds.

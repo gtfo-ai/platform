@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { DEFAULT_CLOCK, setClock } from '../ui/time.js';
 import {
   ORG_SETTINGS_GROUPS,
   orgSettingsGroupsFor,
@@ -42,6 +43,9 @@ interface World {
   budgetPuts: unknown[];
   /** What a `PUT /api/org/budgets` answers, given its body — possibly later. */
   budgetAnswer: (body: unknown) => Answer | Promise<Answer>;
+  /** `GET /api/org`'s document — `PATCH /api/org` replaces its sections (S-28.21). */
+  org: { settings: Record<string, unknown>; updated_at: string | null };
+  orgPatches: unknown[];
 }
 
 interface Answer {
@@ -100,7 +104,18 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
     });
   }
   if (path === '/api/version') return json({ version: '0.0.0-dev', commit: null, built_at: null });
-  if (path === '/api/org') return json({ settings: {}, updated_at: null });
+  if (path === '/api/org' && init?.method === 'PATCH') {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    world.orgPatches.push(body);
+    const settings = { ...world.org.settings };
+    for (const [section, value] of Object.entries(body)) {
+      if (value === null) delete settings[section];
+      else settings[section] = value;
+    }
+    world.org = { settings, updated_at: '2026-11-20T15:05:00.000Z' };
+    return json({ settings, changed: Object.keys(body), performed: true, capped_projects: [] });
+  }
+  if (path === '/api/org') return json(world.org);
   if (path === '/api/org/identities' || path === '/api/org/identities/candidates') {
     return json({ items: [] });
   }
@@ -123,6 +138,8 @@ beforeEach(() => {
     requested: [],
     budgetPuts: [],
     budgetAnswer: () => ({ status: 200, body: {} }),
+    org: { settings: {}, updated_at: null },
+    orgPatches: [],
   };
 });
 
@@ -198,6 +215,59 @@ describe('the org settings sub-routes', () => {
     });
   });
 
+  it('writes times on the 24-hour clock until an administrator chooses 12, and every screen follows (S-28.21)', async () => {
+    const user = userEvent.setup();
+    world.org = { settings: {}, updated_at: '2026-11-19T15:05:00.000Z' };
+    try {
+      open('/settings/date-time');
+      const select = (await screen.findByLabelText('Organisation clock')) as HTMLSelectElement;
+      // Nobody has saved a clock: the default is 24-hour, and the page's own times read so.
+      expect(select.value).toBe('24h');
+      // The card's own "Last changed …" line: a time the page writes on the clock in force (the
+      // selector's option labels name AM/PM themselves, so the line is read alone).
+      const changed = (): string =>
+        /Last changed [^.]*\./.exec(
+          document.querySelector('[data-settings-section]')?.textContent ?? '',
+        )?.[0] ?? '';
+      expect(changed()).toMatch(/^Last changed [A-Z][a-z]{2} \d{1,2}, 2026, \d{2}:\d{2}\.$/);
+      expect(changed()).not.toMatch(/[AP]M/);
+      const preview = (): string =>
+        document.querySelector('[data-clock-preview]')?.textContent ?? '';
+      expect(preview()).toContain('reads 15:05.');
+      expect(screen.getByRole('button', { name: 'Save date & time' })).toHaveProperty(
+        'disabled',
+        true,
+      );
+
+      await user.selectOptions(select, '12h');
+      expect(preview()).toMatch(/reads 3:05\sPM\./);
+      await user.click(screen.getByRole('button', { name: 'Save date & time' }));
+      await waitFor(() => {
+        expect(world.orgPatches).toEqual([{ display: { clock: '12h' } }]);
+      });
+      // The document now says 12-hour: the screen is drawn again on it, its times with AM/PM.
+      await waitFor(() => {
+        expect(changed()).toMatch(
+          /^Last changed [A-Z][a-z]{2} \d{1,2}, 2026, \d{1,2}:\d{2}\s[AP]M\.$/,
+        );
+      });
+      const again = (await screen.findByLabelText('Organisation clock')) as HTMLSelectElement;
+      expect(again.value).toBe('12h');
+
+      // Back to the default removes the section rather than storing it.
+      await user.selectOptions(again, '24h');
+      await user.click(screen.getByRole('button', { name: 'Save date & time' }));
+      await waitFor(() => {
+        expect(world.orgPatches).toEqual([{ display: { clock: '12h' } }, { display: null }]);
+      });
+      await waitFor(() => {
+        expect(changed()).toMatch(/^Last changed [A-Z][a-z]{2} \d{1,2}, 2026, \d{2}:\d{2}\.$/);
+      });
+    } finally {
+      setClock(DEFAULT_CLOCK);
+    }
+  });
+
   it.each(['your-accounts', 'no-such-section'])(
     'says /settings/%s is no settings page, inside Settings, rather than showing Policies (S-25.15)',
     async (section) => {
@@ -253,6 +323,7 @@ describe('the org settings sub-routes', () => {
     ).toEqual([
       'Policies',
       'Notifications',
+      'Date & time',
       'Budgets',
       'Users',
       // The Admin group: Integrations and the Audit log are a maintainer's (`integration.read`,
@@ -375,6 +446,7 @@ describe('the org settings sub-routes', () => {
   it.each([
     ['policies', (scope: Scope) => scope.findByLabelText('Organisation autonomy maximum')],
     ['notifications', (scope: Scope) => scope.findByLabelText('Organisation default chat account')],
+    ['date-time', (scope: Scope) => scope.findByLabelText('Organisation clock')],
     ['identities', (scope: Scope) => scope.findByRole('form', { name: 'Map a provider account' })],
     ['instance', (scope: Scope) => scope.findByText('0.0.0-dev')],
     ['session', (scope: Scope) => scope.findByText('Role: Administrator')],
@@ -474,7 +546,7 @@ describe('the section tables', () => {
         group.sections.map((section) => section.id),
       ]);
     expect(groups('maintainer')).toEqual([
-      ['Organisation', ['policies', 'notifications', 'budgets']],
+      ['Organisation', ['policies', 'notifications', 'date-time', 'budgets']],
       ['People', ['users']],
       ['Admin', ['integrations', 'workers', 'audit']],
       ['Operations', ['instance']],
@@ -482,7 +554,7 @@ describe('the section tables', () => {
     ]);
     for (const role of ['member', 'viewer', undefined] as const) {
       expect(groups(role)).toEqual([
-        ['Organisation', ['policies', 'notifications', 'budgets']],
+        ['Organisation', ['policies', 'notifications', 'date-time', 'budgets']],
         ['People', ['users']],
         ['Admin', ['workers']],
         ['Operations', ['instance']],

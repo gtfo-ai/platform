@@ -2063,7 +2063,7 @@ command records nothing.
 
 **Settings** — the gear in the top bar, also in the account menu — is one page per section, picked from the list on the
 left (on a phone, a one-line menu above the section that names the one you are on) — **Policies ·
-Notifications · Budgets · Users · Linked accounts · Integrations · Workers · Audit log · Stuck
+Notifications · Date & time · Budgets · Users · Linked accounts · Integrations · Workers · Audit log · Stuck
 events · Failed background jobs · Instance · Session · Keyboard shortcuts · Your accounts** — grouped as
 *Organisation*, *People*, *Admin*, *Operations* and *Personal*. **Opening Settings opens the first
 section your role may change**: *Policies* for an administrator, *Budgets* for a maintainer,
@@ -2083,6 +2083,10 @@ administrator; anybody else who opens one of their addresses lands where *Settin
 *New integration* and *Add a worker* wizards take the whole page for their own steps);
 `/settings/integrations` and the like take you there too.
 
+- **Date & time** — the organisation's **Clock**: *24-hour* (*15:05*), which is what every screen
+  shows until somebody changes it, or *12-hour (AM/PM)* (*3:05 PM*). It changes how every date and
+  time in the platform reads, for everybody, in each reader's own time zone; an administrator's.
+  There is no personal override yet.
 - **Session** — who is signed in, and with which role.
 - **Keyboard shortcuts** — **Use single-key shortcuts**, on until you turn it off: whether `g h`,
   `j`, `k`, `/`, `?` and the rest do anything (see *Search and keyboard shortcuts*,

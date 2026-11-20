@@ -99,6 +99,8 @@ notifications:
   quiet_hours: { from: "22:00", to: "07:00" }   # the organisation's zone (TZ); may wrap midnight
   digest_at: "09:00"                           # when the organisation's digest posts (default 09:00)
   organisation_default: <integration id>        # the chat account that speaks for the organisation (Q103 (c))
+display:
+  clock: 24h                  # 24h (default, also when absent) | 12h — how every screen writes a time of day (S-28.21)
 ```
 
 - **Strict, and parsed at every read.** An unknown key is an error, and a stored document the schema refuses is a
@@ -125,6 +127,10 @@ notifications:
   are not built; Q103's refusal applies only when none is flagged. A flag that points at an account which no longer
   exists, or at one whose own config names no channel, refuses the notification by name. It is a pointer in this
   document rather than a boolean on each account, so "exactly one is flagged" is a property of the shape.
+- **`display.clock`** is how the SPA writes a time of day (S-28.21, BACKLOG 1608): `24h` (*14:05*) or `12h`
+  (*2:05 PM*), and `24h` when absent — so the default holds before anybody saves. Only the words change: the server
+  sends ISO instants and the browser formats them through `apps/web/src/ui/time.ts`. There is no per-user override
+  yet (no user-preference store exists; BACKLOG 1624).
 
 ## `.agentic/config.yml` (repository, non-secret, highest precedence for non-secret keys)
 

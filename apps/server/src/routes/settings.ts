@@ -144,12 +144,13 @@ export interface SettingsQueries {
   isCommunicationAccount(id: string): Promise<boolean>;
 }
 
-/** The document's four sections, in the order `PATCH /api/org` reports them. */
+/** The document's five sections, in the order `PATCH /api/org` reports them. */
 export const ORGANISATION_SETTINGS_SECTIONS = [
   'commands',
   'autonomy',
   'pipeline',
   'notifications',
+  'display',
 ] as const;
 
 type OrganisationSettingsSection = (typeof ORGANISATION_SETTINGS_SECTIONS)[number];

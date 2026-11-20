@@ -54,6 +54,7 @@ const READY: Readonly<
 > = {
   policies: (section) => section.getByLabel('Organisation autonomy maximum'),
   notifications: (section) => section.getByLabel('Organisation default chat account'),
+  'date-time': (section) => section.getByLabel('Organisation clock'),
   budgets: (section) => section.getByText('spent $3.25 of $40.00 this window'),
   users: (section) => section.getByRole('list', { name: 'Users' }).getByText('Fake Operator'),
   identities: (section) => section.getByText('U0FAKEOPERATOR').first(),

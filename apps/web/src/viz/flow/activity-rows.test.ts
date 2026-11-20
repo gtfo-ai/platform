@@ -7,6 +7,7 @@
 import type { TranscriptEvent } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { type TranscriptBlock, toBlocks } from '../../transcript/blocks.js';
+import { DEFAULT_CLOCK, setClock } from '../../ui/time.js';
 import {
   ACTIVITY_ROW_LIMIT,
   ARGUMENT_SUMMARY_CHARS,
@@ -125,8 +126,14 @@ describe('the "Live activity" rows', () => {
     expect(rows[0]?.key).toBe('6:0');
   });
 
-  it('times a row in English clock time', () => {
-    expect(clockTime('2026-11-05T16:39:00.000Z')).toMatch(/^\d{1,2}:39\s?[AP]M$/);
+  it('times a row on the clock in force — 24-hour unless the organisation chose 12 (S-28.21)', () => {
+    expect(clockTime('2026-11-05T16:39:00.000Z')).toMatch(/^\d{2}:39$/);
+    setClock('12h');
+    try {
+      expect(clockTime('2026-11-05T16:39:00.000Z')).toMatch(/^\d{1,2}:39\s?[AP]M$/);
+    } finally {
+      setClock(DEFAULT_CLOCK);
+    }
     expect(clockTime('not a date')).toBe('');
   });
 });

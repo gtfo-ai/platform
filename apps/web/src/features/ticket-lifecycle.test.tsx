@@ -850,7 +850,7 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
       return found as HTMLElement;
     });
     expect(row.textContent).toBe(
-      'Skipped ACME-9: its status is Finished, which is not a status work starts from (or means it is finished). (2026-11-04)',
+      'Skipped ACME-9: its status is Finished, which is not a status work starts from (or means it is finished). (Nov 4, 2026)',
     );
   });
 

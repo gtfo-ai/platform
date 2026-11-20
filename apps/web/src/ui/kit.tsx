@@ -351,12 +351,8 @@ export const formatRunCost = (
 
 export const formatInteger = (value: number): string => new Intl.NumberFormat('en').format(value);
 
-export const formatDateTime = (iso: string): string => {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime())
-    ? iso
-    : new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(at);
-};
+/** An instant as every screen writes one, on the clock in force (`ui/time.ts`, S-28.21). */
+export { formatDateTime } from './time.js';
 
 /**
  * Human minutes as `"2 h 15 m"` — product/19 §16's unit, product/09:29's *"shown next to"* (WP-29).

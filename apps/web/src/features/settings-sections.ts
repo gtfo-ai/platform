@@ -62,6 +62,8 @@ export const ORG_SETTINGS_GROUPS = [
     sections: [
       { id: 'policies', label: 'Policies', changeableFrom: 'admin' },
       { id: 'notifications', label: 'Notifications', changeableFrom: 'admin' },
+      // S-28.21: how every screen writes a time of day (24-hour unless an administrator says 12).
+      { id: 'date-time', label: 'Date & time', changeableFrom: 'admin' },
       { id: 'budgets', label: 'Budgets', changeableFrom: 'maintainer' },
     ],
   },

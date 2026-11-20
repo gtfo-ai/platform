@@ -4125,6 +4125,7 @@ export const patchOrgSettingsRequestSchema = z
     autonomy: replacedSection(organisationSettingsSchema.shape.autonomy),
     pipeline: replacedSection(organisationSettingsSchema.shape.pipeline),
     notifications: replacedSection(organisationSettingsSchema.shape.notifications),
+    display: replacedSection(organisationSettingsSchema.shape.display),
   })
   .refine((body) => Object.keys(body).length > 0, {
     message: 'name at least one section to replace or remove',
@@ -4156,7 +4157,7 @@ export const cappedProjectSchema = z.discriminatedUnion('setting', [
 export const patchOrgSettingsResponseSchema = z.strictObject({
   settings: organisationSettingsSchema,
   /** The top-level sections this request replaced or removed. */
-  changed: z.array(z.enum(['commands', 'autonomy', 'pipeline', 'notifications'])),
+  changed: z.array(z.enum(['commands', 'autonomy', 'pipeline', 'notifications', 'display'])),
   performed: z.boolean(),
   /**
    * The projects this write caps — whose autonomy level or WIP limit **in force** fell — with the

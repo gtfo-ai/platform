@@ -10,6 +10,7 @@
 import type { SkippedTicket } from '@platform/contracts';
 import type { ReactElement } from 'react';
 import { useSkippedTickets } from '../app/queries.js';
+import { formatDate } from '../ui/time.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 
@@ -57,7 +58,7 @@ export const SkippedTickets = ({
               <ExternalLink url={item.ticket.url} label={sanitiseUntrusted(item.ticket.key)} />:{' '}
               {words.before}
               {words.status === null ? null : <UntrustedText value={words.status} />}
-              {words.after} <span className="text-fg-muted">({item.skipped_at.slice(0, 10)})</span>
+              {words.after} <span className="text-fg-muted">({formatDate(item.skipped_at)})</span>
             </li>
           );
         })}
