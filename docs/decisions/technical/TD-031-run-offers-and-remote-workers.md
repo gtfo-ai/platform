@@ -1515,3 +1515,18 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
 - Broad intake rules now take members' assigned tickets (BACKLOG 1085).
 - Releasing ownership leaves the ticket assigned to the person in the tracker (BACKLOG 1081).
 - `owner_sync` costs one provider read per `ticket.updated` burst (BACKLOG 1084).
+
+## Amendment (2026-11-20, orchestrator-authorised, PR #176) — the worker protocol is 5: a run package may carry the commit identity
+
+A git integration may now declare who a run's commits are by (GitLab `commit_author_name` + `commit_author_email`,
+owner request). The identity reaches a remote worker on the run package's repository half, so the package gains an
+optional `commitIdentity`; `WORKER_PROTOCOL_VERSION` is **5** and `ACCEPTED_WORKER_PROTOCOLS` is **[4, 5]** — the
+`[N-1, N]` rule of decision 7 (TD-032 decision 7), unchanged.
+
+- A protocol-4 worker is sent the package **without** the key (its strict schema would refuse it) and commits as
+  `agentic <agentic@localhost>` until its updater follows the core. Nothing else differs.
+- A protocol-3 worker is answered `426` and updates, as the rule already says. On Autix at the time of this
+  amendment every active worker reported protocol 4.
+- The core and its own launcher do not negotiate a version: the create request carries the key **only when an
+  identity is configured**, so an older launcher image beside a newer core fails those projects' runs `invalid_spec`
+  rather than committing under the wrong name. Upgrading the launcher image with the core is the operator's step.

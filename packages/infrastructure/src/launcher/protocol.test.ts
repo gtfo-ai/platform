@@ -291,6 +291,8 @@ describe('the commit identity on the wire', () => {
 
   it.each([
     ['a name with a line break', { ...IDENTITY, name: 'Agentic\nGIT_DIR=/tmp' }],
+    ['a name with a right-to-left override', { ...IDENTITY, name: 'Agentic\u202Etxe' }],
+    ['a name with a zero-width space', { ...IDENTITY, name: 'Agen\u200Btic' }],
     ['a name with angle brackets', { ...IDENTITY, name: 'Agentic <root@example.test>' }],
     ['a name of only punctuation git strips', { ...IDENTITY, name: '.,;' }],
     ['a name with a trailing space', { ...IDENTITY, name: 'Agentic ' }],

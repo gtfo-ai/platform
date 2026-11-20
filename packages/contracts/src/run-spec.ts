@@ -163,8 +163,10 @@ export const gitCommitNameSchema = z
   .min(1)
   .max(MAX_GIT_COMMIT_NAME_LENGTH)
   .refine(
-    (value) => !/\p{Cc}/u.test(value),
-    'a commit author name is one line, with no control character',
+    (value) => !/[\p{Cc}\p{Cf}]/u.test(value),
+    // `Cf` too: a right-to-left override (U+202E) or a zero-width character would make the name
+    // read as somebody else's in the provider's UI.
+    'a commit author name is one line, with no control or invisible formatting character',
   )
   .refine(
     (value) => !/[<>]/.test(value),
