@@ -35,7 +35,7 @@
  * A pipeline that runs **no** `ci_gate` (no shipped template; a custom one) carries **nothing**:
  * its rebase gate's head is not persisted anywhere QA's pass could read it, so the Ready entry
  * records `null` and the platform merge waits `head_not_recorded` — a person merges. That is the
- * fail-closed direction and it is stated rather than closed (BACKLOG 1609).
+ * fail-closed direction and it is stated rather than closed (BACKLOG 1615).
  *
  * ## Tasks already waiting (the recovery)
  *
@@ -54,7 +54,7 @@
  * pass then carries the last head CI passed. The platform merge still merges only that head and
  * only with the provider's "mergeable" and an approving review, so a push during the take-over is
  * `head_moved`; what is not re-read is the rebase gate's confirmation of protected paths CI excused
- * (WP-102) for an unpushed take-over that skipped the review stages. Recorded as BACKLOG 1609.
+ * (WP-102) for an unpushed take-over that skipped the review stages. Recorded as BACKLOG 1615.
  */
 import type { Id } from '@platform/contracts';
 import {
