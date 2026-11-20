@@ -203,7 +203,7 @@ for the rebase, because only then was a "before" digest recorded.
    - `head_rebased_ci_pending`: *the branch was rebased and the change is identical; waiting for CI on the rebased
      commit, then merging*;
    - `head_rebased_ci_failed`: *…CI failed on the rebased commit: <jobs>*, the failing jobs' names redacted and bounded
-     (TD-012) in `task_merge_checks.merge_wait_detail` (migration 0125, additive) and served as `merge.waiting_detail`;
+     (TD-012) in `task_merge_checks.merge_wait_detail` (migration 0121, additive) and served as `merge.waiting_detail`;
    - `head_moved` stays for what it says: the head moved again while the platform was judging it (or the reviewed head
      is not the CI-gated one).
 4. **Send back is not offered for a rebase-only state** (`head_rebased_ci_pending`, `head_rebased_ci_failed`,

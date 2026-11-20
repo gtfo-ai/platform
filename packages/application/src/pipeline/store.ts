@@ -1428,7 +1428,7 @@ export interface TaskRepository {
    * {@link TaskRepository.readyMergeCheckDue}, so a merge that waited (a person's words, a
    * pipeline) or a lost wake-up is asked again. Creates the row when there is none.
    *
-   * `detail` (TD-038 Amendment C, migration 0125, `merge_wait_detail`) is the bounded, redacted
+   * `detail` (TD-038 Amendment C, migration 0121, `merge_wait_detail`) is the bounded, redacted
    * text beside a wait — the failing jobs of `head_rebased_ci_failed`; absent is `null`, so every
    * decision replaces the last one's detail.
    */

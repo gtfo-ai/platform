@@ -881,7 +881,7 @@ export const taskMergeChecks = pgTable('task_merge_checks', {
   // S-28.15 (migration 0119): who merges, and what the platform last waited for.
   mergeBy: text('merge_by'),
   mergeWait: text('merge_wait'),
-  // TD-038 Amendment C (migration 0125): the redacted, bounded text beside the wait.
+  // TD-038 Amendment C (migration 0121): the redacted, bounded text beside the wait.
   mergeWaitDetail: text('merge_wait_detail'),
 });
 

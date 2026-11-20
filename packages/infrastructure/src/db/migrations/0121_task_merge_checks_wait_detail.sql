@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0125 — `task_merge_checks.merge_wait_detail`: the words beside what the platform's merge waits
+-- 0121 — `task_merge_checks.merge_wait_detail`: the words beside what the platform's merge waits
 -- for (S-28.23, TD-038 Amendment C, backlog 1636).
 --
 -- A head at Ready that is not the reviewed one is classified now, never just refused: the

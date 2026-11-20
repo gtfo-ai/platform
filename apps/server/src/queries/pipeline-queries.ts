@@ -2663,7 +2663,7 @@ export const mergeStatusFor = async (
     // A task past Ready keeps its last attempt; who merged it is then the attempt's word.
     by: by ?? 'platform',
     waiting_for: atReady ? (row?.merge_wait ?? null) : null,
-    // TD-038 Amendment C (migration 0125): the words beside the wait, at Ready only.
+    // TD-038 Amendment C (migration 0121): the words beside the wait, at Ready only.
     waiting_detail: atReady ? (row?.merge_wait_detail ?? null) : null,
     last_attempt:
       last === null

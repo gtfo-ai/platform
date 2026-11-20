@@ -502,7 +502,7 @@ export const createMemoryPipelineStore = (
       /** S-28.15 (migration 0119): who merges, and what the platform last waited for. */
       mergeBy?: 'person' | 'platform' | null;
       mergeWait?: string | null;
-      /** TD-038 Amendment C (migration 0125): the text beside the wait. */
+      /** TD-038 Amendment C (migration 0121): the text beside the wait. */
       mergeWaitDetail?: string | null;
     }
   >();
@@ -1626,7 +1626,7 @@ export const createMemoryPipelineStore = (
     // S-28.15: the SQL's upsert of the two decision columns, and `task_merges`.
     recordMergeDecision: async (_tx, taskId, decision) => {
       if (decision.detail === '') {
-        // The SQL check `task_merge_checks_merge_wait_detail_not_empty` (migration 0125).
+        // The SQL check `task_merge_checks_merge_wait_detail_not_empty` (migration 0121).
         throw new Error('task_merge_checks.merge_wait_detail must be non-empty when present');
       }
       const row = mergeChecks.get(taskId);
