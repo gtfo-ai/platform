@@ -116,9 +116,12 @@ describe('jiraCloudConfigSchema’s claim_label (BACKLOG 1611)', () => {
     ['the empty string', ''],
     ['256 characters', 'a'.repeat(256)],
   ])('refuses a label with %s', (_what, label) => {
-    expect(issuesOf({ ...BASE, claim_label: label })).toEqual([
-      expect.stringMatching(/^claim_label: /),
-    ]);
+    // The empty string fails both the length bound and the label pattern, so it may carry two issues.
+    const issues = issuesOf({ ...BASE, claim_label: label });
+    expect(issues.length).toBeGreaterThan(0);
+    for (const issue of issues) {
+      expect(issue).toMatch(/^claim_label: /);
+    }
   });
 
   it('accepts a label of exactly 255 characters (the bound’s other side)', () => {
