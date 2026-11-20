@@ -1,5 +1,5 @@
 /**
- * The transcript itself: blocks, follow-tail, the "paused updates" indicator and search.
+ * The transcript itself: blocks, follow-tail, the paused indicator with *Jump to latest*, and search.
  *
  * **Drawn as a log** (S-23.10, research/19 § 5.2 "Run"), as GitHub Actions draws a job: a tool call
  * is a collapsed **log step** — chevron, status icon, the tool, the argument summary, the duration
@@ -7,8 +7,10 @@
  * on arrival while it runs or after it failed; the model's text is prose lines; thinking and the
  * CLI's start-up notice are collapsed; everything else is one row. The scroller is its own pane —
  * the run page sizes it to the viewport through `scrollerClassName` — and following its end is
- * keyed on the tail's signature, so a result folded into a call or a streaming block's next words
- * are followed too, not only a new block.
+ * `ui/follow-tail.tsx`'s (S-28.22): pinned before paint after every commit and on every size change
+ * of the content, so a result folded into a call, a step that closes or a streaming block's next
+ * words are followed too, and only the reader scrolling up pauses it. That module's docblock states
+ * why the earlier signature-keyed follow jumped and let go.
  *
  * **Not virtualised.** technical/09 asks for TanStack Virtual in chat mode, and this ships a plain
  * list instead, for a reason worth stating rather than hiding: a virtualiser measures the DOM, and
@@ -23,6 +25,7 @@
 import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
 import { type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { cx, FOCUS_RING } from '../ui/cx.js';
+import { FollowPaused, useFollowTail } from '../ui/follow-tail.js';
 import { terminalReasonLabel } from '../ui/humanize.js';
 import { Badge, Button, formatInteger, formatUsd } from '../ui/kit.js';
 import { UntrustedInline, UntrustedProse } from '../ui/markdown.js';
@@ -362,19 +365,6 @@ const BlockView = ({
   }
 };
 
-/**
- * What changes when the log grows — a new block, a result folded into a call, a streaming block's
- * next words — so following the end follows all of it, not only a new block.
- */
-const tailSignature = (blocks: readonly TranscriptBlock[]): string => {
-  const last = blocks.at(-1);
-  if (last === undefined) {
-    return '0';
-  }
-  const size = last.kind === 'text' || last.kind === 'thinking' ? last.text.length : 0;
-  return `${blocks.length}:${last.id}:${last.at}:${size}`;
-};
-
 export interface TranscriptViewProps {
   readonly blocks: readonly TranscriptBlock[];
   readonly emptyHint?: string;
@@ -394,6 +384,11 @@ export interface TranscriptViewProps {
    * end again and takes focus, so the last lines are what is in view.
    */
   readonly jumpToEnd?: number;
+  /**
+   * How many blocks the run has written, when `blocks` is only the newest of them (the task page's
+   * live transcript): the paused count keeps counting past the trim. Defaults to `blocks.length`.
+   */
+  readonly total?: number;
 }
 
 export const TranscriptView = ({
@@ -402,53 +397,34 @@ export const TranscriptView = ({
   scrollerClassName,
   ended: endedProp = false,
   jumpToEnd = 0,
+  total,
 }: TranscriptViewProps): ReactElement => {
   const [query, setQuery] = useState('');
-  const [following, setFollowing] = useState(true);
-  const [seen, setSeen] = useState(blocks.length);
-  const scroller = useRef<HTMLDivElement>(null);
+  const follow = useFollowTail(total ?? blocks.length);
 
   const visible = useMemo(() => filterBlocks(blocks, query), [blocks, query]);
-  const tail = tailSignature(blocks);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `tail` is the trigger — the log grew.
-  useEffect(() => {
-    if (!following) {
-      return;
-    }
-    setSeen(blocks.length);
-    const element = scroller.current;
-    if (element !== null) {
-      element.scrollTop = element.scrollHeight;
-    }
-  }, [tail, blocks.length, following]);
 
   // A jump is a request, not a state: only a change of the counter acts, never the first render.
-  // The search and the follow flag are adjusted **while rendering** (React's "adjust state when a
-  // prop changes"), so the very commit that carries the new counter shows the cleared search; the
-  // effect does only what needs the DOM — scroll to the end and take focus.
+  // The search is adjusted **while rendering** (React's "adjust state when a prop changes"), so the
+  // very commit that carries the new counter shows the cleared search; the effect does what needs
+  // the DOM — follow and scroll to the end, and take focus.
   const [jumpSeen, setJumpSeen] = useState(jumpToEnd);
   if (jumpSeen !== jumpToEnd) {
     setJumpSeen(jumpToEnd);
     setQuery('');
-    setFollowing(true);
-    setSeen(blocks.length);
   }
   const jumped = useRef(jumpToEnd);
+  const { jumpToLatest, scrollerRef } = follow;
   useEffect(() => {
     if (jumped.current === jumpToEnd) {
       return;
     }
     jumped.current = jumpToEnd;
-    const element = scroller.current;
-    if (element !== null) {
-      element.scrollTop = element.scrollHeight;
-      element.focus();
-    }
-  }, [jumpToEnd]);
+    jumpToLatest();
+    scrollerRef.current?.focus();
+  }, [jumpToEnd, jumpToLatest, scrollerRef]);
 
   const ended = endedProp || blocks.some((block) => block.kind === 'result');
-  const behind = Math.max(0, blocks.length - seen);
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -463,53 +439,45 @@ export const TranscriptView = ({
           aria-label="Search transcript"
           className="w-56 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
         />
-        {/* A toggle: `default` with `aria-pressed`, never the run page's beacon (S-23.23). */}
-        <Button
-          aria-pressed={following}
-          onClick={() => {
-            setFollowing((current) => !current);
-          }}
-        >
-          {following ? 'Following' : 'Follow tail'}
-        </Button>
-        {behind > 0 && !following ? (
-          <span data-testid="paused-updates" role="status" aria-live="polite">
-            <Badge tone="warning">{`Paused updates, ${formatInteger(behind)} behind`}</Badge>
-          </span>
-        ) : null}
+        {/* `default` with `aria-pressed`, never the run page's beacon (S-23.23); pressing it
+            pauses, and a paused log says so and offers the way back. */}
+        {follow.following ? (
+          <Button aria-pressed onClick={follow.pause}>
+            Following
+          </Button>
+        ) : (
+          <FollowPaused tail={follow} />
+        )}
         <span className="ml-auto text-xs text-fg-muted">
           {formatInteger(visible.length)} of {formatInteger(blocks.length)} blocks
         </span>
       </div>
 
       <div
-        ref={scroller}
+        ref={follow.scrollerRef}
         // Focusable only by *Jump to the last lines*, so the jump lands the reader in the log.
         tabIndex={-1}
         data-testid="transcript-scroller"
         className={cx(
-          'flex min-h-0 flex-col gap-0.5 overflow-y-auto rounded-md border border-line bg-default py-1',
+          'min-h-0 overflow-y-auto rounded-md border border-line bg-default py-1',
           scrollerClassName ?? 'flex-1',
         )}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 32;
-          setFollowing(atBottom);
-          if (atBottom) {
-            setSeen(blocks.length);
-          }
-        }}
+        style={follow.scrollerStyle}
+        onScroll={follow.onScroll}
       >
-        {visible.length === 0 ? (
-          <p className="p-4 text-sm text-fg-muted">
-            {query.trim() === ''
-              ? (emptyHint ??
-                'Nothing yet. Entries appear here as the agent works — the stream is live.')
-              : 'No block matches that search.'}
-          </p>
-        ) : (
-          visible.map((block) => <BlockView key={block.id} block={block} ended={ended} />)
-        )}
+        {/* One observed box around the rows, so a row that changes height is followed. */}
+        <div ref={follow.contentRef} className="flex flex-col gap-0.5">
+          {visible.length === 0 ? (
+            <p className="p-4 text-sm text-fg-muted">
+              {query.trim() === ''
+                ? (emptyHint ??
+                  'Nothing yet. Entries appear here as the agent works — the stream is live.')
+                : 'No block matches that search.'}
+            </p>
+          ) : (
+            visible.map((block) => <BlockView key={block.id} block={block} ended={ended} />)
+          )}
+        </div>
       </div>
     </div>
   );

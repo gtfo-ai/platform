@@ -178,6 +178,25 @@ describe('toBlocks', () => {
     expect(blocks[0]).toMatchObject({ text: 'abcd' });
   });
 
+  it('keeps a streaming block’s id while its partials arrive, so its row is not remounted per frame', () => {
+    const partial = (seq: number, text: string) =>
+      ({
+        ...envelope,
+        kind: 'stream_block',
+        seq,
+        block_index: 0,
+        block: { type: 'text', text },
+        first_delta_at: envelope.created_at,
+        last_delta_at: envelope.created_at,
+      }) as TranscriptEvent;
+
+    const first = toBlocks([partial(3, 'ab')]);
+    const later = toBlocks([partial(3, 'ab'), partial(4, 'abcd'), partial(5, 'abcdef')]);
+    expect(first[0]?.id).toBe('3:stream:0');
+    expect(later[0]?.id).toBe('3:stream:0');
+    expect(later[0]).toMatchObject({ text: 'abcdef' });
+  });
+
   it('is idempotent over a replayed event', () => {
     const events = [
       toolUse(1, 'toolu_1', 'Bash', { command: 'ls' }),

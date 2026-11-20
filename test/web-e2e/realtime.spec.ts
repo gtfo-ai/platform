@@ -105,10 +105,10 @@ const longFrame = (seq: number): SseFrame => ({
 
 /**
  * S-23.10, technical/09's follow-tail: the run's log is a scroll pane of its own, sized to the
- * viewport — the page does not grow with the transcript — so following the end and "paused, N
- * behind" are about that pane. Measured in a real browser, where the pane has a layout.
+ * viewport — the page does not grow with the transcript — so following the end, the paused count
+ * and *Jump to latest* are about that pane. Measured in a real browser, where the pane has a layout.
  */
-test('the run log is its own pane: it follows the end, pauses when scrolled up and counts what arrived', async ({
+test('the run log is its own pane: it follows the end, pauses when scrolled up, counts what arrived and resumes at the end', async ({
   page,
   request,
 }) => {
@@ -141,17 +141,36 @@ test('the run log is its own pane: it follows the end, pauses when scrolled up a
   await pane.evaluate((element) => {
     element.scrollTop = 0;
   });
-  await expect(page.getByRole('button', { name: 'Follow tail' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Jump to latest' })).toBeVisible();
   for (let seq = 50; seq < 53; seq += 1) {
     expect(await publishFrame(request, runTopic, 'assistant', longFrame(seq))).toBe(1);
   }
-  await expect(page.getByTestId('paused-updates')).toHaveText('Paused updates, 3 behind');
+  await expect(page.getByTestId('follow-paused')).toHaveText('Paused · 3 new');
   expect((await geometry()).top).toBe(0);
 
   // Following again goes to the end and clears the count.
-  await page.getByRole('button', { name: 'Follow tail' }).click();
+  await page.getByRole('button', { name: 'Jump to latest' }).click();
   await expect.poll(async () => (await geometry()).gap).toBeLessThan(32);
-  await expect(page.getByTestId('paused-updates')).toHaveCount(0);
+  await expect(page.getByTestId('follow-paused')).toHaveCount(0);
+
+  // S-28.22: a burst of frames while following never lets go — each pin's own scroll event,
+  // read after the next frame made the pane taller, once turned following off on its own.
+  for (let seq = 53; seq < 73; seq += 1) {
+    expect(await publishFrame(request, runTopic, 'assistant', longFrame(seq))).toBe(1);
+  }
+  await expect(page.getByText('Frame 72, first line.')).toBeVisible();
+  await expect.poll(async () => (await geometry()).gap).toBeLessThan(2);
+  await expect(page.getByRole('button', { name: 'Following' })).toBeVisible();
+
+  // Scrolling back to the end by hand resumes it too.
+  await pane.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(page.getByTestId('follow-paused')).toBeVisible();
+  await pane.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(page.getByRole('button', { name: 'Following' })).toBeVisible();
 });
 
 test('a duplicate frame does not render twice', async ({ page, request }) => {

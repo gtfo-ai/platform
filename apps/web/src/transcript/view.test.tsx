@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
+import { bottomOf, layOut, readerScrolls } from '../ui/scroll-geometry.test-fixture.js';
 import type { ToolBlock, TranscriptBlock } from './blocks.js';
 import { toolRendererKind } from './renderers.js';
 import { blockText, filterBlocks, TranscriptView } from './view.js';
@@ -375,28 +376,55 @@ describe('TranscriptView', () => {
       text: id,
       streaming: false,
     });
-    const view = render(<TranscriptView blocks={[text('a', 1), text('b', 2)]} />);
+    const view = render(<TranscriptView blocks={[text('a', 1)]} />);
     const scroller = screen.getByTestId('transcript-scroller');
     // happy-dom lays nothing out: give the pane a size so "scrolled up" means something.
-    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
-    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 });
-    scroller.scrollTop = 0;
-    fireEvent.scroll(scroller);
-    expect(screen.getByRole('button', { name: 'Follow tail' })).toBeTruthy();
+    const geometry = layOut(scroller, { scrollHeight: 1000, clientHeight: 200 });
+    view.rerender(<TranscriptView blocks={[text('a', 1), text('b', 2)]} />);
+    expect(scroller.scrollTop).toBe(bottomOf(geometry));
+
+    readerScrolls(scroller, 0);
+    expect(screen.queryByRole('button', { name: 'Following' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeTruthy();
 
     view.rerender(
       <TranscriptView blocks={[text('a', 1), text('b', 2), text('c', 3), text('d', 4)]} />,
     );
-    expect(screen.getByTestId('paused-updates').textContent).toBe('Paused updates, 2 behind');
+    expect(screen.getByTestId('follow-paused').textContent).toBe('Paused · 2 new');
     // Not followed while paused: the reader's place is kept.
     expect(scroller.scrollTop).toBe(0);
 
     act(() => {
-      screen.getByRole('button', { name: 'Follow tail' }).click();
+      screen.getByRole('button', { name: 'Jump to latest' }).click();
     });
-    expect(screen.queryByTestId('paused-updates')).toBeNull();
+    expect(screen.queryByTestId('follow-paused')).toBeNull();
     expect(screen.getByRole('button', { name: 'Following' })).toBeTruthy();
-    expect(scroller.scrollTop).toBe(1000);
+    expect(scroller.scrollTop).toBe(bottomOf(geometry));
+  });
+
+  it('pauses from the *Following* toggle without moving the pane', () => {
+    const view = render(<TranscriptView blocks={[tool()]} />);
+    const scroller = screen.getByTestId('transcript-scroller');
+    const geometry = layOut(scroller, { scrollHeight: 1000, clientHeight: 200 });
+    view.rerender(<TranscriptView blocks={[tool()]} />);
+    act(() => {
+      screen.getByRole('button', { name: 'Following' }).click();
+    });
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeTruthy();
+    geometry.scrollHeight = 1400;
+    view.rerender(<TranscriptView blocks={[tool(), tool({ id: 't2', seq: 2 })]} />);
+    expect(scroller.scrollTop).toBe(800);
+    expect(screen.getByTestId('follow-paused').textContent).toBe('Paused · 1 new');
+  });
+
+  it('counts past a trimmed window: the task page passes the run’s whole count', () => {
+    const view = render(<TranscriptView blocks={[tool()]} total={30} />);
+    const scroller = screen.getByTestId('transcript-scroller');
+    layOut(scroller, { scrollHeight: 1000, clientHeight: 200 });
+    view.rerender(<TranscriptView blocks={[tool()]} total={30} />);
+    readerScrolls(scroller, 0);
+    view.rerender(<TranscriptView blocks={[tool({ id: 't9', seq: 9 })]} total={33} />);
+    expect(screen.getByTestId('follow-paused').textContent).toBe('Paused · 3 new');
   });
 
   it('writes a step’s tool and summary as plain text, so a model’s URL or markup is no link and the step still toggles', async () => {
@@ -472,15 +500,12 @@ describe('TranscriptView', () => {
     const running = tool({ result: null });
     const view = render(<TranscriptView blocks={[running]} />);
     const scroller = screen.getByTestId('transcript-scroller');
-    const grow = (height: number) => {
-      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: height });
-    };
-    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 });
-    grow(1000);
+    const geometry = layOut(scroller, { scrollHeight: 1000, clientHeight: 200 });
     view.rerender(<TranscriptView blocks={[{ ...running }]} />);
+    expect(scroller.scrollTop).toBe(800);
 
     // The same count, the same last block: only its result and its time moved.
-    grow(1400);
+    geometry.scrollHeight = 1400;
     view.rerender(
       <TranscriptView
         blocks={[
@@ -488,17 +513,47 @@ describe('TranscriptView', () => {
         ]}
       />,
     );
-    expect(scroller.scrollTop).toBe(scroller.scrollHeight);
-    expect(scroller.scrollTop).toBe(1400);
+    expect(scroller.scrollTop).toBe(1200);
+    // The pin's own scroll event, read after the pane grew again, is not the reader scrolling up.
+    geometry.scrollHeight = 1500;
+    fireEvent.scroll(scroller);
+    expect(screen.getByRole('button', { name: 'Following' })).toBeTruthy();
 
     // A streaming block's next words: one block more, then the same block longer.
-    grow(1600);
+    geometry.scrollHeight = 1600;
     view.rerender(<TranscriptView blocks={[running, streaming('half a')]} />);
-    expect(scroller.scrollTop).toBe(1600);
-    grow(1900);
+    expect(scroller.scrollTop).toBe(1400);
+    geometry.scrollHeight = 1900;
     view.rerender(<TranscriptView blocks={[running, streaming('half a sentence')]} />);
-    expect(scroller.scrollTop).toBe(scroller.scrollHeight);
-    expect(scroller.scrollTop).toBe(1900);
+    expect(scroller.scrollTop).toBe(bottomOf(geometry));
+    expect(scroller.scrollTop).toBe(1700);
+  });
+
+  it('follows a change no entry announces: a nested result, a step that closes', () => {
+    const task = tool({
+      id: 'task',
+      toolName: 'Task',
+      result: null,
+      children: [tool({ id: 'child', result: null })],
+    });
+    const view = render(<TranscriptView blocks={[task]} />);
+    const scroller = screen.getByTestId('transcript-scroller');
+    const geometry = layOut(scroller, { scrollHeight: 1000, clientHeight: 200 });
+    view.rerender(<TranscriptView blocks={[task]} />);
+    // The subagent's call got its result: the last top-level block's id, time and count are as
+    // they were, which the replaced signature-keyed follow did not notice.
+    geometry.scrollHeight = 1250;
+    view.rerender(
+      <TranscriptView
+        blocks={[
+          {
+            ...task,
+            children: [tool({ id: 'child', result: { isError: false, content: 'done' } })],
+          },
+        ]}
+      />,
+    );
+    expect(scroller.scrollTop).toBe(bottomOf(geometry));
   });
 });
 

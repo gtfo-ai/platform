@@ -5,7 +5,7 @@
  * **For a task's stage with a run:** the header says the stage, its state, the model, the cost and
  * how long the run has gone; a **"Live activity"** list (time · status dot · what the agent did,
  * `activity-rows.ts`) sits beside a **log** — a terminal-like tail of the same run, following its
- * end until the reader scrolls up, and following again from *Follow the end*. Both read the run's
+ * end until the reader scrolls up, and following again from *Jump to latest* (`ui/follow-tail.tsx`). Both read the run's
  * transcript blocks: the page of history `useRunMessages` loads, and the `run:<id>` frames this
  * dialog subscribes to **while it is open**, which the realtime provider writes into the same store.
  * So the list and the log move while the agent works, and a frame replayed on reconnect changes
@@ -28,13 +28,13 @@
  */
 import type { AgentsResponse, TaskDetailResponse } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
-import { type ReactElement, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { type ReactElement, useSyncExternalStore } from 'react';
 import { useRunMessages } from '../../app/queries.js';
 import { useServices } from '../../app/services.js';
 import { useTopics } from '../../realtime/provider.js';
 import { ACTIVITY_META } from '../../ui/activity.js';
-import { Button } from '../../ui/button.js';
 import { Dialog } from '../../ui/dialog.js';
+import { FollowPaused, useFollowTail } from '../../ui/follow-tail.js';
 import { ARTIFACT_TYPE_LABEL, eventPhrase, ROLE_LABEL, stageLabel } from '../../ui/humanize.js';
 import { formatElapsed, formatRunCost } from '../../ui/kit.js';
 import { StateLabel, type Status } from '../../ui/status.js';
@@ -110,33 +110,6 @@ const SeatNote = ({ live, seat }: { readonly live: boolean; readonly seat: Seat 
   </p>
 );
 
-/**
- * Follows the end of a scroller until the reader scrolls up; `follow()` resumes. Keyed on the
- * **newest line's key**, not on the count: past `LOG_LINE_LIMIT` the count stops changing while
- * lines still arrive, and a count-keyed follow would stop following exactly when a run is busiest.
- */
-const useFollowTail = (newest: string | null) => {
-  const ref = useRef<HTMLDivElement>(null);
-  const [following, setFollowing] = useState(true);
-  useEffect(() => {
-    if (!following || newest === null) {
-      return;
-    }
-    const element = ref.current;
-    if (element !== null) {
-      element.scrollTop = element.scrollHeight;
-    }
-  }, [newest, following]);
-  const onScroll = (): void => {
-    const element = ref.current;
-    if (element === null) {
-      return;
-    }
-    setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
-  };
-  return { ref, following, onScroll, follow: () => setFollowing(true) };
-};
-
 /** The run's live activity and log, while the dialog is open. */
 const RunPanels = ({ runId, live }: { readonly runId: string; readonly live: boolean }) => {
   useTopics([`run:${runId}`]);
@@ -149,7 +122,8 @@ const RunPanels = ({ runId, live }: { readonly runId: string; readonly live: boo
   );
   const rows = activityRows(snapshot.blocks, { live });
   const lines = logLines(snapshot.blocks);
-  const tail = useFollowTail(lines.at(-1)?.key ?? null);
+  // Counted in blocks, which the store never trims: the log keeps only its newest lines.
+  const tail = useFollowTail(snapshot.blocks.length);
   return (
     <div className="grid min-h-0 gap-4 md:grid-cols-[15rem_1fr]">
       <section aria-labelledby={`activity-${runId}`} className="flex min-h-0 flex-col gap-2">
@@ -168,9 +142,7 @@ const RunPanels = ({ runId, live }: { readonly runId: string; readonly live: boo
           {tail.following ? (
             <span className="text-xs text-fg-muted">following the end</span>
           ) : (
-            <Button size="sm" onClick={tail.follow}>
-              Follow the end
-            </Button>
+            <FollowPaused tail={tail} size="sm" />
           )}
         </div>
         {messages.isError ? (
@@ -180,18 +152,21 @@ const RunPanels = ({ runId, live }: { readonly runId: string; readonly live: boo
           </p>
         ) : null}
         <div
-          ref={tail.ref}
+          ref={tail.scrollerRef}
           onScroll={tail.onScroll}
+          style={tail.scrollerStyle}
           data-testid="stage-log"
           className="h-[22rem] overflow-y-auto rounded-md bg-[oklch(0.18_0.01_260)] p-3"
         >
-          {lines.length === 0 ? (
-            <p className="font-mono text-xs text-[oklch(0.72_0.03_280)]">
-              {messages.isPending ? 'Loading the log…' : 'No output yet.'}
-            </p>
-          ) : (
-            <TerminalLines lines={lines} />
-          )}
+          <div ref={tail.contentRef}>
+            {lines.length === 0 ? (
+              <p className="font-mono text-xs text-[oklch(0.72_0.03_280)]">
+                {messages.isPending ? 'Loading the log…' : 'No output yet.'}
+              </p>
+            ) : (
+              <TerminalLines lines={lines} />
+            )}
+          </div>
         </div>
       </section>
     </div>

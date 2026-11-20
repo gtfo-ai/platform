@@ -1593,8 +1593,9 @@ Then four tabs:
   and any step that failed are open already. A call the run never answered — its last, when it crashed or lost its
   worker — reads **no result** once the run has ended, never *running*. The model's words are prose between the steps, and its
   thinking stays folded under *Thinking*. The log scrolls in a pane of its own, sized to the window:
-  at the bottom it follows the end; scroll up and it stays where you are, with **Paused updates, N
-  behind**, until you press **Follow tail**. Everything in it is rendered as **text** or as
+  at the bottom it follows the end and stays on the newest line as entries arrive; scroll up and it
+  stays where you are, with **Paused · N new**, until you press **Jump to latest** or scroll back to
+  the end. Pressing **Following** pauses it without scrolling. The stage dialog's log does the same. Everything in it is rendered as **text** or as
   page elements built from it — the model's Markdown is formatted (headings, lists, bold, code,
   tables), but the application has no markdown-to-HTML step anywhere, on purpose, because all of it
   — model output, tool results, file contents — is untrusted
