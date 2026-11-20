@@ -159,7 +159,7 @@ export const runReadyMergeCheck = async (
   ) {
     return 'not_at_ready';
   }
-  // S-28.18 (BACKLOG 1608): a task that passed QA before its Ready entry recorded a head is given
+  // S-28.18 (BACKLOG 1616): a task that passed QA before its Ready entry recorded a head is given
   // the head the gates judged, once (`qa-pass-head.ts`); the recovery pass finds it due for that.
   await adoptQaPassHead(options, taskId);
   const atReady = stored as StoredTask & { readonly mr: NonNullable<StoredTask['mr']> };

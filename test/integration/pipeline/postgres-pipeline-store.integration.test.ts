@@ -326,7 +326,7 @@ describe('task_stages.attached_feedback (migration 0086)', () => {
 });
 
 /**
- * **A retry's reason is kept on the attempt it entered** (S-28.20, backlog 1611, migration 0120):
+ * **A retry's reason is kept on the attempt it entered** (S-28.20, backlog 1619, migration 0120):
  * written only on the open row of exactly that attempt, read back for it, kept by an in-place
  * re-entry of the same attempt (S-28.1's upsert), and an empty text is refused by the database.
  */

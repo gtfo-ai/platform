@@ -584,7 +584,7 @@ describe('the self-assessment cases run offline (S-28.8)', () => {
 });
 
 /**
- * S-28.19 (backlog 1609, AUT-6645): the let-stand cases run offline the same way — a verdict a
+ * S-28.19 (backlog 1617, AUT-6645): the let-stand cases run offline the same way — a verdict a
  * correct model would give passes every `javascript` assertion, and each wrong one the row names
  * (the accepted finding raised again because it is "still not fixed", its thread named resolved, a
  * finding raised again without saying why) fails one. Nothing here is a claim about a model

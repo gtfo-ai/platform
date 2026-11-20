@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0120 — `task_stages.retry_reason`: the words a person gave a *Retry stage* (S-28.20, backlog 1611).
+-- 0120 — `task_stages.retry_reason`: the words a person gave a *Retry stage* (S-28.20, backlog 1619).
 --
 -- `POST /api/tasks/:id/retry-stage` has accepted an optional `reason` since WP-15i, and the task
 -- page's *Retry a stage* dialog offers a box for it, but the route dropped it: it was not stored, not

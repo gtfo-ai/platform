@@ -67,7 +67,7 @@
  * command, so the audit row still cannot become a copy of an **un**redacted sentence — which is the
  * property this paragraph has always been about. The other eight are stored by the command itself
  * and are not repeated here. **Three more are accepted and still kept nowhere** — the optional
- * `reason` on `resume`, on the task `cancel` and on `ticket-sync/retry` (BACKLOG 1612): no agent reads
+ * `reason` on `resume`, on the task `cancel` and on `ticket-sync/retry` (BACKLOG 1620): no agent reads
  * them, so nothing is lost to a run, but the audit row does not have them either. The run cancel's
  * `reason` is never read, by decision (S-25.23, below).
  *
@@ -787,7 +787,7 @@ export const registerCommandRoutes = async (
             taskId,
             userId,
             stage: body.stage,
-            // S-28.20 (backlog 1611): until then the route dropped it, and the run never saw it.
+            // S-28.20 (backlog 1619): until then the route dropped it, and the run never saw it.
             ...(body.reason === undefined ? {} : { reason: body.reason }),
             idempotencyKey,
           });

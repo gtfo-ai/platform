@@ -2393,7 +2393,7 @@ export const taskDetailResponseSchema = z.strictObject({
     .nullable(),
   /**
    * Whether a *Retry stage* of the task's **current** stage would hand a `reason` to an agent
-   * (S-28.20, backlog 1611): `true` exactly when that stage is an **agent** stage of the task's
+   * (S-28.20, backlog 1619): `true` exactly when that stage is an **agent** stage of the task's
    * compiled pipeline — the command's own rule, so the dialog offers the reason box only where the
    * words reach a run, and a `reason` anywhere else is refused `409 retry_reason_not_deliverable`.
    * `false` for a gate, a human stage, `ready_for_merge`, no stage, or a pipeline this build cannot

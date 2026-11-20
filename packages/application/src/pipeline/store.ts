@@ -1288,7 +1288,7 @@ export interface TaskRepository {
     },
   ): Promise<void>;
   /**
-   * **Records the words a person gave a *Retry stage*** (S-28.20, backlog 1611, migration 0120) on
+   * **Records the words a person gave a *Retry stage*** (S-28.20, backlog 1619, migration 0120) on
    * the row of the attempt the retry entered, and answers whether it wrote one. Only the **open**
    * row of exactly that `(task, stage, attempt)` is written (`state = 'running'`), so a retry whose
    * entry did not open the row it names records nothing and the caller can refuse rather than drop

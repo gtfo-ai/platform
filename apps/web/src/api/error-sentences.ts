@@ -309,7 +309,7 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
   budget_override_unsupported:
     'A retry cannot raise the run’s budget. Retry without a new budget, or raise the task’s cap first.',
   no_gate_feedback: 'There is no check failure to attach. Clear the box and send it again.',
-  // S-28.20 (backlog 1611): the task moved to a stage no agent runs while the dialog was open.
+  // S-28.20 (backlog 1619): the task moved to a stage no agent runs while the dialog was open.
   retry_reason_not_deliverable:
     'This stage runs no agent, so nobody would read your note. Retry without it, or return the task to the stage whose agent should read it.',
   model_not_listed: 'That model is not one this project may use. Choose a model from the list.',

@@ -628,7 +628,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
-       * S-28.18 (BACKLOG 1608): a task that passed QA with no reviewed head but a head CI passed is
+       * S-28.18 (BACKLOG 1616): a task that passed QA with no reviewed head but a head CI passed is
        * due again although its check read mergeable — the check records the head once — and is not
        * once a head is recorded; a task without `qa_stage`, or with no CI head, is never due for it.
        */

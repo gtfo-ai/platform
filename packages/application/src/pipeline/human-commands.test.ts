@@ -791,7 +791,7 @@ describe('retry-stage', () => {
   });
 
   /**
-   * S-28.20 (backlog 1611, AUT-6645): the reason a person types into *Retry a stage* reaches the
+   * S-28.20 (backlog 1619, AUT-6645): the reason a person types into *Retry a stage* reaches the
    * new attempt's run. Until then the route dropped it — a person retried `code_review` believing
    * they had told the agent which findings it could leave, and the agent was told nothing.
    */

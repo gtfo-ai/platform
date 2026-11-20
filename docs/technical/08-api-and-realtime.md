@@ -238,7 +238,7 @@
 > is unchanged: it still refuses a run that has not ended (`run_not_live`), which is the honest
 > answer to "retry this run" while it runs.
 >
-> **Amended 2026-11-20 (S-28.20, backlog 1611, AUT-6645) — a retry's `reason` reaches the run.**
+> **Amended 2026-11-20 (S-28.20, backlog 1619, AUT-6645) — a retry's `reason` reaches the run.**
 > `retryStageRequestSchema` has accepted an optional `reason` since WP-15i and the task page offered a
 > box for it, but the route dropped it: not stored, not audited, never seen by an agent. It is now
 > redacted by the command (TD-012), stored on the attempt the retry entered

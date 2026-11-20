@@ -611,7 +611,7 @@ describe('ci_manual_started on the task detail (S-28.7)', () => {
 });
 
 /**
- * S-28.20 (backlog 1611): the task read's `retry_takes_reason` — the retry command's own rule, so
+ * S-28.20 (backlog 1619): the task read's `retry_takes_reason` — the retry command's own rule, so
  * the dialog offers a reason box only where the words reach an agent's run.
  */
 describe('retry_takes_reason on the task detail (S-28.20)', () => {

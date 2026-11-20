@@ -275,7 +275,7 @@ export interface PromptTask {
   readonly attachedFeedback?: PromptAttachedFeedback | null;
   /**
    * The words a person gave the *Retry stage* that opened this attempt (S-28.20, PROGRESS backlog
-   * 1611 — AUT-6645: a person retried a stage believing they had told the agent something, and the
+   * 1619 — AUT-6645: a person retried a stage believing they had told the agent something, and the
    * route had dropped it). Redacted at the write; absent or `null` for every other attempt.
    *
    * One `retry_note` data block, held to {@link MAX_FEEDBACK_CHARS} and announcing a cut in its

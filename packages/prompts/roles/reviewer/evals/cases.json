@@ -299,7 +299,7 @@
     },
     {
       "id": "rev-let-stand-finding-is-not-raised-again",
-      "description": "S-28.19 (backlog 1609, AUT-6645): a finding an approving review reported and the platform left as is is accepted — a re-review whose diff does not touch its code does not raise it again, nor name its thread in resolved_threads",
+      "description": "S-28.19 (backlog 1617, AUT-6645): a finding an approving review reported and the platform left as is is accepted — a re-review whose diff does not touch its code does not raise it again, nor name its thread in resolved_threads",
       "vars": {
         "spec": "Given an order, When exported, Then the CSV has a header row",
         "diff": "--- a/src/export/header.ts\n+export const HEADER = ['id', 'customer', 'total', 'delivery'];\n--- a/src/export/header.test.ts\n+  it('starts with the header row', () => { expect(csv([])[0]).toEqual(HEADER); });",
@@ -323,7 +323,7 @@
     },
     {
       "id": "rev-let-stand-finding-raised-again-says-why",
-      "description": "S-28.19 (backlog 1609): an accepted finding whose code the change has since touched, and which is now blocking, is raised again — and its explanation opens with `Raised again:` saying why",
+      "description": "S-28.19 (backlog 1617): an accepted finding whose code the change has since touched, and which is now blocking, is raised again — and its explanation opens with `Raised again:` saying why",
       "vars": {
         "spec": "Given an order with no delivery, When exported, Then its delivery column is empty",
         "diff": "--- a/src/export/orders.ts\n-  const formatDate = (d) => (d === null ? '' : d.toISOString().slice(0, 10));\n+  const formatDate = (d) => d.toISOString().slice(0, 10);",

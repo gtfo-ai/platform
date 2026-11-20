@@ -2353,7 +2353,7 @@ const passQa = async (
       // Platform text: the status name is provider text and is not needed to say what happened.
       detail: 'the ticket left the qa status',
     });
-    // S-28.18 (BACKLOG 1608): the rebase gate entered `qa` only for the head CI passed, so that is
+    // S-28.18 (BACKLOG 1616): the rebase gate entered `qa` only for the head CI passed, so that is
     // the head this Ready entry records — without it the column was `null` and the platform's merge
     // waited forever. Read only if the decision enters Ready. Not when the review left protected
     // paths CI excused unconfirmed (WP-102): a hand-back into `qa` skipped the rebase gate that

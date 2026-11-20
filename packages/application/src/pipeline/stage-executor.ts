@@ -176,7 +176,7 @@ export interface StageRunRequest {
    */
   readonly attachedFeedback?: AttachedReturnFeedback | null;
   /**
-   * The words a person gave the *Retry stage* that opened this attempt (S-28.20, backlog 1611,
+   * The words a person gave the *Retry stage* that opened this attempt (S-28.20, backlog 1619,
    * `TaskRepository.retryReasonOf`), redacted at the write — absent or `null` for every other
    * attempt. The prompt carries it as a `retry_note` block.
    */
@@ -1046,7 +1046,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         returnFeedbackOriginalChars: feedback?.originalChars ?? null,
         returnCause: feedback?.cause ?? null,
         attachedFeedback: feedback?.attached ?? null,
-        // S-28.20 (backlog 1611): a retry's reason, stored on the attempt it entered.
+        // S-28.20 (backlog 1619): a retry's reason, stored on the attempt it entered.
         retryNote: await store.tasks.retryReasonOf(scope.tx, job.taskId, job.stage, job.attempt),
         /**
          * Q82 (a) / PROGRESS backlog **71**: the commit this run's workspace starts from.

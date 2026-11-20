@@ -2287,7 +2287,7 @@ describe('a project that verifies on CI (BD-025, 2026-10-05; PROGRESS backlog 46
   });
 
   it('hands a retry’s note to the run as a retry_note block, never as return feedback (S-28.20)', async () => {
-    // Backlog 1611 (AUT-6645): the words a person typed into *Retry a stage* reach the run.
+    // Backlog 1619 (AUT-6645): the words a person typed into *Retry a stage* reach the run.
     const note = 'The minor findings can be ignored; fix only the failing migration.';
     const spec = await planIn(STAGES.developer, {}, { attempt: 2, retryNote: note });
     const blocks = readDataBlocks(spec.userPrompt).blocks;

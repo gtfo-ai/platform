@@ -1,5 +1,5 @@
 /**
- * S-28.18 (BACKLOG 1608) — the head QA's pass records at Ready, and the recovery's one write for a
+ * S-28.18 (BACKLOG 1616) — the head QA's pass records at Ready, and the recovery's one write for a
  * task that passed QA before it did. QA's pass itself is driven through the pipeline harness in
  * `human-return.test.ts` (*"(6) at qa"*); the recovery through the merge check in
  * `platform-merge.test.ts` (*"a task that passed QA with no reviewed head recorded"*).

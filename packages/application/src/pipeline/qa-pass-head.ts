@@ -1,5 +1,5 @@
 /**
- * **A task that passes QA enters Ready with the head the gates judged** (S-28.18, BACKLOG 1608,
+ * **A task that passes QA enters Ready with the head the gates judged** (S-28.18, BACKLOG 1616,
  * TD-038 Amendment B).
  *
  * ## What was wrong
@@ -35,7 +35,7 @@
  * A pipeline that runs **no** `ci_gate` (no shipped template; a custom one) carries **nothing**:
  * its rebase gate's head is not persisted anywhere QA's pass could read it, so the Ready entry
  * records `null` and the platform merge waits `head_not_recorded` — a person merges. That is the
- * fail-closed direction and it is stated rather than closed (BACKLOG 1615).
+ * fail-closed direction and it is stated rather than closed (BACKLOG 1623).
  *
  * ## Tasks already waiting (the recovery)
  *
@@ -66,7 +66,7 @@
  * platform merge still merges only that head, only with the provider's "mergeable" and an approving
  * review, so a push during the take-over is `head_moved`. What is not re-read is the rebase gate's
  * own mergeability judgement against the target branch (the provider's "mergeable" stands in) and
- * its conflict warning. Recorded as BACKLOG 1615.
+ * its conflict warning. Recorded as BACKLOG 1623.
  */
 import type { Id } from '@platform/contracts';
 import {

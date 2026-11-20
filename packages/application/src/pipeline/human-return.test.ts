@@ -877,7 +877,7 @@ describe('(6) at qa, the stage’s three other endings', () => {
   });
 
   /**
-   * S-28.18 (BACKLOG 1608): QA's pass entered Ready with no head, so `ready_head_sha` was null and
+   * S-28.18 (BACKLOG 1616): QA's pass entered Ready with no head, so `ready_head_sha` was null and
    * the platform's merge waited forever ("the branch moved"). The entry records the head the rebase
    * gate agreed with on its way into `qa` — the head CI passed.
    */

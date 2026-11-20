@@ -388,7 +388,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > the person's note decides where the two disagree. A return with one block names no source: the row
 > it is read from does not record who wrote it (PROGRESS backlog 353).
 >
-> **Amended 2026-11-20 (S-28.20, backlog 1611) — a retry's note is a `retry_note` block.** The
+> **Amended 2026-11-20 (S-28.20, backlog 1619) — a retry's note is a `retry_note` block.** The
 > reason a person gives *Retry stage* (`POST /api/tasks/:id/retry-stage`, technical/08) is redacted by
 > the command, stored on the attempt the retry entered (`task_stages.retry_reason`, technical/03) and
 > read by the stage executor for that attempt; the prompt carries it as one `retry_note` data block,

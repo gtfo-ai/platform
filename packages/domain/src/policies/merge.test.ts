@@ -142,7 +142,7 @@ describe('platformMergeWait (TD-038 decision 3)', () => {
       { mergeRequest: { ...READY.mergeRequest, optionsKnown: false } },
       'merge_settings_unknown',
     ],
-    // S-28.18 (BACKLOG 1608): no recorded head is not a moved branch, and is not worded as one.
+    // S-28.18 (BACKLOG 1616): no recorded head is not a moved branch, and is not worded as one.
     ['no reviewed head recorded', { readyHeadSha: null }, 'head_not_recorded'],
     ['the reviewed head is not the CI-gated one', { ciHeadSha: 'c'.repeat(40) }, 'head_moved'],
   ])('waits when %s', (_name, change, wait) => {

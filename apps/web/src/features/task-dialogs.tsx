@@ -84,7 +84,7 @@ export const retryOutcomeText = (answer: RetryStageResponse): string => {
 };
 
 /**
- * What the *Retry a stage* dialog says it does (S-28.20, backlog 1611): where the reason goes when
+ * What the *Retry a stage* dialog says it does (S-28.20, backlog 1619): where the reason goes when
  * there is a box for one, and why there is none otherwise — the words of AUT-6645, where a person
  * typed a note the platform then dropped, are the reason this says where they go.
  */
@@ -331,7 +331,7 @@ export const TaskDialogs = ({
   const close = (): void => {
     onOpenChange(null);
   };
-  // S-28.20 (backlog 1611): the box is offered only where the words reach an agent — the current
+  // S-28.20 (backlog 1619): the box is offered only where the words reach an agent — the current
   // stage, when it is an agent stage. Anywhere else a reason would be refused, and before S-28.20
   // it was silently dropped, so there is no box to type one into.
   const retryCarriesReason = retryTakesReason && form.retrySelected === currentStage;

@@ -74,7 +74,7 @@ describe('who merges, on the task page (S-28.15)', () => {
       detailWith({ by: 'platform', waiting_for: 'head_moved', last_attempt: null }),
     );
     expect(moved?.lines[0]).toContain('the branch moved since the reviewed commit');
-    // S-28.18 (BACKLOG 1608): no recorded commit is its own sentence, never "the branch moved".
+    // S-28.18 (BACKLOG 1616): no recorded commit is its own sentence, never "the branch moved".
     const unrecorded = mergeStatusLines(
       detailWith({ by: 'platform', waiting_for: 'head_not_recorded', last_attempt: null }),
     );

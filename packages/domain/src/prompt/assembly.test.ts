@@ -433,7 +433,7 @@ describe('untrusted text in the assembled prompt', () => {
 });
 
 /**
- * **A retry's note reaches the run** (S-28.20, backlog 1611, AUT-6645): the words a person gave
+ * **A retry's note reaches the run** (S-28.20, backlog 1619, AUT-6645): the words a person gave
  * *Retry stage* are one `retry_note` block — inside a data block like every untrusted string, capped
  * with the cut in the marker — and the task section says the attempt is a retry with a note rather
  * than *there is no return feedback*.

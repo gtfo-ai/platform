@@ -92,7 +92,7 @@ export const mergeByPersonReasons = (input: MergeByInput): readonly MergeByPerso
  *    branch, so the platform cannot pass the repository's own settings back (TD-038 decision 4);
  *  - `head_not_recorded` — no reviewed head was recorded at the task's Ready entry
  *    (`tasks.ready_head_sha` is `null`), so there is nothing to compare the merge request's head
- *    with. Its own code since S-28.18 (BACKLOG 1608): until then it read `head_moved`, and the page
+ *    with. Its own code since S-28.18 (BACKLOG 1616): until then it read `head_moved`, and the page
  *    said "the branch moved" for tasks nobody had pushed to — every task that passed QA. QA's pass
  *    now records the head the gates judged and the `ready_merge_check` duty records it once for a
  *    task that passed QA before, so on a shipped template this is defensive; a custom template

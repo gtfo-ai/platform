@@ -118,7 +118,7 @@ after the rebase (re-runs the review tail for a change the digest proves unchang
 without the digest (a rebase can silently change resolved lines). **Residual.** The digest ignores context lines, so a
 rebase over a default branch that changed the surrounding code passes it; the pipeline on H′ is what judges that.
 
-## Amendment B (2026-11-20, S-28.18, BACKLOG 1608) — a task that passes QA records the head the gates judged
+## Amendment B (2026-11-20, S-28.18, BACKLOG 1616) — a task that passes QA records the head the gates judged
 
 **Context.** Decision 3's fresh check requires **MR head == `tasks.ready_head_sha` == `tasks.ci_head_sha`**. The
 column is written by the Ready entry's transaction, and only a passing rebase-gate settlement supplied a head — but on
@@ -155,5 +155,5 @@ human-return window reading that the ticket left the `qa` status) entered Ready 
 **Residual.** A person's hand-back into `qa` skips the rebase gate's entry into `qa`; QA's pass then records the last
 head CI passed. The protected-path confirmation is asked again (5), and the live-head comparison, the provider's
 "mergeable" and the approving review still hold; what is not re-read is the rebase gate's own mergeability judgement
-against the target branch and its conflict warning — BACKLOG 1615.
+against the target branch and its conflict warning — BACKLOG 1623.
 

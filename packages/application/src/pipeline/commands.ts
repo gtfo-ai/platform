@@ -1246,7 +1246,7 @@ export interface RetryStageOutcome {
   readonly attempt: number | null;
   readonly stoppedRun: { readonly runId: Id; readonly commandId: Id | null } | null;
   /**
-   * Whether the person's `reason` was recorded for the attempt's run (S-28.20, backlog 1611):
+   * Whether the person's `reason` was recorded for the attempt's run (S-28.20, backlog 1619):
    * `true` exactly when one was given — a reason that cannot reach a run is refused
    * ({@link RetryReasonNotDeliverableError}) rather than recorded as `false`.
    */
@@ -1256,7 +1256,7 @@ export interface RetryStageOutcome {
 /**
  * A retry carried a `reason` to a stage whose attempt runs no agent — a gate, a human stage, a
  * system stage, or `ready_for_merge`, which the request does not enter at all (S-28.20, backlog
- * 1611). Refused, `409 retry_reason_not_deliverable`, and nothing is recorded: before S-28.20 the
+ * 1619). Refused, `409 retry_reason_not_deliverable`, and nothing is recorded: before S-28.20 the
  * route dropped every retry's reason, and a person who believed they had told the agent something
  * was told nothing (AUT-6645). The page offers no box where this would be the answer; retry
  * without a reason, or return the task to the agent stage that should read it.
@@ -1322,7 +1322,7 @@ export const retryStageCommand = async (
     readonly userId: Id;
     readonly stage: Slug;
     /**
-     * The person's words for the attempt's run (S-28.20, backlog 1611): redacted here (TD-012) and
+     * The person's words for the attempt's run (S-28.20, backlog 1619): redacted here (TD-012) and
      * stored on the entered attempt's row, which the stage executor hands the run as a `retry_note`
      * block. Absent (or blank) is a retry without one.
      */

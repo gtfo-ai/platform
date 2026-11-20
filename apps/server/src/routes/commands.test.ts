@@ -1444,7 +1444,7 @@ describe('the routes’ own answers', () => {
   });
 
   /**
-   * S-28.20 (backlog 1611, AUT-6645): the retry's `reason` reaches the command — until then this
+   * S-28.20 (backlog 1619, AUT-6645): the retry's `reason` reaches the command — until then this
    * route dropped it — and the audit row says it was recorded, never the words (the command stores
    * them redacted on the attempt's row, the module note's rule for every stored text).
    */

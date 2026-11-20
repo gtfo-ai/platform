@@ -3351,7 +3351,7 @@ describe('code-review convergence (product/04 S5)', () => {
   });
 
   /**
-   * S-28.19 (backlog 1609, AUT-6645): S5 stops a request-changes loop, so only a review that does
+   * S-28.19 (backlog 1617, AUT-6645): S5 stops a request-changes loop, so only a review that does
    * not approve converges. Each round is reached the way the test above reaches its second one: the
    * CI gate is parked at a running pipeline, and a scripted run changes between two publishes.
    */

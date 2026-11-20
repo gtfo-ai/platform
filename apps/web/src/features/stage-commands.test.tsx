@@ -503,7 +503,7 @@ describe('the stage picker (S-23.22)', () => {
 });
 
 /**
- * S-28.20 (backlog 1611, AUT-6645): the *Retry a stage* dialog says where its reason goes, and offers
+ * S-28.20 (backlog 1619, AUT-6645): the *Retry a stage* dialog says where its reason goes, and offers
  * the box only where the words reach an agent — the task read's `retry_takes_reason` at the current
  * stage. Before S-28.20 the box was offered everywhere and the route dropped what was typed into it.
  */

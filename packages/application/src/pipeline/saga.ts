@@ -1023,7 +1023,7 @@ const stageCompletedHandler = (options: PipelineSagaOptions): EventHandler => ({
  * The signature comes from the review's structured findings, never from its prose, so a model that
  * rewords the same finding twice is still recognised as the same round.
  *
- * **Only a review that does not approve can converge** (S-28.19, backlog 1609). S5 stops a
+ * **Only a review that does not approve can converge** (S-28.19, backlog 1617). S5 stops a
  * request-changes loop: its brief says *"another Implementation pass would change nothing"*, and an
  * approving review starts no Implementation pass — it advances. On AUT-6645 two approving reviews
  * with the same two `minor` findings parked the task at `needs_human` instead of advancing it to

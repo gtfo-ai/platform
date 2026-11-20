@@ -2098,7 +2098,7 @@ const compiledPipelineOf = (task: CompilableTask): CompiledPipeline | null => {
 
 /**
  * Whether a *Retry stage* of the task's current stage hands a `reason` to an agent (S-28.20,
- * backlog 1611): that stage is an **agent** stage of the task's compiled pipeline — what
+ * backlog 1619): that stage is an **agent** stage of the task's compiled pipeline — what
  * `retryStageCommand` asks before it records one. `false` for no stage and for a pipeline this
  * build cannot compile, where the command would refuse too.
  */

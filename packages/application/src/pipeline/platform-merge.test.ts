@@ -1179,7 +1179,7 @@ const _duty: PipelineOutboundData['duty'] = 'platform_merge';
 void _duty;
 
 /**
- * S-28.18 (BACKLOG 1608, TD-038 Amendment B): a task that entered Ready from `qa` before QA's pass
+ * S-28.18 (BACKLOG 1616, TD-038 Amendment B): a task that entered Ready from `qa` before QA's pass
  * recorded a head held `ready_head_sha = null`, and the platform's merge waited forever, worded as
  * "the branch moved". The wait has its own code now, and the merge check records the head the gates
  * judged before QA once — so AUT-6640 and its like merge without a person.
