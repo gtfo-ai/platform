@@ -35,6 +35,7 @@ import {
 import type { BotPhase } from '../ui/bot/bot.js';
 import type { ClaimPolicyValue } from '../ui/claim-policy-card.js';
 import type { Status } from '../ui/status.js';
+import { formatTimeWithSeconds } from '../ui/time.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
 import { ROLE_LABEL } from '../ui/words/roles.js';
 import { stageLabel } from '../ui/words/stages.js';
@@ -601,13 +602,16 @@ export const tailLinesOf = (run: WorkerLocalRun, limit = 12): TailLine[] => {
   return lines.slice(-limit);
 };
 
-/** One log line: `10:04:12  the message`, or the line itself when it is not the worker's JSON. */
+/**
+ * One log line: `10:04:12  the message` in this machine's own zone on the 24-hour clock (`ui/time.ts`;
+ * the page has no organisation to ask for another, S-28.21), or the line itself when it is not the
+ * worker's JSON.
+ */
 export const logLineWords = (line: string): string => {
   try {
     const parsed = JSON.parse(line) as { time?: unknown; msg?: unknown };
     if (typeof parsed.msg === 'string') {
-      const time =
-        typeof parsed.time === 'number' ? new Date(parsed.time).toISOString().slice(11, 19) : '';
+      const time = typeof parsed.time === 'number' ? formatTimeWithSeconds(parsed.time) : '';
       return `${time}  ${parsed.msg}`.trim();
     }
   } catch {

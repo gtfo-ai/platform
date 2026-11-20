@@ -601,6 +601,21 @@ describe('the organisation settings document (WP-93)', () => {
     ]);
   });
 
+  it('stores the organisation clock as a section of its own, and removes it on null (S-28.21)', async () => {
+    world.orgStored = { autonomy: { maximum: 'assist' } };
+    const set = await patch({ display: { clock: '12h' } });
+    expect(set.statusCode).toBe(200);
+    expect((set.json() as { changed: string[] }).changed).toEqual(['display']);
+    expect(world.orgStored).toEqual({
+      autonomy: { maximum: 'assist' },
+      display: { clock: '12h' },
+    });
+    const removed = await patch({ display: null });
+    expect(removed.statusCode).toBe(200);
+    expect(world.orgStored).toEqual({ autonomy: { maximum: 'assist' } });
+    expect((await patch({ display: { clock: '13h' } })).statusCode).toBe(400);
+  });
+
   it('refuses a body naming no section, an unknown key and a value the schema refuses', async () => {
     expect((await patch({})).statusCode).toBe(400);
     expect((await patch({ commands: { allow: ['x'] }, surprise: true })).statusCode).toBe(400);

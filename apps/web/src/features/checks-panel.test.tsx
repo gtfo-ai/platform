@@ -268,7 +268,7 @@ describe('the Checks panel against product/10:38', () => {
     expect(text).toContain('1 added · waiting');
     expect(text).toContain('npm:lodash');
     expect(text).toContain('MIT');
-    expect(text).toContain('last release 2026-04-02');
+    expect(text).toContain('last release Apr 2, 2026');
     // The manifest this build cannot read is named on the screen rather than answered with silence.
     expect(text).toContain('services/pom.xml');
     expect(text).toContain('maven');

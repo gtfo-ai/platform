@@ -1373,11 +1373,20 @@ export type HumanReturnsConfig = z.infer<typeof humanReturnsConfigSchema>;
  *    speaks for the organisation when more than one names a channel of its own (Q103 (c)). A
  *    pointer rather than a boolean on each account, so "exactly one is flagged" is a property of
  *    the shape rather than a rule to check.
+ *  - `display.clock` — how every screen writes a time of day: `24h` (*14:05*) or `12h`
+ *    (*2:05 PM*) (S-28.21, BACKLOG 1608). Absent is `24h`: the default holds before anybody
+ *    saves. Only the words change — the server always sends ISO instants and the browser formats
+ *    them (`apps/web/src/ui/time.ts`).
  *
  * **Strict and parsed at every read**: a stored document this schema refuses is a named refusal
  * (the key path and the value), never a silent default and never a cast (standing rule 20,
  * PROGRESS backlog 311's organisation half).
  */
+/** How a screen writes a time of day (S-28.21): `24h` is the default, `12h` adds AM/PM. */
+export const clockSettingSchema = z.enum(['24h', '12h']);
+
+export type ClockSetting = z.infer<typeof clockSettingSchema>;
+
 export const organisationSettingsSchema = z.strictObject({
   commands: commandPolicySchema.optional(),
   autonomy: z.strictObject({ maximum: autonomyLevelSchema }).optional(),
@@ -1389,6 +1398,7 @@ export const organisationSettingsSchema = z.strictObject({
       organisation_default: idSchema.nullable().optional(),
     })
     .optional(),
+  display: z.strictObject({ clock: clockSettingSchema }).optional(),
 });
 
 export type OrganisationSettings = z.infer<typeof organisationSettingsSchema>;

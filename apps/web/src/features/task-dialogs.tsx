@@ -30,7 +30,7 @@ import { type ReactElement, useState } from 'react';
 import type { useTakeOverCommands, useTaskCommands } from '../app/queries.js';
 import { Dialog } from '../ui/dialog.js';
 import { stageLabel } from '../ui/humanize.js';
-import { Button, ErrorNotice, Field, formatUsd } from '../ui/kit.js';
+import { Button, ErrorNotice, Field, formatInteger, formatUsd } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { minimumCapUsd, raiseExplanation, suggestedCapUsd } from './budget-pause-words.js';
@@ -58,8 +58,8 @@ type GateFeedback = TaskDetailResponse['gate_feedback'];
  */
 export const gateFeedbackLength = (feedback: NonNullable<GateFeedback>): string =>
   feedback.original_chars === null
-    ? `${feedback.chars.toLocaleString('en')} characters`
-    : `${feedback.chars.toLocaleString('en')} characters, cut from ${feedback.original_chars.toLocaleString('en')}`;
+    ? `${formatInteger(feedback.chars)} characters`
+    : `${formatInteger(feedback.chars)} characters, cut from ${formatInteger(feedback.original_chars)}`;
 
 /**
  * What a retry did, in one sentence (PROGRESS backlog 494).

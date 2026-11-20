@@ -26,6 +26,7 @@ import { BUILTIN_STAGE_IDS, isBuiltinGateStageId } from '@platform/contracts';
 import { stageLabel } from '../ui/humanize.js';
 import { formatDateTime, formatMinutes } from '../ui/kit.js';
 import type { Status } from '../ui/status.js';
+import { formatDate } from '../ui/time.js';
 import { roughEstimateLine } from './approval-text.js';
 
 /**
@@ -258,7 +259,7 @@ export const dependencyBasisText = (
       const published =
         entry.metadata.last_published_at === null
           ? ''
-          : `, last release ${entry.metadata.last_published_at.slice(0, 10)}`;
+          : `, last release ${formatDate(entry.metadata.last_published_at)}`;
       const allowed = entry.allowlisted ? ', allow-listed' : '';
       return `${entry.ecosystem}:${entry.name} (${licence}${published}${allowed})`;
     })

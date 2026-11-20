@@ -16,6 +16,7 @@
 import type { TaskDetailResponse } from '@platform/contracts';
 import type { ReactElement } from 'react';
 import { Flash } from '../ui/flash.js';
+import { formatTime } from '../ui/time.js';
 import { ExternalLink } from '../ui/untrusted.js';
 import { mergeBlockedWhy } from '../ui/words/merge-blockers.js';
 import { mergeAttemptSentence, mergeWaitSentence } from '../ui/words/merge-status.js';
@@ -23,9 +24,8 @@ import { providerName } from './gate-wait.js';
 
 const capitalised = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** `14:02` in the reader's own zone. */
-const clock = (iso: string): string =>
-  new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+/** `14:02` in the reader's own zone, on the clock in force (S-28.21). */
+const clock = (iso: string): string => formatTime(iso);
 
 /** The lines this box says, in order, with the tone — exported for the test. */
 export const mergeStatusLines = (

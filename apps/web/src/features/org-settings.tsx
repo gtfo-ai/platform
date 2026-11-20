@@ -10,7 +10,10 @@
  *    - the **parallel tasks maximum** (*WIP maximum* until S-25.6) — a project's `pipeline.wip` may
  *      state less, never more;
  *  - **Notifications** — the organisation's quiet hours, digest time and **default chat account**
- *    (Q103 (c)).
+ *    (Q103 (c));
+ *  - **Date & time** — the organisation's **clock** (`display.clock`, S-28.21): 24-hour unless an
+ *    administrator chooses 12-hour. Every screen formats through `ui/time.ts` with it
+ *    (`app/clock.tsx` puts it there).
  *
  * `PATCH` replaces the sections it names and keeps the rest, so a Save sends **only the sections
  * whose draft differs from what the server holds** — a page with three sections and one Save must
@@ -23,12 +26,13 @@
  * command lists, an account's name — is rendered through `ui/untrusted.tsx` (BD-022), and the
  * textareas hold it as a value, never as markup.
  */
-import type { CappedProject, OrganisationSettings } from '@platform/contracts';
+import type { CappedProject, ClockSetting, OrganisationSettings } from '@platform/contracts';
 import { type ReactElement, type ReactNode, useId, useState } from 'react';
 import { useBindableIntegrations, useOrgSettings, useSettingsCommands } from '../app/queries.js';
 import { Button } from '../ui/button.js';
 import { Card, ErrorNotice, Field, formatDateTime, Loading } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
+import { clockOf, formatTime } from '../ui/time.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { AUTONOMY_LEVEL_LABEL } from '../ui/words/settings.js';
 
@@ -478,6 +482,93 @@ const NotificationForm = ({
         disabled={pending}
         dirty={dirty}
         onSave={() => onSave(changed)}
+      />
+    </div>
+  );
+};
+
+// ── Date & time ──────────────────────────────────────────────────────────────
+
+/** Each clock as the selector names it; an absent `display` reads as `24h` (S-28.21). */
+const CLOCK_LABEL: Readonly<Record<ClockSetting, string>> = {
+  '24h': '24-hour',
+  '12h': '12-hour (AM/PM)',
+};
+
+/** An afternoon instant, so the preview shows what the choice changes. */
+const PREVIEW_AT = '2026-11-20T15:05:00.000Z';
+
+/**
+ * The `display` section a draft writes. The default is written as the default, never stored: a
+ * Save back to `24h` removes the section, so the document states only what somebody changed.
+ */
+const clockPatchOf = (clock: ClockSetting): Patch => ({
+  display: clock === '24h' ? null : { clock },
+});
+
+export const OrganisationClock = (): ReactElement => {
+  const commands = useSettingsCommands();
+  const patch = commands.patchOrgSettings;
+  return (
+    <OrgDocument>
+      {(settings, updatedAt) => (
+        <>
+          <ClockForm
+            key={updatedAt ?? 'unset'}
+            settings={settings}
+            pending={patch.isPending}
+            onSave={(body) => commands.patchOrgSettings.mutate(body)}
+          />
+          {patch.error === null || patch.error === undefined ? null : (
+            <ErrorNotice title="The organisation settings were not saved." error={patch.error} />
+          )}
+        </>
+      )}
+    </OrgDocument>
+  );
+};
+
+const ClockForm = ({
+  settings,
+  pending,
+  onSave,
+}: {
+  readonly settings: OrganisationSettings;
+  readonly pending: boolean;
+  readonly onSave: (body: Patch) => void;
+}): ReactElement => {
+  const stored = clockOf(settings.display?.clock);
+  const [draft, setDraft] = useState<ClockSetting>(stored);
+  const dirty = draft !== stored;
+
+  return (
+    <div className="flex flex-col gap-4 text-sm">
+      <p className="text-xs text-fg-muted">
+        Every time the screens show is written on this clock, in the reader’s own time zone. The
+        server keeps exact instants; only the way they read changes.
+      </p>
+      <label className="flex w-fit flex-col gap-1 text-sm">
+        Clock
+        <Select
+          aria-label="Organisation clock"
+          value={draft}
+          onChange={(event) => setDraft(clockOf(event.target.value))}
+        >
+          {(['24h', '12h'] as const).map((clock) => (
+            <option key={clock} value={clock}>
+              {CLOCK_LABEL[clock]}
+            </option>
+          ))}
+        </Select>
+      </label>
+      <p className="text-xs text-fg-muted" data-clock-preview="">
+        {`Five past three in the afternoon reads ${formatTime(PREVIEW_AT, { clock: draft, timeZone: 'UTC' })}.`}
+      </p>
+      <SaveRow
+        label="Save date & time"
+        disabled={pending}
+        dirty={dirty}
+        onSave={() => onSave(clockPatchOf(draft))}
       />
     </div>
   );

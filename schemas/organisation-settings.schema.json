@@ -109,6 +109,22 @@
         }
       },
       "additionalProperties": false
+    },
+    "display": {
+      "type": "object",
+      "properties": {
+        "clock": {
+          "type": "string",
+          "enum": [
+            "24h",
+            "12h"
+          ]
+        }
+      },
+      "required": [
+        "clock"
+      ],
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

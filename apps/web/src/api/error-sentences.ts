@@ -21,6 +21,7 @@ import {
   wordInSentence,
 } from '../ui/humanize.js';
 import { LINK_REFUSAL_WORDS } from '../ui/humanize-accounts.js';
+import { formatDateTime } from '../ui/time.js';
 import { AUTONOMY_LEVEL_LABEL } from '../ui/words/settings.js';
 import { fieldNames, invalidSettingsSentence, TRANSITION_UNKNOWN } from './error-words.js';
 import { type ApiError, PLATFORM_UPDATED_MESSAGE } from './http.js';
@@ -53,13 +54,8 @@ const dollarsOf = (value: string | undefined, rounding: 'up' | 'near'): string |
   return new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' }).format(cents / 100);
 };
 
-/** An instant as the screens print one ("9 Nov 2026, 14:05"), or the text itself if it is none. */
-const instantWords = (iso: string): string => {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime())
-    ? iso
-    : new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(at);
-};
+/** An instant as the screens print one ("Nov 9, 2026, 14:05"), or the text itself if it is none. */
+const instantWords = (iso: string): string => formatDateTime(iso);
 
 /** An autonomy position as the dial names it; one this build has no word for is title-cased. */
 const autonomyWord = (level: string): string =>

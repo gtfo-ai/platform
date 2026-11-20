@@ -646,6 +646,7 @@ describe('the organisation settings document (WP-93)', () => {
           digest_at: '08:30',
           organisation_default: '00000000-0000-4000-8000-0000000000c1',
         },
+        display: { clock: '12h' },
       }).success,
     ).toBe(true);
   });
@@ -662,6 +663,10 @@ describe('the organisation settings document (WP-93)', () => {
       { notifications: { digest_at: '9am' } },
       { notifications: { organisation_default: 'not-a-uuid' } },
       { commands: { allow: 'git status' } },
+      // S-28.21: the clock is one of two words, never a locale or a free string.
+      { display: { clock: '24' } },
+      { display: { clock: 'en-US' } },
+      { display: { clock: '24h', locale: 'en' } },
     ]) {
       expect(organisationSettingsSchema.safeParse(refused).success, JSON.stringify(refused)).toBe(
         false,
@@ -674,6 +679,10 @@ describe('the organisation settings document (WP-93)', () => {
     expect(
       patchOrgSettingsRequestSchema.safeParse({ autonomy: { maximum: 'assist' } }).success,
     ).toBe(true);
+    expect(patchOrgSettingsRequestSchema.safeParse({ display: { clock: '12h' } }).success).toBe(
+      true,
+    );
+    expect(patchOrgSettingsRequestSchema.safeParse({ display: null }).success).toBe(true);
     expect(patchOrgSettingsRequestSchema.safeParse({}).success).toBe(false);
     expect(patchOrgSettingsRequestSchema.safeParse({ timezone: 'UTC' }).success).toBe(false);
   });

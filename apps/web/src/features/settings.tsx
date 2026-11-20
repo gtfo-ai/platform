@@ -61,7 +61,11 @@ import { DeadLetters } from './dead-letters.js';
 import { FailedJobs } from './failed-jobs.js';
 import { IdentityMappings } from './identities.js';
 import { Budgets } from './operating-mode.js';
-import { OrganisationNotifications, OrganisationPolicies } from './org-settings.js';
+import {
+  OrganisationClock,
+  OrganisationNotifications,
+  OrganisationPolicies,
+} from './org-settings.js';
 import { SettingsFrame, SettingsSectionHeader } from './settings-frame.js';
 import { type OrgSettingsSectionId, orgSettingsGroupsFor } from './settings-sections.js';
 
@@ -293,6 +297,15 @@ const SECTION: Readonly<Record<OrgSettingsSectionId, () => ReactElement>> = {
         description="When the organisation’s own messages are posted, and by which chat account."
       />
       <OrganisationNotifications />
+    </>
+  ),
+  'date-time': () => (
+    <>
+      <SettingsSectionHeader
+        title="Date & time"
+        description="How every screen writes a time of day, for everybody in the organisation."
+      />
+      <OrganisationClock />
     </>
   ),
   budgets: OrgBudgets,

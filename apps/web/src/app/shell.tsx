@@ -73,6 +73,7 @@ import { Tooltip } from '../ui/tooltip.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { ClockFromOrganisation } from './clock.js';
 import { CommandLayer } from './keyboard.js';
 import { isCurrentSection, NAV } from './nav.js';
 import { pageWidth, requestStartTicket, START_TICKET_ANCHOR } from './project-frame.js';
@@ -661,7 +662,10 @@ export const AppShell = (): ReactElement => {
           changes — so a page whose frame arrives late is never remounted (review of PR #80). */}
       <main className="min-h-0 flex-1">
         <div className={routeOwnsWidth ? undefined : cx(pageWidth(fullWidth), 'py-6')}>
-          <Outlet />
+          {/* S-28.21: the organisation's clock; remounts the screen only when the clock changes. */}
+          <ClockFromOrganisation>
+            <Outlet />
+          </ClockFromOrganisation>
         </div>
       </main>
     </div>
