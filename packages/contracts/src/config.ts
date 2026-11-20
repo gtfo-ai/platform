@@ -1350,6 +1350,11 @@ export type HumanReturnsConfig = z.infer<typeof humanReturnsConfigSchema>;
 
 // ── the organisation settings document (WP-93) ───────────────────────────────
 
+/** How a screen writes a time of day (S-28.21): `24h` is the default, `12h` adds AM/PM. */
+export const clockSettingSchema = z.enum(['24h', '12h']);
+
+export type ClockSetting = z.infer<typeof clockSettingSchema>;
+
 /**
  * `organizations.settings` — the organisation's own settings document (WP-93, PROGRESS backlogs
  * 146 (2), 223, 235 and Q103 (c)). `GET/PATCH /api/org` read and write it; it is **not** a layer of
@@ -1382,11 +1387,6 @@ export type HumanReturnsConfig = z.infer<typeof humanReturnsConfigSchema>;
  * (the key path and the value), never a silent default and never a cast (standing rule 20,
  * PROGRESS backlog 311's organisation half).
  */
-/** How a screen writes a time of day (S-28.21): `24h` is the default, `12h` adds AM/PM. */
-export const clockSettingSchema = z.enum(['24h', '12h']);
-
-export type ClockSetting = z.infer<typeof clockSettingSchema>;
-
 export const organisationSettingsSchema = z.strictObject({
   commands: commandPolicySchema.optional(),
   autonomy: z.strictObject({ maximum: autonomyLevelSchema }).optional(),
