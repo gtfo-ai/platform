@@ -19,6 +19,16 @@ const Harness = ({ total }: { readonly total: number }) => {
   return (
     <div>
       {tail.following ? <span data-testid="following">following</span> : null}
+      {tail.following ? (
+        <button
+          type="button"
+          onClick={() => {
+            tail.pause('button');
+          }}
+        >
+          Pause
+        </button>
+      ) : null}
       <FollowPaused tail={tail} />
       <div
         data-testid="pane"
@@ -109,6 +119,20 @@ describe('useFollowTail', () => {
     view.rerender(<Harness total={3} />);
     expect(following()).toBe(true);
     expect(pane.scrollTop).toBe(bottomOf(geometry));
+  });
+
+  it('paused from a button: says only *Paused*, moves focus to *Jump to latest*, leaves the pane', () => {
+    const { view, pane, geometry } = mount();
+    const pinned = pane.scrollTop;
+    act(() => {
+      screen.getByRole('button', { name: 'Pause' }).click();
+    });
+    expect(screen.getByTestId('follow-paused').textContent).toBe('Paused');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Jump to latest' }));
+    geometry.scrollHeight = 1400;
+    view.rerender(<Harness total={4} />);
+    expect(pane.scrollTop).toBe(pinned);
+    expect(screen.getByTestId('follow-paused').textContent).toBe('Paused · 2 new');
   });
 
   it('resumes when the reader scrolls back to the end', () => {
