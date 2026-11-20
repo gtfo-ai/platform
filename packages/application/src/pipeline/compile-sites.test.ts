@@ -53,8 +53,8 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     how: "inside the job's transaction: the loaded row's `stored`/`current.pipelineDial` — the human-return window's return and its `qa` pass are two since WP-178",
   },
   'packages/application/src/pipeline/commands.ts': {
-    sites: 6,
-    how: "inside the human command's transaction (`writeTask`): the loaded row's `stored.pipelineDial` — the hand-back's and the return's target checks (`assertReturnTarget`, backlog 483) therefore refuse a stage the dial disabled, `keepGateFeedback` (WP-152) asks of the same compiled pipeline whether the parked stage is a gate, `resumeTargetOf` (WP-152 round 1) which post-merge stage a merged task resumes into, and `resumeAttemptInPlace` (S-28.1) whether the paused stage is an agent stage",
+    sites: 7,
+    how: "inside the human command's transaction (`writeTask`): the loaded row's `stored.pipelineDial` — the hand-back's and the return's target checks (`assertReturnTarget`, backlog 483) therefore refuse a stage the dial disabled, `keepGateFeedback` (WP-152) asks of the same compiled pipeline whether the parked stage is a gate, `resumeTargetOf` (WP-152 round 1) which post-merge stage a merged task resumes into, and `resumeAttemptInPlace` (S-28.1) whether the paused stage is an agent stage; `retryReasonBlocker` (S-28.20) whether the retried stage is one an agent runs, so a reason is refused rather than dropped",
   },
   'packages/application/src/pipeline/dependency-gate.ts': {
     sites: 2,
@@ -75,6 +75,10 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
   'packages/application/src/pipeline/settle.ts': {
     sites: 1,
     how: "inside `settleRun`'s transaction, under the run's lock: the loaded row's `stored.pipelineDial` — the stage a run settled outside its job served",
+  },
+  'packages/application/src/pipeline/qa-pass-head.ts': {
+    sites: 1,
+    how: "inside `ready_merge_check`'s recovery transaction (S-28.18): the re-loaded row's `current.pipelineDial` — whether `qa` and `ci_gate` are enabled before a QA-passed task's judged head is adopted",
   },
   'packages/application/src/pipeline/ready-head.ts': {
     sites: 1,
@@ -260,9 +264,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2323 ms (median 1927 ms); 2× it, 15 s floor.
-  it('counts forty-two — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5, forty before S-28.15 — and states how each resolves the dial', () => {
+  it('counts forty-four — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5, forty before S-28.15, forty-two before S-28.18 and S-28.20 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(42);
+    expect(total).toBe(44);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

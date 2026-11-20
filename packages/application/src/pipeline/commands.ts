@@ -1333,53 +1333,57 @@ export const retryStageCommand = async (
 ): Promise<RetryStageOutcome> => {
   requireJobs(deps);
   const given = input.reason === undefined || input.reason.trim() === '' ? null : input.reason;
-  return writeTask(deps, { ...input, what: 'retrying a stage' }, async (scope, stored, context) => {
-    if (stored.task.currentStage !== input.stage) {
-      throw new StageNotCurrentError(input.stage, stored.task.currentStage);
-    }
-    // S-28.20: refused before anything moves — a reason no agent would read is never dropped.
-    const blocker = given === null ? null : retryReasonBlocker(stored, input.stage);
-    if (blocker !== null) {
-      throw new RetryReasonNotDeliverableError(input.stage, blocker);
-    }
-    // Before the task row is written: `runs` then `tasks`, the order the run's ending takes. The
-    // stage's run only — an ask beside it is not the attempt being retried.
-    const live = await deps.store.runCommands.lockLiveRunOf(scope.tx, stored.task.id, {
-      forUpdate: true,
-      stage: input.stage,
-    });
-    const stoppedRun =
-      live === null ? null : await stopRunForRetry(deps, scope, live, context, input);
-    // At `ready_for_merge` this is the ready-head check, not an entry (WP-79 review round 1).
-    const work = await humanEnter(deps, scope, stored, context, {
-      stage: input.stage,
-      via: 'retry_stage',
-      userId: input.userId,
-      cause: null,
-    });
-    const attempt = work !== null && 'job' in work ? work.job.attempt : null;
-    if (given === null) {
-      return { result: { attempt, stoppedRun, reasonRecorded: false }, work };
-    }
-    // S-28.20: on the row the entry just opened, which is the row the executor reads for this
-    // attempt. An agent stage's entry always opens one and leaves a job; anything else is a broken
-    // invariant, refused (the transaction rolls back) rather than a reason quietly lost.
-    const recorded =
-      attempt !== null &&
-      (await deps.store.tasks.recordRetryReason(scope.tx, {
-        taskId: stored.task.id,
+  return writeTask<RetryStageOutcome>(
+    deps,
+    { ...input, what: 'retrying a stage' },
+    async (scope, stored, context) => {
+      if (stored.task.currentStage !== input.stage) {
+        throw new StageNotCurrentError(input.stage, stored.task.currentStage);
+      }
+      // S-28.20: refused before anything moves — a reason no agent would read is never dropped.
+      const blocker = given === null ? null : retryReasonBlocker(stored, input.stage);
+      if (blocker !== null) {
+        throw new RetryReasonNotDeliverableError(input.stage, blocker);
+      }
+      // Before the task row is written: `runs` then `tasks`, the order the run's ending takes. The
+      // stage's run only — an ask beside it is not the attempt being retried.
+      const live = await deps.store.runCommands.lockLiveRunOf(scope.tx, stored.task.id, {
+        forUpdate: true,
         stage: input.stage,
-        attempt,
-        reason: deps.redactor.redactText(given).value,
-      }));
-    if (!recorded) {
-      throw new InvariantViolationError(
-        'retry reason recorded',
-        `the retry of "${input.stage}" for task ${stored.task.id} opened no attempt row to carry its reason`,
-      );
-    }
-    return { result: { attempt, stoppedRun, reasonRecorded: true }, work };
-  });
+      });
+      const stoppedRun =
+        live === null ? null : await stopRunForRetry(deps, scope, live, context, input);
+      // At `ready_for_merge` this is the ready-head check, not an entry (WP-79 review round 1).
+      const work = await humanEnter(deps, scope, stored, context, {
+        stage: input.stage,
+        via: 'retry_stage',
+        userId: input.userId,
+        cause: null,
+      });
+      const attempt = work !== null && 'job' in work ? work.job.attempt : null;
+      if (given === null) {
+        return { result: { attempt, stoppedRun, reasonRecorded: false }, work };
+      }
+      // S-28.20: on the row the entry just opened, which is the row the executor reads for this
+      // attempt. An agent stage's entry always opens one and leaves a job; anything else is a broken
+      // invariant, refused (the transaction rolls back) rather than a reason quietly lost.
+      const recorded =
+        attempt !== null &&
+        (await deps.store.tasks.recordRetryReason(scope.tx, {
+          taskId: stored.task.id,
+          stage: input.stage,
+          attempt,
+          reason: deps.redactor.redactText(given).value,
+        }));
+      if (!recorded) {
+        throw new InvariantViolationError(
+          'retry reason recorded',
+          `the retry of "${input.stage}" for task ${stored.task.id} opened no attempt row to carry its reason`,
+        );
+      }
+      return { result: { attempt, stoppedRun, reasonRecorded: true }, work };
+    },
+  );
 };
 
 /**

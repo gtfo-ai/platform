@@ -20,4 +20,4 @@
 -- `TaskRepository.retryReasonOf` (the stage executor's admission). No backfill: `null` is *no note*.
 alter table task_stages add column retry_reason text;
 alter table task_stages add constraint task_stages_retry_reason_not_empty
-  check (retry_reason is null or length(retry_reason) > 0);
+  check (retry_reason is null or length(retry_reason) > 0) not valid;
