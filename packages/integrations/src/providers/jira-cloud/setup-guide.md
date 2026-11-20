@@ -75,7 +75,7 @@ it out: the platform reports the missing capability instead of failing halfway t
 | `webhook_secret` | `FAKE-jira-webhook-secret-0123456789` | **Secret.** Needed for the webhook (step 4); leave it unset on a binding that only polls |
 | `project_keys` | `["ACME"]` | Deliveries for any other project are ignored and recorded as such |
 | `pickup_label` | `agentic` | The label that means "this ticket is for the platform" (product/19 §6) |
-| `claim_label` | `agentic-working` | Optional, off by default. Added to a ticket while a task holds it and removed when the task lets go (cancel, *Rework*), so Jira shows the platform is working on it. No spaces, and never the `pickup_label`. The account needs *Edit Issues*; a refused edit is logged and audited and never stops the task |
+| `claim_label` | `agentic-working` | Optional, off by default. Added when a task claims the ticket, so only while the `lifecycle` block claims (`claim` on). It stays on a done ticket, so Jira records that the platform did the work, and is removed only when the task releases the ticket (cancel, *Rework*). No spaces, and never the `pickup_label`. The account needs *Edit Issues*; a refused edit is logged and audited and never stops the task |
 | `poll_enabled` | `true` | Poll Jira for the pick-up rule instead of (or beside) the webhook — step 5. Off by default |
 | `poll_interval_seconds` | `60` | Seconds between two polls of this binding; 30 to 86400, default 60 |
 
