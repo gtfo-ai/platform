@@ -128,6 +128,11 @@
  *     `matchTickets` the same way: `statuses` by name (case-insensitive), `todo_category` by the
  *     seeded category, keeping a ticket whose category was not seeded — intake judges it after its
  *     read, so the fake reads wider, never starts more.
+ * 21. **Stricter — `setLabels` refuses an empty label or one with whitespace** (BACKLOG 1611)
+ *     with `invalid_request`, where Jira answers its own `400`; the Jira binding schema refuses such
+ *     a `claim_label` before any call. `claimLabel()` answers the `claimLabel` option, or — through
+ *     `fakeTaskManagementRegistration` — the binding's `claim_label`, which that schema refuses
+ *     when it equals `pickup_label`, as Jira's does.
  */
 import {
   type AssignResult,
@@ -287,6 +292,12 @@ export interface FakeTaskManagementOptions {
    * decides it instead, as a real adapter's does.
    */
   readonly poll?: TicketPollPlan | null;
+  /**
+   * What `claimLabel()` answers (BACKLOG 1611). Absent is `null` — no claim label, every real
+   * provider's default. Resolved through `fakeTaskManagementRegistration`, the binding's
+   * `claim_label` decides it instead (divergence 21).
+   */
+  readonly claimLabel?: string | null;
   /** The fake clock's first instant (`createFakeCore`); the fixed epoch when absent. */
   readonly clockStart?: string;
   /**
@@ -1022,6 +1033,8 @@ export const createFakeTaskManagement = (
 
     pollPlan: () => poll,
 
+    claimLabel: () => options.claimLabel ?? null,
+
     ticketScope: (ticketKey) => {
       const keys = options.projectKeys ?? [];
       if (keys.length === 0) {
@@ -1074,6 +1087,15 @@ export const createFakeTaskManagement = (
     setLabels: async (ticketRef, add, remove) => {
       core.enter('set_labels');
       const ticket = requireTicket('set_labels', ticketRef.key);
+      // Divergence 21: a label Jira would refuse is refused here too, before anything is written.
+      if ([...add, ...remove].some((label) => !/^\S+$/.test(label))) {
+        throw new IntegrationError(
+          'invalid_request',
+          PROVIDER,
+          'a label cannot be empty or contain whitespace',
+          { action: 'set_labels' },
+        );
+      }
       const next = new Set(ticket.labels);
       for (const label of add) {
         next.add(label);

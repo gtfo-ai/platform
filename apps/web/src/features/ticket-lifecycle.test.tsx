@@ -931,6 +931,33 @@ describe('the lifecycle helpers', () => {
     });
   });
 
+  it('reads and writes the claim label beside the block (BACKLOG 1611)', () => {
+    const stored = { claim_label: 'agentic-working', lifecycle: { claim: true } };
+    const { draft } = lifecycleDraftOf(stored, STATUSES);
+    expect(draft.claimLabel).toBe('agentic-working');
+    // Kept through a save of the slots.
+    expect(lifecycleOverlayOf(stored, draft, null)).toEqual({
+      claim_label: 'agentic-working',
+      lifecycle: { claim: true, take_assigned_tickets: false },
+    });
+    // Typed, trimmed and sent.
+    expect(
+      lifecycleOverlayOf(
+        {},
+        { ...lifecycleDraftOf({}, STATUSES).draft, claimLabel: ' mine ' },
+        null,
+      ),
+    ).toMatchObject({ claim_label: 'mine' });
+    // Emptied: absent, unless the account's own configuration sets one, which `null` overrides.
+    const emptied = { ...draft, claimLabel: '' };
+    expect(lifecycleOverlayOf(stored, emptied, null)).not.toHaveProperty('claim_label');
+    expect(lifecycleOverlayOf(stored, emptied, null, [], 'agentic-working')).toMatchObject({
+      claim_label: null,
+    });
+    // None stored: none drafted.
+    expect(lifecycleDraftOf({}, STATUSES).draft.claimLabel).toBe('');
+  });
+
   it('maps each 422 detail path onto its slot', () => {
     expect(slotOfDetailPath('pickup_status')).toBe('pick_up_from');
     expect(slotOfDetailPath('lifecycle.qa')).toBe('qa');

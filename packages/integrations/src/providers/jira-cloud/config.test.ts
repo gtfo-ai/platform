@@ -93,3 +93,51 @@ describe('jiraCloudConfigSchema’s lifecycle block (WP-172 criterion 6)', () =>
     ).toBe(true);
   });
 });
+
+describe('jiraCloudConfigSchema’s claim_label (BACKLOG 1611)', () => {
+  it('is off by default', () => {
+    expect(jiraCloudConfigSchema.parse(BASE).claim_label).toBeNull();
+  });
+
+  it('accepts a label beside the pick-up label', () => {
+    expect(
+      jiraCloudConfigSchema.parse({ ...BASE, claim_label: 'agentic-working' }).claim_label,
+    ).toBe('agentic-working');
+  });
+
+  it('accepts an explicit null', () => {
+    expect(jiraCloudConfigSchema.parse({ ...BASE, claim_label: null }).claim_label).toBeNull();
+  });
+
+  it.each([
+    ['a space', 'agentic working'],
+    ['a tab', 'agentic\tworking'],
+    ['a leading space', ' agentic-working'],
+    ['the empty string', ''],
+    ['256 characters', 'a'.repeat(256)],
+  ])('refuses a label with %s', (_what, label) => {
+    expect(issuesOf({ ...BASE, claim_label: label })).toEqual([
+      expect.stringMatching(/^claim_label: /),
+    ]);
+  });
+
+  it('accepts a label of exactly 255 characters (the bound’s other side)', () => {
+    expect(issuesOf({ ...BASE, claim_label: 'a'.repeat(255) })).toEqual([]);
+  });
+
+  it('refuses the default pick-up label, case-insensitively, naming both keys', () => {
+    expect(issuesOf({ ...BASE, claim_label: 'Agentic' })).toEqual([
+      expect.stringMatching(/^claim_label: claim_label names the label pickup_label names/),
+    ]);
+  });
+
+  it('refuses a claim label equal to a configured pick-up label', () => {
+    expect(issuesOf({ ...BASE, pickup_label: 'ready', claim_label: 'ready' })).toEqual([
+      expect.stringContaining('claim_label'),
+    ]);
+  });
+
+  it('accepts the former pick-up label once label pick-up is off', () => {
+    expect(issuesOf({ ...BASE, pickup_label: null, claim_label: 'agentic' })).toEqual([]);
+  });
+});

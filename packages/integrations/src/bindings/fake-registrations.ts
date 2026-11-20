@@ -264,33 +264,45 @@ export const fakeCommunicationRegistration = (
  * registration switches it on the way an operator does — in `bindings.config` — and the sweep's
  * query over that column is production code on the path.
  */
-const fakeTaskManagementConfigSchema = z.strictObject({
-  token: z.string().min(1),
-  [TICKET_POLL_CONFIG_KEYS.enabled]: z.boolean().default(false),
-  [TICKET_POLL_CONFIG_KEYS.intervalSeconds]: z
-    .int()
-    .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
-    .max(MAX_TICKET_POLL_INTERVAL_SECONDS)
-    .default(DEFAULT_TICKET_POLL_INTERVAL_SECONDS),
-  pickup_label: z.string().min(1).default('agentic'),
-  /**
-   * WP-110 (backlog 298): a **status** pick-up rule, which wins over the label as Jira's does
-   * (`pickupRuleOf`) — so a tier can poll the rule a status mapping moves a ticket out of.
-   */
-  pickup_status: z.string().min(1).nullish(),
-  /**
-   * WP-122 pre-review round: the binding's declared scope, Jira's `project_keys` — what
-   * `ticketScope` answers from, so a tier can set it the way an operator does.
-   */
-  project_keys: z.array(z.string().min(1)).default([]),
-  /**
-   * WP-171 criterion (5): the ticket lifecycle (BD-031, TD-029 decision 1) — **the** contracts
-   * definition, not a copy, so a tier configures the fake's lifecycle the way an operator configures
-   * Jira's. Nothing in the fake reads it; its reader is the application — the settings port's
-   * `ticketLifecycle`, since WP-177.
-   */
-  lifecycle: ticketLifecycleSchema.optional(),
-});
+const fakeTaskManagementConfigSchema = z
+  .strictObject({
+    token: z.string().min(1),
+    [TICKET_POLL_CONFIG_KEYS.enabled]: z.boolean().default(false),
+    [TICKET_POLL_CONFIG_KEYS.intervalSeconds]: z
+      .int()
+      .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
+      .max(MAX_TICKET_POLL_INTERVAL_SECONDS)
+      .default(DEFAULT_TICKET_POLL_INTERVAL_SECONDS),
+    pickup_label: z.string().min(1).default('agentic'),
+    /**
+     * BACKLOG 1611: the label a claim adds and a release removes, Jira's `claim_label` — off by
+     * default, a label with no whitespace, never the pick-up label (refused below, as Jira's is).
+     */
+    claim_label: z.string().regex(/^\S+$/).nullish().default(null),
+    /**
+     * WP-110 (backlog 298): a **status** pick-up rule, which wins over the label as Jira's does
+     * (`pickupRuleOf`) — so a tier can poll the rule a status mapping moves a ticket out of.
+     */
+    pickup_status: z.string().min(1).nullish(),
+    /**
+     * WP-122 pre-review round: the binding's declared scope, Jira's `project_keys` — what
+     * `ticketScope` answers from, so a tier can set it the way an operator does.
+     */
+    project_keys: z.array(z.string().min(1)).default([]),
+    /**
+     * WP-171 criterion (5): the ticket lifecycle (BD-031, TD-029 decision 1) — **the** contracts
+     * definition, not a copy, so a tier configures the fake's lifecycle the way an operator configures
+     * Jira's. Nothing in the fake reads it; its reader is the application — the settings port's
+     * `ticketLifecycle`, since WP-177.
+     */
+    lifecycle: ticketLifecycleSchema.optional(),
+  })
+  .refine(
+    (config) =>
+      typeof config.claim_label !== 'string' ||
+      config.claim_label.toLowerCase() !== config.pickup_label.toLowerCase(),
+    { path: ['claim_label'], message: 'claim_label names the label pickup_label names' },
+  );
 
 /** The plan the binding's config states — `null` unless it switched polling on. */
 const fakePollPlanOf = (config: unknown): TicketPollPlan | null => {
@@ -321,19 +333,22 @@ const fakeTicketScopeOf =
   };
 
 /**
- * The prebuilt port, answering `pollPlan()` and `ticketScope()` from **this binding's** config
+ * The prebuilt port, answering `pollPlan()`, `ticketScope()` and `claimLabel()` from **this binding's** config
  * rather than its own.
  */
 const withBindingConfig = (port: TaskManagementPort, config: unknown): TaskManagementPort => {
   const plan: TicketPollPlan | null = fakePollPlanOf(config);
   const ticketScope = fakeTicketScopeOf(config);
+  const claimLabel = fakeTaskManagementConfigSchema.parse(config).claim_label ?? null;
   return new Proxy(port, {
     get: (target, key, receiver) =>
       key === 'pollPlan'
         ? () => plan
         : key === 'ticketScope'
           ? ticketScope
-          : Reflect.get(target, key, receiver),
+          : key === 'claimLabel'
+            ? () => claimLabel
+            : Reflect.get(target, key, receiver),
   });
 };
 

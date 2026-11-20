@@ -30,6 +30,8 @@
  * (`recordReleaseUnassign`), so the next owner sync reads no change and a platform-set owner
  * survives a *Rework*.
  *
+ * The binding's claim label, when it configured one, is removed (BACKLOG 1611).
+ *
  * Each provider step fails open with a `warn`; what happened is recorded either way. A `rework` or
  * `stopped` release acts only while the claim is still **stale** — the stale mark is the token, and
  * a re-claim clears it — so a release that finds the claim held again does nothing.
@@ -132,6 +134,20 @@ export const releaseTicket = async (
       return result !== null && !shadow;
     }));
 
+  /**
+   * The claim label comes off (BACKLOG 1611) whoever held the ticket — every recorded claim added
+   * it, a kept one included — and only that label: one edit naming it alone. Nothing is called when
+   * the binding configured none. Best-effort like the steps above; not recorded on
+   * `ticket.released`, whose payload is the contract's.
+   */
+  await failingOpen(logger, taskId, 'claim_label', async () => {
+    await ticketWrites(integrations).claimLabel(task.ticket, 'remove', {
+      ...writeContext,
+      idempotencyKey: `ticket_release_claim_label:${taskId}:${request.keySuffix}`,
+    });
+    return true;
+  });
+
   await inTaskTransaction(options, taskId, 'recording the ticket release', async (scope) => {
     await options.store.tasks.bumpVersion(scope.tx, taskId);
     const current = await options.store.tasks.load(scope.tx, taskId);
@@ -188,7 +204,7 @@ export const releaseTicket = async (
 const failingOpen = async (
   logger: Logger,
   taskId: Id,
-  step: 'unassign' | 'pick_up_from',
+  step: 'unassign' | 'pick_up_from' | 'claim_label',
   perform: () => Promise<boolean>,
 ): Promise<boolean> => {
   try {

@@ -86,6 +86,15 @@ interface TrackerOptions {
     readonly status: string;
     readonly category: TicketStatusCategory;
   };
+  /**
+   * The binding's `claim_label` (BACKLOG 1611): the port answers it and keeps the ticket's labels.
+   * Absent keeps the harness's `claimLabel: () => null` and no `setLabels`.
+   */
+  readonly claimLabel?: string;
+  /** Labels the ticket carries before anything happens (BACKLOG 1611). */
+  readonly labels?: readonly string[];
+  /** `setLabels` is refused, as Jira refuses an edit without *Edit Issues* (BACKLOG 1611). */
+  readonly forbidLabels?: boolean;
 }
 
 /** One ticket's assignee, status and comments, and every lifecycle call made on it, in order. */
@@ -95,6 +104,7 @@ const tracker = (options: TrackerOptions = {}) => {
     status: options.status ?? 'Ready for the agent',
     statusCategory: (options.statusCategory ?? null) as TicketStatusCategory | null,
     comments: [] as { readonly markerId: string | null; readonly body: string }[],
+    labels: [...(options.labels ?? [])],
   };
   const calls: string[] = [];
   /** Every `readTicket`, kept apart from `calls` because the snapshot and the planner read too. */
@@ -136,6 +146,39 @@ const tracker = (options: TrackerOptions = {}) => {
       calls.push('selfIdentity');
       return identity(SELF_ID);
     },
+    ...(options.claimLabel === undefined
+      ? {}
+      : {
+          claimLabel: () => options.claimLabel as string,
+          setLabels: async (
+            _ref: TicketRefInput,
+            add: readonly string[],
+            remove: readonly string[],
+          ) => {
+            calls.push(
+              `setLabels:${[...add.map((label) => `+${label}`), ...remove.map((label) => `-${label}`)].join(',')}`,
+            );
+            if (options.forbidLabels === true) {
+              throw new IntegrationError(
+                'forbidden',
+                'fake-jira',
+                'the account may not edit issues',
+                {
+                  action: 'set_labels',
+                },
+              );
+            }
+            const next = new Set(state.labels);
+            for (const label of add) {
+              next.add(label);
+            }
+            for (const label of remove) {
+              next.delete(label);
+            }
+            state.labels = [...next];
+            return [...state.labels];
+          },
+        }),
     ...(options.assignsOthers === true
       ? {
           capabilities: () =>
@@ -2640,5 +2683,142 @@ describe('a take unblocks the claim (TD-031 amendment item 5 as amended for a ta
     expect(await claimOf(harness)).toMatchObject({ held_by: 'member', stale: false });
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
     expect(harness.store.ownershipOf(taskId)).toMatchObject({ ownerUserId: BOB });
+  });
+});
+
+// ── BACKLOG 1611: the claim label ───────────────────────────────────────────────────────────────
+
+describe('the claim label (BACKLOG 1611)', () => {
+  const CLAIM_LABEL = 'agentic-working';
+  const labelCalls = (ticket: ReturnType<typeof tracker>): string[] =>
+    ticket.calls.filter((call) => call.startsWith('setLabels:'));
+  const statuses = (harness: PipelineHarness, action: string): string[] =>
+    harness.audit.entriesFor(action).map((entry) => entry.status);
+
+  it('a claim adds the label and a cancel removes it, leaving every other label alone', async () => {
+    const ticket = tracker({ claimLabel: CLAIM_LABEL, labels: ['agentic', 'customer-x'] });
+    const harness = harnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+
+    // One add, at the claim — later agent stages find the claim held and add nothing.
+    expect(labelCalls(ticket)).toEqual([`setLabels:+${CLAIM_LABEL}`]);
+    expect(ticket.state.labels).toEqual(['agentic', 'customer-x', CLAIM_LABEL]);
+    expect(statuses(harness, 'add_claim_label')).toEqual(['ok']);
+    // After the assign and the in_progress move, before the first run.
+    expect(ticket.calls.indexOf(`setLabels:+${CLAIM_LABEL}`)).toBeGreaterThan(
+      ticket.calls.indexOf('transition:Doing'),
+    );
+
+    await cancelTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    await harness.drain();
+
+    expect(labelCalls(ticket)).toEqual([`setLabels:+${CLAIM_LABEL}`, `setLabels:-${CLAIM_LABEL}`]);
+    expect(ticket.state.labels).toEqual(['agentic', 'customer-x']);
+    expect(statuses(harness, 'remove_claim_label')).toEqual(['ok']);
+    expect(eventsOf(harness, 'ticket.released')).toHaveLength(1);
+  });
+
+  it('with no claim label configured, neither the claim nor the release makes a label call', async () => {
+    // The harness's port answers `claimLabel: () => null`; `setLabels` is scripted to see a call.
+    const plain = tracker({ labels: ['agentic'] });
+    const setLabels: string[] = [];
+    const ticket = {
+      ...plain,
+      port: {
+        ...plain.port,
+        setLabels: async (
+          _ref: TicketRefInput,
+          add: readonly string[],
+          remove: readonly string[],
+        ) => {
+          setLabels.push([...add, ...remove].join(','));
+          return [];
+        },
+      },
+    };
+    const harness = harnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
+    await cancelTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    await harness.drain();
+
+    expect(eventsOf(harness, 'ticket.released')).toHaveLength(1);
+    expect(setLabels).toEqual([]);
+    expect(harness.audit.entriesFor('add_claim_label')).toEqual([]);
+    expect(harness.audit.entriesFor('remove_claim_label')).toEqual([]);
+    expect(ticket.state.labels).toEqual(['agentic']);
+  });
+
+  it('a refused label write neither refuses the claim nor stops the stage, and is audited failed', async () => {
+    const ticket = tracker({ claimLabel: CLAIM_LABEL, forbidLabels: true });
+    const harness = harnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+
+    // The write was attempted, refused and audited…
+    expect(labelCalls(ticket)).toEqual([`setLabels:+${CLAIM_LABEL}`]);
+    expect(statuses(harness, 'add_claim_label')).toEqual(['failed']);
+    // …and the claim stands and the task ran.
+    expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(1);
+    expect(await claimOf(harness)).toMatchObject({ status: 'confirmed', stale: false });
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(0);
+    expect(runsCreated(harness)).toBeGreaterThan(1);
+
+    // The release's removal fails the same way, and the release is still recorded.
+    await cancelTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    await harness.drain();
+    expect(statuses(harness, 'remove_claim_label')).toEqual(['failed']);
+    expect(eventsOf(harness, 'ticket.released')[0]?.payload).toMatchObject({
+      unassigned: true,
+      cause: 'cancelled',
+    });
+  });
+
+  it('a claim kept for a person’s Take adds the label too, and its release removes it', async () => {
+    const ticket = janeTakesBeforeTheClaim({ claimLabel: CLAIM_LABEL });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    // The refused claim added nothing.
+    expect(labelCalls(ticket)).toEqual([]);
+
+    await takeAs(harness, taskId);
+    await handBackTaskCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      summary: 'Bob works this one',
+    });
+    await harness.drain();
+
+    expect(await claimOf(harness)).toMatchObject({ held_by: 'platform_owner', stale: false });
+    expect(labelCalls(ticket)).toEqual([`setLabels:+${CLAIM_LABEL}`]);
+    expect(ticket.state.labels).toEqual([CLAIM_LABEL]);
+    expect(ticket.state.assignee).toBe('jane');
+
+    await cancelTaskCommand(harness.humanCommands, { taskId, userId: USER });
+    await harness.drain();
+    expect(labelCalls(ticket)).toEqual([`setLabels:+${CLAIM_LABEL}`, `setLabels:-${CLAIM_LABEL}`]);
+    expect(ticket.state.labels).toEqual([]);
+  });
+
+  it('a shadow claim records the add as would_have and writes nothing', async () => {
+    const ticket = tracker({ claimLabel: CLAIM_LABEL });
+    const harness = harnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    const stored = await insertTask(harness, { mode: 'shadow' });
+    await ensureTicketClaim(claimOptions(harness), stored, {
+      taskId: stored.task.id,
+      ...REFINEMENT_1,
+    });
+    expect(labelCalls(ticket)).toEqual([]);
+    expect(statuses(harness, 'add_claim_label')).toEqual(['would_have']);
   });
 });

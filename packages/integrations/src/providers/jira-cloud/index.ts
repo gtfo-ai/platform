@@ -1470,6 +1470,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     upsertWorkpad,
     addComment,
     setLabels,
+    // BACKLOG 1611: off unless the binding configured one; the schema refuses the pick-up label.
+    claimLabel: () => config.claim_label ?? null,
     linkMergeRequest,
     createTicket,
     resolveIdentity,

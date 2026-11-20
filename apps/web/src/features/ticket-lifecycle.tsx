@@ -21,6 +21,10 @@
  * - **The `claim`, `take_assigned_tickets` and `assign_owner` switches** are the block's own keys. `claim` is seeded
  *   from the stored block, or **on** when there is none, because that is what the block means once
  *   it is saved (`ticketLifecycleSchema`'s docblock): the switch shows what saving puts in force.
+ * - **The claim label** (BACKLOG 1611): a text field, *Label a claimed ticket*, the binding's
+ *   `claim_label` — added to a ticket while a task holds it and removed when the task lets go. Empty
+ *   is none: sent absent, or `null` when the integration's own configuration sets one. A label with a
+ *   space, or the pick-up label, is the server's `400 invalid_binding_config`.
  * - **`assign_owner` is the third switch** (S-26.3's owner write-back; S-26.8a, product/06's M26
  *   amendment): *Assign the owner in the tracker*, beside the other two and **off** unless the
  *   block stores `true`. It is sent when on, or as `false` when the overlay already stored a value;
@@ -70,7 +74,7 @@ import {
 } from '../app/queries.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
 import { CheckboxList } from '../ui/checkbox-list.js';
-import { Badge, Button, ErrorNotice, Loading } from '../ui/kit.js';
+import { Badge, Button, ErrorNotice, Field, Loading } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
@@ -141,6 +145,11 @@ export interface LifecycleDraft {
    * whose ticket a person finishes. `cancel` by default.
    */
   readonly onClosed: OnTicketClosed;
+  /**
+   * The binding's `claim_label` (BACKLOG 1611): the label the platform adds to a ticket it claims
+   * and removes when it lets go, or `''` for none (the default).
+   */
+  readonly claimLabel: string;
 }
 
 /** A stored `on_ticket_closed`, or the reader's default (`cancel`) for anything else. */
@@ -323,15 +332,17 @@ export const lifecycleDraftOf = (
       closed: policyList('closed'),
       // S-28.14: a stored choice is kept; absent is the reader's default, `cancel`.
       onClosed: onClosedOf(block?.on_ticket_closed),
+      claimLabel: nonEmptyString(effective.claim_label) ?? '',
     },
     dropped,
   };
 };
 
 /**
- * The binding overlay the draft saves: the stored overlay with `pickup_status` and `lifecycle`
- * replaced. An empty slot is **absent**; an emptied `pick_up_from` is `null` only when the account's
- * own configuration would otherwise supply one (the module's docblock).
+ * The binding overlay the draft saves: the stored overlay with `pickup_status`, `lifecycle` and
+ * `claim_label` replaced. An empty slot is **absent**; an emptied `pick_up_from` or claim label is
+ * `null` only when the account's own configuration would otherwise supply one (the module's
+ * docblock).
  */
 export const lifecycleOverlayOf = (
   stored: Readonly<Record<string, unknown>> | undefined,
@@ -339,8 +350,15 @@ export const lifecycleOverlayOf = (
   accountPickupStatus: string | null,
   /** The statuses the form showed (S-28.4): a list equal to their category default is absent. */
   statuses: readonly TicketStatus[] = [],
+  /** The account's own `claim_label` (BACKLOG 1611), which an emptied field must override. */
+  accountClaimLabel: string | null = null,
 ): Record<string, unknown> => {
-  const { pickup_status: _pickup, lifecycle: storedLifecycle, ...rest } = stored ?? {};
+  const {
+    pickup_status: _pickup,
+    lifecycle: storedLifecycle,
+    claim_label: _claimLabel,
+    ...rest
+  } = stored ?? {};
   const lifecycle: Record<string, unknown> = {};
   for (const slot of LIFECYCLE_SINGLE_SLOTS) {
     if (draft.names[slot] !== '') {
@@ -380,6 +398,7 @@ export const lifecycleOverlayOf = (
     lifecycle.on_ticket_closed = draft.onClosed;
   }
   const pickup = draft.names.pick_up_from;
+  const claimLabel = draft.claimLabel.trim();
   return {
     ...rest,
     ...(pickup !== ''
@@ -387,6 +406,12 @@ export const lifecycleOverlayOf = (
       : accountPickupStatus === null
         ? {}
         : { pickup_status: null }),
+    // BACKLOG 1611: sent as typed — a label with a space is refused by the server, by path.
+    ...(claimLabel !== ''
+      ? { claim_label: claimLabel }
+      : accountClaimLabel === null
+        ? {}
+        : { claim_label: null }),
     lifecycle,
   };
 };
@@ -769,6 +794,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
   const setDraft = (next: LifecycleDraft): void =>
     setSeeded({ integrationId: tracker.integration_id, draft: next, dropped });
   const accountPickup = nonEmptyString(account?.pickup_status);
+  const accountClaimLabel = nonEmptyString(account?.claim_label);
   const hasStoredBlock =
     asObject({ ...(account ?? {}), ...(overlay ?? {}) }.lifecycle) !== undefined;
   const ticked = tickedPolicy(draft, items);
@@ -901,6 +927,15 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
         />
         Also start tickets already assigned to a person (only while claiming)
       </label>
+      <div className="max-w-sm" data-lifecycle-claim-label="">
+        <Field
+          label="Label a claimed ticket"
+          hint="Added to the ticket while the platform works it, removed when it lets go, so the tracker shows who is on it. No spaces, and not the pick-up label. Empty: no label. Key: claim_label."
+          placeholder="agentic-working"
+          value={draft.claimLabel}
+          onChange={(event) => setDraft({ ...draft, claimLabel: event.target.value })}
+        />
+      </div>
       <div className="flex flex-col gap-0.5">
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -931,7 +966,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
                 integration_id: item.integration_id,
                 config:
                   item.integration_id === tracker.integration_id
-                    ? lifecycleOverlayOf(overlay, draft, accountPickup, items)
+                    ? lifecycleOverlayOf(overlay, draft, accountPickup, items, accountClaimLabel)
                     : bindingConfigOf(bound, item.integration_id),
               })),
             })

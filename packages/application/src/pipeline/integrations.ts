@@ -1858,6 +1858,43 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
   },
 
   /**
+   * The claim label (BACKLOG 1611): adds the binding's `claimLabel()` to the ticket when a task
+   * claims it, removes it when the task releases it — one `setLabels` edit naming that label alone,
+   * so no other label is touched. `null`, with **no call and no audit row**, for no binding, a
+   * platform-issued reference, or a binding that configured no claim label. A shadow task writes
+   * nothing (`would_have`, BD-021). `idempotencyKey` is the caller's: the claim's stage entry, or
+   * the release's suffix.
+   */
+  claimLabel: async (
+    ticket: TicketRefInput,
+    change: 'add' | 'remove',
+    context: TicketWriteContext & { readonly idempotencyKey: string },
+  ): Promise<{ readonly label: string } | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    const label = binding.port.claimLabel();
+    if (label === null) {
+      return null;
+    }
+    const add = change === 'add' ? [label] : [];
+    const remove = change === 'remove' ? [label] : [];
+    await mutate(
+      integrations,
+      binding.ref,
+      change === 'add' ? 'add_claim_label' : 'remove_claim_label',
+      { ticket_key: ticket.key, label },
+      context,
+      async () => binding.port.setLabels(ticket, add, remove),
+      () => add,
+      () => ({ label }),
+      replayable<readonly string[]>(context.idempotencyKey),
+    );
+    return { label };
+  },
+
+  /**
    * The claim refusal's comment (WP-177, TD-029 decision 5): one per refused admission, opened by
    * the marker `agentic:claim-refused:<task>` so the platform never reads it as a person's word.
    * Platform text only — the caller writes no provider text into it — and redacted here anyway, at
