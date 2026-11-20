@@ -184,6 +184,27 @@ describe('the shipped provider catalogue', () => {
     expect(both.built.length).toBeGreaterThan(0);
     expect(both.built.length).toBeLessThan(SHIPPED_PROVIDERS.length);
   });
+
+  /**
+   * BACKLOG 1610: the bindings screen says whether a binding can verify a webhook from these
+   * fields, so each must be a credential the provider declares, and only a provider with an inbound
+   * half may name any — a field a schema renamed would read every binding as poll-only.
+   */
+  it('names webhook secret fields only among the provider’s credentials, and only with an inbound half', () => {
+    for (const entry of SHIPPED_PROVIDERS) {
+      for (const field of entry.webhookSecretFields) {
+        expect(entry.secretFields, `${entry.id}.${field}`).toContain(field);
+      }
+      if (!entry.inboundWebhook) {
+        expect(entry.webhookSecretFields, entry.id).toEqual([]);
+      }
+    }
+    expect(findShippedProvider('jira-cloud')?.webhookSecretFields).toEqual(['webhook_secret']);
+    expect(findShippedProvider('gitlab')?.webhookSecretFields).toEqual([
+      'webhook_secret_token',
+      'webhook_signing_token',
+    ]);
+  });
 });
 
 /**

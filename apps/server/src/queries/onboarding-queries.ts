@@ -45,6 +45,7 @@ import type {
   JsonObject,
   JsonValue,
   MaterialisedAutonomy,
+  ProjectBindingInbound,
   ProjectBindingSummary,
   ProjectRecord,
 } from '@platform/contracts';
@@ -61,6 +62,7 @@ import {
 } from '@platform/integrations';
 import { and, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
+import { readBindingInbound } from './binding-inbound-queries.js';
 import { completeCommandAttempt, findCommandAttempt } from './idempotency-queries.js';
 import type { Database } from './identity-queries.js';
 import {
@@ -1319,6 +1321,11 @@ export const createIntegration = async (
 export const listProjectBindings = async (
   database: Database,
   projectId: string,
+  /**
+   * BACKLOG 1610: with the process's secret key, each binding of a provider that declares webhook
+   * secret fields carries `inbound` (`binding-inbound-queries.ts`); without it, none does.
+   */
+  inbound?: { readonly secretKey: secretAdapters.SecretKey; readonly now: Date },
 ): Promise<readonly ProjectBindingSummary[]> => {
   const rows = await database
     .select({
@@ -1327,21 +1334,40 @@ export const listProjectBindings = async (
       provider: integrations.provider,
       name: integrations.name,
       config: bindings.config,
+      accountConfig: integrations.config,
     })
     .from(bindings)
     .innerJoin(integrations, eq(integrations.id, bindings.integrationId))
     .where(eq(bindings.projectId, projectId))
     .orderBy(integrations.type, integrations.name);
-  return rows.map((row) => ({
-    integration_id: row.integrationId as Id,
-    type: row.type,
-    provider: row.provider,
-    name: row.name,
-    // WP-100 review round 1 (backlog 330): the provider's declared credential fields removed, and
-    // nothing at all for a provider this build does not ship — `GET /api/integrations`'s rule, one
-    // function. It covers a binding row stored before the write refused a credential key.
-    config: publishableConfig(row.config, findShippedProvider(row.provider)),
-  }));
+  const heard =
+    inbound === undefined
+      ? new Map<string, ProjectBindingInbound>()
+      : await readBindingInbound(
+          database,
+          inbound.secretKey,
+          rows.map((row) => ({
+            integrationId: row.integrationId,
+            provider: findShippedProvider(row.provider),
+            accountConfig: row.accountConfig,
+            bindingConfig: row.config,
+          })),
+          inbound.now,
+        );
+  return rows.map((row) => {
+    const answer = heard.get(row.integrationId);
+    return {
+      integration_id: row.integrationId as Id,
+      type: row.type,
+      provider: row.provider,
+      name: row.name,
+      // WP-100 review round 1 (backlog 330): the provider's declared credential fields removed, and
+      // nothing at all for a provider this build does not ship — `GET /api/integrations`'s rule, one
+      // function. It covers a binding row stored before the write refused a credential key.
+      config: publishableConfig(row.config, findShippedProvider(row.provider)),
+      ...(answer === undefined ? {} : { inbound: answer }),
+    };
+  });
 };
 
 /**

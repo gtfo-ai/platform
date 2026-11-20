@@ -74,6 +74,7 @@ import {
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { INTEGRATION_TYPE_LABEL } from '../ui/words/integrations.js';
+import { BindingInboundStatus } from './binding-inbound.js';
 import { SaveBindingsButton, useBindingSelection } from './binding-selection.js';
 import { BusinessInterview } from './business-interview.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
@@ -153,9 +154,13 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
         ) : (
           <ul className="flex flex-col gap-1 text-sm">
             {bound.map((binding) => (
-              <li key={binding.integration_id} className="flex items-center gap-2">
-                <Badge tone="accent">{INTEGRATION_TYPE_LABEL[binding.type]}</Badge>
-                <UntrustedText value={binding.name} />
+              <li key={binding.integration_id} className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-2">
+                  <Badge tone="accent">{INTEGRATION_TYPE_LABEL[binding.type]}</Badge>
+                  <UntrustedText value={binding.name} />
+                </span>
+                {/* BACKLOG 1610: webhook or poll only, and when the last webhook arrived. */}
+                <BindingInboundStatus binding={binding} />
               </li>
             ))}
           </ul>

@@ -104,10 +104,16 @@ what the URL below is built from. With no public URL, skip to step 5 and switch 
    above this guide on the integrations screen, with a Copy button; the API publishes it as the
    `webhook_url` field of `GET /api/integrations/<integration-id>/setup-guide`).
 3. **Secret:** generate one and paste the same value into `webhook_secret`. Atlassian shows it once.
-4. **Events:** *Issue: created, updated* and *Comment: created*. Nothing else is used, and every
-   other event is answered with "not handled by this provider" in the delivery log. *Issue updated*
-   is what tells the platform a ticket was edited: a task whose ticket changes is shown the new
-   text at its next agent stage, and without the event it keeps the text it read when it started.
+4. **Events:** tick *Issue: created*, *Issue: updated*, *Issue: deleted* and *Comment: created*.
+   **Assignee and status changes need *Issue: updated*** — Jira sends both as an update — and with
+   it they take effect within seconds: a new assignee becomes the task's owner, and a ticket a
+   person moves to a finished status stops its task. *Issue: updated* is also what tells the
+   platform a ticket was edited: a task whose ticket changes is shown the new text at its next
+   agent stage, and without the event it keeps the text it read when it started. Without the
+   webhook, all of this waits for the next poll (step 5). *Issue: deleted* is not acted on yet: the
+   delivery log records it as "not handled by this provider", as it does every other event, which
+   nothing else uses. The project's *Connections* settings say per binding whether its webhook is
+   set up and when the last one arrived.
 5. **JQL filter** (recommended): `project = ACME` — Jira warns that an empty filter sends events for
    every issue in the site, which is more data than the platform needs or should see.
 
@@ -154,6 +160,8 @@ What polling does not see, so you can choose knowingly:
   interval only, so a ticket labelled last month is not started by switching polling on today;
   touch it (any edit) and the next poll finds it.
 - **Comments and new-ticket linting.** Both are webhook-only.
+- **A change as it happens.** A running task's ticket is re-read once per poll, so a new assignee or
+  a status a person set reaches the platform up to `poll_interval_seconds` later, not within seconds.
 - **A bulk edit of more than a thousand labelled tickets within a few minutes.** A poll reads up to
   a thousand tickets at once; past that it cannot get beyond the edit, and says so in the server log
   on every poll (*"the ticket poll is stalled"*). Use the webhook for a site that bulk-edits on that

@@ -2194,6 +2194,15 @@ section it has **no one Save at its foot**: each card saves on its own, some as 
 the rest with their own button. **Replace with these classes…** asks first when risk classes are
 already in force, saying that a class not among the proposed ones stops applying.
 
+**Webhook or poll only.** Under each Jira or GitLab integration the project uses, *Connections* says
+how changes reach the platform: **Webhook** with the time the last one arrived, when the
+integration's webhook secret is set and deliveries come in; **Webhook set up** when the secret is set
+but no webhook has arrived in the last 90 days (check the webhook on the provider's side); **Poll
+only** when no webhook secret is set — a status or assignee changed in Jira then reaches the platform
+only at the next poll — with a link to the setup guide's webhook step; and **Webhook unknown** when
+the integration's stored credentials cannot be read. With the webhook, a new assignee becomes the
+task's owner and a ticket moved to a finished status stops its task within seconds.
+
 **The ticket lifecycle** is a project's own setting too: the project settings' *Connections* section
 carries the same form as the wizard's step 1 (§ 1, *The ticket lifecycle*) — every slot a pick
 list of the tracker's own statuses, every slot allowed to stay empty, the two claim switches, and the

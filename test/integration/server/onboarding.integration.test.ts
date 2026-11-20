@@ -767,6 +767,120 @@ describe('bindings and configuration', () => {
 });
 
 /**
+ * BACKLOG 1610: each Jira and GitLab binding says whether a webhook can be verified — read off the
+ * **sealed** field names, never a value — and when the last verified webhook arrived, a poll's own
+ * `inbox` row not counted, a refused delivery not counted, a delivery older than the lookback not
+ * counted. A binding of a provider with no webhook door carries no `inbound`.
+ */
+describe('a binding’s webhook status (BACKLOG 1610)', () => {
+  const key = secretAdapters.deriveSecretKey(SECRET_KEY);
+  const NOW = new Date();
+  const PLANTED_WEBHOOK_SECRET = 'FAKE-jira-webhook-secret-1610-000000';
+
+  const sealed = async (field: string, value: string): Promise<string> => {
+    const secretId = crypto.randomUUID();
+    await pool.query('insert into secrets (id, ciphertext, key_id) values ($1, $2, $3)', [
+      secretId,
+      secretAdapters.sealSecret(key, secretAdapters.secretDocument(field, value), secretId),
+      key.keyId,
+    ]);
+    return secretId;
+  };
+  const integration = async (
+    type: string,
+    provider: string,
+    name: string,
+    secretIds: readonly string[],
+  ): Promise<string> => {
+    const row = await pool.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, secret_ids)
+       values ($1, $2::integration_type, $3, $4, $5::uuid[]) returning id`,
+      [orgId, type, provider, name, [...secretIds]],
+    );
+    return row.rows[0]?.id as string;
+  };
+  const delivery = async (
+    integrationId: string,
+    provider: string,
+    deliveryId: string,
+    verified: boolean,
+    hoursAgo: number,
+  ): Promise<void> => {
+    await pool.query(
+      `insert into inbox
+         (provider, delivery_id, integration_id, received_at, headers, payload, processed_at,
+          redaction_count, verified)
+       values ($2, $3, $1, $5::timestamptz - make_interval(secs => $6::float8 * 3600), '{}'::jsonb,
+               '{}'::jsonb, now(), 0, $4)`,
+      [integrationId, provider, deliveryId, verified, NOW.toISOString(), hoursAgo],
+    );
+  };
+
+  it('reads the sealed webhook secret and the newest verified webhook delivery, never a poll row', async () => {
+    const created: string[] = [];
+    // Jira with a sealed webhook secret: one webhook two hours ago; a newer poll row, a newer
+    // refused delivery and an older-than-the-lookback webhook, none of which may be the answer.
+    const jiraWebhook = await integration('task_management', 'jira-cloud', 'wiz 1610 jira', [
+      await sealed('api_token', 'FAKE-jira-api-token-1610-0000000'),
+      await sealed('webhook_secret', PLANTED_WEBHOOK_SECRET),
+    ]);
+    // GitLab, poll only: a token and no webhook secret, and only poll rows in its inbox.
+    const gitlabPolled = await integration('git', 'gitlab', 'wiz 1610 gitlab', [
+      await sealed('token', 'glpat-FAKE-1610-planted-000000000000'),
+    ]);
+    // Slack: a provider whose webhook door this read does not describe.
+    const slack = await integration('communication', 'slack', 'wiz 1610 slack', []);
+    created.push(jiraWebhook, gitlabPolled, slack);
+
+    await delivery(jiraWebhook, 'jira-cloud', `jira-cloud:${crypto.randomUUID()}`, true, 2);
+    await delivery(jiraWebhook, 'jira-cloud', `jira-cloud:poll:${projectId}:ACME-1@x`, true, 1);
+    await delivery(jiraWebhook, 'jira-cloud', `jira-cloud:${crypto.randomUUID()}`, false, 0.5);
+    await delivery(jiraWebhook, 'jira-cloud', `jira-cloud:${crypto.randomUUID()}`, true, 24 * 100);
+    await delivery(gitlabPolled, 'gitlab', `gitlab:poll:${projectId}:acme/api!7@x`, true, 1);
+
+    // Inserted rather than written through `replaceProjectBindings`: the accounts carry no
+    // configuration, which the write would refuse, and this read is not about the write.
+    for (const id of created) {
+      await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+        projectId,
+        id,
+      ]);
+    }
+    const served = await listProjectBindings(db, projectId, { secretKey: key, now: NOW });
+    const byProvider = new Map(served.map((item) => [item.provider, item]));
+
+    const twoHoursAgo = new Date(NOW.getTime() - 2 * 3_600_000).toISOString();
+    expect(byProvider.get('jira-cloud')?.inbound).toEqual({
+      webhook_secret: 'configured',
+      last_webhook_at: twoHoursAgo,
+    });
+    expect(byProvider.get('gitlab')?.inbound).toEqual({
+      webhook_secret: 'not_configured',
+      last_webhook_at: null,
+    });
+    expect(byProvider.get('slack')).toBeDefined();
+    expect(byProvider.get('slack')).not.toHaveProperty('inbound');
+    // The value never leaves: the answer names a state, never the secret.
+    expect(JSON.stringify(served)).not.toContain(PLANTED_WEBHOOK_SECRET);
+    // Without the key the read is the one it always was.
+    expect(
+      (await listProjectBindings(db, projectId)).every((item) => item.inbound === undefined),
+    ).toBe(true);
+
+    // A sealed row the process's key cannot open is `unreadable`, never "not configured".
+    const otherKey = secretAdapters.deriveSecretKey('another-not-real-app-secret-key-0000000000');
+    const unreadable = await listProjectBindings(db, projectId, { secretKey: otherKey, now: NOW });
+    expect(unreadable.find((item) => item.provider === 'gitlab')?.inbound?.webhook_secret).toBe(
+      'unreadable',
+    );
+
+    await pool.query('delete from bindings where project_id = $1', [projectId]);
+    await pool.query('delete from inbox where integration_id = any($1::uuid[])', [created]);
+    await pool.query('delete from integrations where id = any($1::uuid[])', [created]);
+  });
+});
+
+/**
  * WP-181 round 3 (Q118 (a), migration 0090): the column the bindings write stores and the join the
  * readiness note reads, on PostgreSQL — the two statements no other tier executes.
  */

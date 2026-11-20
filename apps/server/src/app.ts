@@ -64,7 +64,10 @@ import type {
 } from '@platform/application';
 import { createIntegrationEgressPolicy } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { redaction as redactionAdapters } from '@platform/infrastructure';
+import {
+  redaction as redactionAdapters,
+  secrets as secretAdapters,
+} from '@platform/infrastructure';
 import { type FastifyBaseLogger, type FastifyInstance, fastify, LogController } from 'fastify';
 import {
   jsonSchemaTransform,
@@ -991,13 +994,20 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     // the lifecycle check the write makes before it saves anything.
     const bindingEgress = createIntegrationEgressPolicy(config.integrationHosts);
     const ticketStatuses = options.ticketStatuses ?? null;
+    // Derived per read, as the onboarding routes derive theirs per command (one HKDF).
     await registerProjectBindingRoutes(app, {
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
-        listBindings: async (projectId) => listProjectBindings(options.database, projectId),
+        // BACKLOG 1610: each Jira and GitLab binding says whether its webhook can be verified and
+        // when the last one arrived.
+        listBindings: async (projectId) =>
+          listProjectBindings(options.database, projectId, {
+            secretKey: secretAdapters.deriveSecretKey(config.secretKey),
+            now: new Date(),
+          }),
         replaceBindings: async (projectId, items) =>
           replaceProjectBindings(options.database, projectId, items, { egress: bindingEgress }),
         recordAction: async (input) => recordHumanAction(options.database, input),

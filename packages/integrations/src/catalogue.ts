@@ -144,6 +144,15 @@ export interface ProviderCatalogueEntry {
    * holds every entry to the provider's declared non-credential fields).
    */
   readonly usageFields: readonly UsageField[];
+  /**
+   * The credential fields that let a webhook delivery be **verified** (BACKLOG 1610): with none of
+   * them set, every delivery fails its signature check and the binding hears the provider only
+   * through its poll. Jira's `webhook_secret`, GitLab's two schemes. `[]` is "not reported" — a
+   * provider with no webhook door (Loki, Sentry), or one whose inbound half is not a signed webhook
+   * this screen describes (Slack's held connection). `catalogue.test.ts` holds each to
+   * {@link secretFields} and to {@link inboundWebhook}.
+   */
+  readonly webhookSecretFields: readonly string[];
 }
 
 /**
@@ -295,6 +304,7 @@ const entryOf = (
   },
   inboundWebhook: boolean,
   usageFields: readonly UsageField[],
+  webhookSecretFields: readonly string[] = [],
 ): ProviderCatalogueEntry => ({
   id: registration.id,
   type: registration.type,
@@ -309,6 +319,7 @@ const entryOf = (
   accountConfigSchema: withoutCredentials(registration.configSchema, registration.secretFields),
   staticRunCredential: registration.staticRunCredential ?? null,
   usageFields,
+  webhookSecretFields: [...webhookSecretFields],
 });
 
 /**
@@ -317,12 +328,22 @@ const entryOf = (
  * Ordered by id so the integrations screen is stable between reads.
  */
 export const SHIPPED_PROVIDERS: readonly ProviderCatalogueEntry[] = [
-  entryOf(gitlabProviderRegistration, true, [{ field: 'project', label: 'Repository' }]),
-  entryOf({ ...JIRA_CLOUD_PROVIDER_METADATA, agentTooling: JIRA_CLOUD_AGENT_TOOLING }, true, [
-    { field: 'project_keys', label: 'Tickets from' },
-    { field: 'pickup_status', label: 'Picked up at status' },
-    { field: 'pickup_label', label: 'Picked up with label', unless: 'pickup_status' },
-  ]),
+  entryOf(
+    gitlabProviderRegistration,
+    true,
+    [{ field: 'project', label: 'Repository' }],
+    ['webhook_secret_token', 'webhook_signing_token'],
+  ),
+  entryOf(
+    { ...JIRA_CLOUD_PROVIDER_METADATA, agentTooling: JIRA_CLOUD_AGENT_TOOLING },
+    true,
+    [
+      { field: 'project_keys', label: 'Tickets from' },
+      { field: 'pickup_status', label: 'Picked up at status' },
+      { field: 'pickup_label', label: 'Picked up with label', unless: 'pickup_status' },
+    ],
+    ['webhook_secret'],
+  ),
   entryOf(lokiProviderRegistration, false, [
     { field: 'tenant_id', label: 'Tenant' },
     { field: 'excerpt_selector', label: 'Log selector' },
