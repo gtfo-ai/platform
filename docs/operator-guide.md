@@ -579,6 +579,8 @@ read off the bundle the installer downloaded, so it is exactly what that bundle 
 `PASSWD`, `KEY`, `DSN`, `CREDENTIAL` or `PRIVATE`), or a variable the bundle does not declare. A value
 with a character other than letters, digits and `_ . : / @ % + , = -` is named and not saved: put it in
 `.env` yourself. The token and the DSN have no default, so the updater carries them already.
+`APP_WORKER_LABEL` (S-29.1) has an empty default, so it is not in that list: write it into the
+folder's `.env` yourself (S-29.2's `--name` will write it).
 
 **It refuses a worker that would share another worker's names** (BACKLOG 1056). Today that other
 worker is one made by hand: the installer itself cannot make a second worker before S-29.2 (above). Before it writes
