@@ -133,7 +133,9 @@ if ($args[0] -eq 'compose') {
     # one (S-29.2): $env:STUB_UP_PAGE_SITE served there, its pid in page-<project>.pid.
     if ($created -and $args[2] -ne 'agentic-worker' -and $env:STUB_UP_PAGE_SITE) {
       $port = (Get-Content -LiteralPath $publishedFile -Raw).Trim()
-      $page = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', $port, '--bind', '127.0.0.1', '--directory', $env:STUB_UP_PAGE_SITE) -PassThru -WindowStyle Hidden
+      # Started outside the worker's folder: a process whose working directory it is holds it, and
+      # Windows then refuses the purge's removal of the folder (measured on the runner).
+      $page = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', $port, '--bind', '127.0.0.1', '--directory', $env:STUB_UP_PAGE_SITE) -WorkingDirectory $env:STUB_STATE -PassThru -WindowStyle Hidden
       Set-Content -LiteralPath (Join-Path $env:STUB_STATE "page-$($args[2]).pid") -Value $page.Id
     }
     # The folder's .env as Compose read it at this up (nothing: no file).
