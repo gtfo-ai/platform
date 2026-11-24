@@ -54,12 +54,7 @@
  * fallback), and the header shows the label, the core's host and this page's port, each a text
  * node. The tab icon is the worker's own (`/favicon.svg`, generated); no URL is set from script.
  */
-import type {
-  WorkerLocalClaimScope,
-  WorkerLocalIdentity,
-  WorkerLocalRun,
-  WorkerLocalState,
-} from '@platform/contracts';
+import type { WorkerLocalClaimScope, WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
 import {
   type ReactElement,
   useCallback,
@@ -108,6 +103,7 @@ import {
   workerModeWords,
 } from './model.js';
 import { PickWork } from './pick-work.js';
+import { currentPagePort, PlatformBadge, pageTitleOf } from './platform-badge.js';
 import { ChangePlatform, Wizard } from './wizard.js';
 
 /** A message as a sentence: its first letter capitalised (the worker's words start lower-case). */
@@ -339,38 +335,6 @@ const IdleLine = ({
   );
 };
 
-/** The tab title for a label (S-29.1), or `null` to leave `worker.html`'s own. */
-export const pageTitleOf = (identity: WorkerLocalIdentity | null | undefined): string | null =>
-  identity == null ? null : `${identity.label} — worker`;
-
-/** The header's badge (S-29.1): which platform, its host, and the port this page answers on. */
-const PlatformBadge = ({
-  identity,
-  port,
-}: {
-  identity: WorkerLocalIdentity;
-  port: string;
-}): ReactElement => {
-  return (
-    <p data-platform-badge="" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-      <span
-        data-platform-label=""
-        className="rounded-md border border-line bg-surface px-2 py-0.5 font-semibold text-fg"
-      >
-        <UntrustedText value={identity.label} />
-      </span>
-      {identity.core_host === null ? null : (
-        <span data-platform-host="" className="text-fg-muted">
-          <UntrustedText value={identity.core_host} />
-        </span>
-      )}
-      {port === '' ? null : (
-        <span data-page-port="" className="text-fg-muted">{`this page on port ${port}`}</span>
-      )}
-    </p>
-  );
-};
-
 export interface WorkerAppProps {
   /** `null` when the page has no token (opened without the printed address). */
   readonly client: LocalClient | null;
@@ -387,7 +351,7 @@ export const WorkerApp = ({
   now = Date.now,
   pollMs = POLL_MS,
   newKey = () => crypto.randomUUID(),
-  pagePort = typeof window === 'undefined' ? '' : window.location.port,
+  pagePort = currentPagePort(),
 }: WorkerAppProps): ReactElement => {
   const [state, setState] = useState<WorkerLocalState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -502,6 +466,7 @@ export const WorkerApp = ({
         busy={busy}
         error={error}
         restarted={restarted}
+        pagePort={pagePort}
       />
     );
   }

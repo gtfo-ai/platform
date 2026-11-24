@@ -1239,21 +1239,31 @@ describe('which platform this worker serves (S-29.1)', () => {
     expect((window as { __pwnedLabel?: number }).__pwnedLabel).toBeUndefined();
   });
 
-  it('titles the wizard too, and leaves the static title and draws no badge with no label', async () => {
+  it('titles and badges the wizard too, and leaves the static title and draws no badge with no label', async () => {
     document.title = 'This worker — Agentic platform';
-    const wizard = renderPage(
-      fakeClient(
-        state({
-          connection: 'needs_claude',
-          worker_id: null,
-          worker_name: null,
-          runs: [],
-          identity: { label: 'fontai', source: 'host', core_host: 'agentic.fontai.org' },
-        }),
-      ),
+    const wizard = render(
+      <WorkerApp
+        client={fakeClient(
+          state({
+            connection: 'needs_claude',
+            worker_id: null,
+            worker_name: null,
+            runs: [],
+            identity: { label: 'fontai', source: 'host', core_host: 'agentic.fontai.org' },
+          }),
+        )}
+        now={() => NOW}
+        pollMs={60_000}
+        newKey={() => 'key-1'}
+        pagePort="7358"
+      />,
     );
     await waitFor(() => expect(document.title).toBe('fontai — worker'));
-    expect(wizard.container.querySelector('[data-platform-badge]')).toBeNull();
+    expect(wizard.container.querySelector('[data-wizard]')).not.toBeNull();
+    const badge = wizard.container.querySelector('[data-platform-badge]');
+    expect(badge?.querySelector('[data-platform-label]')?.textContent).toBe('fontai');
+    expect(badge?.querySelector('[data-platform-host]')?.textContent).toBe('agentic.fontai.org');
+    expect(badge?.querySelector('[data-page-port]')?.textContent).toBe('this page on port 7358');
     cleanup();
 
     document.title = 'This worker — Agentic platform';

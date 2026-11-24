@@ -740,12 +740,13 @@ export const startRemoteWorker = async (
    */
   const keepPlatformName = async (name: string | null): Promise<void> => {
     if (name === platformName || coreUrl === null) return;
-    platformName = name;
+    // The file first: once the page says the new name, `worker-state` holds it too.
     try {
       await writeStoredInstanceName(config.stateDir, coreUrl, name);
     } catch (error) {
       loggerPort.warn({ err: error }, 'the platform’s name could not be kept in worker-state');
     }
+    platformName = name;
   };
 
   const handshake = async (client: CoreClient, signal: AbortSignal): Promise<boolean> => {

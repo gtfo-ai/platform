@@ -50,6 +50,7 @@ import {
   type WizardView,
   wizardOf,
 } from './model.js';
+import { currentPagePort, PlatformBadge } from './platform-badge.js';
 
 /** A wizard action's outcome: the worker's new state, or its refusal in the page's words. */
 type Act = (action: () => Promise<WorkerLocalState>) => Promise<void>;
@@ -654,6 +655,8 @@ export interface WizardProps {
   /** The worker restarted while a sign-in or its check ran (`restartNoticeOf`). */
   readonly restarted?: boolean;
   readonly writeText?: (text: string) => Promise<void>;
+  /** The port this page answers on, which the header names (S-29.1). @default `location.port` */
+  readonly pagePort?: string;
 }
 
 /** The wizard for a worker that is not connected yet; `wizardOf` decides which step is open. */
@@ -665,6 +668,7 @@ export const Wizard = ({
   error,
   restarted = false,
   writeText = defaultWriteText,
+  pagePort = currentPagePort(),
 }: WizardProps): ReactElement => {
   const view = wizardOf(state) as WizardView;
   return (
@@ -675,6 +679,9 @@ export const Wizard = ({
     >
       <header className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold text-fg">Set up this worker</h1>
+        {state.identity == null ? null : (
+          <PlatformBadge identity={state.identity} port={pagePort} />
+        )}
         <p className="text-sm text-fg-muted">
           Three steps, then this machine starts taking work. The page moves on by itself.
         </p>
