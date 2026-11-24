@@ -280,7 +280,7 @@ try {
   $fontaiLines = (@($fontaiEnv -split "`n" | Where-Object { $_ -ne '' } | Sort-Object -CaseSensitive) -join '|')
   $expectedLines = 'APP_WORKER_CACHE_VOLUME=agentic-worker-fontai-repo-cache|APP_WORKER_CONTROL_VOLUME=agentic-worker-fontai-ctl|APP_WORKER_RUN_NETWORK=agentic-worker-fontai-run-egress|APP_WORKER_UI_PORT=7358|COMPOSE_PROJECT_NAME=agentic-worker-fontai'
   Test-That ($fontaiLines -eq $expectedLines) "its .env holds its project, volumes, network and the first free port, no label (it holds: $fontaiLines)"
-  Test-That ([IO.File]::ReadAllText((Join-Path $fontai '.agentic-worker-install')) -match "(?m)^core=$([regex]::Escape("$core/second"))\r?$") 'its folder is marked with the second core'
+  Test-That ((Read-EnvText (Join-Path $fontai '.agentic-worker-install')) -match "(?m)^core=$([regex]::Escape("$core/second"))$") 'its folder is marked with the second core'
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
   Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker-fontai up -d') "it is brought up as its own project (last: $($calls[-1]))"
   & $shell -NoProfile -ExecutionPolicy Bypass -File $secondScript -NoOpen

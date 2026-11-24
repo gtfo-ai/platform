@@ -622,8 +622,8 @@ A named install writes into its folder's `.env`, outside the updater's block: `C
 (so a `docker compose up -d` in that folder is that worker's project, not `agentic-worker` — the
 installer's own, never taken from the shell), `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`
 and `APP_WORKER_RUN_NETWORK` (`agentic-worker-<n>-ctl`, `-repo-cache`, `-run-egress`),
-`APP_WORKER_UI_PORT` — the first port from 7357 up that nothing on `127.0.0.1` answers on and no
-container in any state has bound, so a stopped worker keeps its port — and, for a `--name`,
+`APP_WORKER_UI_PORT` — the first port from 7357 up that nothing listens on (`install.sh` asks
+`127.0.0.1`, `install.ps1` the system's listener table) and no container in any state has bound, so a stopped worker keeps its port — and, for a `--name`,
 `APP_WORKER_LABEL`; a value you set on the shell wins over each. **No install is ever renamed** (its
 volumes hold its approval and its Claude sign-in): `--name` on an install that exists only sets its
 label. A name whose folder another platform's install holds, or whose project runs from another

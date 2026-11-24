@@ -850,10 +850,12 @@ const main = async () => {
       config?.name === PROJECT_B,
       String(config?.name ?? config?.error),
     );
+    // `compose config` prints a literal `$` as `$$`, so that its output reads back as the same model
+    // (measured on CI's Compose: `$HOME` came back `$$HOME` while the container held `$HOME`).
     const configLabel = config?.services?.['remote-worker']?.environment?.APP_WORKER_LABEL;
     check(
       'and reads the single-quoted label in its .env byte for byte (BACKLOG 1643)',
-      configLabel === LABEL_B,
+      typeof configLabel === 'string' && configLabel.replaceAll('$$', '$') === LABEL_B,
       JSON.stringify(configLabel ?? null),
     );
     const hand = await docker(['compose', 'up', '-d'], {

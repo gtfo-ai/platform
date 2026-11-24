@@ -625,29 +625,19 @@ control characters) is saved as the page's label. With irm | iex, pass them as:
     return $ports
   }
 
-  # Whether something accepts a connection on 127.0.0.1:<port>; no answer within a second counts as
-  # taken, a refusal as free.
-  function Test-PortListening {
-    param([int]$Port)
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-      $attempt = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
-      if (-not $attempt.AsyncWaitHandle.WaitOne(1000)) { return $true }
-      $client.EndConnect($attempt)
-      return $true
-    } catch {
-      return $false
-    } finally {
-      $client.Close()
-    }
+  # The TCP ports something on this machine listens on, read off the system's own table rather than
+  # by connecting: Windows refuses a connection to a closed loopback port only after retrying it, so
+  # a one-second probe called every port of 7357-7456 taken (measured on the Windows runner, S-29.2).
+  function Get-ListeningPort {
+    $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    return @($listeners | ForEach-Object { [string]$_.Port } | Sort-Object -Unique)
   }
 
   # The first port from 7357 up that nothing listens on and no container has bound.
   function Get-FirstFreePort {
-    $taken = @(Get-BoundPort)
+    $taken = @(Get-BoundPort) + @(Get-ListeningPort)
     for ($port = $FirstPagePort; $port -lt $FirstPagePort + $PagePortSearch; $port++) {
-      if ($taken -contains [string]$port) { continue }
-      if (-not (Test-PortListening $port)) { return $port }
+      if ($taken -notcontains [string]$port) { return $port }
     }
     Exit-Installer 1 "no port from $FirstPagePort to $($FirstPagePort + $PagePortSearch - 1) is free for the worker's page; set APP_WORKER_UI_PORT to one that is and run this again."
   }
