@@ -190,7 +190,7 @@ export const DOCKER_CHECKS = [
       // is what the install must leave running and healthy.
       'apps/server/src/updater/',
     ],
-    why: 'a core serving install.sh; the piped line installs, re-runs and purges a worker',
+    why: 'two cores serving install.sh; the piped lines install a worker for each side by side, re-run and purge them',
   },
 ];
 

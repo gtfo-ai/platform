@@ -121,8 +121,9 @@ jobs:
     needs: [plan, images]
     if: needs.plan.outputs.checks != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30 # slowest leg worker-update-check, 6.3 min green (x3 = 19); a red one took 28 min to
-    # end on its own phase bounds and print its FAIL line, so 30. Others 1.0-5.9 min (PR #45)
+    timeout-minutes: 45 # slowest leg worker-update-check, 6.3 min green (x3 = 19); a red one took 28 min to
+    # end on its own phase bounds and print its FAIL line. Others 1.0-5.9 min (PR #45). 45 since S-29.2:
+    # worker-install-check's stage bounds (two cores, two workers) sum to 41 min
     strategy:
       fail-fast: false
       matrix:

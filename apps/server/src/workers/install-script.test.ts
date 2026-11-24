@@ -33,9 +33,14 @@ import { APPLY_LABEL } from '../updater/updater.js';
 import { renderWorkerCompose, WORKER_IMAGE_VARIABLE } from './compose.js';
 import {
   INSTALL_CORE_URL_PLACEHOLDER,
+  INSTALL_PLATFORM_SLUG_PLACEHOLDER,
   INSTALL_SCRIPT_NAMES,
   InstallScriptError,
   installCoreUrlOf,
+  installPlatformSlug,
+  installScriptRenderer,
+  isInstallName,
+  RESERVED_INSTALL_NAMES,
   readInstallScriptTemplate,
   renderInstallScript,
   renderInstallScripts,
@@ -65,8 +70,14 @@ const TEMPLATE = readFileSync(
 const servedBundle = (hex: string): string =>
   renderWorkerCompose(TEMPLATE, { digests: digests(hex), repository: REPOSITORY, coreUrl: CORE });
 
-const SH = renderInstallScript(readInstallScriptTemplate('install.sh'), CORE);
-const PS1 = renderInstallScript(readInstallScriptTemplate('install.ps1'), CORE);
+/** The platform's slug the tests' core renders (S-29.2): its organisation is called *Acme*. */
+const SLUG = 'acme';
+const SH = renderInstallScript(readInstallScriptTemplate('install.sh'), CORE, SLUG);
+const PS1 = renderInstallScript(readInstallScriptTemplate('install.ps1'), CORE, SLUG);
+/** A second core's install.sh (S-29.2): another URL, another platform's slug. */
+const SECOND_CORE = 'https://second.example.test';
+const shOf = (core: string, slug: string): string =>
+  renderInstallScript(readInstallScriptTemplate('install.sh'), core, slug);
 
 /** One top-level service's block of a compose file. */
 const serviceOf = (file: string, name: string): string => {
@@ -141,6 +152,58 @@ describe('the install scripts the core renders', () => {
       'http://localhost:8080/agentic',
     );
     expect(() => renderInstallScript('no placeholder here', CORE)).toThrow(InstallScriptError);
+    // Both placeholders are required: a template that lost the slug's is refused too.
+    expect(() => renderInstallScript(INSTALL_CORE_URL_PLACEHOLDER, CORE)).toThrow(
+      InstallScriptError,
+    );
+  });
+
+  it('render the platform’s slug: the organisation’s name’s, else the host’s, never dev (S-29.2, BACKLOG 1641)', () => {
+    const base = 'https://agentic.fontai.org';
+    expect(installPlatformSlug({ name: 'Acme Labs s.r.o.', baseUrl: base })).toBe(
+      'acme-labs-s-r-o',
+    );
+    expect(installPlatformSlug({ name: null, baseUrl: base })).toBe('fontai');
+    // Nothing of the name survives: the host's.
+    expect(installPlatformSlug({ name: '株式会社', baseUrl: base })).toBe('fontai');
+    // An organisation called Dev would install into pnpm worker:dev's project: the host's instead.
+    expect(installPlatformSlug({ name: 'Dev', baseUrl: base })).toBe('fontai');
+    // A host whose own slug is dev gives none: such a core's second worker needs --name.
+    expect(installPlatformSlug({ name: 'Dev', baseUrl: 'https://dev.example.org' })).toBe('');
+    expect(installPlatformSlug({ name: 'Dev', baseUrl: 'https://agentic.dev' })).toBe('');
+    expect(installPlatformSlug({ name: null, baseUrl: 'not a url' })).toBe('');
+    // Both sides of the pattern: 24 characters is a name, the cut keeps a long one inside it.
+    expect(isInstallName('a'.repeat(24))).toBe(true);
+    expect(isInstallName('a'.repeat(25))).toBe(false);
+    expect(installPlatformSlug({ name: 'x'.repeat(200), baseUrl: base })).toBe('x'.repeat(24));
+    for (const name of ['', 'dev', '-a', 'A', 'a_b', 'a b', "a'b"]) {
+      expect(isInstallName(name), name).toBe(false);
+    }
+    expect(RESERVED_INSTALL_NAMES).toEqual(['dev']);
+  });
+
+  it('render a slug into both scripts only when it is an install name, as the host’s otherwise', () => {
+    for (const [name, line] of [
+      ['install.sh', (slug: string) => `PLATFORM_SLUG='${slug}'`],
+      ['install.ps1', (slug: string) => `$PlatformSlug = '${slug}'`],
+    ] as const) {
+      const template = readInstallScriptTemplate(name);
+      expect(template, name).toContain(line(INSTALL_PLATFORM_SLUG_PLACEHOLDER));
+      expect(renderInstallScript(template, CORE, 'fontai'), name).toContain(line('fontai'));
+      for (const hostile of ['dev', 'Bad Slug', "x';rm -rf ~;'", 'a'.repeat(25)]) {
+        const text = renderInstallScript(template, CORE, hostile);
+        expect(text, `${name} ${hostile}`).toContain(line(''));
+        expect(text, `${name} ${hostile}`).not.toContain(INSTALL_PLATFORM_SLUG_PLACEHOLDER);
+      }
+    }
+    // The renderer reads the templates once and renders per call: a rename reaches the next one.
+    const render = installScriptRenderer('https://agentic.fontai.org');
+    const before = render('install.sh', 'FontAI');
+    const after = render('install.sh', 'FontAI Studio');
+    const dev = render('install.ps1', 'Dev');
+    expect('text' in before && before.text).toContain("PLATFORM_SLUG='fontai'");
+    expect('text' in after && after.text).toContain("PLATFORM_SLUG='fontai-studio'");
+    expect('text' in dev && dev.text).toContain("$PlatformSlug = 'fontai'");
   });
 
   it('agree with the updater on its managed block, its image variables and its apply label', () => {
@@ -251,13 +314,47 @@ describe('the settings the installers save into .env', () => {
     expect(SH).toContain(SECRET_WORDS.map((word) => `*${word}*`).join(' | '));
     expect(PS1).toContain(`'${SECRET_WORDS.join('|')}'`);
   });
+
+  it('save the page’s label too, declared with an empty default, single-quoted (BACKLOG 1643)', () => {
+    // Free text the bundle declares with no default value, so the census above does not see it.
+    expect(TEMPLATE).toContain('APP_WORKER_LABEL: ${APP_WORKER_LABEL:-}');
+    expect(defaultedVariables(servedBundle('a'))).not.toContain('APP_WORKER_LABEL');
+    expect(SH).toContain(`APP_WORKER_LABEL) printf "%s='%s'\\n" "$1" "$value" ;;`);
+    expect(PS1).toContain("$LabelVariable = 'APP_WORKER_LABEL'");
+  });
+
+  it('agree on what an install name is, and on the reserved ones (S-29.2)', () => {
+    expect(SH).toContain(`RESERVED_NAMES='${RESERVED_INSTALL_NAMES.join(' ')}'`);
+    expect(PS1).toContain(
+      `$ReservedNames = @(${RESERVED_INSTALL_NAMES.map((name) => `'${name}'`).join(', ')})`,
+    );
+    expect(PS1).toContain(`'^[a-z0-9][a-z0-9-]{0,23}\\z'`);
+    for (const text of [SH, PS1]) expect(text).toContain('agentic-worker-dev');
+  });
 });
 
 // ── install.sh against stubs ─────────────────────────────────────────────────────────────────────
 
 const DOCKER_STUB = String.raw`#!/bin/sh
-# A stub docker for install-script.test.ts: records each call and answers from $STUB_STATE.
+# A stub docker for install-script.test.ts: records each call and answers from $STUB_STATE, one
+# folder per compose project - agentic-worker's is $STUB_STATE itself, another project P's
+# $STUB_STATE/projects/P - so two installs on one machine each have their own containers (S-29.2).
+# $STUB_STATE/stopped-bindings: host ports stopped containers have bound; $STUB_STATE/updater-mounts:
+# the folders updater containers mount as their host bundle, one per line.
 printf 'docker %s\n' "$*" >> "$STUB_LOG"
+pdir() {
+  if [ "$1" = agentic-worker ]; then printf '%s\n' "$STUB_STATE"; return 0; fi
+  mkdir -p "$STUB_STATE/projects/$1"
+  printf '%s\n' "$STUB_STATE/projects/$1"
+}
+up_projects() {
+  [ -f "$STUB_STATE/up" ] && printf 'agentic-worker\n'
+  for flag in "$STUB_STATE"/projects/*/up; do
+    [ -f "$flag" ] && basename "$(dirname "$flag")"
+  done
+  return 0
+}
+filter_project=$(printf '%s\n' "$*" | sed -n 's/.*label=com\.docker\.compose\.project=\([a-z0-9_-]*\).*/\1/p')
 case "$1" in
   info)
     [ "${'${STUB_DOCKER_INFO:-ok}'}" = ok ] || exit 1
@@ -266,52 +363,87 @@ case "$1" in
   ps)
     case "$*" in
       *org.platform.update-apply=*) printf '%s' "${'${STUB_APPLYING:-}'}"; exit 0 ;;
+    esac
+    if [ -z "$filter_project" ]; then
+      case "$*" in
+        *com.docker.compose.service=updater*)
+          [ -f "$STUB_STATE/updater-mounts" ] && printf 'updater-any\n'
+          exit 0
+          ;;
+      esac
+      # Every container on the machine: one per project that is up, and the stopped ones.
+      for project in $(up_projects); do printf 'id.%s.remote-worker\n' "$project"; done
+      [ -f "$STUB_STATE/stopped-bindings" ] && printf 'stopped\n'
+      exit 0
+    fi
+    d=$(pdir "$filter_project")
+    case "$*" in
       *com.docker.compose.project.working_dir*)
-        [ -f "$STUB_STATE/up" ] && cat "$STUB_STATE/wd"
-        [ -n "${'${STUB_FOREIGN:-}'}" ] && printf '%s\n' "$STUB_FOREIGN"
+        [ -f "$d/up" ] && cat "$d/wd"
+        if [ "$filter_project" = agentic-worker ] && [ -n "${'${STUB_FOREIGN:-}'}" ]; then printf '%s\n' "$STUB_FOREIGN"; fi
         exit 0
         ;;
       *com.docker.compose.service=*)
         service=$(printf '%s\n' "$*" | sed -n 's/.*com\.docker\.compose\.service=\([a-z-]*\).*/\1/p')
-        [ -f "$STUB_STATE/up" ] || exit 0
-        case "$*" in *--quiet*) printf 'c0ffee-%s\n' "$service"; exit 0 ;; esac
-        if [ -f "$STUB_STATE/state-$service" ]; then cat "$STUB_STATE/state-$service"; else printf 'running|Up 3 seconds\n'; fi
+        [ -f "$d/up" ] || exit 0
+        case "$*" in *--quiet*) printf 'id.%s.%s\n' "$filter_project" "$service"; exit 0 ;; esac
+        if [ -f "$d/state-$service" ]; then cat "$d/state-$service"; else printf 'running|Up 3 seconds\n'; fi
         exit 0
         ;;
       *--quiet*)
-        [ -f "$STUB_STATE/up" ] && printf 'c0ffee\n'
+        [ -f "$d/up" ] && printf 'id.%s.any\n' "$filter_project"
+        exit 0
+        ;;
+    esac
+    ;;
+  inspect)
+    case "$*" in
+      *PortBindings*)
+        for project in $(up_projects); do
+          d=$(pdir "$project")
+          [ -f "$d/published-port" ] && printf '%s \n' "$(cat "$d/published-port")"
+        done
+        [ -f "$STUB_STATE/stopped-bindings" ] && cat "$STUB_STATE/stopped-bindings"
+        exit 0
+        ;;
+      *Mounts*)
+        [ -f "$STUB_STATE/updater-mounts" ] && cat "$STUB_STATE/updater-mounts"
         exit 0
         ;;
     esac
     ;;
   compose)
     [ "$2" = version ] && { printf 'Docker Compose version v5.7.0\n'; exit 0; }
+    # docker compose --project-name <project> ...
+    d=$(pdir "$3")
     case "$*" in
       *' up '* | *' up')
-        pwd > "$STUB_STATE/wd"
-        : > "$STUB_STATE/up"
+        pwd > "$d/wd"
+        : > "$d/up"
         # The page's host port: what a created container publishes (this env, else .env, else the
         # default); --no-recreate leaves a container that exists as it is.
-        case "$*" in *--no-recreate*) [ -f "$STUB_STATE/published-port" ] || recreate=1 ;; *) recreate=1 ;; esac
+        case "$*" in *--no-recreate*) [ -f "$d/published-port" ] || recreate=1 ;; *) recreate=1 ;; esac
         if [ -n "$recreate" ]; then
           published="$APP_WORKER_UI_PORT"
           [ -n "$published" ] || published=$([ -f .env ] && sed -n 's/^APP_WORKER_UI_PORT=//p' .env | tail -n 1)
           [ -n "$published" ] || published=7357
-          printf '%s\n' "$published" > "$STUB_STATE/published-port"
+          printf '%s\n' "$published" > "$d/published-port"
         fi
         # The folder's .env as Compose read it at this up (nothing: no file).
-        if [ -f .env ]; then cp .env "$STUB_STATE/env-at-up"; else rm -f "$STUB_STATE/env-at-up"; fi
-        env | grep -E '^(PLATFORM_|APP_TRUSTED_|APP_CORE_URL|COMPOSE_|CLAUDE_CODE_OAUTH_TOKEN)' | sort > "$STUB_STATE/up-env"
+        if [ -f .env ]; then cp .env "$d/env-at-up"; else rm -f "$d/env-at-up"; fi
+        env | grep -E '^(PLATFORM_|APP_TRUSTED_|APP_CORE_URL|COMPOSE_|CLAUDE_CODE_OAUTH_TOKEN)' | sort > "$d/up-env"
         exit "${'${STUB_UP_EXIT:-0}'}"
         ;;
-      *' start'*) : > "$STUB_STATE/up"; : > "$STUB_STATE/started"; exit 0 ;;
-      *' down'*) rm -f "$STUB_STATE/up"; exit 0 ;;
+      *' start'*) : > "$d/up"; : > "$d/started"; exit 0 ;;
+      *' down'*) rm -f "$d/up"; exit 0 ;;
     esac
     ;;
   port)
-    # docker port <container> 7357/tcp: the published page port while the project is up.
-    [ -f "$STUB_STATE/up" ] && [ -f "$STUB_STATE/published-port" ] || exit 1
-    printf '127.0.0.1:%s\n' "$(cat "$STUB_STATE/published-port")"
+    # docker port id.<project>.<service> 7357/tcp: the published page port while the project is up.
+    project=${'${2#id.}'}
+    d=$(pdir "${'${project%.*}'}")
+    [ -f "$d/up" ] && [ -f "$d/published-port" ] || exit 1
+    printf '127.0.0.1:%s\n' "$(cat "$d/published-port")"
     exit 0
     ;;
   volume | network)
@@ -332,8 +464,8 @@ exit 64
 `;
 
 const CURL_STUB = String.raw`#!/bin/sh
-# A stub curl: the core's compose.yml from $STUB_BUNDLE, the local page from $STUB_PAGE (on the
-# published port only), and the page's state from $STUB_PAGE_STATE (unset: the page answers it
+# A stub curl: the core's compose.yml from $STUB_BUNDLE, the local page from $STUB_PAGE (on a port a
+# running worker publishes; $STUB_LISTENING's ports stand for something else listening), and the page's state from $STUB_PAGE_STATE (unset: the page answers it
 # with an HTTP error; 'down': nothing answers) or, once 'docker compose start' ran, from
 # $STUB_PAGE_STATE_AFTER_START (nothing before).
 printf 'curl %s\n' "$*" >> "$STUB_LOG"
@@ -362,12 +494,18 @@ case "$url" in
     printf '%s' "$STUB_PAGE_STATE"
     ;;
   http://127.0.0.1:*)
+    port=$(printf '%s' "$url" | sed 's|^http://127.0.0.1:\([0-9]*\).*|\1|')
+    # Something that is not a worker listens on $STUB_LISTENING's ports.
+    case " ${'${STUB_LISTENING:-}'} " in *" $port "*) exit 0 ;; esac
     [ "${'${STUB_PAGE:-up}'}" = up ] || exit 7
-    # Only the port the worker's container publishes answers.
-    if [ -f "$STUB_STATE/published-port" ] &&
-      [ "$(printf '%s' "$url" | sed 's|^http://127.0.0.1:\([0-9]*\).*|\1|')" != "$(cat "$STUB_STATE/published-port")" ]; then
-      exit 7
-    fi
+    # Only a port a running worker's container publishes answers.
+    listening=''
+    [ -f "$STUB_STATE/up" ] && [ -f "$STUB_STATE/published-port" ] && listening="$(cat "$STUB_STATE/published-port")"
+    for published in "$STUB_STATE"/projects/*/published-port; do
+      [ -f "$published" ] && [ -f "$(dirname "$published")/up" ] && listening="$listening $(cat "$published")"
+    done
+    case " $listening " in *" $port "*) exit 0 ;; esac
+    exit 7
     ;;
   *) exit 6 ;;
 esac
@@ -467,8 +605,9 @@ const run = (
   s: Stage,
   args: readonly string[] = [],
   env: Readonly<Record<string, string>> = {},
+  script = 'install.sh',
 ) => {
-  const result = spawnSync(shell, [path.join(s.root, 'install.sh'), ...args], {
+  const result = spawnSync(shell, [path.join(s.root, script), ...args], {
     cwd: s.root,
     encoding: 'utf8',
     timeout: 20_000,
@@ -537,6 +676,9 @@ describe.each(SHELLS)(
       );
       expect(r.calls).toContain('open http://127.0.0.1:7357');
       expect(r.out).toContain('you never run this again to update');
+      // Today's install (S-29.2 item 4): no port probe, no name, no .env line.
+      expect(r.calls.some((call) => call.startsWith('docker inspect'))).toBe(false);
+      expect(r.out).toContain('compose project agentic-worker)');
     });
 
     it('opens the page on Linux only with a display, and never with --no-open', () => {
@@ -892,7 +1034,7 @@ describe.each(SHELLS)(
       const s = stage();
       mkdirSync(s.dir, { recursive: true });
       writeFileSync(path.join(s.dir, 'notes.txt'), 'mine');
-      const r = run(shell, s);
+      const r = run(shell, s, ['--dir', s.dir]);
       expect(r.status).toBe(3);
       expect(r.out).toContain('was not made by this installer');
       expect(existsSync(path.join(s.dir, 'compose.yaml'))).toBe(false);
@@ -936,7 +1078,7 @@ describe.each(SHELLS)(
       const other = stage();
       writeFileSync(path.join(other.state, 'up'), '');
       writeFileSync(path.join(other.state, 'wd'), '/var/lib/platform/host-bundle\n');
-      const refused = run(shell, other);
+      const refused = run(shell, other, ['--dir', other.dir]);
       expect(refused.status).toBe(3);
       expect(refused.out).toContain("is not this installer's");
       expect(refused.composeCalls).toEqual([]);
@@ -1102,9 +1244,326 @@ describe.each(SHELLS)(
       expect(refused.status).toBe(3);
       expect(read(path.join(foreign.dir, 'compose.yaml'))).toBe('services: {}\n');
     });
+
+    // ── Named installs: one worker per core on one machine (S-29.2) ─────────────────────────────
+
+    /** A second core's script beside install.sh: `second.sh`, its platform called *FontAI*. */
+    const withSecondCore = (s: Stage, slug = 'fontai'): string => {
+      writeFileSync(path.join(s.root, 'second.sh'), shOf(SECOND_CORE, slug));
+      return 'second.sh';
+    };
+    const envLines = (file: string): string[] =>
+      (read(file) ?? '').split('\n').filter(Boolean).sort();
+
+    it('installs a second core’s worker beside the first as its platform’s name: its own folder, project, volumes, network and the next free port', () => {
+      const s = stage();
+      expect(run(shell, s, ['--no-open']).status).toBe(0);
+      const second = withSecondCore(s);
+      // The shell's own COMPOSE_PROJECT_NAME is never taken.
+      const r = run(shell, s, ['--no-open'], { COMPOSE_PROJECT_NAME: 'someone-else' }, second);
+      expect(r.out).toContain('installed beside it as fontai');
+      expect(r.status).toBe(0);
+      const dir = path.join(s.home, 'agentic-worker-fontai');
+      expect(read(path.join(dir, '.agentic-worker-install'))).toContain(`core=${SECOND_CORE}\n`);
+      // 7357 is the first worker's page, so the second takes 7358. A platform's name is no label.
+      expect(envLines(path.join(dir, '.env'))).toEqual([
+        'APP_WORKER_CACHE_VOLUME=agentic-worker-fontai-repo-cache',
+        'APP_WORKER_CONTROL_VOLUME=agentic-worker-fontai-ctl',
+        'APP_WORKER_RUN_NETWORK=agentic-worker-fontai-run-egress',
+        'APP_WORKER_UI_PORT=7358',
+        'COMPOSE_PROJECT_NAME=agentic-worker-fontai',
+      ]);
+      expect(statSync(path.join(dir, '.env')).mode & 0o777).toBe(0o600);
+      expect(r.composeCalls).toEqual([
+        'docker compose --project-name agentic-worker up -d',
+        'docker compose --project-name agentic-worker-fontai up -d',
+      ]);
+      const state = projectState(s, 'agentic-worker-fontai');
+      expect(read(path.join(state, 'wd'))?.trim()).toBe(dir);
+      expect(read(path.join(state, 'env-at-up'))).toBe(read(path.join(dir, '.env')));
+      expect(read(path.join(state, 'up-env'))).toBe('');
+      expect(r.out).toContain('http://127.0.0.1:7358 (open it in a browser)');
+      expect(r.out).toContain('--uninstall --name fontai');
+      // The first install is as it was: no .env, its page on 7357.
+      expect(existsSync(path.join(s.dir, '.env'))).toBe(false);
+      expect(read(path.join(s.state, 'published-port'))?.trim()).toBe('7357');
+    });
+
+    it('re-runs each core’s script onto its own install, with or without --name, recreating nothing', () => {
+      const s = stage();
+      expect(run(shell, s, ['--no-open']).status).toBe(0);
+      const second = withSecondCore(s);
+      expect(run(shell, s, ['--no-open'], {}, second).status).toBe(0);
+      const secondEnv = read(path.join(s.home, 'agentic-worker-fontai', '.env'));
+      const again = run(shell, s, ['--no-open'], {}, second);
+      expect(again.status).toBe(0);
+      expect(again.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker-fontai up -d --no-recreate',
+      );
+      expect(again.out).toContain('http://127.0.0.1:7358');
+      expect(read(path.join(s.home, 'agentic-worker-fontai', '.env'))).toBe(secondEnv);
+      const first = run(shell, s, ['--no-open']);
+      expect(first.status).toBe(0);
+      expect(first.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker up -d --no-recreate',
+      );
+      expect(existsSync(path.join(s.dir, '.env'))).toBe(false);
+      // A --name on an existing install renames nothing: it writes only the page's label.
+      const named = run(shell, s, ['--no-open', '--name', 'big-box'], {}, second);
+      expect(named.status).toBe(0);
+      expect(named.out).toContain('No install is renamed');
+      expect(named.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker-fontai up -d --no-recreate',
+      );
+      expect(read(path.join(s.home, 'agentic-worker-fontai', '.env'))).toBe(
+        `${secondEnv}APP_WORKER_LABEL='big-box'\n`,
+      );
+      expect(existsSync(path.join(s.home, 'agentic-worker-big-box'))).toBe(false);
+      const labelled = run(shell, s, ['--no-open', '--name=box'], {});
+      expect(labelled.status).toBe(0);
+      expect(read(path.join(s.dir, '.env'))).toBe("APP_WORKER_LABEL='box'\n");
+      expect(labelled.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker up -d --no-recreate',
+      );
+    });
+
+    it('--name on a new install writes its names, the first free port and the name as its label', () => {
+      const s = stage();
+      const r = run(shell, s, ['--no-open', '--name', 'box-2']);
+      expect(r.status).toBe(0);
+      const dir = path.join(s.home, 'agentic-worker-box-2');
+      expect(envLines(path.join(dir, '.env'))).toEqual([
+        'APP_WORKER_CACHE_VOLUME=agentic-worker-box-2-repo-cache',
+        'APP_WORKER_CONTROL_VOLUME=agentic-worker-box-2-ctl',
+        "APP_WORKER_LABEL='box-2'",
+        'APP_WORKER_RUN_NETWORK=agentic-worker-box-2-run-egress',
+        // Nothing bound and nothing listening: the default port is the first free one.
+        'APP_WORKER_UI_PORT=7357',
+        'COMPOSE_PROJECT_NAME=agentic-worker-box-2',
+      ]);
+      expect(r.composeCalls).toEqual(['docker compose --project-name agentic-worker-box-2 up -d']);
+      expect(existsSync(s.dir)).toBe(false);
+    });
+
+    it('skips a port a stopped container has bound, and one something else listens on', () => {
+      const s = stage();
+      // A stopped worker publishes nothing, but its binding comes back when it starts.
+      writeFileSync(path.join(s.state, 'stopped-bindings'), '7357 \n');
+      const r = run(shell, s, ['--no-open', '--name', 'box'], { STUB_LISTENING: '7358' });
+      expect(r.status).toBe(0);
+      expect(envLines(path.join(s.home, 'agentic-worker-box', '.env'))).toContain(
+        'APP_WORKER_UI_PORT=7359',
+      );
+      expect(r.calls).toContain('curl -s -o /dev/null --max-time 2 http://127.0.0.1:7358/');
+      expect(r.calls).not.toContain('curl -s -o /dev/null --max-time 2 http://127.0.0.1:7357/');
+    });
+
+    it('takes the person’s own values over the name’s, and writes a free-text label intact (BACKLOG 1643)', () => {
+      const s = stage();
+      const label = 'My "box" #2 $HOME & `co` – Mikeš';
+      const r = run(shell, s, ['--no-open', '--name', 'box'], {
+        APP_WORKER_UI_PORT: '7400',
+        APP_WORKER_CONTROL_VOLUME: 'mine-ctl',
+        APP_WORKER_LABEL: label,
+      });
+      expect(r.status).toBe(0);
+      const envFile = path.join(s.home, 'agentic-worker-box', '.env');
+      expect(envLines(envFile)).toEqual([
+        'APP_WORKER_CACHE_VOLUME=agentic-worker-box-repo-cache',
+        'APP_WORKER_CONTROL_VOLUME=mine-ctl',
+        `APP_WORKER_LABEL='${label}'`,
+        'APP_WORKER_RUN_NETWORK=agentic-worker-box-run-egress',
+        'APP_WORKER_UI_PORT=7400',
+        'COMPOSE_PROJECT_NAME=agentic-worker-box',
+      ]);
+      // A later run that saves another setting copies the label's line byte for byte.
+      const before = read(envFile) as string;
+      expect(run(shell, s, ['--no-open'], { LOG_LEVEL: 'debug' }).status).toBe(0);
+      expect(read(envFile)).toBe(`${before}LOG_LEVEL=debug\n`);
+      // And a re-run given the same label writes the same line where it stands.
+      expect(run(shell, s, ['--no-open'], { APP_WORKER_LABEL: label }).status).toBe(0);
+      expect(read(envFile)).toBe(`${before}LOG_LEVEL=debug\n`);
+    });
+
+    it.each([
+      ["it's", 'a single quote or a backslash'],
+      ['back\\slash', 'a single quote or a backslash'],
+      ['two\nlines', 'a control character or a line break'],
+      ['tab\there', 'a control character or a line break'],
+    ])('refuses a label %j it cannot write into .env, before anything is done', (label, said) => {
+      const s = stage();
+      const r = run(shell, s, ['--name', 'box'], { APP_WORKER_LABEL: label });
+      expect(r.status).toBe(2);
+      expect(r.out).toContain(said);
+      expect(r.calls).toEqual([]);
+    });
+
+    it.each(['dev', 'Box', '-box', 'box_2', 'a'.repeat(25), "x';rm", ''])(
+      'refuses --name %j with a sentence, before anything is done',
+      (name) => {
+        const s = stage();
+        const r = run(shell, s, ['--name', name]);
+        expect(r.status).toBe(2);
+        expect(r.out).toContain('--name takes 1 to 24 of a-z, 0-9 and -');
+        expect(r.out).toContain('agentic-worker-dev');
+        expect(r.calls).toEqual([]);
+      },
+    );
+
+    it('accepts a 24-character --name, the other side of the bound', () => {
+      const s = stage();
+      const name = `b${'0'.repeat(23)}`;
+      const r = run(shell, s, ['--no-open', '--name', name]);
+      expect(r.status).toBe(0);
+      expect(r.composeCalls).toEqual([
+        `docker compose --project-name agentic-worker-${name} up -d`,
+      ]);
+    });
+
+    it('refuses a name another core’s install holds, by folder or by project', () => {
+      const s = stage();
+      const second = withSecondCore(s);
+      expect(run(shell, s, ['--no-open', '--name', 'shared'], {}, second).status).toBe(0);
+      const byFolder = run(shell, s, ['--no-open', '--name', 'shared']);
+      expect(byFolder.status).toBe(3);
+      expect(byFolder.out).toContain(`was installed from ${SECOND_CORE}`);
+      expect(byFolder.out).toContain('pass another --name');
+      expect(byFolder.composeCalls).toEqual([
+        'docker compose --project-name agentic-worker-shared up -d',
+      ]);
+      // A project of the name brought up from somewhere else.
+      const taken = projectState(s, 'agentic-worker-taken');
+      mkdirSync(taken, { recursive: true });
+      writeFileSync(path.join(taken, 'up'), '');
+      writeFileSync(path.join(taken, 'wd'), '/Users/someone/elsewhere\n');
+      const byProject = run(shell, s, ['--no-open', '--name', 'taken']);
+      expect(byProject.status).toBe(3);
+      expect(byProject.out).toContain('already runs from /Users/someone/elsewhere');
+      expect(existsSync(path.join(s.home, 'agentic-worker-taken', 'compose.yaml'))).toBe(false);
+    });
+
+    it('goes beside a ~/agentic-worker it did not make rather than refuse, and refuses with no platform name, naming --name', () => {
+      const s = stage();
+      mkdirSync(s.dir, { recursive: true });
+      writeFileSync(path.join(s.dir, 'notes.txt'), 'mine');
+      const r = run(shell, s, ['--no-open']);
+      expect(r.status).toBe(0);
+      expect(r.composeCalls).toEqual(['docker compose --project-name agentic-worker-acme up -d']);
+      expect(read(path.join(s.dir, 'notes.txt'))).toBe('mine');
+      // A core that names no platform cannot call a second worker anything: the person must.
+      const t = stage();
+      expect(run(shell, t, ['--no-open']).status).toBe(0);
+      const nameless = withSecondCore(t, '');
+      const refused = run(shell, t, ['--no-open'], {}, nameless);
+      expect(refused.status).toBe(3);
+      expect(refused.out).toContain('--name <name>');
+      expect(refused.composeCalls).toEqual(['docker compose --project-name agentic-worker up -d']);
+    });
+
+    it('finds this core’s install in the decision’s order: the first is repaired, a second is named in one warning', () => {
+      const s = stage();
+      expect(run(shell, s, ['--no-open']).status).toBe(0);
+      // A copy of this core's install under another name (made by hand, say).
+      const copy = path.join(s.home, 'agentic-worker-copy');
+      mkdirSync(copy);
+      writeFileSync(path.join(copy, '.agentic-worker-install'), `core=${CORE}\n`);
+      writeFileSync(path.join(copy, '.env'), 'COMPOSE_PROJECT_NAME=agentic-worker-copy\n');
+      const r = run(shell, s, ['--no-open']);
+      expect(r.status).toBe(0);
+      expect(r.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker up -d --no-recreate',
+      );
+      expect(r.out).toContain(`this core has another install too: ${copy}`);
+      // Without the default one, the copy is this core's install, under its own project.
+      rmSync(s.dir, { recursive: true });
+      rmUp(s);
+      writeFileSync(path.join(copy, 'compose.yaml'), servedBundle('a'));
+      const found = run(shell, s, ['--no-open']);
+      expect(found.status).toBe(0);
+      expect(found.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker-copy up -d',
+      );
+      expect(existsSync(s.dir)).toBe(false);
+    });
+
+    it('finds an install outside the home folder through the folder its updater mounts', () => {
+      const s = stage();
+      const elsewhere = path.join(s.root, 'elsewhere');
+      expect(run(shell, s, ['--no-open', '--dir', elsewhere]).status).toBe(0);
+      writeFileSync(path.join(s.state, 'updater-mounts'), `${elsewhere}\n`);
+      const r = run(shell, s, ['--no-open']);
+      expect(r.status).toBe(0);
+      expect(r.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker up -d --no-recreate',
+      );
+      expect(read(path.join(s.state, 'wd'))?.trim()).toBe(elsewhere);
+      expect(existsSync(s.dir)).toBe(false);
+      // Without the updater's mount it is not found: the decision's stated residual.
+      rmSync(path.join(s.state, 'updater-mounts'));
+      rmUp(s);
+      const lost = run(shell, s, ['--no-open']);
+      expect(lost.composeCalls.at(-1)).toBe('docker compose --project-name agentic-worker up -d');
+      expect(read(path.join(s.state, 'wd'))?.trim()).toBe(s.dir);
+    });
+
+    it('--uninstall --name removes that install only, and never another in its place', () => {
+      const s = stage();
+      expect(run(shell, s, ['--no-open']).status).toBe(0);
+      const second = withSecondCore(s);
+      expect(run(shell, s, ['--no-open'], {}, second).status).toBe(0);
+      // The first core's script, asked for the second core's worker by its name.
+      const r = run(shell, s, ['--uninstall', '--purge', '--name', 'fontai']);
+      expect(r.status).toBe(0);
+      expect(r.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker-fontai down --volumes --remove-orphans',
+      );
+      const volumeCalls = r.calls.filter(
+        (call) => call.startsWith('docker volume') && !call.includes('--format'),
+      );
+      expect(volumeCalls).toEqual([
+        'docker volume inspect agentic-worker-fontai-repo-cache',
+        'docker volume rm agentic-worker-fontai-repo-cache',
+      ]);
+      expect(existsSync(path.join(s.home, 'agentic-worker-fontai'))).toBe(false);
+      expect(existsSync(path.join(s.dir, 'compose.yaml'))).toBe(true);
+      expect(existsSync(path.join(s.state, 'up'))).toBe(true);
+      // A name nobody installed: nothing is removed.
+      const none = run(shell, s, ['--uninstall', '--name', 'nosuch']);
+      expect(none.status).toBe(3);
+      expect(none.out).toContain('no install is named nosuch');
+      // (The call log is the stage's whole history: no compose call since the purge.)
+      expect(none.composeCalls).toEqual(r.composeCalls);
+      // The second core's script with no worker of its own left removes nothing either.
+      const nothing = run(shell, s, ['--uninstall'], {}, second);
+      expect(nothing.status).toBe(3);
+      expect(nothing.out).toContain(`no worker of ${SECOND_CORE} is installed`);
+      expect(nothing.composeCalls).toEqual(r.composeCalls);
+      expect(existsSync(path.join(s.state, 'up'))).toBe(true);
+    });
+
+    it('a named purge whose .env lost its cache line keeps the cache rather than guess the default worker’s', () => {
+      const s = stage();
+      expect(run(shell, s, ['--no-open', '--name', 'box']).status).toBe(0);
+      const envFile = path.join(s.home, 'agentic-worker-box', '.env');
+      writeFileSync(
+        envFile,
+        (read(envFile) as string).replace(/^APP_WORKER_CACHE_VOLUME=.*\n/m, ''),
+      );
+      const r = run(shell, s, ['--uninstall', '--purge', '--name', 'box']);
+      expect(r.status).toBe(0);
+      expect(r.out).toContain("kept the launcher's repository cache");
+      expect(r.calls.some((call) => call.includes('agentic-worker-repo-cache'))).toBe(false);
+      expect(r.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker-box down --volumes --remove-orphans',
+      );
+    });
   },
   STUB_RUN_TIMEOUT_MS,
 );
+
+/** Where the stub keeps a compose project's containers: agentic-worker's at its root. */
+const projectState = (s: Stage, project: string): string =>
+  project === 'agentic-worker' ? s.state : path.join(s.state, 'projects', project);
 
 /** The stub's "nothing of the project is in Docker" (a person's `docker compose down`). */
 const rmUp = (s: Stage): void => {

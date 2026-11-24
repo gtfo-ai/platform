@@ -1633,3 +1633,17 @@ No migration. No TD-032 change unless V-WM11 forces item 7's fallback.
 anything else become `-` (`Mikeš` → `mikes`, not `mike-s`), and trims a hyphen the 24-character cut
 leaves at the end; and `instance.name` has its control and format characters (`\p{Cf}`, the bidi
 controls among them) made spaces before the cut, as `APP_WORKER_LABEL` does.
+
+**Clarification (S-29.2, 2026-11-24).** What the installers decide where items 1–2 are silent: **`--dir`
+with no `--name`** makes the project `agentic-worker`, as before (the slug fallback is for the default
+folder only), so an explicit folder keeps today's refusals; **a value the person sets on the shell**
+(`APP_WORKER_UI_PORT`, a volume or network name, `APP_WORKER_LABEL`) wins over the name-derived one;
+**`--uninstall` with no `--name` and no `--dir`** removes this core's install only, and refuses (exit 3)
+when there is none rather than fall back to `~/agentic-worker`, which may be another core's;
+`--uninstall --name <n>` takes `~/agentic-worker-<n>`, else the installed folder whose project is
+`agentic-worker-<n>`, from either core's script; **a named install's purge** removes the repository
+cache its `.env` names and none when the line is gone (never the default install's name); and **the
+label** (BACKLOG 1643) is written single-quoted, so Compose reads spaces, `#`, double quotes and `$`
+literally, while a label holding `'`, `\` or a control character is refused (exit 2) before anything is
+done. The core renders `installPlatformSlug`: the organisation's name's slug, else the host's, each
+refused when it is not an install name (so *Dev* renders as the host's, BACKLOG 1641), else `''`.

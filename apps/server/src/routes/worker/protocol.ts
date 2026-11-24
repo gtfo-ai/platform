@@ -129,7 +129,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { HttpError } from '../../errors.js';
 import type { WorkerStore } from '../../queries/worker-queries.js';
-import { renderInstallScripts } from '../../workers/install.js';
+import { installScriptRenderer } from '../../workers/install.js';
 import type { WorkerRelease } from '../../workers/release.js';
 import { authenticateWorkerCredential } from '../../workers/secrets.js';
 import { registerWorkerOwnerVerbs, type WorkerRunCancelPort } from './owner-verbs.js';
@@ -1120,8 +1120,9 @@ export const registerWorkerProtocolRoutes = async (
     },
   );
 
-  // S-22.20: the one-command install, rendered once with this core's URL (`workers/install.ts`).
-  const installScripts = renderInstallScripts(options.baseUrl ?? 'http://localhost');
+  // S-22.20: the one-command install, with this core's URL (`workers/install.ts`); S-29.2: and the
+  // platform's slug, rendered per request so a renamed organisation reaches the next download.
+  const renderInstallScript = installScriptRenderer(options.baseUrl ?? 'http://localhost');
   for (const [verb, name, language] of [
     [WORKER_PATHS.installSh, 'install.sh', 'POSIX sh, for macOS and Linux'],
     [WORKER_PATHS.installPs1, 'install.ps1', 'PowerShell 5.1 and 7, for Windows'],
@@ -1131,13 +1132,13 @@ export const registerWorkerProtocolRoutes = async (
       {
         schema: {
           summary: `\`${name}\`: install a worker on this machine in one command (${language})`,
-          description: `Public, and outside the \`X-Worker-Protocol\` check (TD-031's 2026-11-05 install-scripts amendment): a person's download, which no worker calls and which holds no secret. The script baked into this core's image with this core's \`APP_BASE_URL\` filled in. It checks Docker, creates \`~/agentic-worker\`, downloads \`compose.yml\` from this core, starts the bundle — its updater included — and opens the worker's page; a re-run never changes the images a worker runs. \`503 install_script_unavailable\` when \`APP_BASE_URL\` cannot be quoted safely (S-22.20).`,
+          description: `Public, and outside the \`X-Worker-Protocol\` check (TD-031's 2026-11-05 install-scripts amendment): a person's download, which no worker calls and which holds no secret. The script baked into this core's image with this core's \`APP_BASE_URL\` and the platform's slug filled in (the organisation's name's, else the host's; rendered per request, S-29.2). It checks Docker, creates \`~/agentic-worker\` (a second core's worker \`~/agentic-worker-<slug>\`, or \`--name\`'s), downloads \`compose.yml\` from this core, starts the bundle — its updater included — and opens the worker's page; a re-run never changes the images a worker runs. \`503 install_script_unavailable\` when \`APP_BASE_URL\` cannot be quoted safely (S-22.20).`,
           tags: ['worker'],
           // No `response` block: the body is a script, not JSON (as `compose.yml`).
         },
       },
       async (_request, reply) => {
-        const script = installScripts[name];
+        const script = renderInstallScript(name, await options.store.organisationName());
         if ('error' in script) {
           throw new HttpError(503, 'install_script_unavailable', script.error);
         }

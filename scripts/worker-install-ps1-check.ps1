@@ -13,7 +13,12 @@ exists and recreates nothing; a re-run against another served build only starts 
 (its page reads needs_claude) - a stopped one too, whose page answers only once it was started; an
 `irm | iex`-style run leaves the caller's session alive with no installer function behind;
 `-Uninstall -Purge` removes the volumes and the folder; a second worker that would share another's
-control volume is refused until it names its own. Prints PASS or FAIL and exits 0 or 1.
+control volume is refused until it names its own. And (S-29.2) a second core's worker goes beside
+the first as its platform's name - its own folder, project, volumes, network and the first free page
+port, all in its .env - and a re-run finds it; -Name makes a named one with its label, sets only the
+label on an existing one, writes a free-text label single-quoted and refuses dev and a label it cannot
+write; -Uninstall -Name removes that install only. %USERPROFILE% points at the check's own folder, so
+nothing of the runner's home is read. Prints PASS or FAIL and exits 0 or 1.
 #>
 $ErrorActionPreference = 'Stop'
 $failures = New-Object System.Collections.Generic.List[string]
@@ -36,7 +41,10 @@ $bin = Join-Path $root 'bin'
 $state = Join-Path $root 'state'
 $site = Join-Path $root 'site'
 $workerDir = Join-Path $root 'agentic-worker'
-foreach ($folder in @($bin, $state, (Join-Path $site 'api\worker\v1'), (Join-Path $site 'api\local'))) { $null = New-Item -ItemType Directory -Force -Path $folder }
+# The installer's home folder (%USERPROFILE%): the check's own, empty (S-29.2).
+$homeDir = Join-Path $root 'home'
+foreach ($folder in @($bin, $state, $homeDir, (Join-Path $site 'api\worker\v1'), (Join-Path $site 'second\api\worker\v1'), (Join-Path $site 'api\local'))) { $null = New-Item -ItemType Directory -Force -Path $folder }
+$env:USERPROFILE = $homeDir
 $log = Join-Path $root 'calls.log'
 Set-Content -LiteralPath $log -Value ''
 
@@ -59,6 +67,7 @@ $bundle = @(
   '      LOG_LEVEL: ${LOG_LEVEL:-info}',
   '      APP_WORKER_UI_PORT: ${APP_WORKER_UI_PORT:-7357}',
   '      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}',
+  '      APP_WORKER_LABEL: ${APP_WORKER_LABEL:-}',
   '  launcher:',
   "    image: `${PLATFORM_LAUNCHER_IMAGE:-ghcr.io/acme/platform-launcher@$sha}",
   '    environment:',
@@ -74,6 +83,8 @@ $bundle = @(
   ''
 ) -join "`n"
 [IO.File]::WriteAllText((Join-Path $site 'api\worker\v1\compose.yml'), $bundle)
+# A second core (S-29.2): the same server under /second, serving the same bundle.
+[IO.File]::WriteAllText((Join-Path $site 'second\api\worker\v1\compose.yml'), $bundle)
 [IO.File]::WriteAllText((Join-Path $site 'index.html'), '<!doctype html><title>worker</title>')
 $server = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', "$port", '--bind', '127.0.0.1', '--directory', $site) -PassThru -WindowStyle Hidden
 try {
@@ -215,8 +226,9 @@ try {
   Test-That (-not (Test-Path -LiteralPath (Join-Path $unmarked 'compose.yaml'))) 'the refused folder gets no compose file'
 
   # As `irm | iex` runs it: in the caller's own scope, which must survive with nothing of the
-  # installer left. With no options it targets $HOME\agentic-worker, which has no mark, so the stub's
-  # running project makes it refuse (exit 3) before it writes anything.
+  # installer left. With no options it looks for this core's install in the check's home folder,
+  # finds none, and the stub's running agentic-worker project with no platform name rendered makes
+  # it refuse (status 3, naming -Name) before it writes anything.
   $probe = "Invoke-Expression ([IO.File]::ReadAllText('$script')); " +
     "`$left = @(Get-Variable -Name Dir, Core, NoOpen, Uninstall, Purge, installerExitCode, CoreAddress, WorkerDir -Scope Global -ErrorAction SilentlyContinue).Count + " +
     "@(Get-Command -Name Install-Worker, Exit-Installer -ErrorAction SilentlyContinue).Count; " +
@@ -253,10 +265,70 @@ try {
   Test-That ($LASTEXITCODE -eq 0) "with a control volume of its own it installs (it exited $LASTEXITCODE)"
   $secondEnv = Read-EnvText (Join-Path $second '.env')
   Test-That ($secondEnv -eq "APP_WORKER_CONTROL_VOLUME=agentic-worker-2-ctl`n") "and its name is kept in .env (it holds: $secondEnv)"
+
+  # S-29.2: a second core's worker beside the first. The project agentic-worker runs (from $second),
+  # so the second core's script, rendered with its platform's name, installs as agentic-worker-fontai.
+  $secondScript = Join-Path $root 'second.ps1'
+  [IO.File]::WriteAllText($secondScript, $template.Replace('@@AGENTIC_CORE_URL@@', "$core/second").Replace('@@AGENTIC_PLATFORM_SLUG@@', 'fontai'))
+  $env:STUB_UP_PAGE_SITE = $site
+  $env:COMPOSE_PROJECT_NAME = 'someone-else'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $secondScript -NoOpen
+  Remove-Item -LiteralPath 'Env:COMPOSE_PROJECT_NAME' -ErrorAction SilentlyContinue
+  Test-That ($LASTEXITCODE -eq 0) "a second core's worker installs beside the first (it exited $LASTEXITCODE)"
+  $fontai = Join-Path $homeDir 'agentic-worker-fontai'
+  $fontaiEnv = Read-EnvText (Join-Path $fontai '.env')
+  $fontaiLines = (@($fontaiEnv -split "`n" | Where-Object { $_ -ne '' } | Sort-Object -CaseSensitive) -join '|')
+  $expectedLines = 'APP_WORKER_CACHE_VOLUME=agentic-worker-fontai-repo-cache|APP_WORKER_CONTROL_VOLUME=agentic-worker-fontai-ctl|APP_WORKER_RUN_NETWORK=agentic-worker-fontai-run-egress|APP_WORKER_UI_PORT=7358|COMPOSE_PROJECT_NAME=agentic-worker-fontai'
+  Test-That ($fontaiLines -eq $expectedLines) "its .env holds its project, volumes, network and the first free port, no label (it holds: $fontaiLines)"
+  Test-That ([IO.File]::ReadAllText((Join-Path $fontai '.agentic-worker-install')) -match "(?m)^core=$([regex]::Escape("$core/second"))\r?$") 'its folder is marked with the second core'
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker-fontai up -d') "it is brought up as its own project (last: $($calls[-1]))"
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $secondScript -NoOpen
+  Test-That ($LASTEXITCODE -eq 0) "a re-run of the second core's script exits 0 (it exited $LASTEXITCODE)"
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker-fontai up -d --no-recreate') "and finds its own install, recreating nothing (last: $($calls[-1]))"
+  Test-That ((Read-EnvText (Join-Path $fontai '.env')) -eq $fontaiEnv) 'and leaves its .env as it was'
+
+  # -Name on a new install: its folder, its project and the name as its label.
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Name box -NoOpen
+  Test-That ($LASTEXITCODE -eq 0) "-Name box installs a named worker (it exited $LASTEXITCODE)"
+  $boxEnvPath = Join-Path (Join-Path $homeDir 'agentic-worker-box') '.env'
+  $boxEnv = Read-EnvText $boxEnvPath
+  Test-That ($boxEnv -match "(?m)^COMPOSE_PROJECT_NAME=agentic-worker-box$" -and $boxEnv -match "(?m)^APP_WORKER_LABEL='box'$" -and $boxEnv -match '(?m)^APP_WORKER_UI_PORT=7359$') "its .env names its project, its label and the next free port (it holds: $boxEnv)"
+  # -Name again with a free-text label: the existing install is not renamed, its label is replaced.
+  $env:APP_WORKER_LABEL = 'My "box" #2 $HOME & co'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Name box -NoOpen
+  Remove-Item -LiteralPath 'Env:APP_WORKER_LABEL' -ErrorAction SilentlyContinue
+  Test-That ($LASTEXITCODE -eq 0) "a re-run with a label exits 0 (it exited $LASTEXITCODE)"
+  $labelled = Read-EnvText $boxEnvPath
+  Test-That ($labelled -eq $boxEnv.Replace("APP_WORKER_LABEL='box'", "APP_WORKER_LABEL='My `"box`" #2 `$HOME & co'")) "the label is written single-quoted where the old one stood (it holds: $labelled)"
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker-box up -d --no-recreate') "and recreates nothing (last: $($calls[-1]))"
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Name dev -NoOpen
+  Test-That ($LASTEXITCODE -eq 2) "-Name dev is refused (it exited $LASTEXITCODE)"
+  $env:APP_WORKER_LABEL = "it's"
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Name box -NoOpen
+  Remove-Item -LiteralPath 'Env:APP_WORKER_LABEL' -ErrorAction SilentlyContinue
+  Test-That ($LASTEXITCODE -eq 2) "a label with a single quote is refused (it exited $LASTEXITCODE)"
+
+  # -Uninstall -Name removes that install only, whichever core's script asks.
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Uninstall -Purge -Name fontai
+  Test-That ($LASTEXITCODE -eq 0) "-Uninstall -Purge -Name fontai exits 0 (it exited $LASTEXITCODE)"
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker-fontai down --volumes --remove-orphans') "it removes that project (last: $($calls[-1]))"
+  $volumeCalls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker volume rm *' })
+  Test-That ($volumeCalls[-1] -eq 'docker volume rm agentic-worker-fontai-repo-cache') "and its own repository cache (last: $($volumeCalls[-1]))"
+  Test-That (-not (Test-Path -LiteralPath $fontai)) 'and its folder'
+  Test-That (Test-Path -LiteralPath $boxEnvPath) 'and leaves the other named install as it was'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Uninstall -Name nosuch
+  Test-That ($LASTEXITCODE -eq 3) "-Uninstall -Name of no install is refused (it exited $LASTEXITCODE)"
 } finally {
   Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
   $pagePid = Join-Path $state 'page.pid'
   if (Test-Path -LiteralPath $pagePid) { Stop-Process -Id ([int](Get-Content -LiteralPath $pagePid -Raw).Trim()) -Force -ErrorAction SilentlyContinue }
+  foreach ($pidFile in @(Get-ChildItem -LiteralPath $state -Filter 'page-*.pid' -ErrorAction SilentlyContinue)) {
+    Stop-Process -Id ([int](Get-Content -LiteralPath $pidFile.FullName -Raw).Trim()) -Force -ErrorAction SilentlyContinue
+  }
 }
 
 if ($failures.Count -gt 0) { Write-Host "FAIL: worker-install-ps1 ($($failures.Count))"; exit 1 }

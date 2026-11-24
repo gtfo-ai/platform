@@ -583,9 +583,13 @@ the page's origin, then `http://127.0.0.1:7357` on that machine (WP-294). The te
 `${APP_CORE_URL:-}` since WP-294 and the render fills its default, so a served file skips the wizard's
 platform step. **`GET install.sh` and `GET install.ps1`** (S-22.20) are the same kind of
 public download, outside the protocol check: `text/plain`, the scripts in `apps/server/src/workers/install/`
-with `APP_BASE_URL` filled in (`503 install_script_unavailable` when it cannot be quoted safely); each
-downloads `compose.yml`, starts the bundle with its updater and never moves a worker's images on a re-run
-(the operator guide's *One-command install*). **Residual, stated:** an anonymous caller learns the registry namespace and
+with `APP_BASE_URL` filled in (`503 install_script_unavailable` when it cannot be quoted safely) and, since
+S-29.2, the platform's slug — the organisation's name's, else the host's, never `dev`, rendered **per
+request** so a rename reaches the next download (`installPlatformSlug`, TD-031's 2026-11-24 amendment
+decision 9 item 3); each downloads `compose.yml`, starts the bundle with its updater and never moves a
+worker's images on a re-run, and a second core's install goes beside the first as `agentic-worker-<slug>`
+or `--name`'s (the operator guide's *One-command install*). **Residual, stated:** the slug of the
+organisation's name is public, as the base URL is. **Residual, stated:** an anonymous caller learns the registry namespace and
 the canonical base URL (the digests and the protocol range already reach it through the `426`). The
 bundle **pulls** the run, egress and git-helper images itself (three one-shot services the launcher waits
 for), so a clean machine can run; a worker reports as held only what its launcher resolves locally.

@@ -2394,7 +2394,10 @@ off.
 
    Each has **Read the script first**. The script checks Docker, puts the worker in
    `~/agentic-worker`, starts it for this platform and opens http://127.0.0.1:7357, the worker's own
-   page. **Set it up by hand** holds the three lines instead: the `curl` that downloads `compose.worker.yml`, the
+   page. A computer that already runs a worker for another platform gets this one beside it, in
+   `~/agentic-worker-<this platform's name>` with the next free page port (or the name you give with
+   `--name <name>` / `-Name <name>`, which also becomes its page's label); running the line again later
+   always finds this platform's own worker. **Set it up by hand** holds the three lines instead: the `curl` that downloads `compose.worker.yml`, the
    `APP_CORE_URL=…` line for a `.env.worker` file beside it, and
    `docker compose --env-file .env.worker -f compose.worker.yml up -d`; then open
    http://127.0.0.1:7357 on that computer.

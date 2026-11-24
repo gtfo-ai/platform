@@ -1081,6 +1081,26 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     }
   });
 
+  it('install.sh and install.ps1 carry the platform’s slug, rendered per request: a rename reaches the next download, a Dev renders as the host’s (S-29.2)', async () => {
+    const w = await world({ baseUrl: 'https://agentic.fontai.org' });
+    const slugOf = async (verb: string): Promise<string | undefined> => {
+      const response = await w.app.inject({ method: 'GET', url: url(verb) });
+      expect(response.statusCode).toBe(200);
+      return /(?:PLATFORM_SLUG=|\$PlatformSlug = )'([^']*)'/.exec(response.body)?.[1];
+    };
+    // No organisation name yet: the host's.
+    for (const verb of [WORKER_PATHS.installSh, WORKER_PATHS.installPs1]) {
+      expect(`${verb} ${await slugOf(verb)}`).toBe(`${verb} fontai`);
+    }
+    w.store.setOrganisationName('Acme Labs');
+    expect(await slugOf(WORKER_PATHS.installSh)).toBe('acme-labs');
+    w.store.setOrganisationName('Acme Studio');
+    expect(await slugOf(WORKER_PATHS.installPs1)).toBe('acme-studio');
+    // `dev` is pnpm worker:dev's project (BACKLOG 1641): the host's instead.
+    w.store.setOrganisationName('Dev');
+    expect(await slugOf(WORKER_PATHS.installSh)).toBe('fontai');
+  });
+
   it('install.sh and install.ps1 answer 503 install_script_unavailable for an APP_BASE_URL they cannot quote (S-22.20)', async () => {
     const w = await world({ baseUrl: "https://core.example.test/it's" });
     for (const verb of [WORKER_PATHS.installSh, WORKER_PATHS.installPs1]) {

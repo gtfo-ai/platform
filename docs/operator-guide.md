@@ -505,17 +505,15 @@ instead, remove the `updater` and `updater-docker-proxy` services, download the 
 is drawn in the label's colour with the label's first letter or digit. The label is `APP_WORKER_LABEL`
 when set (in the folder's `.env`; any text, cut to 80 characters), else the platform's own name as its core
 says it on the handshake (the organisation's name — a rename shows at the next handshake), else the
-platform's host (`agentic.fontai.org` → `fontai`). A second worker on one machine sets its own project name,
+platform's host (`agentic.fontai.org` → `fontai`). A second worker on one machine has its own project name,
 `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_UI_PORT` — **in its folder's `.env`**, never only on the shell: each has a default in the
 template, and a value given only on the shell goes back to it at the next update, so a second worker
 would then share the first worker's control volume, cache volume and run network. **The installers
-below cannot make a second worker yet**: their project name is fixed (`agentic-worker`), so a run from a
-second folder is refused (exit 3) as someone else's project, whatever volumes and port you give it. Until
-M29 (S-29.2: `--name`, TD-031's 2026-11-24 amendment) a second worker is a hand install: download
+below write all of that themselves** (S-29.2, *One worker per platform* below); by hand, download
 `compose.yml` into its own folder, write `COMPOSE_PROJECT_NAME` and the four settings above (and, if you
-like, `APP_WORKER_LABEL`) into that folder's `.env`, and `docker compose up -d` there. Two workers on one Claude token also each find its
-usage limit by spending a run until S-29.3.
+like, `APP_WORKER_LABEL`) into that folder's `.env`, and `docker compose up -d` there. Two workers on one
+Claude token still each find its usage limit by spending a run until S-29.3.
 
 #### One-command install (S-22.20)
 
@@ -531,12 +529,13 @@ powershell -ExecutionPolicy ByPass -c "irm https://agentic.example.com/api/worke
 To read one first: `curl -fsSLo install.sh https://agentic.example.com/api/worker/v1/install.sh && less
 install.sh && sh install.sh`. Each checks `docker`, `docker info` and `docker compose version` and names
 what to install (Docker Desktop, or Docker Engine on Linux) when one fails; creates `~/agentic-worker`
-(`--dir`/`-Dir`), refusing a folder it did not make and a project `agentic-worker` brought up from
-another folder; downloads `compose.yml` as `compose.yaml` and writes `.agentic-worker-install` (the
+(`--dir`/`-Dir`; a second platform's worker goes beside it, *One worker per platform* below), refusing
+a folder it did not make and a project of its name brought up from another folder; downloads `compose.yml` as `compose.yaml` and writes `.agentic-worker-install` (the
 core it came from); runs `docker compose up -d`; waits until `remote-worker` and `updater` run
 (and are `healthy` if they declare a healthcheck) and `http://127.0.0.1:7357` answers; and opens it.
 **What it changes**: that folder and the compose project's containers, volumes and networks — no
-sudo, no service, no PATH or profile edit. Options: `--core` (another core), `--no-open`,
+sudo, no service, no PATH or profile edit. Options: `--name` (a named worker, below), `--core`
+(another core), `--no-open`,
 `--uninstall` (containers only) and `--uninstall --purge` (its volumes, the launcher's repository
 cache volume and the folder too).
 
@@ -579,11 +578,15 @@ read off the bundle the installer downloaded, so it is exactly what that bundle 
 `PASSWD`, `KEY`, `DSN`, `CREDENTIAL` or `PRIVATE`), or a variable the bundle does not declare. A value
 with a character other than letters, digits and `_ . : / @ % + , = -` is named and not saved: put it in
 `.env` yourself. The token and the DSN have no default, so the updater carries them already.
-`APP_WORKER_LABEL` (S-29.1) has an empty default, so it is not in that list: write it into the
-folder's `.env` yourself (S-29.2's `--name` will write it).
+`APP_WORKER_LABEL` (S-29.1) is saved too although its default is empty, and it is free text: it is
+written **single-quoted** (`APP_WORKER_LABEL='My "box" #2'`), which Compose reads with its spaces, `#`,
+double quotes and `$` as they are (BACKLOG 1643; the Docker check reads it back). A label with a single
+quote, a backslash or a control character cannot be written that way and is refused (exit 2) before
+anything is done.
 
-**It refuses a worker that would share another worker's names** (BACKLOG 1056). Today that other
-worker is one made by hand: the installer itself cannot make a second worker before S-29.2 (above). Before it writes
+**It refuses a worker that would share another worker's names** (BACKLOG 1056). A worker the installer
+names (below) has names of its own, so that other worker is one made by hand or given names on the
+shell. Before it writes
 anything, it resolves `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_CACHE_VOLUME` (the shell, else `.env`, else the bundle's default) and asks Docker for the
 labels of what already has those names: a control volume or run network Compose created for another
@@ -595,9 +598,43 @@ in the shell, and the installer saves it. What it cannot see: an object of that 
 port conflict says so.
 
 **Its install is its mark.** An installer knows its own folder by the `.agentic-worker-install` it
-wrote, never by Compose's `working_dir` label, which names the updater's mount path
-(`/var/lib/platform/host-bundle`) after the first update. A folder without the mark is a new install,
-and any `agentic-worker` project already on the machine is refused as someone else's.
+wrote (which core it came from), never by Compose's `working_dir` label, which names the updater's mount
+path (`/var/lib/platform/host-bundle`) after the first update. A folder without the mark is a new
+install, and a project of its name already on the machine is refused (exit 3) as someone else's.
+
+**One worker per platform on one machine** (S-29.2, TD-031's 2026-11-24 amendment, decision 9). Every
+run first looks for **this platform's** install — a folder whose mark names this core — in `--dir`, then
+`~/agentic-worker`, then `~/agentic-worker-<--name>`, then every `~/agentic-worker-*`, then every folder
+an `updater` container (in any state) mounts, and repairs the first it finds; a second one found is named
+in one warning line. With none, it makes a new one:
+
+- **with no `--name`** in `~/agentic-worker` as the project `agentic-worker` when that folder is absent
+  or empty and no `agentic-worker` project exists — exactly the single install above, no new `.env`
+  line — and otherwise **beside it**, as `~/agentic-worker-<slug>`, the slug being this platform's name
+  as its core renders it into the script (the organisation's name, else its host: `agentic.fontai.org`
+  → `fontai`; never `dev`). A core with neither refuses (exit 3) and asks for `--name`. With `--dir`
+  and no `--name` the project is `agentic-worker`, as before;
+- **with `--name <n>`** (`-Name <n>`; 1 to 24 of `a-z`, `0-9` and `-`, starting with a letter or digit,
+  not `dev`, which `pnpm worker:dev` uses — anything else is a usage error, exit 2) in
+  `~/agentic-worker-<n>` as the project `agentic-worker-<n>`, with `<n>` as its page's label.
+
+A named install writes into its folder's `.env`, outside the updater's block: `COMPOSE_PROJECT_NAME`
+(so a `docker compose up -d` in that folder is that worker's project, not `agentic-worker` — the
+installer's own, never taken from the shell), `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`
+and `APP_WORKER_RUN_NETWORK` (`agentic-worker-<n>-ctl`, `-repo-cache`, `-run-egress`),
+`APP_WORKER_UI_PORT` — the first port from 7357 up that nothing on `127.0.0.1` answers on and no
+container in any state has bound, so a stopped worker keeps its port — and, for a `--name`,
+`APP_WORKER_LABEL`; a value you set on the shell wins over each. **No install is ever renamed** (its
+volumes hold its approval and its Claude sign-in): `--name` on an install that exists only sets its
+label. A name whose folder another platform's install holds, or whose project runs from another
+folder, is refused (exit 3). `--uninstall` resolves the same way and removes this platform's install,
+and `--uninstall --name <n>` the install named `<n>` — from either platform's script — and never
+another one in its place; a named install's purge removes the repository cache its `.env` names, and
+none when that line is gone. On Windows `-Name` is the same and the home folder is `%USERPROFILE%`.
+**Residuals, stated:** an install made with `--dir` outside the home folder and then `--uninstall`ed
+(its containers gone, so no updater mounts it) is not found by a run without `--dir`, which makes a new
+install beside it; the updater mount's source as Docker Desktop for Mac and Windows report it is
+unmeasured (the Docker check measures a Linux engine).
 
 **Windows** runs the same bundle as Linux containers on Docker Desktop, and updates itself since
 S-22.21: the updater reaches the folder through its fixed-path mount, whose `C:\` source Docker

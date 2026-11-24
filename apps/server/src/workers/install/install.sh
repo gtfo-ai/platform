@@ -17,6 +17,19 @@
 #     `docker compose up -d` in that folder. Docker keeps them running across restarts.
 # It does not use sudo, install a system service, or edit your PATH or shell profile.
 #
+# One worker per core on one machine (S-29.2, TD-031's 2026-11-24 amendment, decision 9). Every run
+# first looks for this core's install - a folder whose mark names this core - in --dir, then
+# ~/agentic-worker, then ~/agentic-worker-<--name>, then every ~/agentic-worker-* and every folder an
+# `updater` container mounts, and repairs the first it finds. With none, a new install goes to
+# ~/agentic-worker as project `agentic-worker` (today's install) unless another worker already has
+# that folder or project; then, or with --name <n>, it goes to ~/agentic-worker-<n> as project
+# `agentic-worker-<n>`, `<n>` being --name or this platform's name as the core that served this
+# copy renders it (PLATFORM_SLUG below). Such a named install writes into its .env, outside the
+# updater's block: COMPOSE_PROJECT_NAME (so a `docker compose up` in the folder is the same project),
+# its own control volume, repository cache volume and run network, the first page port from 7357 up
+# that nothing listens on and no container (stopped ones too) has bound, and, from --name,
+# APP_WORKER_LABEL. No install is ever renamed: --name on an existing install sets its label only.
+#
 # The worker keeps itself up to date. Its `updater` service follows the core and verifies each build
 # before it applies it. Running this script again is a repair, never an upgrade. It never changes the
 # images an approved worker runs, never writes inside the block of `.env` the updater manages, and
@@ -36,7 +49,17 @@
 set -eu
 
 CORE_URL='@@AGENTIC_CORE_URL@@'
-PROJECT=agentic-worker
+# This platform's name as an install name (S-29.2): the core renders it, '' when it has none.
+PLATFORM_SLUG='@@AGENTIC_PLATFORM_SLUG@@'
+# The project of today's single install; a named one is agentic-worker-<name>.
+DEFAULT_PROJECT=agentic-worker
+# The install's project, set once the run has resolved which install it is.
+PROJECT=$DEFAULT_PROJECT
+# Names no install takes: `pnpm worker:dev` owns agentic-worker-dev (TD-031 2026-11-24, item 1).
+RESERVED_NAMES='dev'
+# The page's default port, and how far up a named install looks for a free one.
+FIRST_PAGE_PORT=7357
+PAGE_PORT_SEARCH=100
 MARK=.agentic-worker-install
 BUNDLE=compose.yaml
 DOWNLOAD=.compose.yaml.download
@@ -66,10 +89,14 @@ die() {
 
 usage() {
   cat <<'USAGE'
-Usage: sh install.sh [--dir DIR] [--core URL] [--no-open]
-       sh install.sh --uninstall [--purge] [--dir DIR]
+Usage: sh install.sh [--name NAME] [--dir DIR] [--core URL] [--no-open]
+       sh install.sh --uninstall [--purge] [--name NAME | --dir DIR]
 
-  --dir DIR     the worker's folder (default: ~/agentic-worker)
+  --name NAME   a second worker on this machine: folder ~/agentic-worker-NAME, compose project
+                agentic-worker-NAME, its own volumes, network and page port, and NAME as its page's
+                label. 1 to 24 of a-z, 0-9 and -, starting with a letter or digit; not dev. On an
+                install that exists it only sets the label: no install is renamed
+  --dir DIR     the worker's folder (default: this core's install, else ~/agentic-worker)
   --core URL    download the worker bundle from this core instead of the one that served this script
   --no-open     do not open the worker's page in a browser
   --uninstall   stop and remove the worker's containers; keep its volumes and folder
@@ -77,10 +104,12 @@ Usage: sh install.sh [--dir DIR] [--core URL] [--no-open]
 
 Piped from curl, pass options after `sh -s --`, for example: curl -fsSL URL | sh -s -- --uninstall
 AGENTIC_INSTALL_WAIT_SECONDS (default 300) bounds the wait for the worker to start.
+APP_WORKER_LABEL (any text but ' and \ and control characters) is saved as the page's label.
 USAGE
 }
 
 dir=''
+name=''
 core=$CORE_URL
 action=install
 purge=0
@@ -94,6 +123,17 @@ while [ $# -gt 0 ]; do
       ;;
     --dir=*)
       dir=${1#--dir=}
+      shift
+      ;;
+    --name)
+      [ $# -ge 2 ] || die 2 '--name needs a name'
+      name=$2
+      name_given=1
+      shift 2
+      ;;
+    --name=*)
+      name=${1#--name=}
+      name_given=1
       shift
       ;;
     --core)
@@ -126,6 +166,38 @@ while [ $# -gt 0 ]; do
 done
 [ "$purge" -eq 0 ] || [ "$action" = uninstall ] || die 2 '--purge goes with --uninstall'
 
+# Whether a name may be an install's: 1 to 24 of a-z, 0-9 and -, starting with a letter or digit,
+# and not a reserved one. The letters are spelled out: a range like a-z follows the locale's
+# collation in some shells, where it takes capitals too.
+is_install_name() {
+  case $1 in
+    '' | [!abcdefghijklmnopqrstuvwxyz0123456789]* | *[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 24 ] || return 1
+  case " $RESERVED_NAMES " in *" $1 "*) return 1 ;; esac
+  return 0
+}
+
+if [ "${name_given:-0}" -eq 1 ] && ! is_install_name "$name"; then
+  die 2 "--name takes 1 to 24 of a-z, 0-9 and -, starting with a letter or digit, and not dev (pnpm worker:dev uses agentic-worker-dev); it was given: $name"
+fi
+# A copy not served by a core, or a slug that is not an install name, names no platform.
+is_install_name "$PLATFORM_SLUG" || PLATFORM_SLUG=''
+
+# The page's label from this shell (BACKLOG 1643): saved into .env single-quoted, so Compose reads
+# spaces, #, double quotes and $ as they are; a single quote, a backslash or a control character
+# cannot be written that way, so such a label is refused before anything is done.
+if [ "$action" = install ] && [ -n "${APP_WORKER_LABEL:-}" ]; then
+  case $APP_WORKER_LABEL in
+    *\'* | *\\*) die 2 "APP_WORKER_LABEL cannot hold a single quote or a backslash (it is saved in .env inside single quotes); choose a label without them." ;;
+  esac
+  label_plain=$(printf '%s' "$APP_WORKER_LABEL" | tr -d '\000-\037\177')
+  [ "$label_plain" = "$APP_WORKER_LABEL" ] ||
+    die 2 'APP_WORKER_LABEL cannot hold a control character or a line break; choose a label on one line.'
+fi
+# COMPOSE_PROJECT_NAME is never taken from this shell: the installer writes its own (named installs).
+unset COMPOSE_PROJECT_NAME
+
 case $core in
   @@*) die 2 'this copy of the script was not served by a core; pass --core https://<your core>' ;;
 esac
@@ -144,17 +216,21 @@ case $core in
 esac
 
 [ -n "${HOME:-}" ] || die 2 'HOME is not set; pass --dir'
-[ -n "$dir" ] || dir=$HOME/agentic-worker
-case $dir in
-  /*) ;;
-  *) dir=$PWD/$dir ;;
-esac
-while :; do
-  case $dir in
-    ?*/) dir=${dir%/} ;;
-    *) break ;;
+# --dir as given (absolute, no trailing slash); `dir` is the install's folder once resolved.
+dir_given=$dir
+if [ -n "$dir_given" ]; then
+  case $dir_given in
+    /*) ;;
+    *) dir_given=$PWD/$dir_given ;;
   esac
-done
+  while :; do
+    case $dir_given in
+      ?*/) dir_given=${dir_given%/} ;;
+      *) break ;;
+    esac
+  done
+fi
+dir=${dir_given:-$HOME/agentic-worker}
 
 wait_limit=${AGENTIC_INSTALL_WAIT_SECONDS:-300}
 case $wait_limit in
@@ -233,12 +309,12 @@ foreign_folders() {
 refuse_foreign_and_busy() {
   foreign=$(foreign_folders)
   if [ -n "$foreign" ]; then
-    die 3 "a worker bundle named $PROJECT already runs from $foreign. This installer will not take it over: stop it there first (docker compose down, in that folder), or keep using it."
+    die 3 "a worker bundle named $PROJECT already runs from $foreign. This installer will not take it over: stop it there first (docker compose down, in that folder), keep using it, or install this core's worker beside it with --name <name>."
   fi
   if [ ! -f "$dir/$MARK" ]; then
     others=$(project_containers) || die 1 'docker ps failed'
     if [ -n "$others" ]; then
-      die 3 "a worker bundle named $PROJECT already exists on this machine, and $dir is not this installer's (it has no $MARK). This installer will not take it over: run it with --dir pointing at that bundle's folder, or remove that bundle first."
+      die 3 "a worker bundle named $PROJECT already exists on this machine, and $dir is not this installer's (it has no $MARK). This installer will not take it over: run it with --dir pointing at that bundle's folder, remove that bundle first, or install this core's worker beside it with --name <name>."
     fi
   fi
   refuse_applying
@@ -340,7 +416,13 @@ write_mark() {
 }
 
 marked_core() {
-  sed -n 's/^core=//p' "$dir/$MARK" | head -n 1
+  marked_core_in "$dir"
+}
+
+# The core a folder's mark names, or nothing.
+marked_core_in() {
+  [ -f "$1/$MARK" ] || return 0
+  sed -n 's/^core=//p' "$1/$MARK" | head -n 1
 }
 
 # --- Settings given on the shell (BACKLOG 1055) ---
@@ -354,9 +436,14 @@ defaulted_variables() {
 # The value .env sets for a variable outside the updater's block (the last line wins), or nothing:
 # `NAME=value`, `export NAME=value`, with the value bare, 'single' or "double" quoted.
 env_value() {
-  [ -f "$dir/.env" ] || return 0
-  sed "/^$BLOCK_BEGIN/,/^$BLOCK_END/d" "$dir/.env" |
-    sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" |
+  env_value_in "$dir" "$1"
+}
+
+# The same, of another folder's .env.
+env_value_in() {
+  [ -f "$1/.env" ] || return 0
+  sed "/^$BLOCK_BEGIN/,/^$BLOCK_END/d" "$1/.env" |
+    sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$2[[:space:]]*=[[:space:]]*//p" |
     tail -n 1 | sed -e "s/^'\(.*\)'\$/\1/" -e 's/^"\(.*\)"$/\1/'
 }
 
@@ -375,10 +462,14 @@ assigned_name() {
     sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p'
 }
 
-# `NAME=value` for a setting of this shell.
+# `NAME=value` for a setting of this shell; the label single-quoted (BACKLOG 1643: its value was
+# checked at the start to hold no single quote, backslash or control character).
 setting_line() {
   eval "value=\${$1:-}"
-  printf '%s=%s\n' "$1" "$value"
+  case $1 in
+    APP_WORKER_LABEL) printf "%s='%s'\n" "$1" "$value" ;;
+    *) printf '%s=%s\n' "$1" "$value" ;;
+  esac
 }
 
 # The settings to save: each variable the downloaded bundle declares with a default, set (non-empty)
@@ -400,6 +491,12 @@ settings_to_save() {
     esac
     say "$variable"
   done
+  # The compose project of a named install: the installer's own, never this shell's (unset above).
+  [ -z "${COMPOSE_PROJECT_NAME:-}" ] || say COMPOSE_PROJECT_NAME
+  # The page's label, free text the bundle declares with an empty default (S-29.1, BACKLOG 1643).
+  if [ -n "${APP_WORKER_LABEL:-}" ] && grep -q '[$][{]APP_WORKER_LABEL:-[}]' "$dir/$DOWNLOAD"; then
+    say APP_WORKER_LABEL
+  fi
 }
 
 # Writes the settings of this shell into .env (BACKLOG 1055), before the first `docker compose up`:
@@ -526,6 +623,216 @@ refuse_shared_names() {
   die 3 "another worker runs on this machine: $shared to a name of its own in this shell (the installer saves it in .env) and run this again."
 }
 
+# --- Which install (S-29.2, TD-031's 2026-11-24 amendment, decision 9 item 2) ---
+
+# The compose project a folder's install runs as: its .env's COMPOSE_PROJECT_NAME (a named install's,
+# written by this installer), else agentic-worker.
+project_of() {
+  p_name=$(env_value_in "$1" COMPOSE_PROJECT_NAME)
+  [ -n "$p_name" ] || p_name=$DEFAULT_PROJECT
+  case $p_name in
+    [abcdefghijklmnopqrstuvwxyz0123456789]*) ;;
+    *) die 3 "$1/.env names the compose project '$p_name', which is not a name Compose and the updater accept; correct COMPOSE_PROJECT_NAME there and run this again." ;;
+  esac
+  case $p_name in
+    *[!abcdefghijklmnopqrstuvwxyz0123456789_-]*) die 3 "$1/.env names the compose project '$p_name', which is not a name Compose and the updater accept; correct COMPOSE_PROJECT_NAME there and run this again." ;;
+  esac
+  say "$p_name"
+}
+
+# The folders an updater container of any state mounts as its host bundle (Docker reports the bind
+# mount's source; a label does not, TD-032 decision 4), one per line.
+updater_folders() {
+  u_ids=$(docker ps --all --quiet --filter label=com.docker.compose.service=updater 2>/dev/null) || return 0
+  [ -n "$u_ids" ] || return 0
+  # shellcheck disable=SC2086 # one argument per container id
+  docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/platform/host-bundle"}}{{println .Source}}{{end}}{{end}}' \
+    $u_ids 2>/dev/null | grep -v '^$' || :
+}
+
+# Where an install may be, one folder per line, in the decision's order: --dir, ~/agentic-worker,
+# ~/agentic-worker-<--name>, every ~/agentic-worker-*, every folder an updater mounts.
+candidate_folders() {
+  [ -z "$dir_given" ] || say "$dir_given"
+  say "$HOME/agentic-worker"
+  [ -z "$name" ] || say "$HOME/agentic-worker-$name"
+  for c_folder in "$HOME"/agentic-worker-*; do
+    [ -d "$c_folder" ] && say "$c_folder"
+  done
+  updater_folders
+}
+
+# The installed folders (each with this installer's mark) among the candidates, once each, in order.
+marked_folders() {
+  m_list=$(candidate_folders)
+  m_seen='/'
+  m_ifs=$IFS
+  IFS='
+'
+  set -f
+  for m_folder in $m_list; do
+    [ -f "$m_folder/$MARK" ] || continue
+    m_real=$(cd "$m_folder" 2>/dev/null && pwd -P) || continue
+    case $m_seen in *"/$m_real/"*) continue ;; esac
+    m_seen="$m_seen$m_real/"
+    say "$m_folder"
+  done
+  set +f
+  IFS=$m_ifs
+}
+
+# This core's install, if there is one: sets `dir` and PROJECT to the first marked folder that names
+# this core and says the rest in one warning. Answers 1 when there is none.
+find_this_core_install() {
+  f_found=''
+  f_more=''
+  f_list=$(marked_folders)
+  f_ifs=$IFS
+  IFS='
+'
+  set -f
+  for f_folder in $f_list; do
+    [ "$(marked_core_in "$f_folder")" = "$core" ] || continue
+    if [ -z "$f_found" ]; then f_found=$f_folder; else f_more="$f_more ${f_folder}"; fi
+  done
+  set +f
+  IFS=$f_ifs
+  [ -n "$f_found" ] || return 1
+  if [ -n "$dir_given" ] && [ "$f_found" != "$dir_given" ]; then
+    warn "$dir_given is not this core's install; this core's worker is installed in $f_found, so this run works on that one."
+  fi
+  [ -z "$f_more" ] || warn "this core has another install too:$f_more. This run works on $f_found only; remove the other with --uninstall --dir <its folder>."
+  dir=$f_found
+  PROJECT=$(project_of "$dir") || exit 3
+  return 0
+}
+
+# Whether today's single install may be made: ~/agentic-worker is absent or empty and no container
+# of the project agentic-worker exists.
+default_install_is_free() {
+  d_folder=$HOME/agentic-worker
+  if [ -e "$d_folder" ]; then
+    [ -d "$d_folder" ] && [ -z "$(ls -A "$d_folder")" ] || return 1
+  fi
+  d_ids=$(docker ps --all --quiet --filter "label=com.docker.compose.project=$DEFAULT_PROJECT") ||
+    die 1 'docker ps failed'
+  [ -z "$d_ids" ]
+}
+
+# The host ports any container of any state has bound (a stopped worker keeps its port), one line.
+bound_ports() {
+  b_ids=$(docker ps --all --quiet) || die 1 'docker ps failed'
+  [ -n "$b_ids" ] || return 0
+  # shellcheck disable=SC2086 # one argument per container id
+  docker inspect --format '{{range $port, $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{.HostPort}} {{end}}{{end}}' \
+    $b_ids 2>/dev/null | tr '\n' ' ' || :
+}
+
+# Whether something listens on 127.0.0.1:<port>: curl's 7 is "nothing answered the connection".
+port_listening() {
+  curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$1/" >/dev/null 2>&1 && l_code=0 || l_code=$?
+  [ "$l_code" -ne 7 ]
+}
+
+# The first port from 7357 up that nothing listens on and no container has bound.
+first_free_port() {
+  taken=" $(bound_ports) "
+  port=$FIRST_PAGE_PORT
+  while [ "$port" -lt $((FIRST_PAGE_PORT + PAGE_PORT_SEARCH)) ]; do
+    case $taken in
+      *" $port "*) ;;
+      *)
+        if ! port_listening "$port"; then
+          say "$port"
+          return 0
+        fi
+        ;;
+    esac
+    port=$((port + 1))
+  done
+  die 1 "no port from $FIRST_PAGE_PORT to $((FIRST_PAGE_PORT + PAGE_PORT_SEARCH - 1)) is free for the worker's page; set APP_WORKER_UI_PORT to one that is and run this again."
+}
+
+# Resolves which install this run makes or repairs: sets `dir`, PROJECT and, for a new named one,
+# the settings its .env gets. `existing` is 1 for this core's install found, else 0.
+resolve_install() {
+  if find_this_core_install; then
+    existing=1
+    if [ -n "$name" ]; then
+      [ -n "${APP_WORKER_LABEL:-}" ] || APP_WORKER_LABEL=$name
+      say "This core's worker is already installed in $dir (compose project $PROJECT). No install is renamed, so --name only sets its page's label."
+    fi
+    return 0
+  fi
+  existing=0
+  install_name=$name
+  if [ -z "$install_name" ] && [ -z "$dir_given" ] && ! default_install_is_free; then
+    [ -n "$PLATFORM_SLUG" ] ||
+      die 3 "another worker already has $HOME/agentic-worker or the compose project $DEFAULT_PROJECT, and this core names no platform to call a second worker after. Run this again with --name <name> to install this core's worker beside it."
+    install_name=$PLATFORM_SLUG
+    say "Another worker already has $HOME/agentic-worker or the compose project $DEFAULT_PROJECT, so this core's worker is installed beside it as $install_name (pass --name to choose another name)."
+  fi
+  if [ -z "$install_name" ]; then
+    PROJECT=$DEFAULT_PROJECT
+    dir=${dir_given:-$HOME/agentic-worker}
+    return 0
+  fi
+  PROJECT=$DEFAULT_PROJECT-$install_name
+  dir=${dir_given:-$HOME/agentic-worker-$install_name}
+  # Its .env lines (TD-031 2026-11-24 item 1); a value given in this shell is the person's and wins.
+  COMPOSE_PROJECT_NAME=$PROJECT
+  [ -n "${APP_WORKER_CONTROL_VOLUME:-}" ] || APP_WORKER_CONTROL_VOLUME=$PROJECT-ctl
+  [ -n "${APP_WORKER_CACHE_VOLUME:-}" ] || APP_WORKER_CACHE_VOLUME=$PROJECT-repo-cache
+  [ -n "${APP_WORKER_RUN_NETWORK:-}" ] || APP_WORKER_RUN_NETWORK=$PROJECT-run-egress
+  if [ -z "${APP_WORKER_UI_PORT:-}" ]; then
+    APP_WORKER_UI_PORT=$(first_free_port) || exit 1
+  fi
+  # A person's --name is the page's label too; the platform's name never is (a rename still shows).
+  if [ -n "$name" ] && [ -z "${APP_WORKER_LABEL:-}" ]; then APP_WORKER_LABEL=$name; fi
+  return 0
+}
+
+# Which install --uninstall removes: --dir; else --name's (its folder, or the installed folder whose
+# project is agentic-worker-<name>); else this core's. Never another one in its place.
+resolve_uninstall() {
+  if [ -n "$dir_given" ]; then
+    dir=$dir_given
+  elif [ -n "$name" ]; then
+    dir=$HOME/agentic-worker-$name
+    if [ ! -f "$dir/$MARK" ]; then
+      u_found=''
+      u_list=$(marked_folders)
+      u_ifs=$IFS
+      IFS='
+'
+      set -f
+      for u_folder in $u_list; do
+        if [ -z "$u_found" ] && [ "$(project_of "$u_folder")" = "$DEFAULT_PROJECT-$name" ]; then
+          u_found=$u_folder
+        fi
+      done
+      set +f
+      IFS=$u_ifs
+      [ -n "$u_found" ] ||
+        die 3 "nothing to remove: no install is named $name ($dir has no worker this installer made, and no installed folder runs the compose project $DEFAULT_PROJECT-$name)."
+      dir=$u_found
+    fi
+  elif ! find_this_core_install; then
+    die 3 "nothing to remove: no worker of $core is installed on this machine (none of ~/agentic-worker, ~/agentic-worker-* or an updater's folder is marked with it). For another core's worker pass --name <name> or --dir <folder>."
+  fi
+  [ -d "$dir" ] || die 3 "nothing to remove: $dir does not exist"
+  [ -f "$dir/$MARK" ] || die 3 "$dir was not made by this installer (it has no $MARK); remove that worker yourself (docker compose down, in that folder)."
+  PROJECT=$(project_of "$dir") || exit 3
+}
+
+# The options that name this install again: nothing for today's, --name for a named one.
+again_options() {
+  case $PROJECT in
+    "$DEFAULT_PROJECT") ;;
+    "$DEFAULT_PROJECT"-*) printf ' --name %s' "${PROJECT#"$DEFAULT_PROJECT"-}" ;;
+  esac
+}
+
 # --- Waiting for the worker ---
 
 # The host port the running remote-worker publishes its page on, or nothing (not running yet). A
@@ -622,6 +929,7 @@ open_page() {
 
 install_worker() {
   need_docker
+  resolve_install
   if [ -e "$dir" ] && [ ! -d "$dir" ]; then
     die 3 "$dir exists and is not a folder; pass another with --dir"
   fi
@@ -631,7 +939,7 @@ install_worker() {
   if [ -f "$dir/$MARK" ]; then
     previous=$(marked_core)
     if [ -n "$previous" ] && [ "$previous" != "$core" ]; then
-      die 3 "this worker was installed from $previous, not $core. To move it, remove it first (--uninstall --purge) and install again."
+      die 3 "the worker in $dir was installed from $previous, not $core. To move it, remove it first (--uninstall --purge) and install again; to install this core's worker beside it, pass another --name."
     fi
   fi
   refuse_foreign_and_busy
@@ -711,35 +1019,41 @@ install_worker() {
   fi
   say '              Sign in to Claude and approve this machine there. If the page asks for a token:'
   say "              cd '$dir' && docker compose logs remote-worker | grep token="
-  say "  Its folder: $dir"
+  say "  Its folder: $dir (compose project $PROJECT)"
   say "  Updates:    automatic. Its updater follows $core; you never run this again to update."
-  say '  Remove it:  run this script again with --uninstall (add --purge to remove its data too)'
+  say "  Remove it:  run this script again with --uninstall$(again_options) (add --purge to remove its data too)"
 }
 
 # --- Uninstall ---
 
 # The launcher's repository cache volume: APP_WORKER_CACHE_VOLUME (this shell, else .env), or the
-# bundle's default.
+# bundle's default - for today's install only. A named install's is in its .env; without that line
+# it answers nothing rather than the default install's name, so a purge never reaches another
+# worker's cache.
 cache_volume() {
   volume=${APP_WORKER_CACHE_VOLUME:-}
   [ -n "$volume" ] || volume=$(env_value APP_WORKER_CACHE_VOLUME)
   case $volume in
-    '' | *[!A-Za-z0-9_.-]*) volume=agentic-worker-repo-cache ;;
+    '' | *[!A-Za-z0-9_.-]*)
+      volume=''
+      [ "$PROJECT" != "$DEFAULT_PROJECT" ] || volume=agentic-worker-repo-cache
+      ;;
   esac
   say "$volume"
 }
 
 uninstall_worker() {
   need_docker
-  [ -d "$dir" ] || die 3 "nothing to remove: $dir does not exist"
-  [ -f "$dir/$MARK" ] || die 3 "$dir was not made by this installer (it has no $MARK); remove that worker yourself (docker compose down, in that folder)."
+  resolve_uninstall
   refuse_foreign_and_busy
   [ -f "$dir/$BUNDLE" ] || die 3 "$dir/$BUNDLE is missing, so this installer cannot tell Compose what to remove."
   if [ "$purge" -eq 1 ]; then
     cache=$(cache_volume)
     compose down --volumes --remove-orphans || die 1 'docker compose down failed (see above).'
     # The launcher's repository cache (cloned source) is the launcher's volume, not Compose's.
-    if docker volume inspect "$cache" >/dev/null 2>&1; then
+    if [ -z "$cache" ]; then
+      warn "kept the launcher's repository cache: $dir/.env does not name it (APP_WORKER_CACHE_VOLUME), and this installer removes no volume by guess."
+    elif docker volume inspect "$cache" >/dev/null 2>&1; then
       docker volume rm "$cache" >/dev/null ||
         warn "kept the volume $cache (still in use?); remove it with: docker volume rm $cache"
     fi
@@ -753,7 +1067,7 @@ uninstall_worker() {
     compose down --remove-orphans || die 1 'docker compose down failed (see above).'
     say "Removed the worker's containers. Kept its volumes (its approval, its Claude sign-in) and $dir."
     say "To start it again as it was: cd '$dir' && docker compose up -d (its updater then follows the core)."
-    say 'To remove the rest: run this script again with --uninstall --purge.'
+    say "To remove the rest: run this script again with --uninstall --purge$(again_options)."
   fi
   say 'Its images stay in Docker; docker image prune -a removes the ones nothing uses.'
 }

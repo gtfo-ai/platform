@@ -53,6 +53,22 @@ describe('the managed block (TD-032 decision 4)', () => {
     expect(assignments).toEqual([`PLATFORM_IMAGE=${refs('a').platform}`]);
   });
 
+  it('keeps a named install’s lines and a free-text label byte for byte, at every update (S-29.2, BACKLOG 1643)', () => {
+    // What install.sh / install.ps1 write for `--name box` and a person's label.
+    const installer = [
+      'COMPOSE_PROJECT_NAME=agentic-worker-box',
+      'APP_WORKER_CONTROL_VOLUME=agentic-worker-box-ctl',
+      'APP_WORKER_UI_PORT=7358',
+      `APP_WORKER_LABEL='My "box" #2 $HOME & \`co\` – Mikeš'`,
+      '',
+    ].join('\n');
+    const once = rewriteManagedBlock(installer, refs('a'));
+    const twice = rewriteManagedBlock(once, refs('b'));
+    expect(once.startsWith(installer)).toBe(true);
+    expect(twice.startsWith(installer)).toBe(true);
+    expect(managedReferencesOf(twice)).toEqual(refs('b'));
+  });
+
   it('reads no references from a partial block', () => {
     const partial = `${MANAGED_BLOCK_BEGIN}\nPLATFORM_IMAGE=x\n${MANAGED_BLOCK_END}\n`;
     expect(managedReferencesOf(partial)).toBeNull();

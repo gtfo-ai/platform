@@ -60,8 +60,11 @@
 #
 # **Its volumes and run network have their own names**, so a worker and a core can share one daemon
 # (the Docker check does) without one's `ctl` volume or run network being the other's. A second
-# worker on the same machine sets `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`,
-# `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name).
+# worker on the same machine has its own `COMPOSE_PROJECT_NAME`, `APP_WORKER_CONTROL_VOLUME`,
+# `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT` in its folder's `.env`:
+# the installers write them for `--name <n>` / `-Name <n>`, or for a second core's install
+# (`agentic-worker-<n>`, S-29.2), and `COMPOSE_PROJECT_NAME` there beats `name:` below, so a
+# `docker compose up` in that folder is that worker's project.
 #
 # **Each worker's page says which platform it serves** (S-29.1, TD-031's 2026-11-24 amendment): the
 # tab title, the header and a generated tab icon show `APP_WORKER_LABEL` when set, else the
