@@ -504,8 +504,13 @@ instead, remove the `updater` and `updater-docker-proxy` services, download the 
 `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_UI_PORT` — **in its folder's `.env`**, never only on the shell: each has a default in the
 template, and a value given only on the shell goes back to it at the next update, so a second worker
-would then share the first worker's control volume, cache volume and run network. (The installers
-below write a shell-given one into `.env` for you, and refuse a second worker that would share.)
+would then share the first worker's control volume, cache volume and run network. **The installers
+below cannot make a second worker yet**: their project name is fixed (`agentic-worker`), so a run from a
+second folder is refused (exit 3) as someone else's project, whatever volumes and port you give it. Until
+M29 (S-29.2: `--name`, TD-031's 2026-11-24 amendment) a second worker is a hand install: download
+`compose.yml` into its own folder, write `COMPOSE_PROJECT_NAME` and the four settings above into that
+folder's `.env`, and `docker compose up -d` there. Two workers on one Claude token also each find its
+usage limit by spending a run until S-29.3.
 
 #### One-command install (S-22.20)
 
@@ -570,7 +575,8 @@ read off the bundle the installer downloaded, so it is exactly what that bundle 
 with a character other than letters, digits and `_ . : / @ % + , = -` is named and not saved: put it in
 `.env` yourself. The token and the DSN have no default, so the updater carries them already.
 
-**It refuses a second worker that would share the first's names** (BACKLOG 1056). Before it writes
+**It refuses a worker that would share another worker's names** (BACKLOG 1056). Today that other
+worker is one made by hand: the installer itself cannot make a second worker before S-29.2 (above). Before it writes
 anything, it resolves `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_CACHE_VOLUME` (the shell, else `.env`, else the bundle's default) and asks Docker for the
 labels of what already has those names: a control volume or run network Compose created for another
@@ -578,8 +584,8 @@ project, or a repository cache another worker's launcher created (its `com.agent
 that launcher's control volume), refuses (exit 3) with one sentence naming the variable to set — set it
 in the shell, and the installer saves it. What it cannot see: an object of that name with no such label
 (created by hand), and a cache volume another worker is configured with but has not created yet
-(before its first run). A second worker also needs its own `APP_WORKER_UI_PORT`; Compose's port
-conflict says so.
+(before its first run). A hand-made second worker also needs its own `APP_WORKER_UI_PORT`; Compose's
+port conflict says so.
 
 **Its install is its mark.** An installer knows its own folder by the `.agentic-worker-install` it
 wrote, never by Compose's `working_dir` label, which names the updater's mount path

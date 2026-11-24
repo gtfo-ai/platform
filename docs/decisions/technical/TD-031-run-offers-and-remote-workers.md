@@ -1530,3 +1530,101 @@ optional `commitIdentity`; `WORKER_PROTOCOL_VERSION` is **5** and `ACCEPTED_WORK
 - The core and its own launcher do not negotiate a version: the create request carries the key **only when an
   identity is configured**, so an older launcher image beside a newer core fails those projects' runs `invalid_spec`
   rather than committing under the wrong name. Upgrading the launcher image with the core is the operator's step.
+
+## Amendment (2026-11-24, architect, owner request) — decisions 9 and 11: several workers on one machine, each page says whose it is, one usage limit per Claude token (M29, S-29.1–S-29.3)
+
+**Context.** The owner runs two cores and wants one Mac to run a worker for each, beside each other, on
+one Claude subscription. Today the installers cannot: `PROJECT=agentic-worker` is fixed
+(`apps/server/src/workers/install/install.sh:39`) and a second folder is refused as someone else's
+project (`:236`); the page title is static (`apps/web/worker.html:9`); and a usage limit is learned per
+worker (`apps/server/src/remote-worker/runtime.ts:807`), so a second worker spends a run to find it.
+
+**Decision 9 — named installs.**
+1. `install.sh --name <n>` / `install.ps1 -Name <n>`, `n` matching `^[a-z0-9][a-z0-9-]{0,23}$`, `dev`
+   refused (`pnpm worker:dev` owns `agentic-worker-dev`). A **new** install named `n` gets: folder
+   `~/agentic-worker-<n>`; project `agentic-worker-<n>` (inside the updater's `^[a-z0-9][a-z0-9_-]*$`,
+   `apps/server/src/updater/plan.ts:36`; the updater reads its project off its own container's label,
+   `updater.ts:214`, so it needs no change); `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`,
+   `APP_WORKER_RUN_NETWORK` = `agentic-worker-<n>-ctl|-repo-cache|-run-egress`; `APP_WORKER_UI_PORT` =
+   the first port from 7357 up that is **free**: not listening on 127.0.0.1 **and** not bound by any
+   container of any state (`docker inspect` `HostConfig.PortBindings`, so a stopped worker keeps its
+   port). All are written into the folder's `.env` outside the updater's block, together with
+   `COMPOSE_PROJECT_NAME` — this narrows the 2026-11-06 amendment's `COMPOSE_*` exclusion to that one
+   line, written by the installer itself and never taken from the shell. `.env` beats the bundle's
+   `name:` (precedence `-p` > `COMPOSE_PROJECT_NAME` > `name:`,
+   https://docs.docker.com/compose/how-tos/project-name/; that the folder's `.env` sets it is the
+   owner's measurement of 2026-11-24, which the docs page does not state and S-29.2's Docker check
+   holds), so a hand `docker compose up` in the folder hits the same project. A person-given `--name` is also written as
+   `APP_WORKER_LABEL`; a platform-derived name never is, so a later rename still reaches the label.
+2. **Resolution.** Every run first looks for **this core's** install: a folder whose
+   `.agentic-worker-install` names this core's origin, in the owner's order — `--dir`, then
+   `~/agentic-worker`, then the name-derived folder — and, added to that order, every
+   `~/agentic-worker-*` folder and every folder an `updater` container (any state) mounts at
+   `/var/lib/platform/host-bundle` (Docker reports the source; the label does not, TD-032 decision 4).
+   The first in that order wins and is repaired, as today; a second one found is named in one warning
+   line. None → a new install: with `--name`, in its folder; without, in `~/agentic-worker` when no
+   folder and no `agentic-worker` project is there (so a single worker is byte-for-byte today's), else
+   in the platform's name's folder (3). A name whose folder or project another core's install holds is
+   refused. **No existing install is renamed** (the owner said it of the default install; it holds for
+   every install, since its volumes carry its approval and sign-in): `--name` on it writes only
+   `APP_WORKER_LABEL`. Uninstall resolves the same way and takes `--name` too. Residual, stated: an
+   install made with `--dir` outside the home folder, then `--uninstall`ed (containers gone,
+   `install.sh:753`), is not found by a re-run without `--dir`, which makes a new install beside it.
+3. **The platform's name travels two ways, because two readers need it at different times.**
+   - **The installer** needs it before any worker exists, so the core renders a second placeholder into
+     `install.sh`/`install.ps1`: the **slug** only, `slug(organizations.name)` (one row per instance,
+     BD-009, `0003_identity.sql:3`; NFKD, lowercase, non-`[a-z0-9]` runs → `-`, ≤ 24), else the host's
+     (`agentic.fontai.org` → `fontai`: the first DNS label not `agentic`/`www`/`worker`), refused unless
+     it matches (1)'s pattern — never the display name, which no shell quoting is asked to hold. The
+     scripts are rendered per request (today once, `routes/worker/protocol.ts:1112`), so a rename
+     reaches the next download. Residual: the slug of the organisation's name is public, as
+     `APP_BASE_URL` already is in the same file.
+   - **The running worker** learns the display name on `handshake`: **protocol 6**, accepted `[5, 6]`
+     (decision 7's `[N-1, N]`), top-level `instance: { name }` (≤ 80 characters, cut by the core), sent
+     only at `≥ 6` because `workerHandshakeResponseSchema` is strict (`packages/contracts/src/worker.ts:689`).
+     A protocol-4 worker is answered `426` and updates, as at protocol 5. The worker keeps the last
+     answer in `worker-state`, so a rename shows at the next handshake and a restart before one shows
+     the last name.
+   - **Rejected: rendering the name into the compose bundle** (`${APP_WORKER_LABEL:-<name>}`). The
+     updater re-renders the bundle from the verified image's template with the plan's core URL only
+     (`apps/server/src/updater/apply.ts:701`), so the default would vanish at the first update unless
+     the updater learned the name — a channel anyway; it makes the person's label and the platform's
+     indistinguishable; a rename would wait for a build. The template only gains
+     `APP_WORKER_LABEL: ${APP_WORKER_LABEL:-}`, the same bytes for every core, so
+     `compose_bundle_digest` keeps its meaning (no worker reads it; its only use is the handshake,
+     `routes/worker/protocol.ts:587`). Attestation is untouched either way: it covers the image
+     digests, and the template an update applies is read from the verified image, never the core's
+     file (TD-032 decision 3). TD-032 is **not** amended (but see item 7's fallback).
+4. **Page identity.** The label is `APP_WORKER_LABEL` > the platform's name > the host's slug; the local
+   state carries `{label, source, core_host}`. The tab reads `<label> — worker` (set as text; the static
+   title stays the fallback); the header shows a badge of label, core host and port; `/favicon.svg` is
+   **generated by `local-ui.ts`**: a hue from SHA-256 of the label and one character, the label's first
+   `[A-Za-z0-9]` uppercased, else none — nothing else of the label enters the SVG, and no URL is set
+   from script (`apps/web/src/no-html.test.ts`).
+
+**Decision 11 — one usage limit per Claude token on a machine.**
+5. A machine-wide volume `${APP_WORKER_USAGE_VOLUME:-agentic-worker-usage}`, mounted into
+   `remote-worker` only, holds one file per token: name = the first 16 hex of SHA-256 of the Claude
+   token, body `{version: 1, until, estimated, written_at}`, written to a temporary file and renamed.
+   A worker writes it when **its own** session reports a limit, reads it at start and before each
+   claim, and passes a later `until` to `noteUsageLimit`, so each core is told by its own worker
+   (`POST pause`). A pause learned from the file is never written back. Different tokens never pause
+   each other. It is a **hint**: no secret is in it, and losing it costs one handed-back run.
+6. **The reader is deliberately not strict** — the one exception to "boundary schemas are strict": the
+   file is a contract between two worker builds of **different cores**, so unknown keys are ignored, a
+   higher `version` is read for `until`/`estimated` when they parse, and anything else is ignored with
+   one log line. `until` is clamped to now + 8 days (a weekly limit's reach) so no other worker can
+   pause this one indefinitely, and a past `until` is ignored.
+7. **The volume is shared on purpose**: the BACKLOG 1056 sharing refusal skips it. `--uninstall --purge`
+   no longer runs `compose down --volumes` (`install.sh:740`): it removes this project's own volumes by
+   name, as it already does the cache (`:743`), and the usage volume only when no other container,
+   in any state, mounts it (`docker ps -a --filter volume=`). Compose's behaviour when a second project
+   declares a volume another project created is `[unverified]` (TODO V-WM11; expected: a warning, then
+   used; (d) the updater's apply bringing an existing worker onto the new template). If Compose
+   refuses, the fallback is `external: true`, and then **three** creators are needed: the installers,
+   `pnpm worker:dev`, and the updater's apply before its `up` — an existing worker reaches the new
+   template only through the apply, whose `up` would otherwise fail and roll back. That last one
+   changes TD-032 decision 4 and needs an amendment there before S-29.3 builds it.
+
+**Consequences.** Three slices (M29), in series. The protocol bump and the installers are high risk.
+No migration. No TD-032 change unless V-WM11 forces item 7's fallback.
