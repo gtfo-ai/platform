@@ -434,8 +434,8 @@ user).
   quotes untrusted text carries up to 1 KiB of it, redacted for secrets but not for meaning.
   The DSN names a host the developer chose: the worker sends its errors there and nowhere else.
 - *What this machine takes* and *Take this one* (WP-293, protocol 3; S-26.4, protocol 4 — a
-  core accepts `[4, 5]` since protocol 5 (the commit identity), so a worker image older than
-  protocol 4 must be updated first): the owner's
+  core accepts `[5, 6]` since protocol 6 (the instance name, S-29.1), so a worker image older than
+  protocol 5 must be updated first; its updater follows the core): the owner's
   **claim scope** (every project or named projects) is stored on the core in `workers.claim_project_ids`
   and its **claim policy** (*my tasks and unassigned ones* — the default for a new machine —, *only my
   tasks*, *everything*, *only what I pick*) in `workers.claim_policy` (migration 0108); both only narrow
@@ -500,7 +500,12 @@ in `.env` to keep your own. The updater is
 (`updater-docker-proxy`), which filters by API path and not by project, so keeping to the worker's own
 compose project is its code's property — every Compose call names the project. To update by hand
 instead, remove the `updater` and `updater-docker-proxy` services, download the compose file again and
-`docker compose up -d`. A second worker on one machine sets its own project name,
+`docker compose up -d`. **Each worker's page says which platform it serves** (S-29.1): its tab reads
+`<label> — worker`, its header shows the label, the platform's host and the page's port, and its tab icon
+is drawn in the label's colour with the label's first letter or digit. The label is `APP_WORKER_LABEL`
+when set (in the folder's `.env`; any text, cut to 80 characters), else the platform's own name as its core
+says it on the handshake (the organisation's name — a rename shows at the next handshake), else the
+platform's host (`agentic.fontai.org` → `fontai`). A second worker on one machine sets its own project name,
 `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_UI_PORT` — **in its folder's `.env`**, never only on the shell: each has a default in the
 template, and a value given only on the shell goes back to it at the next update, so a second worker
@@ -508,8 +513,8 @@ would then share the first worker's control volume, cache volume and run network
 below cannot make a second worker yet**: their project name is fixed (`agentic-worker`), so a run from a
 second folder is refused (exit 3) as someone else's project, whatever volumes and port you give it. Until
 M29 (S-29.2: `--name`, TD-031's 2026-11-24 amendment) a second worker is a hand install: download
-`compose.yml` into its own folder, write `COMPOSE_PROJECT_NAME` and the four settings above into that
-folder's `.env`, and `docker compose up -d` there. Two workers on one Claude token also each find its
+`compose.yml` into its own folder, write `COMPOSE_PROJECT_NAME` and the four settings above (and, if you
+like, `APP_WORKER_LABEL`) into that folder's `.env`, and `docker compose up -d` there. Two workers on one Claude token also each find its
 usage limit by spending a run until S-29.3.
 
 #### One-command install (S-22.20)

@@ -1580,6 +1580,15 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       expect((await ask({ path: '/assets/worker-abc.js' })).status).toBe(200);
       const icon = await ask({ path: '/favicon.svg' });
       expect([icon.status, icon.headers['content-type']]).toEqual([200, 'image/svg+xml']);
+      // S-29.1: generated for the page's label — the core's host's slug here, `core` — not the
+      // bundle's file; the state says the same label.
+      expect(icon.text).toContain('>C</text>');
+      expect(icon.text).not.toContain('<svg xmlns="http://www.w3.org/2000/svg"/>');
+      expect(parsed.identity).toEqual({
+        label: 'core',
+        source: 'host',
+        core_host: 'core.example.test',
+      });
       for (const refused of [
         '/index.html',
         '/.env',
@@ -2273,6 +2282,15 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       auth: 'none',
     });
     expect(loadRemoteWorkerConfig({ ...base, APP_WORKER_UI_AUTH: 'token' }).ui?.auth).toBe('token');
+    // S-29.1: the page's label is shown, never parsed — bounded, never a refusal to start.
+    expect(loadRemoteWorkerConfig(base).label).toBeNull();
+    expect(loadRemoteWorkerConfig({ ...base, APP_WORKER_LABEL: '   ' }).label).toBeNull();
+    expect(
+      loadRemoteWorkerConfig({ ...base, APP_WORKER_LABEL: ' FontAI\u0000<b>"x"</b> ' }).label,
+    ).toBe('FontAI <b>"x"</b>');
+    expect(loadRemoteWorkerConfig({ ...base, APP_WORKER_LABEL: 'é'.repeat(200) }).label).toBe(
+      'é'.repeat(80),
+    );
     expect(() => loadRemoteWorkerConfig({ ...base, APP_WORKER_UI_AUTH: 'cookie' })).toThrow(
       /APP_WORKER_UI_AUTH must be none or token/,
     );

@@ -1208,3 +1208,58 @@ describe('a machine that cannot start runs (S-28.12)', () => {
     expect(client.retry).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('which platform this worker serves (S-29.1)', () => {
+  /** A label with markup, quotes and an emoji: rendered and titled as text, nothing more. */
+  const HOSTILE_LABEL = 'Autix <img src=x onerror="window.__pwnedLabel=1"> "s.r.o." 🚀';
+
+  it('titles the tab `<label> — worker` and shows the label, the core host and the port as text', async () => {
+    document.title = 'This worker — Agentic platform';
+    const { container } = render(
+      <WorkerApp
+        client={fakeClient(
+          state({
+            identity: { label: HOSTILE_LABEL, source: 'platform', core_host: 'agentic.autix.eu' },
+          }),
+        )}
+        now={() => NOW}
+        pollMs={60_000}
+        newKey={() => 'key-1'}
+        pagePort="7358"
+      />,
+    );
+    await screen.findByText('Runs on this machine');
+    await waitFor(() => expect(document.title).toBe(`${HOSTILE_LABEL} — worker`));
+    const badge = container.querySelector('[data-platform-badge]');
+    expect(badge?.querySelector('[data-platform-label]')?.textContent).toBe(HOSTILE_LABEL);
+    expect(badge?.querySelector('[data-platform-host]')?.textContent).toBe('agentic.autix.eu');
+    expect(badge?.querySelector('[data-page-port]')?.textContent).toBe('this page on port 7358');
+    // The label is a text node: no element came out of it, and nothing ran.
+    expect(container.querySelector('img')).toBeNull();
+    expect((window as { __pwnedLabel?: number }).__pwnedLabel).toBeUndefined();
+  });
+
+  it('titles the wizard too, and leaves the static title and draws no badge with no label', async () => {
+    document.title = 'This worker — Agentic platform';
+    const wizard = renderPage(
+      fakeClient(
+        state({
+          connection: 'needs_claude',
+          worker_id: null,
+          worker_name: null,
+          runs: [],
+          identity: { label: 'fontai', source: 'host', core_host: 'agentic.fontai.org' },
+        }),
+      ),
+    );
+    await waitFor(() => expect(document.title).toBe('fontai — worker'));
+    expect(wizard.container.querySelector('[data-platform-badge]')).toBeNull();
+    cleanup();
+
+    document.title = 'This worker — Agentic platform';
+    const { container } = renderPage(fakeClient(state({ identity: null })));
+    await screen.findByText('Runs on this machine');
+    expect(document.title).toBe('This worker — Agentic platform');
+    expect(container.querySelector('[data-platform-badge]')).toBeNull();
+  });
+});

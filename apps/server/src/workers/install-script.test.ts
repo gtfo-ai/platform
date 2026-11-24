@@ -207,6 +207,8 @@ const SAVED_SETTINGS = [
   'APP_WORKER_CACHE_VOLUME',
   'APP_WORKER_CONCURRENCY',
   'APP_WORKER_CONTROL_VOLUME',
+  // S-29.1: a person's page label given on the shell is kept across updates like any setting.
+  'APP_WORKER_LABEL',
   'APP_WORKER_RUN_NETWORK',
   'APP_WORKER_UI',
   'APP_WORKER_UI_AUTH',

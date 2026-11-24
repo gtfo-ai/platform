@@ -63,6 +63,12 @@
 # worker on the same machine sets `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`,
 # `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name).
 #
+# **Each worker's page says which platform it serves** (S-29.1, TD-031's 2026-11-24 amendment): the
+# tab title, the header and a generated tab icon show `APP_WORKER_LABEL` when set, else the
+# platform's own name (its core says it on the handshake, protocol 6), else its host. The line below
+# is the same for every core: no core renders a name into this file, so the bundle's digest is the
+# build's, not the platform's.
+#
 # **It updates itself** (`updater`, WP-287): it follows the core's digests, verifying each build's
 # attestation first, and writes each build it applies back into this folder — this file, re-rendered
 # for the new digests, and a marked block of the env file beside it (`.env`) — so a `docker compose up`
@@ -140,6 +146,8 @@ services:
       APP_WORKER_UI_PORT: ${APP_WORKER_UI_PORT:-7357}
       # `none`: no token, the page at http://127.0.0.1:7357; `token` for a shared machine.
       APP_WORKER_UI_AUTH: ${APP_WORKER_UI_AUTH:-none}
+      # What the page calls this worker's platform (S-29.1); empty: the platform's own name, else its host.
+      APP_WORKER_LABEL: ${APP_WORKER_LABEL:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Optional error reporting: a Sentry DSN; set here it wins over the page's setting (empty: the page's).
       SENTRY_DSN: ${SENTRY_DSN:-}

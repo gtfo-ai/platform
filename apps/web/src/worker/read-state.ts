@@ -97,6 +97,8 @@ export const CLAIM_POLICIES = ['everything', 'mine_and_unassigned', 'mine', 'pic
 export const WORKSPACE_CAUSES: readonly string[] = Object.keys(WORKSPACE_CAUSE_WORDS);
 /** The first-run wizard's enums (WP-294) — each held to its zod enum by the test. */
 export const SOURCES = ['environment', 'file'] as const;
+/** Where the page's label came from (S-29.1) — held to `workerLocalLabelSourceSchema` by the test. */
+export const LABEL_SOURCES = ['environment', 'platform', 'host'] as const;
 export const CORE_FAILURES = [
   'address_refused',
   'no_answer',
@@ -355,6 +357,14 @@ export const STATE: Spec = object({
       detail: nullable(str({ max: 500 })),
       since: datetime,
       retry_at: nullable(datetime),
+    }),
+  ),
+  // S-29.1: which platform this worker serves — the label is shown as text, never parsed.
+  identity: nullish(
+    object({
+      label: str({ min: 1, max: 80 }),
+      source: { t: 'enum', values: LABEL_SOURCES },
+      core_host: nullable(str({ min: 1, max: 260 })),
     }),
   ),
   error_reporting: object({

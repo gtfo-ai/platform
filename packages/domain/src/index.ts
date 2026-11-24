@@ -115,5 +115,7 @@ export * from './workers/credential.js';
 export * from './workers/device-flow.js';
 // Where an offer may be claimed, and from when (WP-278, TD-031 decision 8)
 export * from './workers/execution-routing.js';
+// A platform's slug: its name's, else its host's (S-29.1, TD-031's 2026-11-24 amendment)
+export * from './workers/instance-slug.js';
 
 export const packageId = '@platform/domain' as const;

@@ -16,6 +16,7 @@ import {
   workerLocalCoreFailureSchema,
   workerLocalErrorReportingTestResponseSchema,
   workerLocalErrorSchema,
+  workerLocalLabelSourceSchema,
   workerLocalLauncherSchema,
   workerLocalOffersSchema,
   workerLocalRunSchema,
@@ -40,6 +41,7 @@ import {
   ERROR,
   ERROR_REPORTING_TEST,
   HOOKS,
+  LABEL_SOURCES,
   LAUNCHERS,
   LOCAL_API_PREFIX,
   OFFERS,
@@ -313,6 +315,8 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     expect(sorted(TERMINAL_REASONS)).toEqual(sorted(runTerminalReasonSchema.options));
     // The first-run wizard's enums (WP-294 (2)).
     expect(sorted(SOURCES)).toEqual(sorted(workerLocalSourceSchema.options));
+    // S-29.1: where the page's label came from.
+    expect(sorted(LABEL_SOURCES)).toEqual(sorted(workerLocalLabelSourceSchema.options));
     expect(sorted(CORE_FAILURES)).toEqual(sorted(workerLocalCoreFailureSchema.options));
     expect(sorted(SIGN_IN_PHASES)).toEqual(sorted(workerLocalSignInPhaseSchema.options));
     expect(sorted(SIGN_IN_FAILURES)).toEqual(sorted(workerLocalSignInFailureSchema.options));
@@ -414,6 +418,26 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
       { ...STATE, error_reporting: { source: 'page', host: null } },
     ],
     ['a state with no error-reporting block', (({ error_reporting: _e, ...rest }) => rest)(STATE)],
+    // S-29.1: the page's label — bounded, from a known source, and nothing more.
+    [
+      'an empty label',
+      { ...STATE, identity: { label: '', source: 'platform', core_host: 'core.example.test' } },
+    ],
+    [
+      'a label past 80 characters',
+      {
+        ...STATE,
+        identity: { label: 'x'.repeat(81), source: 'platform', core_host: 'core.example.test' },
+      },
+    ],
+    [
+      'an unknown label source',
+      { ...STATE, identity: { label: 'Autix', source: 'guess', core_host: null } },
+    ],
+    [
+      'an identity with an unknown key',
+      { ...STATE, identity: { label: 'Autix', source: 'host', core_host: null, hue: 3 } },
+    ],
     // S-28.6: why a ready machine runs nothing, kind by kind.
     ['an unknown idle reason', { ...STATE, idle_reason: { kind: 'sleeping' } }],
     [
@@ -433,6 +457,17 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
   it('accepts what the schema accepts', () => {
     expect(workerLocalStateSchema.safeParse(STATE).success).toBe(true);
     expect(readState(STATE)).toEqual(STATE);
+    // S-29.1: each label source, and none, through both.
+    for (const identity of [
+      null,
+      { label: 'Autix <b>"s.r.o."</b> 🚀', source: 'platform', core_host: 'agentic.autix.eu' },
+      { label: 'fontai', source: 'host', core_host: 'agentic.fontai.org:8443' },
+      { label: 'Mine', source: 'environment', core_host: null },
+    ]) {
+      const value = { ...STATE, identity };
+      expect(workerLocalStateSchema.safeParse(value).success).toBe(true);
+      expect(readState(value)).toEqual(value);
+    }
     // S-28.6: every idle reason kind, through both.
     for (const idle_reason of [
       null,

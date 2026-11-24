@@ -25,7 +25,9 @@
  * The static files are public (they hold no secret) but behind the `Host` check. Which file a path
  * names is decided by the core's own guard (`web/bundle.ts`: realpath containment, no dotfile, no
  * encoded separator); only `/` (the page), `/assets/*` and `/favicon.svg` are served — nothing of
- * the SPA.
+ * the SPA. Since S-29.1 `/favicon.svg` is **generated** for the page's label (`page-identity.ts`:
+ * the label's hue and at most one `[A-Z0-9]` of it), so two workers' tabs differ; with no label yet
+ * it is the bundle's own icon.
  */
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -48,6 +50,7 @@ import {
 import type * as z from 'zod';
 import { ASSET_DIRECTORY, decodeRequestPath, resolveBundleFile } from '../web/bundle.js';
 import { CONTENT_SECURITY_POLICY } from '../web/csp.js';
+import { faviconSvgOf } from './page-identity.js';
 import { isUiToken } from './ui-token.js';
 
 /** The page's own file in the web bundle (`apps/web/worker.html`, Vite's second entry). */
@@ -154,6 +157,11 @@ export interface LocalUiOptions {
   readonly api: LocalUiApi;
   /** Redacts an error message before it is answered (the worker's exact-value redactor). */
   readonly redact: (text: string) => string;
+  /**
+   * The page's label as the state says it (S-29.1), or `null` for none yet: `/favicon.svg` is then
+   * generated for it. Absent, the bundle's icon is served.
+   */
+  readonly label?: () => string | null;
 }
 
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
@@ -468,7 +476,13 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
       return;
     }
     if (pathname === `/${FAVICON_FILE}`) {
-      await serveFile(request, response, [FAVICON_FILE]);
+      const label = options.label?.() ?? null;
+      if (label === null) {
+        await serveFile(request, response, [FAVICON_FILE]);
+        return;
+      }
+      response.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/svg+xml' });
+      response.end(request.method === 'HEAD' ? undefined : faviconSvgOf(label));
       return;
     }
     const segments = decodeRequestPath(pathname);

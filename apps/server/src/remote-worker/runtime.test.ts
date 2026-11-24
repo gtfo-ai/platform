@@ -17,6 +17,7 @@ import type { RemoteWorkerConfig } from './config.js';
 import { CoreCallError, type CoreFetch } from './core-client.js';
 import { CREDENTIAL_FILE } from './credential.js';
 import { pickOwnerOf, type RemoteWorkerRuntime, startRemoteWorker } from './runtime.js';
+import { INSTANCE_NAME_FILE } from './setup-files.js';
 
 const scratch = mkdtempSync(path.join(tmpdir(), 'remote-worker-runtime-'));
 afterAll(() => {
@@ -59,6 +60,10 @@ const fakeCore = (
     readonly handshake?: number;
     /** `true`: a claim holds until the worker calls it off, as the core's 25 s hold does. */
     readonly holdClaims?: boolean;
+    /** The platform's name the handshake answers (protocol 6, S-29.1); `null` or absent, none. */
+    readonly instanceName?: () => string | null;
+    /** The handshake answers only once this settles (S-29.1: what a restart shows before it). */
+    readonly handshakeGate?: Promise<void>;
   } = {},
 ) => {
   const verbs: string[] = [];
@@ -89,7 +94,11 @@ const fakeCore = (
         if (options.handshake === 401) {
           return json(401, { error: { code: 'unauthenticated', message: 'revoked' } });
         }
+        await options.handshakeGate;
         return json(200, {
+          ...((name) => (name === null ? {} : { instance: { name } }))(
+            options.instanceName?.() ?? null,
+          ),
           protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [WORKER_PROTOCOL_VERSION] },
           digests: DIGESTS,
           compose_bundle_digest: 'e'.repeat(64),
@@ -435,5 +444,130 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
       status: 'down',
       checks: { core_handshake: 'revoked', launcher: 'ok' },
     });
+  });
+});
+
+describe('which platform the page serves (S-29.1)', () => {
+  const connected = async (
+    stateDir: string,
+    core: ReturnType<typeof fakeCore>,
+    label: string | null = null,
+  ): Promise<RemoteWorkerRuntime> => {
+    const started = await startRemoteWorker({
+      config: { ...config(stateDir), label },
+      coreFetch: core.fetch,
+      launcher,
+      sleep: async () => {},
+    });
+    worker = started;
+    await started.listen();
+    return started;
+  };
+  const withCredential = (): string => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    writeFileSync(
+      path.join(stateDir, CREDENTIAL_FILE),
+      `${CREDENTIAL}\nhttps://core.example.test\n`,
+      { mode: 0o600 },
+    );
+    return stateDir;
+  };
+
+  it('says the host’s slug while the core names no platform', async () => {
+    const started = await connected(withCredential(), fakeCore());
+    await until('the handshake', () => started.state().connection === 'connected');
+    expect(started.localState().identity).toEqual({
+      label: 'core',
+      source: 'host',
+      core_host: 'core.example.test',
+    });
+  });
+
+  it('says the platform’s name from the handshake, and keeps it in worker-state', async () => {
+    const stateDir = withCredential();
+    const started = await connected(stateDir, fakeCore({ instanceName: () => 'Autix s.r.o.' }));
+    await until('the name', () => started.localState().identity?.source === 'platform');
+    expect(started.localState().identity).toEqual({
+      label: 'Autix s.r.o.',
+      source: 'platform',
+      core_host: 'core.example.test',
+    });
+    expect(JSON.parse(readFileSync(path.join(stateDir, INSTANCE_NAME_FILE), 'utf8'))).toEqual({
+      core_url: 'https://core.example.test',
+      name: 'Autix s.r.o.',
+    });
+    expect(statSync(path.join(stateDir, INSTANCE_NAME_FILE)).mode & 0o777).toBe(0o600);
+  });
+
+  it('says a person’s APP_WORKER_LABEL over the platform’s name', async () => {
+    const started = await connected(
+      withCredential(),
+      fakeCore({ instanceName: () => 'Autix s.r.o.' }),
+      'My FontAI box',
+    );
+    await until('the handshake', () => started.state().connection === 'connected');
+    expect(started.localState().identity).toEqual({
+      label: 'My FontAI box',
+      source: 'environment',
+      core_host: 'core.example.test',
+    });
+  });
+
+  it('shows the last name after a restart, and a rename at the next handshake', async () => {
+    const stateDir = withCredential();
+    let name: string | null = 'Autix';
+    const first = await connected(stateDir, fakeCore({ instanceName: () => name }));
+    await until('the first name', () => first.localState().identity?.label === 'Autix');
+    await first.stop();
+    worker = undefined;
+
+    // The platform is renamed; the restarted worker's handshake waits behind a gate.
+    name = 'Autix Engineering';
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const core = fakeCore({ instanceName: () => name, handshakeGate: gate });
+    const second = await connected(stateDir, core);
+    await until('the handshake asked', () => core.verbs.includes('handshake'));
+    // Before it is answered: the name this worker kept, not the host.
+    expect(second.state().connection).toBe('handshaking');
+    expect(second.localState().identity).toMatchObject({ label: 'Autix', source: 'platform' });
+    open();
+    await until('the rename', () => second.localState().identity?.label === 'Autix Engineering');
+    expect(JSON.parse(readFileSync(path.join(stateDir, INSTANCE_NAME_FILE), 'utf8')).name).toBe(
+      'Autix Engineering',
+    );
+
+    // The platform stops naming itself: the host again, and the file is gone.
+    await second.stop();
+    worker = undefined;
+    name = null;
+    const third = await connected(stateDir, fakeCore({ instanceName: () => name }));
+    await until('the host again', () => third.localState().identity?.source === 'host');
+    expect(() => statSync(path.join(stateDir, INSTANCE_NAME_FILE))).toThrow();
+  });
+
+  it('never reads a name another core wrote', async () => {
+    const stateDir = withCredential();
+    writeFileSync(
+      path.join(stateDir, INSTANCE_NAME_FILE),
+      JSON.stringify({ core_url: 'https://agentic.fontai.org', name: 'FontAI' }),
+    );
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const core = fakeCore({ handshakeGate: gate });
+    const started = await connected(stateDir, core);
+    await until('the handshake asked', () => core.verbs.includes('handshake'));
+    expect(started.localState().identity).toEqual({
+      label: 'core',
+      source: 'host',
+      core_host: 'core.example.test',
+    });
+    // Answered (no name): the worker goes on, and `stop` is not left waiting on the handshake.
+    open();
+    await until('the handshake', () => started.state().connection === 'connected');
   });
 });

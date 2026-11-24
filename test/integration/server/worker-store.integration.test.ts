@@ -157,6 +157,9 @@ describeWorkerStoreContract({
           [runId, at, workerId],
         );
       },
+      nameOrganisation: async (name) => {
+        await pool.query('update organizations set name = $1 where id = $2', [name, orgId]);
+      },
       leaseExpired: async (runId) => {
         const row = await pool.query<{ expired: boolean }>(
           'select lease_expires_at <= now() as expired from runs where id = $1',

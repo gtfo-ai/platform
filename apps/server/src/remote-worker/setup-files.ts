@@ -10,19 +10,26 @@
  * | `core-url` | the platform's origin | *Connect to a platform* |
  * | `claude-token` | the developer's Claude token, the CLI's `sk-ant-oat01-…` | *Sign in to Claude* or *Paste a token instead* |
  * | `sentry-dsn` | the *Error reporting* DSN (WP-295, TD-023's 2026-11-05 amendment §3) | the page's *Save*; *Remove* deletes it |
+ * | `instance-name` | the platform's display name as its core last said it, with that core's origin (S-29.1) | each handshake that changes it; *Change platform* deletes it |
  *
- * Each is read only when the environment has no value (environment → file → wizard), and each is
- * deleted by the page's own undo: *Change platform*, *Sign out* and *Remove*.
+ * Each of the first three is read only when the environment has no value (environment → file →
+ * wizard), and each is deleted by the page's own undo: *Change platform*, *Sign out* and *Remove*.
+ * The fourth is no input: it is what the page shows before the next handshake (a restart shows the
+ * last name), and it is read only for the core whose origin it names.
  */
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CLAUDE_OAUTH_TOKEN_SHAPE } from '@platform/contracts';
+import { CLAUDE_OAUTH_TOKEN_SHAPE, instanceNameOf } from '@platform/contracts';
 import { errorReporting } from '@platform/infrastructure';
 import { coreOriginOf } from './config.js';
 
 export const CORE_URL_FILE = 'core-url';
 export const CLAUDE_TOKEN_FILE = 'claude-token';
 export const SENTRY_DSN_FILE = 'sentry-dsn';
+export const INSTANCE_NAME_FILE = 'instance-name';
+
+/** A file longer than this is not one this worker wrote: it is ignored, never read whole. */
+const INSTANCE_NAME_FILE_MAX_BYTES = 4_096;
 
 /**
  * A Claude token's shape: the CLI's long-lived OAuth token (V-WM4, V-WM10 — `sk-ant-oat01-`, 108
@@ -76,4 +83,55 @@ export const readStoredSentryDsn = async (stateDir: string): Promise<string | nu
   if (text === null) return null;
   const verdict = errorReporting.parseErrorReportingDsn(text);
   return verdict.ok ? verdict.dsn : null;
+};
+
+/** Any URL's origin — `APP_CORE_URL` may be `http:` to a compose service — or `null`. */
+const originOf = (url: string): string | null => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The platform's name as its core last said it (S-29.1) — `null` for none, for a file another core
+ * wrote (`coreUrl`'s origin differs), or for one that no longer reads as this worker wrote it. Bounded
+ * by `instanceNameOf` whatever the file says.
+ */
+export const readStoredInstanceName = async (
+  stateDir: string,
+  coreUrl: string | null,
+): Promise<string | null> => {
+  if (coreUrl === null) return null;
+  const text = await readText(path.join(stateDir, INSTANCE_NAME_FILE));
+  if (text === null || text.length > INSTANCE_NAME_FILE_MAX_BYTES) return null;
+  try {
+    const stored = JSON.parse(text) as unknown;
+    if (typeof stored !== 'object' || stored === null) return null;
+    const { core_url: core, name } = stored as Record<string, unknown>;
+    if (typeof core !== 'string' || typeof name !== 'string') return null;
+    const origin = originOf(core);
+    if (origin === null || origin !== originOf(coreUrl)) return null;
+    return instanceNameOf(name);
+  } catch {
+    return null;
+  }
+};
+
+/** Keeps the platform's name beside its core's origin; `null` deletes the file (S-29.1). */
+export const writeStoredInstanceName = async (
+  stateDir: string,
+  coreUrl: string,
+  name: string | null,
+): Promise<void> => {
+  if (name === null) {
+    await removeFile(stateDir, INSTANCE_NAME_FILE);
+    return;
+  }
+  await writePrivateFile(
+    stateDir,
+    INSTANCE_NAME_FILE,
+    JSON.stringify({ core_url: originOf(coreUrl) ?? coreUrl, name }),
+  );
 };

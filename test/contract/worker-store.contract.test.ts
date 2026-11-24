@@ -53,6 +53,7 @@ describeWorkerStoreContract({
       setProjectMode: async (projectId, mode) => store.setProjectMode(projectId, mode),
       refuseRemoteCredential: async (projectId) => store.refuseRemoteCredential(projectId),
       recordClaim: async (workerId, at) => store.recordClaim(workerId, at),
+      nameOrganisation: async (name) => store.setOrganisationName(name),
     };
   },
 });

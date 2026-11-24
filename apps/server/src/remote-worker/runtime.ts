@@ -142,6 +142,7 @@ import {
 import { CoreCheckError, checkCoreAddress, probeCoreCandidates } from './core-probe.js';
 import { CREDENTIAL_FILE, ensureCredential } from './credential.js';
 import { createLocalUiServer, LocalUiError, type LocalUiOwner } from './local-ui.js';
+import { pageIdentityOf } from './page-identity.js';
 import { claimScopeReadForPage, claimScopeWriteOfPage } from './page-scope.js';
 import { backoffMs, RETRY_MAX_MS, sleepMs } from './retry.js';
 import {
@@ -161,12 +162,15 @@ export const WORKSPACE_RETRY_MS: readonly number[] = [60_000, 5 * 60_000, 15 * 6
 import {
   CLAUDE_TOKEN_FILE,
   CORE_URL_FILE,
+  INSTANCE_NAME_FILE,
   readStoredClaudeToken,
   readStoredCoreUrl,
+  readStoredInstanceName,
   readStoredSentryDsn,
   removeFile,
   SENTRY_DSN_FILE,
   writePrivateFile,
+  writeStoredInstanceName,
 } from './setup-files.js';
 import { ensureUiToken, plainUiAddressOf, uiAddressOf } from './ui-token.js';
 import { type PackageWorkspaceOptions, packageWorkspaceProvisioner } from './workspaces.js';
@@ -452,6 +456,12 @@ export const startRemoteWorker = async (
   let coreUrl: string | null = config.coreUrl ?? (await readStoredCoreUrl(config.stateDir));
   let claudeToken: string | null =
     config.claudeToken ?? (await readStoredClaudeToken(config.stateDir));
+  /**
+   * The platform's display name as its core last said it (S-29.1, protocol 6) — kept in
+   * `worker-state` beside that core's origin, so a restart shows the last name before its handshake
+   * and a rename shows at the next one. `null` for none.
+   */
+  let platformName: string | null = await readStoredInstanceName(config.stateDir, coreUrl);
   if (claudeToken !== null) rememberSecret(WORKER_SECRET_NAMES.claudeToken, claudeToken);
   // Error reporting (WP-295): environment → `worker-state` file → the page's setting.
   const sentryFromEnvironment = (config.sentryDsn ?? null) !== null;
@@ -724,6 +734,20 @@ export const startRemoteWorker = async (
     });
   };
 
+  /**
+   * The platform's name as this handshake said it (S-29.1): kept in memory and, when it changed, in
+   * `worker-state`. A file that cannot be written costs only the name a restart shows first.
+   */
+  const keepPlatformName = async (name: string | null): Promise<void> => {
+    if (name === platformName || coreUrl === null) return;
+    platformName = name;
+    try {
+      await writeStoredInstanceName(config.stateDir, coreUrl, name);
+    } catch (error) {
+      loggerPort.warn({ err: error }, 'the platform’s name could not be kept in worker-state');
+    }
+  };
+
   const handshake = async (client: CoreClient, signal: AbortSignal): Promise<boolean> => {
     connection = 'handshaking';
     for (let attempt = 0; !stopping && !signal.aborted; attempt += 1) {
@@ -738,6 +762,7 @@ export const startRemoteWorker = async (
         coreDigests = answer.digests;
         workerId = answer.worker.id;
         workerName = answer.worker.name;
+        await keepPlatformName(answer.instance?.name ?? null);
         manuallyPausedAt = answer.worker.manually_paused_at ?? null;
         claimScope = answer.worker.claim_project_ids;
         claimPolicy = answer.worker.claim_policy ?? claimPolicy;
@@ -1418,6 +1443,7 @@ export const startRemoteWorker = async (
     if (uiAuth === 'none') refuseFromEnvironment('claude');
     await removeFile(config.stateDir, CORE_URL_FILE);
     await removeFile(config.stateDir, CREDENTIAL_FILE);
+    await removeFile(config.stateDir, INSTANCE_NAME_FILE);
     if (uiAuth === 'none') {
       signIn.cancel();
       await removeFile(config.stateDir, CLAUDE_TOKEN_FILE);
@@ -1428,6 +1454,7 @@ export const startRemoteWorker = async (
     credential = null;
     workerId = null;
     workerName = null;
+    platformName = null;
     coreProtocol = null;
     coreDigests = null;
     lastHandshakeAt = null;
@@ -1701,6 +1728,12 @@ export const startRemoteWorker = async (
                   ? null
                   : new Date(workspaceBlock.retryAt).toISOString(),
             },
+      // S-29.1: which platform this page serves — a person's label, the platform's name, its host.
+      identity: pageIdentityOf({
+        environmentLabel: config.label ?? null,
+        platformName,
+        coreUrl,
+      }),
       // What the reporter sends to now, not what was stored: a client that failed to build is *Off*.
       error_reporting: ((dsn: string | null) => ({
         source: dsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',
@@ -1887,6 +1920,8 @@ export const startRemoteWorker = async (
       publishedPort: ui.publishedPort,
       webRoot,
       redact: (text) => pageRedactor().redactText(text).value,
+      // S-29.1: the tab icon says the label the state says — redacted like every other value of it.
+      label: () => localState().identity?.label ?? null,
       api: {
         state: localState,
         pause: async (paused) => {

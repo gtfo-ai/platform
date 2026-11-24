@@ -125,6 +125,8 @@ export interface MemoryWorkerStore extends WorkerStore {
   seedPolicySkippedOffers(workerId: string, count: number | null): void;
   /** A worker row as a build before migration 0108 left it: its policy `null` (S-26.4). */
   clearClaimPolicy(workerId: string): void;
+  /** `organizations.name` (S-29.1); `null` is no organisation row. Starts `null`. */
+  setOrganisationName(name: string | null): void;
 }
 
 const stateOf = (row: CodeRow): DeviceCodeState => ({
@@ -173,6 +175,8 @@ export const createMemoryWorkerStore = (
   const refused = new Set<string>();
   const claims = new Map<string, Date>();
   const skipped = new Map<string, number | null>();
+  /** `organizations.name` (S-29.1): `null` until a test names the instance. */
+  let organisationName: string | null = null;
   /** S-28.12: why a machine cannot provision a workspace (`workers.workspace_unavailable_*`). */
   const workspace = new Map<string, NonNullable<WorkerListRow['workspaceUnavailable']>>();
 
@@ -576,6 +580,12 @@ export const createMemoryWorkerStore = (
 
     async organisationTimezone() {
       return 'UTC';
+    },
+    async organisationName() {
+      return organisationName;
+    },
+    setOrganisationName(name) {
+      organisationName = name;
     },
     async setUsagePause({ workerId, until, estimated }) {
       const worker = workers.get(workerId);

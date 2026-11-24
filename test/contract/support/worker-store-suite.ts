@@ -21,6 +21,7 @@
  * - **The claim scope is a state assertion too** (WP-293): stored distinct and sorted, one
  *   `worker.claim_scope` row per change and none for a repeat as a set; a project where the user is
  *   not `member`+ is `invalid` and writes nothing; the chooser lists exactly the user's projects.
+ * - **The instance's name** (S-29.1) is read as stored — the handshake cuts it, never the store.
  * - **The claim facts** (S-22.19) are the claim's own predicates: online on the store's clock, a
  *   hold told apart by its newest `worker.pause` row's `via`, a usage pause still ahead, the
  *   projects that would give it work (role, mode, run credential, scope — *pick only* counts every
@@ -64,6 +65,8 @@ export interface WorkerStoreWorld {
   refuseRemoteCredential(projectId: string): Promise<void>;
   /** A run the worker claimed at `at` (`run_offers.claimed_at`, S-22.19). */
   recordClaim(workerId: string, at: Date): Promise<void>;
+  /** The instance's organisation renamed (`organizations.name`, S-29.1). */
+  nameOrganisation(name: string): Promise<void>;
 }
 
 export interface WorkerStoreHarness {
@@ -779,6 +782,16 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       expect((await world.store.findCredentialSubject(worker))?.usable).toBe(false);
       expect(await world.store.expireUserWorkerLeases(owner)).toBe(1);
       expect(await world.leaseExpired(live)).toBe(true);
+    });
+
+    it('answers the instance’s name as stored, uncut, and a rename at the next read (S-29.1)', async () => {
+      const world = await harness.create();
+      await world.nameOrganisation('FontAI s.r.o.');
+      expect(await world.store.organisationName()).toBe('FontAI s.r.o.');
+      // Stored as given: the handshake cuts it, the store does not.
+      const long = `Ž${'x'.repeat(199)}`;
+      await world.nameOrganisation(long);
+      expect(await world.store.organisationName()).toBe(long);
     });
   });
 };

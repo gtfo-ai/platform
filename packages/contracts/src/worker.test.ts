@@ -4,6 +4,8 @@ import { apiErrorSchema } from './api.js';
 import { runCredentialIssues, type WorkspaceSpec } from './run-spec.js';
 import {
   ACCEPTED_WORKER_PROTOCOLS,
+  INSTANCE_NAME_MAX_CHARS,
+  instanceNameOf,
   isAcceptedWorkerProtocol,
   parseWorkerProtocolHeader,
   runPackageSchema,
@@ -17,6 +19,7 @@ import {
   WORKER_PROTOCOL_CLAIM_SCOPE,
   WORKER_PROTOCOL_COMMIT_IDENTITY,
   WORKER_PROTOCOL_HEADER,
+  WORKER_PROTOCOL_INSTANCE_NAME,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
   WORKER_SCOPE_PROJECTS_MAX,
@@ -40,6 +43,7 @@ import {
   workerHandshakeResponseSchema,
   workerHeartbeatRequestSchema,
   workerHeartbeatResponseSchema,
+  workerInstanceSchema,
   workerLateCostRequestSchema,
   workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
@@ -199,15 +203,16 @@ const refusals = (value: unknown): string[] => {
 const SCOPE_PROJECT = '00000000-0000-4000-8000-000000029301';
 
 describe('protocol versions (TD-032 decision 7)', () => {
-  it('ships N = 5, accepting [N-1, N] without a 0 (the commit identity bumped it)', () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(5);
-    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([4, 5]);
+  it('ships N = 6, accepting [N-1, N] without a 0 (the instance name bumped it, S-29.1)', () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(6);
+    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([5, 6]);
     // The local UI's verbs and keys are protocol 2's, the claim scope's 3's, the claim policy's
-    // 4's, and the package's commit identity 5's — the version N.
+    // 4's, the package's commit identity 5's, and the handshake's instance name 6's — the version N.
     expect(WORKER_PROTOCOL_LOCAL_UI).toBe(2);
     expect(WORKER_PROTOCOL_CLAIM_SCOPE).toBe(3);
     expect(WORKER_PROTOCOL_CLAIM_POLICY).toBe(4);
     expect(WORKER_PROTOCOL_COMMIT_IDENTITY).toBe(5);
+    expect(WORKER_PROTOCOL_INSTANCE_NAME).toBe(6);
     expect(ACCEPTED_WORKER_PROTOCOLS).toContain(WORKER_PROTOCOL_VERSION);
     for (const version of ACCEPTED_WORKER_PROTOCOLS) {
       expect([WORKER_PROTOCOL_VERSION - 1, WORKER_PROTOCOL_VERSION]).toContain(version);
@@ -216,11 +221,11 @@ describe('protocol versions (TD-032 decision 7)', () => {
   });
 
   it('accepts exactly the listed versions', () => {
-    expect(isAcceptedWorkerProtocol(4)).toBe(true);
     expect(isAcceptedWorkerProtocol(5)).toBe(true);
+    expect(isAcceptedWorkerProtocol(6)).toBe(true);
     expect(isAcceptedWorkerProtocol(0)).toBe(false);
-    expect(isAcceptedWorkerProtocol(3)).toBe(false);
-    expect(isAcceptedWorkerProtocol(6)).toBe(false);
+    expect(isAcceptedWorkerProtocol(4)).toBe(false);
+    expect(isAcceptedWorkerProtocol(7)).toBe(false);
   });
 
   it('reads the X-Worker-Protocol header strictly; anything else is no protocol (426)', () => {
@@ -601,6 +606,24 @@ const DTO_SAMPLES: ReadonlyArray<readonly [string, z.ZodType, Record<string, unk
         paused_until: null,
         paused_reason: null,
       },
+      server_time: '2026-11-04T12:00:00.000Z',
+    },
+  ],
+  [
+    'handshake response at protocol 6 (S-29.1)',
+    workerHandshakeResponseSchema,
+    {
+      protocol: { current: 6, accepted: [5, 6] },
+      digests: DIGESTS,
+      compose_bundle_digest: 'c'.repeat(64),
+      worker: {
+        id: OTHER_ID,
+        name: 'laptop',
+        concurrency: 1,
+        paused_until: null,
+        paused_reason: null,
+      },
+      instance: { name: 'FontAI s.r.o.' },
       server_time: '2026-11-04T12:00:00.000Z',
     },
   ],
@@ -1064,5 +1087,54 @@ describe('the worker DTOs (TD-031 decision 9)', () => {
     expect(workerRunReleaseRequestSchema.safeParse({ epoch: 0, reason: 'shutdown' }).success).toBe(
       false,
     );
+  });
+});
+
+describe('the platform’s name on the handshake (S-29.1)', () => {
+  const body = (instance: unknown) => ({
+    protocol: { current: 6, accepted: [5, 6] },
+    digests: DIGESTS,
+    compose_bundle_digest: 'c'.repeat(64),
+    worker: {
+      id: OTHER_ID,
+      name: 'laptop',
+      concurrency: 1,
+      paused_until: null,
+      paused_reason: null,
+    },
+    instance,
+    server_time: '2026-11-04T12:00:00.000Z',
+  });
+
+  it('admits a name of 1 to 80 characters and nothing else beside it', () => {
+    expect(INSTANCE_NAME_MAX_CHARS).toBe(80);
+    expect(workerHandshakeResponseSchema.safeParse(body({ name: 'x'.repeat(80) })).success).toBe(
+      true,
+    );
+    for (const refused of [
+      { name: 'x'.repeat(81) },
+      { name: '' },
+      { name: 'Autix', slug: 'autix' },
+      { name: null },
+      null,
+    ]) {
+      expect(workerHandshakeResponseSchema.safeParse(body(refused)).success).toBe(false);
+    }
+  });
+
+  it('cuts a name for the wire: control characters as spaces, trimmed, 80 units between code points', () => {
+    expect(instanceNameOf('  FontAI  ')).toBe('FontAI');
+    expect(instanceNameOf('Autix\u0000\u001b[31m s.r.o.')).toBe('Autix  [31m s.r.o.');
+    expect(instanceNameOf(`${'a'.repeat(79)}😀tail`)).toBe('a'.repeat(79));
+    expect(instanceNameOf('😀'.repeat(50))).toBe('😀'.repeat(40));
+    expect(instanceNameOf(`${'a'.repeat(79)} b`)).toBe('a'.repeat(79));
+    for (const nothing of [null, undefined, '', ' \t\n ', '\u0000\u0007']) {
+      expect(instanceNameOf(nothing)).toBeNull();
+    }
+    // Whatever it is given, what it answers the schema admits.
+    for (const name of ['é'.repeat(300), `${'😀'.repeat(39)}é😀`, 'x'.repeat(80)]) {
+      const cut = instanceNameOf(name);
+      expect(workerInstanceSchema.safeParse({ name: cut }).success, name).toBe(true);
+    }
   });
 });

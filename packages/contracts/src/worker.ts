@@ -29,7 +29,7 @@
  * ## Protocol versions (TD-032 decision 7)
  *
  * {@link WORKER_PROTOCOL_VERSION} is an integer independent of the build. The core accepts
- * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 5` is `[4, 5]` (the commit identity, 2026-11-20) — and answers anything
+ * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 6` is `[5, 6]` (the instance name, S-29.1) — and answers anything
  * else `426`. A change ships expand → contract: the release that adds a field or a verb accepts both
  * shapes, and the release that removes the old one bumps `N`. `pnpm protocol:check`
  * (`scripts/check-protocol.ts`, a `verify:static` step) refuses a bump that is not `base + 1`, one
@@ -79,13 +79,13 @@ import {
 // ── Versions ─────────────────────────────────────────────────────────────────
 
 /** The protocol this build speaks (TD-032 decision 7). A literal: `protocol:check` reads it as text. */
-export const WORKER_PROTOCOL_VERSION = 5;
+export const WORKER_PROTOCOL_VERSION = 6;
 
 /**
  * The protocols this build's core serves: `[N-1, N]`, without a `0`. A literal for the same reason as
  * {@link WORKER_PROTOCOL_VERSION}; `worker.test.ts` holds it to the shape.
  */
-export const ACCEPTED_WORKER_PROTOCOLS = [4, 5] as const;
+export const ACCEPTED_WORKER_PROTOCOLS = [5, 6] as const;
 
 /**
  * The first protocol that carries the worker's local UI (TD-031's 2026-11-04 worker-UI amendment §5,
@@ -120,11 +120,22 @@ export const WORKER_PROTOCOL_CLAIM_POLICY = 4;
  * The first protocol whose run package may carry the git integration's **commit identity**
  * (`workspace.repo.commitIdentity`, the commit-identity slice of 2026-11-20). A version-4 worker's
  * strict `workspaceRepoSchema` refuses the key, so it is sent the package without it and its run
- * commits as the platform's `agentic <agentic@localhost>` until it updates. Accepting `[4, 5]`
+ * commits as the platform's `agentic <agentic@localhost>` until it updates (version 4 is refused since
+ * protocol 6). Accepting `[4, 5]`
  * drops version 3 (TD-031 decision 9's `[N-1, N]`): a version-3 worker is answered `426` and its
  * updater follows the core.
  */
 export const WORKER_PROTOCOL_COMMIT_IDENTITY = 5;
+
+/**
+ * The first protocol whose handshake answers the platform's **instance name** (S-29.1, TD-031's
+ * 2026-11-24 amendment, decision 9 item 3): the top-level `instance: { name }`, the organisation's
+ * display name cut to {@link INSTANCE_NAME_MAX_CHARS}, which the worker's local page shows. A
+ * version-5 worker's strict {@link workerHandshakeResponseSchema} refuses the key, so it is sent
+ * today's body. Accepting `[5, 6]` drops version 4: a version-4 worker is answered `426` and its
+ * updater follows the core.
+ */
+export const WORKER_PROTOCOL_INSTANCE_NAME = 6;
 
 /** Whether a worker announcing `version` is served by this build (else `426 upgrade_required`). */
 export const isAcceptedWorkerProtocol = (version: number): boolean =>
@@ -682,15 +693,50 @@ export const workerSettingsSchema = z.strictObject({
   claim_policy: workerClaimPolicySchema.optional(),
 });
 
+/** The longest instance name a handshake carries, in UTF-16 units (zod's count) — S-29.1. */
+export const INSTANCE_NAME_MAX_CHARS = 80;
+
+/**
+ * The platform's display name as a handshake carries it (S-29.1): control characters become
+ * spaces, the ends are trimmed, and the text is cut to {@link INSTANCE_NAME_MAX_CHARS} UTF-16 units
+ * **between** code points, so a cut never leaves half a surrogate pair. `null` for a name with
+ * nothing left — the handshake then sends no `instance` (the worker falls back to the host).
+ */
+export const instanceNameOf = (name: string | null | undefined): string | null => {
+  if (name === null || name === undefined) return null;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it replaces.
+  const plain = name.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim();
+  let cut = '';
+  for (const point of plain) {
+    if (cut.length + point.length > INSTANCE_NAME_MAX_CHARS) break;
+    cut += point;
+  }
+  const trimmed = cut.trim();
+  return trimmed === '' ? null : trimmed;
+};
+
+/** `handshake`'s `instance` (protocol ≥ 6): the platform's display name (S-29.1). */
+export const workerInstanceSchema = z.strictObject({
+  name: nonEmptyStringSchema.max(INSTANCE_NAME_MAX_CHARS),
+});
+export type WorkerInstance = z.infer<typeof workerInstanceSchema>;
+
 /**
  * `POST handshake` → the protocol range, the core's digests, the compose bundle's digest, the
- * worker's settings and the server time (TD-031 §9).
+ * worker's settings and the server time (TD-031 §9) — and, since protocol 6, the platform's
+ * instance name (S-29.1).
  */
 export const workerHandshakeResponseSchema = z.strictObject({
   protocol: workerProtocolRangeSchema,
   digests: coreImageDigestsSchema,
   compose_bundle_digest: sha256HexSchema,
   worker: workerSettingsSchema,
+  /**
+   * The platform's display name (`organizations.name`, cut by {@link instanceNameOf}). **Absent**
+   * below protocol 6 ({@link WORKER_PROTOCOL_INSTANCE_NAME}) — a version-5 worker's strict schema
+   * refuses the key — and absent when the instance has no name to send.
+   */
+  instance: workerInstanceSchema.optional(),
   server_time: isoDateTimeSchema,
 });
 export type WorkerHandshakeResponse = z.infer<typeof workerHandshakeResponseSchema>;

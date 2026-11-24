@@ -24,6 +24,7 @@ import * as z from 'zod';
 import { agentRoleSchema, idSchema, isoDateTimeSchema } from './common.js';
 import { transcriptEventSchema } from './transcript.js';
 import {
+  INSTANCE_NAME_MAX_CHARS,
   policySkippedOffersSchema,
   workerClaimPolicySchema,
   workerClaimScopeResponseSchema,
@@ -242,6 +243,23 @@ export type WorkerLocalRun = z.infer<typeof workerLocalRunSchema>;
 export const workerLocalLauncherSchema = z.enum(['unknown', 'ok', 'unreachable']);
 export type WorkerLocalLauncher = z.infer<typeof workerLocalLauncherSchema>;
 
+/** Where the page's label came from (S-29.1): `APP_WORKER_LABEL`, the platform's name, its host. */
+export const workerLocalLabelSourceSchema = z.enum(['environment', 'platform', 'host']);
+export type WorkerLocalLabelSource = z.infer<typeof workerLocalLabelSourceSchema>;
+
+/**
+ * Which platform this worker serves, as the page says it (S-29.1, TD-031's 2026-11-24 amendment,
+ * decision 9 item 4): the label — `APP_WORKER_LABEL` > the platform's name > its host's slug —, its
+ * source and the core's host (with its port when the URL names one; `null` while no platform is
+ * chosen). The page shows the label as text in the tab title and the header.
+ */
+export const workerLocalIdentitySchema = z.strictObject({
+  label: z.string().min(1).max(INSTANCE_NAME_MAX_CHARS),
+  source: workerLocalLabelSourceSchema,
+  core_host: z.string().min(1).max(260).nullable(),
+});
+export type WorkerLocalIdentity = z.infer<typeof workerLocalIdentitySchema>;
+
 /** `GET /api/local/state` — the whole page in one answer, polled. */
 export const workerLocalStateSchema = z.strictObject({
   worker_id: idSchema.nullable(),
@@ -316,6 +334,11 @@ export const workerLocalStateSchema = z.strictObject({
     .extend({ retry_at: isoDateTimeSchema.nullable() })
     .nullable()
     .optional(),
+  /**
+   * Which platform this worker serves (S-29.1): `null` while there is nothing to say — no
+   * `APP_WORKER_LABEL` and no platform chosen. Always sent, optional as above.
+   */
+  identity: workerLocalIdentitySchema.nullable().optional(),
   /** The *Error reporting* setting (WP-295). */
   error_reporting: workerLocalErrorReportingSchema,
   /**

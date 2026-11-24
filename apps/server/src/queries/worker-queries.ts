@@ -459,6 +459,11 @@ export interface WorkerStore {
    * (WP-285).
    */
   organisationTimezone(): Promise<string>;
+  /**
+   * The instance's display name — `organizations.name` of the one row (BD-009), the oldest should
+   * there be more — or `null` for none. Unbounded as stored; the handshake cuts it (S-29.1).
+   */
+  organisationName(): Promise<string | null>;
 }
 
 /**
@@ -1181,6 +1186,12 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
     const { rows } = await database.execute<{ timezone: string | null }>(sql`
       select timezone from organizations order by created_at limit 1`);
     return resolveBudgetTimezone(rows[0]?.timezone ?? null).timezone;
+  },
+
+  async organisationName() {
+    const { rows } = await database.execute<{ name: string | null }>(sql`
+      select name from organizations order by created_at limit 1`);
+    return rows[0]?.name ?? null;
   },
 
   async setUsagePause({ workerId, until, estimated }) {

@@ -313,6 +313,28 @@ describe('compose.worker.yml rendered for a first install (WP-284 (3), backlog 7
     expect(changed).toBeGreaterThan(4);
   });
 
+  it('declares APP_WORKER_LABEL for every core alike: no platform name enters the bundle or its digest (S-29.1)', () => {
+    const source = template as string;
+    const line = '      APP_WORKER_LABEL: ${APP_WORKER_LABEL:-}';
+    expect(source.split('\n')).toContain(line);
+    const render = (coreUrl: string) =>
+      renderWorkerCompose(source, { digests: DIGESTS, repository: 'ghcr.io/acme', coreUrl });
+    const autix = render('https://agentic.autix.eu');
+    const fontai = render('https://agentic.fontai.org');
+    // The line passes through untouched, empty default and all, whichever core renders it.
+    for (const rendered of [autix, fontai]) {
+      expect(rendered.split('\n')).toContain(line);
+      expect(rendered).not.toMatch(/APP_WORKER_LABEL:-[^}]/);
+    }
+    // The two renders differ only on the APP_CORE_URL lines: the renderer's two substitutions.
+    const differing = autix
+      .split('\n')
+      .map((text, index) => [text, fontai.split('\n')[index]] as const)
+      .filter(([a, b]) => a !== b);
+    expect(differing.length).toBeGreaterThan(0);
+    for (const [a] of differing) expect(a).toContain('${APP_CORE_URL:-https://agentic.autix.eu}');
+  });
+
   it('refuses a template whose platform image cannot be pinned, rather than serve it half pinned', () => {
     expect(() =>
       renderWorkerCompose('services:\n  a:\n    image: platform:latest\n', {

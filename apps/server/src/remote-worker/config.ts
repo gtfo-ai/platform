@@ -25,6 +25,7 @@
  * | `APP_WORKER_UI` | `enabled` (default) or `disabled`: the local page on container port 7357 (WP-292); `disabled` opens no port |
  * | `APP_WORKER_UI_PORT` | the **host** port `compose.worker.yml` publishes the page on, `127.0.0.1` only (default 7357) — the `Host` header the page must carry names it |
  * | `APP_WORKER_UI_AUTH` | `none` (default: no bearer, the page at `http://127.0.0.1:<port>`) or `token` (WP-292's `ui-token`, for a machine with more than one OS account) — TD-031's 2026-11-05 no-bearer amendment |
+ * | `APP_WORKER_LABEL` | optional: what the page calls this worker's platform — its tab title, header and icon (S-29.1, TD-031's 2026-11-24 amendment); empty, the platform's own name, else its host. Control characters become spaces and it is cut to 80 characters, never refused |
  * | `LOG_LEVEL` | |
  * | `SENTRY_DSN(_FILE)` | optional error reporting (WP-295): a Sentry DSN, `https://<key>@<host>/<project id>` (`http:` only to loopback) — malformed is a startup refusal. Set here it **wins** over the page's *Error reporting* setting, whose actions then answer `409` |
  * | `APP_VERSION`, `APP_COMMIT` | the build — the commit is reported at the handshake, both tag an error report |
@@ -36,6 +37,7 @@
 import { DEFAULT_USAGE_PAUSE_SECONDS } from '@platform/application';
 import {
   imageDigestSchema,
+  instanceNameOf,
   WORKER_UI_CONTAINER_PORT,
   type WorkerUiAuth,
 } from '@platform/contracts';
@@ -148,6 +150,11 @@ export interface RemoteWorkerConfig {
    * time pauses claiming. Absent reads as {@link DEFAULT_USAGE_PAUSE_SECONDS}.
    */
   readonly usagePauseDefaultMs?: number;
+  /**
+   * `APP_WORKER_LABEL`, bounded (`instanceNameOf`), or `null`: the page's label, which wins over the
+   * platform's name and its host (S-29.1). Absent reads as unset.
+   */
+  readonly label?: string | null;
 }
 
 export class RemoteWorkerConfigError extends Error {
@@ -304,6 +311,9 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
     version: read('APP_VERSION') || null,
     sentryDsn,
     usagePauseDefaultMs: pauseSeconds * 1_000,
+    // A person's label is shown, never parsed: it is bounded rather than refused, so no value of it
+    // can stop a worker from starting (S-29.1).
+    label: instanceNameOf(env.APP_WORKER_LABEL),
     ui: {
       enabled: uiSwitch === 'enabled',
       host: '0.0.0.0',

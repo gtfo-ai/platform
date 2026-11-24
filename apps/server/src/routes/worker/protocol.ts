@@ -23,7 +23,8 @@
  *
  * Protocol 4 (S-26.4) adds no verb: the claim policy's fields on the handshake, `claim-scope`,
  * `offers` and the pick (`pick-verbs.ts`). Protocol 5 adds no verb either: a claimed package's
- * `workspace.repo.commitIdentity`, stripped for a version-4 worker (`packageFor`); accepted `[4, 5]`.
+ * `workspace.repo.commitIdentity`, stripped for a version-4 worker (`packageFor`). Protocol 6 (S-29.1)
+ * adds none: the handshake's `instance: { name }`, the platform's display name; accepted `[5, 6]`.
  *
  * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
  * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
@@ -73,6 +74,7 @@ import {
   apiErrorSchema,
   type Id,
   type IsoDateTime,
+  instanceNameOf,
   isAcceptedWorkerProtocol,
   parseWorkerProtocolHeader,
   runPackageSchema,
@@ -85,6 +87,7 @@ import {
   WORKER_PROTOCOL_CLAIM_SCOPE,
   WORKER_PROTOCOL_COMMIT_IDENTITY,
   WORKER_PROTOCOL_HEADER,
+  WORKER_PROTOCOL_INSTANCE_NAME,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
   WORKSPACE_COOL_DOWN_MS,
@@ -492,7 +495,9 @@ export const registerWorkerProtocolRoutes = async (
    * refuses the display block (the worker-UI amendment §5) — version 1 is no longer accepted since
    * protocol 3 (WP-293), so that half holds only while a build accepting it could reach here — and a
    * worker below {@link WORKER_PROTOCOL_COMMIT_IDENTITY} refuses `workspace.repo.commitIdentity`,
-   * so it is sent the package without it and its run commits as `agentic <agentic@localhost>`.
+   * so it is sent the package without it and its run commits as `agentic <agentic@localhost>`. Since
+   * protocol 6 (S-29.1, accepted `[5, 6]`) that half is unreachable too — a version-4 worker is
+   * answered `426` first — and stays for the range it was written for.
    */
   const packageFor = (
     request: FastifyRequest,
@@ -563,7 +568,7 @@ export const registerWorkerProtocolRoutes = async (
       schema: {
         summary: 'Open a worker’s session with this core (TD-031 §9)',
         description:
-          'Worker credential. Answers the protocol range this core serves, its four image digests, the compose bundle’s digest, the worker’s settings as the core holds them and the server time; records the digests the worker holds. `503 digests_unresolved` while the core cannot name its digests (WP-281).',
+          'Worker credential. Answers the protocol range this core serves, its four image digests, the compose bundle’s digest, the worker’s settings as the core holds them and the server time; records the digests the worker holds. Since protocol 6 (S-29.1) also `instance.name`, the platform’s display name (at most 80 characters), which the worker’s local page shows; absent at protocol 5. `503 digests_unresolved` while the core cannot name its digests (WP-281).',
         tags: ['worker'],
         body: workerHandshakeRequestSchema,
         response: {
@@ -581,6 +586,12 @@ export const registerWorkerProtocolRoutes = async (
         throw unresolved();
       }
       const paused = row.pausedUntil !== null && row.pausedUntil.getTime() > now().getTime();
+      // S-29.1: the platform's display name, cut for the wire — and only to a worker that reads it
+      // (a version-5 worker's strict schema refuses the key). A name with nothing left sends none.
+      const instanceName =
+        protocolOf(request) >= WORKER_PROTOCOL_INSTANCE_NAME
+          ? instanceNameOf(await options.store.organisationName())
+          : null;
       return {
         protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [...ACCEPTED_WORKER_PROTOCOLS] },
         digests: release.digests,
@@ -621,6 +632,7 @@ export const registerWorkerProtocolRoutes = async (
             ? { claim_policy: row.claimPolicy }
             : {}),
         },
+        ...(instanceName === null ? {} : { instance: { name: instanceName } }),
         server_time: isoNow(now),
       };
     },
