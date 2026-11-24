@@ -700,7 +700,7 @@ worker's `claim_projects` (`null`, `[]`, or `[{id, key}]`), which the Workers sc
 items 3–4).** `WORKER_PROTOCOL_VERSION = 6`, accepted `[5, 6]` (a version-4 worker is now `426` at the
 protocol check, so `packageFor`'s commit-identity strip is unreachable and kept for the range it was
 written for). No new verb: `handshake` answers a top-level `instance: { name }` — `organizations.name`
-(`WorkerStore.organisationName`), control characters made spaces, trimmed, cut to 80 UTF-16 units between
+(`WorkerStore.organisationName`), control and format characters (bidi controls included) made spaces, trimmed, cut to 80 UTF-16 units between
 code points (`instanceNameOf` in `packages/contracts/src/worker.ts`) — only at protocol 6, because a
 version-5 worker's strict `workerHandshakeResponseSchema` refuses the key; a name with nothing left sends no
 `instance`. The worker keeps the last name in `worker-state` (`instance-name`, beside the core's origin, so

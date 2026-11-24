@@ -33,6 +33,7 @@
  * and the integration file asserts the row lock against PostgreSQL on its own.
  */
 import type { JsonObject } from '@platform/contracts';
+import { WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import type {
   NewDeviceCode,
@@ -326,7 +327,11 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
         lastClaimedAt: null,
       });
 
-      await world.store.recordContact({ workerId: worker, protocolVersion: 4, imageDigests: [] });
+      await world.store.recordContact({
+        workerId: worker,
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        imageDigests: [],
+      });
       const acme = await world.addProject('acme', [owner]);
       const ops = await world.addProject('ops', [owner]);
       await world.addProject('elsewhere', []);
@@ -540,7 +545,11 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       const listed = (await world.store.listWorkers(owner)).find((row) => row.id === worker);
       expect(listed?.manuallyPausedAt).toEqual(at(5_000));
       // A connected, manually paused worker is counted paused.
-      await world.store.recordContact({ workerId: worker, protocolVersion: 4, imageDigests: null });
+      await world.store.recordContact({
+        workerId: worker,
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        imageDigests: null,
+      });
       expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 1 });
       expect(
         await world.store.setManualPause({

@@ -119,11 +119,10 @@ export const WORKER_PROTOCOL_CLAIM_POLICY = 4;
 /**
  * The first protocol whose run package may carry the git integration's **commit identity**
  * (`workspace.repo.commitIdentity`, the commit-identity slice of 2026-11-20). A version-4 worker's
- * strict `workspaceRepoSchema` refuses the key, so it is sent the package without it and its run
- * commits as the platform's `agentic <agentic@localhost>` until it updates (version 4 is refused since
- * protocol 6). Accepting `[4, 5]`
- * drops version 3 (TD-031 decision 9's `[N-1, N]`): a version-3 worker is answered `426` and its
- * updater follows the core.
+ * strict `workspaceRepoSchema` refuses the key, so while `[4, 5]` was accepted it was sent the
+ * package without it and its run committed as the platform's `agentic <agentic@localhost>`. Since
+ * protocol 6 (S-29.1, accepted `[5, 6]`) a version-4 worker is answered `426` before any package,
+ * and its updater follows the core.
  */
 export const WORKER_PROTOCOL_COMMIT_IDENTITY = 5;
 
@@ -697,15 +696,17 @@ export const workerSettingsSchema = z.strictObject({
 export const INSTANCE_NAME_MAX_CHARS = 80;
 
 /**
- * The platform's display name as a handshake carries it (S-29.1): control characters become
- * spaces, the ends are trimmed, and the text is cut to {@link INSTANCE_NAME_MAX_CHARS} UTF-16 units
+ * The platform's display name as a handshake carries it (S-29.1): control and format characters
+ * (`\p{Cf}`, the bidi controls among them) become spaces, the ends are trimmed, and the text is cut to {@link INSTANCE_NAME_MAX_CHARS} UTF-16 units
  * **between** code points, so a cut never leaves half a surrogate pair. `null` for a name with
  * nothing left — the handshake then sends no `instance` (the worker falls back to the host).
  */
 export const instanceNameOf = (name: string | null | undefined): string | null => {
   if (name === null || name === undefined) return null;
+  // Control characters, and format characters (`\p{Cf}`: the bidi overrides and isolates, zero-width
+  // marks), become spaces — a right-to-left override cannot flip the page's title or its badge.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it replaces.
-  const plain = name.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim();
+  const plain = name.replace(/[\u0000-\u001f\u007f-\u009f\p{Cf}]/gu, ' ').trim();
   let cut = '';
   for (const point of plain) {
     if (cut.length + point.length > INSTANCE_NAME_MAX_CHARS) break;

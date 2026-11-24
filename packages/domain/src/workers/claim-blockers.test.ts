@@ -2,7 +2,11 @@
  * Why a worker takes no work (S-22.19): each side's half of the one vocabulary, a case per blocker
  * from both sides of its predicate, and the property that every answer is in the vocabulary's order.
  */
-import { WORKER_CLAIM_BLOCKERS, workerClaimBlockersSchema } from '@platform/contracts';
+import {
+  WORKER_CLAIM_BLOCKERS,
+  WORKER_PROTOCOL_VERSION,
+  workerClaimBlockersSchema,
+} from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
@@ -21,7 +25,7 @@ const ready: CoreWorkerClaimFacts = {
   revoked: false,
   ownerMayAct: true,
   online: true,
-  protocolVersion: 4,
+  protocolVersion: WORKER_PROTOCOL_VERSION,
   hold: null,
   usagePaused: false,
   heldDigests: [RUN, EGRESS],

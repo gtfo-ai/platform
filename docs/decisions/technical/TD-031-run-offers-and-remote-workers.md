@@ -1628,3 +1628,8 @@ worker (`apps/server/src/remote-worker/runtime.ts:807`), so a second worker spen
 
 **Consequences.** Three slices (M29), in series. The protocol bump and the installers are high risk.
 No migration. No TD-032 change unless V-WM11 forces item 7's fallback.
+
+**Clarification (S-29.1, 2026-11-24).** Item 3's slug drops combining marks after NFKD, before runs of
+anything else become `-` (`Mikeš` → `mikes`, not `mike-s`), and trims a hyphen the 24-character cut
+leaves at the end; and `instance.name` has its control and format characters (`\p{Cf}`, the bidi
+controls among them) made spaces before the cut, as `APP_WORKER_LABEL` does.

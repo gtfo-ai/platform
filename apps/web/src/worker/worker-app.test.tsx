@@ -1239,6 +1239,19 @@ describe('which platform this worker serves (S-29.1)', () => {
     expect((window as { __pwnedLabel?: number }).__pwnedLabel).toBeUndefined();
   });
 
+  it('gives the tab its static title back when the label goes (Change platform)', async () => {
+    document.title = 'This worker — Agentic platform';
+    const client = fakeClient(
+      state({ identity: { label: 'Autix', source: 'host', core_host: null } }),
+    );
+    render(<WorkerApp client={client} now={() => NOW} pollMs={20} newKey={() => 'key-1'} />);
+    await waitFor(() => expect(document.title).toBe('Autix — worker'));
+    client.advance(state({ identity: null }));
+    await waitFor(() => expect(document.title).toBe('This worker — Agentic platform'));
+    cleanup();
+    document.title = 'This worker — Agentic platform';
+  });
+
   it('titles and badges the wizard too, and leaves the static title and draws no badge with no label', async () => {
     document.title = 'This worker — Agentic platform';
     const wizard = render(

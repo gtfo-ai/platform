@@ -13,6 +13,7 @@ import {
   OFFER_WAITING_REASONS,
   offerWaitingSchema,
   WORKER_CLAIM_BLOCKERS,
+  WORKER_PROTOCOL_VERSION,
   type WorkerClaimBlocker,
 } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
@@ -37,7 +38,7 @@ const machine = (over: Partial<WaitingMachineFacts> = {}): WaitingMachineFacts =
   policyTakes: true,
   ownerMayAct: true,
   online: true,
-  protocolVersion: 4,
+  protocolVersion: WORKER_PROTOCOL_VERSION,
   hold: null,
   usagePaused: false,
   heldDigests: [CORE.run, CORE.egress],

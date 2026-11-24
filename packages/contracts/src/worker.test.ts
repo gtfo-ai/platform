@@ -1128,6 +1128,11 @@ describe('the platform’s name on the handshake (S-29.1)', () => {
     expect(instanceNameOf(`${'a'.repeat(79)}😀tail`)).toBe('a'.repeat(79));
     expect(instanceNameOf('😀'.repeat(50))).toBe('😀'.repeat(40));
     expect(instanceNameOf(`${'a'.repeat(79)} b`)).toBe('a'.repeat(79));
+    // Bidi overrides, isolates and zero-width marks (\p{Cf}) are spaces: nothing can flip the text.
+    expect(instanceNameOf('Autix\u202Eexe.txt\u2066x\u2069\u200By\uFEFF')).toBe(
+      'Autix exe.txt x  y',
+    );
+    expect(instanceNameOf('\u202E\u200F')).toBeNull();
     for (const nothing of [null, undefined, '', ' \t\n ', '\u0000\u0007']) {
       expect(instanceNameOf(nothing)).toBeNull();
     }

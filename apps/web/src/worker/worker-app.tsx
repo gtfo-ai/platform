@@ -374,9 +374,13 @@ export const WorkerApp = ({
   }, []);
   const reduced = useReducedMotion();
   // S-29.1: the tab says which platform this worker serves, on every screen — as text.
+  // With no label (after *Change platform*) the static title of `worker.html` comes back.
+  const staticTitle = useRef<string | null>(null);
   const title = pageTitleOf(state?.identity);
   useEffect(() => {
-    if (title !== null) document.title = title;
+    if (typeof document === 'undefined') return;
+    staticTitle.current ??= document.title;
+    document.title = title ?? staticTitle.current;
   }, [title]);
 
   const refresh = useCallback(async (): Promise<boolean> => {

@@ -6,6 +6,7 @@
  * `Idempotency-Key`, and the notice the settings screen shows on an instance with no server claimant.
  */
 import type { JsonObject, UserRole } from '@platform/contracts';
+import { WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import type { ExecutionSettings } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
@@ -64,7 +65,7 @@ const workerRow = (overrides: Partial<ProjectWorkerRow> = {}): ProjectWorkerRow 
   userName: 'Alice',
   createdAt: new Date('2026-11-05T09:00:00.000Z'),
   lastSeenAt: new Date(),
-  protocolVersion: 4,
+  protocolVersion: WORKER_PROTOCOL_VERSION,
   imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
   state: 'active',
   revokedAt: null,

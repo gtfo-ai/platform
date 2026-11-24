@@ -37,7 +37,7 @@ import {
   type Transaction,
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug, WorkerClaimPolicy } from '@platform/contracts';
-import { WORKER_CLAIM_POLICIES } from '@platform/contracts';
+import { WORKER_CLAIM_POLICIES, WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import {
   addMs,
   claimPolicyTakes,
@@ -882,7 +882,11 @@ describe('the list and the count (S-26.4, criterion 5)', () => {
     try {
       const workers = createPostgresWorkerStore(drizzle(pool) as unknown as Database);
       const core = { run: RUN_DIGEST, egress: EGRESS_DIGEST };
-      await workers.recordContact({ workerId: w, protocolVersion: 4, imageDigests: HELD });
+      await workers.recordContact({
+        workerId: w,
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        imageDigests: HELD,
+      });
       const skipped = async () =>
         (await workers.listWorkers(me, core)).find((row) => row.id === w)?.policySkippedOffers;
       // Exactly the other's task is left; `everything` leaves nothing; no digests count nothing.
