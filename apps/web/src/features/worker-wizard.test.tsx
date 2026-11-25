@@ -148,6 +148,9 @@ describe('Add a worker: Install', () => {
     expect(note?.textContent).toContain('Run it from any folder');
     expect(note?.textContent).toContain('~/agentic-worker');
     expect(note?.textContent).toContain('$HOME\\agentic-worker');
+    expect(document.querySelector('[data-second-platform]')?.textContent).toContain(
+      'another platform',
+    );
     const first = document.querySelector('[data-installer]');
     expect(
       note && first ? note.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING : 0,

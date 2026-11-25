@@ -258,15 +258,36 @@ const InstallStep = ({
       {installerAvailable ? (
         <>
           <div className="flex flex-col gap-3">
+            <div className="flex max-w-prose flex-col gap-1" data-install-dir="">
+              <h3 className="text-sm font-semibold">What it does</h3>
+              <ul className="list-disc pl-5 text-sm">
+                <li>
+                  Run it from any folder: it always installs into <code>{WORKER_INSTALL_DIR}</code>{' '}
+                  (<code>$HOME\agentic-worker</code> on Windows), never the folder you are in. That
+                  folder holds the worker’s compose file and its <code>.env</code>.
+                </li>
+                <li>
+                  It checks that Docker runs, starts the worker there with{' '}
+                  <code>docker compose up -d</code> for <code>{commands.origin}</code>, and opens{' '}
+                  <code>{WORKER_LOCAL_PAGE}</code>, the worker’s own page, which guides the next two
+                  steps.
+                </li>
+                <li>
+                  No sudo, no service, no PATH change. Docker keeps the worker running and it
+                  updates itself; running the line again repairs it, it never upgrades or duplicates
+                  it.
+                </li>
+                <li data-second-platform="">
+                  Already running a worker for another platform on this computer? The line refuses
+                  to replace it: it installs one worker per computer for now. Set the second one up
+                  by hand below, in its own folder, with its own <code>COMPOSE_PROJECT_NAME</code>,
+                  volume, network and page-port settings in that folder’s <code>.env</code>: the
+                  operator guide lists them.
+                </li>
+              </ul>
+            </div>
             <p className="text-sm">
               On the computer that will run agent work, run the one line for its system:
-            </p>
-            <p className="max-w-prose text-sm text-fg-muted" data-install-dir="">
-              Run it from any folder: the worker always goes into <code>{WORKER_INSTALL_DIR}</code>{' '}
-              (<code>$HOME\agentic-worker</code> on Windows), not the folder you run it in. The
-              script checks that Docker runs, starts the worker for <code>{commands.origin}</code>{' '}
-              and opens <code>{WORKER_LOCAL_PAGE}</code>, the worker’s own page, which guides the
-              next two steps.
             </p>
             <Installer os={firstOs} commands={commands} />
             <Installer os={firstOs === 'unix' ? 'windows' : 'unix'} commands={commands} />
