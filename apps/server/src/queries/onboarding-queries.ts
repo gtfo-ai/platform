@@ -471,10 +471,19 @@ export const assertNoCredentialInConfig = (
  * binding's overlay (`assertBindingConfigsParse`); `queries/integration-config-writers.test.ts` is
  * what holds that the first two are the only writers.
  *
+ * **A host the document implies without writing it as a URL is swept too**: the provider's
+ * `derivedEgressUrlsOf` (its registration's own declaration, never a provider name here) — Jira
+ * Cloud's `cloud_id`, a UUID that sends every call to `api.atlassian.com`. `null` for a document no
+ * shipped provider judges (a provider this build does not ship), which then has nothing to derive.
+ *
  * @throws {HttpError} 403 `integration_host_not_permitted` — the request is well formed and this
  * deployment does not permit it, which is the reading `secret_name_not_permitted` already has.
  */
-export const assertHostIsDeclared = (config: JsonObject, egress: IntegrationEgressPolicy): void => {
+export const assertHostIsDeclared = (
+  config: JsonObject,
+  egress: IntegrationEgressPolicy,
+  provider: Pick<ProviderCatalogueEntry, 'derivedEgressUrlsOf'> | null,
+): void => {
   const visit = (value: JsonValue): void => {
     if (typeof value === 'string') {
       // Not every string is a URL, and one that is not is not this guard's business: `egressHostOf`
@@ -503,6 +512,9 @@ export const assertHostIsDeclared = (config: JsonObject, egress: IntegrationEgre
     }
   };
   visit(config);
+  for (const url of provider?.derivedEgressUrlsOf(config) ?? []) {
+    visit(url);
+  }
 };
 
 /**
@@ -713,7 +725,7 @@ export const updateIntegrationConfig = async (
       Object.entries(stored).filter(([key]) => !input.remove.includes(key)),
     );
     Object.assign(next, input.set);
-    assertHostIsDeclared({ ...provider.configDefaults, ...next }, input.egress);
+    assertHostIsDeclared({ ...provider.configDefaults, ...next }, input.egress, provider);
     assertConfigParses(next, provider);
     if (declaresDedicatedRunCredential(provider.staticRunCredential ?? undefined, next)) {
       // WP-137: the run token must already be sealed (and not be the API token), and a static
@@ -1191,6 +1203,7 @@ export const createIntegration = async (
   assertHostIsDeclared(
     { ...input.provider.configDefaults, ...input.integration.config },
     input.egress,
+    input.provider,
   );
   // The provider's own schema, before the row exists (WP-100, backlog 328): a create that answered
   // 201 over `config: {}` stored a row every binding load and every probe then refused.
@@ -1429,7 +1442,7 @@ export const assertBindingConfigsParse = (
     // stored before the create refused them) and would otherwise admit a token into
     // `bindings.config` in plaintext (backlog 330).
     assertNoCredentialInConfig(overlay, provider);
-    assertHostIsDeclared(overlay, egress);
+    assertHostIsDeclared(overlay, egress, provider);
     const issues = configIssuesOf(provider, { ...account.config, ...overlay });
     if (issues.length > 0) {
       throw new HttpError(

@@ -74,6 +74,14 @@
  *     `project-statuses-acme.json` gives its status name — the stored issues carry none, as the
  *     published `getIssue` example's status carries none. Names compare case-insensitively, as
  *     Jira's JQL compares status names; the category is compared by its name ("To Do").
+ * 17. **Stricter — a request is answered only below the binding's own REST root** (service
+ *     accounts): `https://acme-example.atlassian.net/rest/api/3/` by default, or the Atlassian API
+ *     gateway's `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/` for a replay created with
+ *     `cloudId`. Anything else — the site when the gateway was expected, another cloud id, another
+ *     host — is refused by name rather than routed, so a request sent to the wrong root cannot pass
+ *     as served. The documents are the same on both roots, because the gateway serves the site's
+ *     REST API; the `self` links inside them are left on the site — what the gateway writes there is
+ *     not measured, and the adapter builds no link from `self` (`mapping.ts` uses `site_url`).
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -112,6 +120,15 @@ const bodyOf = (name: string): Record<string, unknown> => {
 };
 
 export const JIRA_REPLAY_SITE = 'https://acme-example.atlassian.net';
+/** The Atlassian API gateway's origin, which a service-account binding (`cloud_id`) calls. */
+export const JIRA_REPLAY_GATEWAY = 'https://api.atlassian.com';
+/** An obviously invented cloud id (all hex, version nibble 4), for the gateway replay. */
+export const JIRA_REPLAY_CLOUD_ID = '0000fa4e-0000-4000-8000-00000000c10d';
+/** The REST root a replay answers below: the site's, or the gateway's for `cloudId`. */
+export const jiraReplayRestRoot = (cloudId?: string): string =>
+  cloudId === undefined
+    ? `${JIRA_REPLAY_SITE}/rest/api/3/`
+    : `${JIRA_REPLAY_GATEWAY}/ex/jira/${cloudId}/rest/api/3/`;
 export const JIRA_REPLAY_SECRET = 'FAKE-jira-webhook-secret-0123456789';
 export const JIRA_REPLAY_TOKEN = 'FAKE-jira-api-token-0123456789';
 export const JIRA_REPLAY_EMAIL = 'agentic-bot@example.test';
@@ -286,8 +303,15 @@ const STATUS_CATEGORY_NAMES: ReadonlyMap<string, string> = new Map(
     .reverse(),
 );
 
-export const createJiraReplay = (options: { readonly now?: string } = {}): JiraReplay => {
+export const createJiraReplay = (
+  options: {
+    readonly now?: string;
+    /** Answer below the API gateway's root for this cloud id instead of the site's (divergence 17). */
+    readonly cloudId?: string;
+  } = {},
+): JiraReplay => {
   const nowMs = Date.parse(options.now ?? JIRA_REPLAY_NOW);
+  const restRoot = jiraReplayRestRoot(options.cloudId);
   const issues = new Map<string, Record<string, unknown>>();
   const comments = new Map<string, StoredComment[]>();
   const remoteLinks = new Map<string, StoredRemoteLink[]>();
@@ -699,7 +723,13 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
   const fetchImpl: typeof globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input as string, init);
     const url = new URL(request.url);
-    const path = url.pathname.replace(/^\/rest\/api\/3\//, '');
+    if (!request.url.startsWith(restRoot)) {
+      // Divergence 17: never routed, so a call to the wrong root fails by name.
+      return harnessError(
+        `jira replay: ${request.method} ${url.origin}${url.pathname} is not below ${restRoot}`,
+      );
+    }
+    const path = url.pathname.slice(new URL(restRoot).pathname.length);
     const query: Record<string, string> = {};
     for (const [name, value] of url.searchParams) {
       // `fields` "may be specified multiple times" (swagger, `getIssue`): the lists are one list.

@@ -265,6 +265,15 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    * "the permission to assign tickets".
    */
   readonly assignPermission?: string;
+  /**
+   * The URLs a configuration document makes this provider call that are **not** written in it as a
+   * URL — Jira Cloud's `cloud_id`, which sends every call to `https://api.atlassian.com/…`. The
+   * write-time host check sweeps the strings of a document that parse as a URL; these are swept
+   * beside them (`ProviderCatalogueEntry.derivedEgressUrlsOf`), so the refusal arrives at the create
+   * rather than at the first call. Called over an **unvalidated** document, so it must never throw.
+   * Absent: none — every host the provider dials is a URL in its configuration.
+   */
+  readonly derivedEgressUrls?: (config: Readonly<Record<string, unknown>>) => readonly string[];
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 

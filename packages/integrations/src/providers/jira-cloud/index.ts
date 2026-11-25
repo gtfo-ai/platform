@@ -114,7 +114,7 @@ import {
   type JiraClient,
   type JiraClientOptions,
 } from './client.js';
-import { type JiraCloudConfig, jiraCloudConfigSchema } from './config.js';
+import { type JiraCloudConfig, jiraApiBaseUrl, jiraCloudConfigSchema } from './config.js';
 import {
   commentUrl,
   identityOfUser,
@@ -333,6 +333,8 @@ export interface JiraCloudOptions {
 
 export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskManagementPort => {
   const config = jiraCloudConfigSchema.parse(options.config);
+  /** Where the REST calls go: the site, or the API gateway for a `cloud_id` (`config.ts`). */
+  const apiBaseUrl = jiraApiBaseUrl(config);
   const ref: IntegrationRef = {
     integrationId: options.integrationId,
     provider: PROVIDER_ID,
@@ -342,9 +344,11 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
      *
      * `egressHostOf` rather than a hand-rolled parse: the executor's allow-list compares the value
      * it finds here against what an operator declared, and two spellings of "the host" would be two
-     * chances to disagree.
+     * chances to disagree. Off `apiBaseUrl`, the client's own base, so a service-account binding
+     * (`cloud_id`) is judged as `api.atlassian.com` — the host it dials — and a deployment that has
+     * not declared it is refused naming it and `APP_INTEGRATION_HOSTS`.
      */
-    host: egressHostOf(config.site_url),
+    host: egressHostOf(apiBaseUrl),
   };
   const siteUrl = config.site_url.replace(/\/+$/, '');
 
@@ -390,7 +394,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
   );
 
   const client: JiraClient = createJiraClient({
-    siteUrl,
+    // Calls go to `apiBaseUrl`; every link a person opens is still built from `siteUrl`.
+    baseUrl: apiBaseUrl,
     email: config.user_email,
     apiToken: config.api_token,
     timeoutMs: config.request_timeout_ms,

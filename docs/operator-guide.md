@@ -779,7 +779,10 @@ Add it to APP_INTEGRATION_HOSTS (declared: none) and recreate the processes that
 **What to put in it: the host of every integration you create, exactly as it appears in that
 integration's `base_url` (or Jira's `site_url`), with no scheme, no port and no path.** Hosted
 Sentry is `sentry.io`, GitLab.com is `gitlab.com`, a Jira site is `<your-site>.atlassian.net`, and a
-self-managed instance is whatever host you type into the form. Matching is exact and
+self-managed instance is whatever host you type into the form. **A Jira integration with a `cloud_id`**
+(an Atlassian service account) also calls `api.atlassian.com`, which its configuration does not
+write as a URL — declare it beside the site; the create and every call are refused naming it until
+you do. Matching is exact and
 case-insensitive, on the **host** only: no wildcard below a name — `gitlab.example.com` does not
 admit `api.gitlab.example.com`, and a Loki on `https://loki.example.test:3100` is declared as
 `loki.example.test`. Write an internationalised host

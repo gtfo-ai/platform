@@ -42,6 +42,59 @@ second copy: the platform will not answer "not there" about a thread it did not 
 The platform authenticates with `Authorization: Basic base64(email:api_token)`, which is what
 Atlassian documents for API-token access to the REST API.
 
+### 1a. Or: an Atlassian service account
+
+An organisation admin can instead create an **Atlassian service account** — a non-human account that
+does **not** count towards your Jira user limit ("we don't charge your Jira or Confluence
+subscription plan for service accounts", Atlassian, *Understand service accounts*). Every comment,
+transition and assignment is then attributed to it, exactly as with a dedicated bot account.
+
+1. **admin.atlassian.com → Directory → Service accounts → Create a service account.** Give it a
+   name (`agentic-platform`); Atlassian gives it an email ending in `@serviceaccount.atlassian.com`.
+2. **Give it Jira**: in the same wizard (or later under the account's *Apps*), add Jira with the
+   **User** role. Then give it the project permissions of step 2 below, exactly as for a person:
+   add it to a project role (or group) that holds them in each project of `project_keys`. A service
+   account is "subject to the same permission and scope requirements as regular users"; without
+   *Browse Projects* and *Assign Issues* it can neither read nor claim a ticket. The claim assigns
+   the ticket to the service account itself, so it must be an **assignable user** of the project.
+3. **Create an API token** on the service account (*Create credentials → API token*), for **Jira**,
+   with these scopes — they cannot be changed afterwards, only replaced by a new token:
+
+   | Scope (classic) | Needed for |
+   |---|---|
+   | `read:jira-work` | reading tickets, comments, remote links, transitions, searching (the poll), the project's statuses |
+   | `write:jira-work` | the workpad and comments, transitions, labels, the claim and owner assignment, linking the merge request, creating tickets |
+   | `read:jira-user` | *Test connection* and the claim (`GET /myself`), mapping people (`GET /user`, `GET /user/search`) |
+
+   Atlassian recommends classic scopes. If your organisation requires **granular** scopes, the
+   endpoints the platform calls list these in Jira's REST v3 reference (marked *beta* there, and not
+   tried against a real token): `read:issue:jira`, `read:issue-details:jira`, `read:issue-meta:jira`,
+   `read:issue.changelog:jira`, `read:issue.vote:jira`, `read:issue-security-level:jira`,
+   `read:issue.remote-link:jira`, `read:issue.transition:jira`, `read:issue-status:jira`,
+   `read:issue-type:jira`, `read:status:jira`, `read:project:jira`, `read:project-role:jira`,
+   `read:comment:jira`, `read:comment.property:jira`, `read:field-configuration:jira`,
+   `read:audit-log:jira`, `read:user:jira`, `read:user.property:jira`, `read:group:jira`,
+   `read:application-role:jira`, `read:avatar:jira`, `write:issue:jira`, `write:issue.property:jira`,
+   `write:issue.remote-link:jira`, `write:comment:jira`, `write:comment.property:jira`,
+   `write:attachment:jira`. Token expiry is 1 to 365 days: put a renewal in your calendar and use
+   *Replace credentials* to rotate it.
+4. **Find your site's cloud ID**: open `https://<your-site>.atlassian.net/_edge/tenant_info` in a
+   browser; it answers `{"cloudId":"…"}`. (It is also the string after `/s/` in an
+   admin.atlassian.com URL. It is **not** your organisation ID.)
+5. **Configure the binding** (step 3) with `user_email` = the service account's email, `api_token`
+   = its token and `cloud_id` = the cloud ID. Everything else is as for any other account.
+
+**What changes with a `cloud_id`.** A service account's token is accepted only through Atlassian's
+API gateway, so every call goes to `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/…`
+instead of `https://<site>.atlassian.net/rest/api/3/…`. The platform still authenticates with
+`Authorization: Basic base64(email:api_token)` — Atlassian documents Basic with the service
+account's email for the gateway, and Bearer has community reports of `404`s where Basic worked, so
+Bearer is not used. Links to tickets and comments still use `site_url`, and the webhook (step 4) is
+unchanged: Jira sends it, the platform does not call out for it. **`api.atlassian.com` must be in
+`APP_INTEGRATION_HOSTS`** beside the site's host: without it, creating the integration and every
+call are refused, naming the host to add. Leave `cloud_id` empty for a regular account: a regular
+API token keeps working against the site, exactly as before.
+
 ## 2. Give the account the permissions it needs
 
 In the project's **Project settings → People / Permissions**, the account needs:
@@ -71,6 +124,7 @@ it out: the platform reports the missing capability instead of failing halfway t
 |---|---|---|
 | `site_url` | `https://acme-example.atlassian.net` | Your site, no path |
 | `user_email` | `agentic-bot@example.test` | The account the token belongs to |
+| `cloud_id` | `0000fa4e-0000-4000-8000-00000000c10d` | **Service account only** (step 1a): the site's cloud ID. Calls then go through `api.atlassian.com`; leave it empty for a regular account |
 | `api_token` | `FAKE-jira-api-token-0123456789` | **Secret.** Stored encrypted, redacted from every log and audit row |
 | `webhook_secret` | `FAKE-jira-webhook-secret-0123456789` | **Secret.** Needed for the webhook (step 4); leave it unset on a binding that only polls |
 | `project_keys` | `["ACME"]` | Deliveries for any other project are ignored and recorded as such |
@@ -84,6 +138,7 @@ The same values can come from the environment (TD-020):
 ```
 JIRA_SITE=https://acme-example.atlassian.net
 JIRA_USER_EMAIL=agentic-bot@example.test
+JIRA_CLOUD_ID=             # service account only (step 1a)
 JIRA_API_TOKEN=            # or JIRA_API_TOKEN_FILE=/run/secrets/jira_api_token
 JIRA_WEBHOOK_SECRET=       # or JIRA_WEBHOOK_SECRET_FILE=/run/secrets/jira_webhook_secret
 ```
@@ -249,7 +304,8 @@ not send the task back.
 
 ## 7. Test the connection
 
-*Test connection* performs one read-only call (`GET /rest/api/3/myself`) and reports the account it
+*Test connection* performs one read-only call (`GET /rest/api/3/myself`, through the gateway for a
+`cloud_id`) and reports the account it
 authenticated as. If it fails, the message you see has already been through the secret redactor — if
 Jira quoted your token back in an error, you will see `[REDACTED:integration:jira_api_token]`.
 

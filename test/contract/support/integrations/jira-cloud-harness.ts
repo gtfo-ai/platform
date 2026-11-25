@@ -94,7 +94,10 @@ export const jiraConfig = (overrides: Partial<JiraCloudConfig> = {}): JiraCloudC
   }) as JiraCloudConfig;
 
 export const createJiraBinding = (options: JiraBindingOptions = {}): JiraBinding => {
-  const replay = createJiraReplay();
+  // A service-account binding (`cloud_id`) is answered only below the API gateway's root, and the
+  // site's root is then refused (the replay's divergence 17).
+  const cloudId = options.config?.cloud_id;
+  const replay = createJiraReplay(typeof cloudId === 'string' ? { cloudId } : {});
   const audit = createMemoryAuditLog();
   // `autoAdvance`: a sleep wakes itself on the next microtask, so backoff costs no wall time and
   // the assertion is on the delay that was *asked for* (`timer.sleeps`), never on elapsed time.
