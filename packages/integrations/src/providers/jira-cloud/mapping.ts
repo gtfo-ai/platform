@@ -150,13 +150,38 @@ export const jiraIssueLinkSchema = z.object({
 });
 
 /**
+ * A status's **name in one language** (production, 2026-11-25): Jira translates a built-in status's
+ * `name` into the request's `Accept-Language`, and Node's `fetch` sends `*` when nobody sets it, so
+ * a service account with no language of its own read "待办" for the status a binding's lifecycle
+ * names "TODO". The client now asks for `en` on every request (`client.ts`); this is the second
+ * half: where Jira also sends `untranslatedName` — measured on `project/{key}/statuses`, absent
+ * (and undocumented) on an issue's `fields.status` and a transition's `to` — that one is the name,
+ * because it is what an administrator typed and what does not move with anyone's language. The
+ * name is replaced rather than kept beside it, so every comparison downstream (the lifecycle slots,
+ * the transition's target, a webhook's status) reads one field.
+ */
+const withUntranslatedName = <
+  T extends { readonly name?: string; readonly untranslatedName?: string },
+>(
+  status: T,
+): Omit<T, 'untranslatedName'> => {
+  const { untranslatedName, ...rest } = status;
+  return typeof untranslatedName === 'string' && untranslatedName.trim() !== ''
+    ? { ...rest, name: untranslatedName }
+    : rest;
+};
+
+/**
  * An issue's `status` as `IssueBean.fields` carries it: a `StatusDetails`, whose `statusCategory`
  * (`{key, …}`) is read since S-28.4 so intake can judge a ticket's status by its category (M28
  * ruling 3). The vendor types the key as a bare string; it is normalised by the port.
  */
-const jiraIssueStatusSchema = jiraNamedSchema.extend({
-  statusCategory: z.object({ key: z.string().nullish() }).nullish(),
-});
+const jiraIssueStatusSchema = jiraNamedSchema
+  .extend({
+    statusCategory: z.object({ key: z.string().nullish() }).nullish(),
+    untranslatedName: z.string().optional(),
+  })
+  .transform(withUntranslatedName);
 
 export const jiraIssueFieldsSchema = z.object({
   summary: z.string().nullish(),
@@ -225,12 +250,19 @@ export const jiraSubsetSearchResultSchema = searchResultOf(jiraIssueSchema);
 export const jiraStatusCategorySchema = z.object({ key: z.string().nullish() });
 
 /** `StatusDetails` — a status as `getAllStatuses` and a transition's `to` carry it. */
-export const jiraStatusSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  /** Absent in the published `getAllStatuses` example, so absence is a documented state. */
-  statusCategory: jiraStatusCategorySchema.nullish(),
-});
+export const jiraStatusSchema = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().optional(),
+    /**
+     * Not in the published schema; sent by `project/{key}/statuses` (measured 2026-11-25). Read
+     * into `name` by {@link withUntranslatedName} and never kept.
+     */
+    untranslatedName: z.string().optional(),
+    /** Absent in the published `getAllStatuses` example, so absence is a documented state. */
+    statusCategory: jiraStatusCategorySchema.nullish(),
+  })
+  .transform(withUntranslatedName);
 export type JiraStatus = z.infer<typeof jiraStatusSchema>;
 
 /** `IssueTypeWithStatus` — one issue type of the project and the statuses its workflow has. */

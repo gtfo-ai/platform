@@ -139,6 +139,21 @@ export interface JiraClientOptions {
 export const DEFAULT_TIMEOUT_MS = 20_000;
 
 /**
+ * The language every request asks for: `en`, never left to the transport.
+ *
+ * Jira translates the **names** it answers — a built-in status's above all — into the request's
+ * `Accept-Language` when the account has no language of its own, and Node's `fetch` (undici) sends
+ * `accept-language: *` whenever a caller sets none, which Jira answered with an arbitrary language:
+ * measured in production on 2026-11-25 with a service account through the API gateway,
+ * `project/GO/statuses` named status `1` "待办" under `*`, and "TODO" — the site's own name —
+ * with no header; `en` and `en-US,en;q=0.9` answered English.
+ * A binding's lifecycle, its pick-up status and every transition the platform resolves compare
+ * those names, so one language for every read is the contract; `en` is the one that answered the
+ * site's own names. `mapping.ts`'s `withUntranslatedName` is the second half, where Jira sends one.
+ */
+export const JIRA_ACCEPT_LANGUAGE = 'en';
+
+/**
  * The largest body this client reads (WP-190, backlog 548): **16 MiB**, refused past it rather
  * than cut. The Jira adapter applies **no byte cap of its own** — its bounds are counts (page
  * sizes, `MAX_TICKET_STATUSES`), and the ticket text's caps are the ticket snapshot's, in
@@ -274,7 +289,7 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
     // about which host answered were.
     redirect: 'error',
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    headers: { authorization, accept: 'application/json' },
+    headers: { authorization, accept: 'application/json', 'accept-language': JIRA_ACCEPT_LANGUAGE },
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 

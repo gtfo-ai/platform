@@ -8,7 +8,10 @@ import {
   issueUrl,
   jiraCommentSchema,
   jiraDateTimeSchema,
+  jiraIssueSchema,
   jiraIssueWithUpdatedSchema,
+  jiraProjectStatusesSchema,
+  jiraTransitionsSchema,
   slugOf,
   toTicketComment,
   toTicketLinks,
@@ -168,5 +171,46 @@ describe('issueUrl', () => {
     expect(issueUrl('https://acme-example.atlassian.net/', 'ACME-1')).toBe(
       'https://acme-example.atlassian.net/browse/ACME-1',
     );
+  });
+});
+
+/**
+ * One language for every status name (production, 2026-11-25): where Jira sends `untranslatedName`
+ * it is the name, on every schema a status is compared through — the project's statuses, a
+ * transition's target and an issue's (and so a webhook's) `fields.status`. Where it sends none, the
+ * name is what the request's `Accept-Language: en` answered, untouched.
+ */
+describe('a status’s untranslatedName is its name', () => {
+  const translated = { id: '1', name: '待办', untranslatedName: 'TODO' };
+
+  it('on the project’s statuses', () => {
+    const [type] = jiraProjectStatusesSchema.parse([{ id: '10004', statuses: [translated] }]);
+    expect(type?.statuses).toEqual([{ id: '1', name: 'TODO' }]);
+  });
+
+  it('on a transition’s target', () => {
+    const { transitions } = jiraTransitionsSchema.parse({
+      transitions: [{ id: '11', name: 'Open', to: translated }],
+    });
+    expect(transitions[0]?.to).toEqual({ id: '1', name: 'TODO' });
+  });
+
+  it('on an issue’s status, which a webhook delivery carries too', () => {
+    const issue = jiraIssueSchema.parse({
+      id: '10001',
+      key: 'ACME-1',
+      fields: { status: { ...translated, statusCategory: { key: 'new' } } },
+    });
+    expect(issue.fields.status).toEqual({ id: '1', name: 'TODO', statusCategory: { key: 'new' } });
+  });
+
+  it.each([
+    ['absent', { id: '3', name: 'IN PROGRESS' }],
+    ['blank', { id: '3', name: 'IN PROGRESS', untranslatedName: ' ' }],
+  ])('keeps the name when untranslatedName is %s', (_case, status) => {
+    const { transitions } = jiraTransitionsSchema.parse({
+      transitions: [{ id: '21', to: status }],
+    });
+    expect(transitions[0]?.to).toEqual({ id: '3', name: 'IN PROGRESS' });
   });
 });
