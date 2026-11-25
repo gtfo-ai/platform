@@ -8,8 +8,8 @@
  * configuration (BD-002).
  *
  * The environment names an operator sets are the tool-native ones from TD-020 — `JIRA_SITE`,
- * `JIRA_USER_EMAIL`, `JIRA_API_TOKEN` (+ `_FILE`), `JIRA_WEBHOOK_SECRET` (+ `_FILE`) — and the
- * setup guide maps them onto these fields.
+ * `JIRA_USER_EMAIL`, `JIRA_CLOUD_ID`, `JIRA_API_TOKEN` (+ `_FILE`), `JIRA_WEBHOOK_SECRET`
+ * (+ `_FILE`) — and the setup guide maps them onto these fields.
  */
 import {
   DEFAULT_TICKET_POLL_INTERVAL_SECONDS,
@@ -28,6 +28,60 @@ import { DEFAULT_WEBHOOK_MAX_AGE_MS } from './webhook.js';
 
 /** The longest label this binding accepts (Jira's label field is bounded at 255 characters). */
 export const MAX_JIRA_LABEL_LENGTH = 255;
+
+/**
+ * A site's **cloud ID** (`GET https://<site>.atlassian.net/_edge/tenant_info` answers it as
+ * `cloudId`): a UUID, hex digits in the 8-4-4-4-12 groups and nothing else. It is interpolated into
+ * the path of every URL this binding's credential is sent to (`jiraApiBaseUrl`), so the shape is
+ * refused here rather than escaped there: no `/`, `?`, `#`, `.` or `%` can reach that path.
+ */
+export const jiraCloudIdSchema = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
+    message:
+      'a Jira cloud ID is a UUID such as 1a11d016-8984-4c3e-b9ab-142dd06acb1b (https://<site>.atlassian.net/_edge/tenant_info answers it as cloudId)',
+  });
+
+/**
+ * The Atlassian API gateway's host (`https://api.atlassian.com/ex/jira/<cloudId>/…`): where every
+ * call goes when the binding names a `cloud_id`. An Atlassian **service account's** scoped API token
+ * is accepted only there, never on `<site>.atlassian.net` — "Tokens must always use the Platform API
+ * Gateway URLs beginning with `api.atlassian.com`" (support.atlassian.com, *Manage API tokens for
+ * service accounts*, retrieved 2026-11-25).
+ */
+export const JIRA_API_GATEWAY_HOST = 'api.atlassian.com';
+
+/**
+ * The REST v3 root every call of this binding is addressed to, with its trailing slash — the one
+ * answer to "where does this binding call", so the client's base URL, the host the executor's
+ * egress allow-list judges (`IntegrationRef.host`) and the host a refused body names cannot
+ * disagree.
+ *
+ *  - no `cloud_id`: `<site_url>/rest/api/3/`, as every binding before service accounts;
+ *  - a `cloud_id`: `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`.
+ *
+ * Links a person opens (a ticket, a comment) are **not** built from this: they stay on `site_url`.
+ */
+export const jiraApiBaseUrl = (config: Pick<JiraCloudConfig, 'site_url' | 'cloud_id'>): string =>
+  typeof config.cloud_id === 'string'
+    ? `https://${JIRA_API_GATEWAY_HOST}/ex/jira/${config.cloud_id.toLowerCase()}/rest/api/3/`
+    : `${config.site_url.replace(/\/+$/, '')}/rest/api/3/`;
+
+/**
+ * The URLs a configuration document makes this provider call that are **not** written in it as a
+ * URL — read by the write-time host check (`ProviderCatalogueEntry.derivedEgressUrlsOf`), whose
+ * sweep only sees strings that parse as one. A `cloud_id` is a UUID, so without this the create would
+ * admit a gateway binding on a deployment that never declared `api.atlassian.com`, and the operator
+ * would learn it from the first failed call instead of from the form.
+ *
+ * Over an **unvalidated** document (the write checks hosts before it parses), so any non-empty
+ * string counts: the host it implies is the gateway's whatever the value, and the parse refuses a
+ * malformed one right after.
+ */
+export const jiraDerivedEgressUrls = (config: Readonly<Record<string, unknown>>): string[] =>
+  typeof config.cloud_id === 'string' && config.cloud_id.trim() !== ''
+    ? [`https://${JIRA_API_GATEWAY_HOST}/`]
+    : [];
 
 /**
  * A Jira label: Jira does not accept a label containing a space, so a label with any whitespace
@@ -51,8 +105,21 @@ export const jiraCloudConfigSchema = z
      * again when the call is made (`createIntegrationEgressPolicy`).
      */
     site_url: httpUrlSchema,
-    /** The Atlassian account the API token belongs to. */
+    /**
+     * The Atlassian account the API token belongs to — a person-shaped bot account, or an
+     * Atlassian **service account** (`…@serviceaccount.atlassian.com`). Required in both modes:
+     * the client always sends `Basic base64(user_email:api_token)` (`client.ts`).
+     */
     user_email: z.email(),
+    /**
+     * The site's cloud ID; set it for an Atlassian **service account** (`setup-guide.md` § "Service
+     * account"). Absent (the default), calls go to `site_url` as they always have. Present, every
+     * REST call goes to the API gateway, `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`,
+     * because a service account's scoped token is refused anywhere else — and the links a person
+     * opens still use `site_url`. The deployment must then declare `api.atlassian.com` in
+     * `APP_INTEGRATION_HOSTS`.
+     */
+    cloud_id: jiraCloudIdSchema.nullish().default(null),
     /** Secret. An Atlassian API token, never a password. */
     api_token: nonEmptyStringSchema,
     /**

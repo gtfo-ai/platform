@@ -32,7 +32,7 @@ const clientWith = (
 ): { client: ReturnType<typeof createJiraClient>; calls: Recorded[] } => {
   const calls: Recorded[] = [];
   const client = createJiraClient({
-    siteUrl: SITE,
+    baseUrl: `${SITE}/rest/api/3/`,
     email: 'agentic-bot@example.test',
     apiToken: TOKEN,
     now: () => Date.parse('2026-09-02T12:05:00.000Z'),

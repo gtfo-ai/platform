@@ -2,7 +2,8 @@
  * The thin Jira Cloud REST client (TD-024: "small typed clients written in-repo on `fetch` + `ky`
  * … covering only the endpoints the type contracts need").
  *
- * It does three things and nothing else: it addresses `/rest/api/3/*`, it authenticates, and it
+ * It does three things and nothing else: it addresses `…/rest/api/3/*` — on the site, or on the
+ * Atlassian API gateway (`jiraApiBaseUrl`) — it authenticates, and it
  * turns an HTTP outcome into the platform's typed failure vocabulary. It does **not** retry, does
  * not back off, does not log and does not validate a body — retries and rate limits belong to
  * `IntegrationActionExecutor` (which owns the injected timer, so a test never sleeps), and schema
@@ -13,6 +14,15 @@
  * `Authorization: Basic base64(email:api_token)`, per
  * `https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/` (retrieved
  * 2026-09-10): "Build a string of the form `useremail:api_token`", "BASE64 encode the string".
+ *
+ * **The same header on the API gateway** (an Atlassian service account, `config.ts`'s `cloud_id`):
+ * "You can use Bearer token authentication or basic authentication in the HTTP header for APIs
+ * requiring the `api.atlassian.com` gateway … Ensure the email corresponds to the service account,
+ * and use the API token in place of a password" (support.atlassian.com, *Manage API tokens for
+ * service accounts*, retrieved 2026-11-25). Basic is chosen over Bearer deliberately: it is one
+ * code path for both modes, it keeps `user_email` meaning what it meant (and the `jira_basic_auth`
+ * redaction entry covering the header), and Bearer on the gateway has community reports of `404`s
+ * where Basic with the same token worked. Bearer is not implemented.
  *
  * ## Why no provider error object ever leaves this file
  *
@@ -92,8 +102,12 @@ export interface JiraClient {
 }
 
 export interface JiraClientOptions {
-  /** `https://acme-example.atlassian.net`, no trailing slash required. */
-  readonly siteUrl: string;
+  /**
+   * The REST v3 root every path is resolved against, **with** its trailing slash —
+   * `jiraApiBaseUrl(config)`: `https://acme-example.atlassian.net/rest/api/3/`, or the gateway's
+   * `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/` for a service account.
+   */
+  readonly baseUrl: string;
   readonly email: string;
   readonly apiToken: string;
   /** Injected in tests (fixture replay) and by a proxy-aware root. Defaults to global `fetch`. */
@@ -248,7 +262,7 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
   const instance: KyInstance = ky.create({
     // ky 2 renamed `prefixUrl` to `baseUrl`, which resolves the relative input the web way:
     // a trailing slash here plus a relative path below yields `…/rest/api/3/issue/ACME-1`.
-    baseUrl: `${options.siteUrl.replace(/\/+$/, '')}/rest/api/3/`,
+    baseUrl: options.baseUrl.endsWith('/') ? options.baseUrl : `${options.baseUrl}/`,
     retry: 0,
     throwHttpErrors: false,
     // WP-59, PROGRESS backlog 129: a `3xx` is refused, never followed with the credential on the
@@ -297,7 +311,7 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
     const text = await readBoundedBody(response, {
       provider: PROVIDER_ID,
       ceilingBytes: JIRA_MAX_RESPONSE_BYTES,
-      host: new URL(options.siteUrl).host,
+      host: new URL(options.baseUrl).host,
       what: `${request.method} ${request.path}`,
       action: request.action,
       // An error body past the ceiling is dropped, so the status keeps its classification.

@@ -23,6 +23,7 @@
  */
 import { exactSecretRedactor, IntegrationError, noSecretsRedactor } from '@platform/application';
 import {
+  type JiraCloudConfig,
   JiraMarkerSearchBoundError,
   MARKER_SEARCH_MAX_PAGES,
   MAX_KEY_SEARCHES,
@@ -38,6 +39,7 @@ import {
 } from '../support/integrations/jira-cloud-harness.js';
 import {
   createJiraReplay,
+  JIRA_REPLAY_CLOUD_ID,
   JIRA_REPLAY_TOKEN,
   type JiraReplay,
   loadJiraFixture,
@@ -73,8 +75,14 @@ const withoutSelfAccountId = (): typeof globalThis.fetch => {
   };
 };
 
-const createJiraContext = async (): Promise<TaskManagementContractContext> => {
-  const binding = createJiraBinding();
+/**
+ * `base` is configuration every binding of the context carries — `{}` for a site binding, a
+ * `cloud_id` for a service account's (the whole shared suite then runs through the API gateway).
+ */
+const createJiraContext = async (
+  base: Partial<JiraCloudConfig> = {},
+): Promise<TaskManagementContractContext> => {
+  const binding = createJiraBinding({ config: base });
   // The lifecycle half's ticket starts unassigned (`TaskManagementLifecycleContext`); the issue
   // fixture is assigned to the directory's developer, so the double releases it first.
   binding.replay.assign(JIRA_TICKET.key, null);
@@ -149,13 +157,14 @@ const createJiraContext = async (): Promise<TaskManagementContractContext> => {
      * through the plan the configuration states rather than a rule the test wrote.
      */
     polling: {
-      port: createJiraBinding({ config: { poll_enabled: true, poll_interval_seconds: 90 } })
-        .adapter,
+      port: createJiraBinding({
+        config: { ...base, poll_enabled: true, poll_interval_seconds: 90 },
+      }).adapter,
       intervalSeconds: 90,
     },
     // BACKLOG 1611: the replay's ACME-1 carries the pick-up label.
     claimLabel: {
-      port: createJiraBinding({ config: { claim_label: 'agentic-working' } }).adapter,
+      port: createJiraBinding({ config: { ...base, claim_label: 'agentic-working' } }).adapter,
       label: 'agentic-working',
       ticket: JIRA_TICKET,
     },
@@ -209,7 +218,23 @@ const createJiraContext = async (): Promise<TaskManagementContractContext> => {
   };
 };
 
-runTaskManagementContract({ name: 'jira-cloud (recorded fixtures)', create: createJiraContext });
+runTaskManagementContract({
+  name: 'jira-cloud (recorded fixtures)',
+  create: () => createJiraContext(),
+});
+
+/**
+ * The same contract through the **Atlassian API gateway** — a service-account binding (`cloud_id`).
+ * The replay answers only below `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/` here
+ * (its divergence 17), so every member the suite drives — the claim (`myself`, the assignee),
+ * transitions, comments and the workpad, labels, the statuses read, the poll, `testConnection` —
+ * is proved to address the gateway, and every ticket and comment URL it asserts is still the
+ * site's (`JIRA_TICKET.url`).
+ */
+runTaskManagementContract({
+  name: 'jira-cloud via the API gateway (service account, recorded fixtures)',
+  create: () => createJiraContext({ cloud_id: JIRA_REPLAY_CLOUD_ID }),
+});
 
 // Without the declaration the shared clauses fall back to "at most once" silently (WP-236 review).
 it('declares countsSearches, so the shared clauses hold Jira to one whole count', async () => {

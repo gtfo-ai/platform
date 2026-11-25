@@ -508,6 +508,36 @@ describe('the integrations list', () => {
     expect(patch?.config?.remote_run_credential).toBe('allow');
   });
 
+  /** Atlassian service accounts: `cloud_id` is offered in words, with what setting it does. */
+  it('offers Jira’s cloud_id as Cloud ID, says what it is for, and sends it', async () => {
+    const { sent, fetchImpl } = recorder();
+    renderApp(fetchImpl);
+    const user = userEvent.setup();
+    await choose(user, 'ACME Jira', 'Edit configuration');
+    const form = await screen.findByRole('form', { name: 'Configuration of ACME Jira' });
+    const field = within(form).getByLabelText('Cloud ID') as HTMLInputElement;
+    expect(field.getAttribute('data-config-key')).toBe('cloud_id');
+    expect(field.getAttribute('data-config-kind')).toBe('string');
+    const hint = document.getElementById(field.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/^Only for an Atlassian service account/);
+    expect(hint?.textContent).toContain('api.atlassian.com');
+    expect(hint?.textContent).toContain('APP_INTEGRATION_HOSTS');
+    expect(hint?.textContent).toMatch(/Key: cloud_id\.$/);
+    // The note is Jira's own: no other field of the form carries it.
+    expect(form.textContent?.split('Only for an Atlassian service account').length).toBe(2);
+    fireEvent.change(field, { target: { value: '0000fa4e-0000-4000-8000-00000000c10d' } });
+    await user.click(screen.getByRole('button', { name: 'Save configuration' }));
+    await waitFor(() => {
+      expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
+    });
+    const body = sent.find((each) => each.method === 'PATCH')?.body as {
+      config: Record<string, unknown>;
+    };
+    expect(body.config.cloud_id).toBe('0000fa4e-0000-4000-8000-00000000c10d');
+    const jira = findShippedProvider('jira-cloud') as ProviderCatalogueEntry;
+    expect(configIssuesOf(jira, body.config as never)).toEqual([]);
+  });
+
   /**
    * WP-114, PROGRESS backlog 332: each optional field is a control of its declared type, and what
    * it sends is typed — a boolean as a boolean, a number as a number, a list as a list. (The same

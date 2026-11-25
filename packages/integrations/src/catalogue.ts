@@ -153,6 +153,14 @@ export interface ProviderCatalogueEntry {
    * {@link secretFields} and to {@link inboundWebhook}.
    */
   readonly webhookSecretFields: readonly string[];
+  /**
+   * The URLs a configuration document makes this provider call that are not written in it as a URL
+   * — the registration's `derivedEgressUrls`, `[]` for one that declares none. The create, the
+   * configuration `PATCH` and a binding's overlay sweep these beside the document's own URL strings
+   * (`assertHostIsDeclared` in `apps/server`), so Jira's `cloud_id` is refused at the write on a
+   * deployment that has not declared `api.atlassian.com`.
+   */
+  readonly derivedEgressUrlsOf: (config: JsonObject) => readonly string[];
 }
 
 /**
@@ -301,6 +309,7 @@ const entryOf = (
     readonly accountOnlyFields?: readonly string[];
     readonly configSchema: z.ZodObject;
     readonly staticRunCredential?: StaticRunCredentialSupport;
+    readonly derivedEgressUrls?: (config: Readonly<Record<string, unknown>>) => readonly string[];
   },
   inboundWebhook: boolean,
   usageFields: readonly UsageField[],
@@ -320,6 +329,7 @@ const entryOf = (
   staticRunCredential: registration.staticRunCredential ?? null,
   usageFields,
   webhookSecretFields: [...webhookSecretFields],
+  derivedEgressUrlsOf: (config) => [...(registration.derivedEgressUrls?.(config) ?? [])],
 });
 
 /**

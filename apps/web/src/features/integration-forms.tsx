@@ -185,6 +185,17 @@ export const CONFIG_FIELD_RESIDUALS: Readonly<Record<string, string>> = {
 };
 
 /**
+ * What a field is **for**, when its words alone do not say it — keyed `<provider id>:<field>`,
+ * because the same key can mean different things to two providers. Written before the generic
+ * *Required/Optional … Key: …* hint, so the key stays the last thing the hint names.
+ */
+export const CONFIG_FIELD_NOTES: Readonly<Record<string, string>> = {
+  // Atlassian service accounts: the gateway is the only place a scoped token is accepted.
+  'jira-cloud:cloud_id':
+    'Only for an Atlassian service account: your site’s cloud ID (https://<site>.atlassian.net/_edge/tenant_info answers it as cloudId). Set, every call goes through api.atlassian.com — add that host to APP_INTEGRATION_HOSTS — and ticket links still use the site URL. Empty: calls go to the site URL.',
+};
+
+/**
  * One configuration field's control, by its declared kind (WP-114, backlog 332): a select for a
  * boolean and a choice — whose first option, for an optional field, is the provider's default — a
  * number input for a number, and text otherwise. Labelled in words, with the key in the hint.
@@ -202,7 +213,8 @@ export const ConfigFieldControl = ({
 }): ReactElement => {
   const id = useId();
   const label = configFieldLabel(field.name);
-  const hint = `${
+  const note = CONFIG_FIELD_NOTES[`${provider.id}:${field.name}`];
+  const hint = `${note === undefined ? '' : `${note} `}${
     field.required
       ? `Required by ${provider.display_name}.`
       : `Optional — left empty, ${provider.display_name}'s default applies.`

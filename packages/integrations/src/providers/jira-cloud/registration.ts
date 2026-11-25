@@ -14,7 +14,11 @@
  */
 import type { AgentTooling } from '@platform/application';
 import type { ProviderRegistration } from '../../registry.js';
-import { JIRA_CLOUD_SECRET_FIELDS, jiraCloudConfigSchema } from './config.js';
+import {
+  JIRA_CLOUD_SECRET_FIELDS,
+  jiraCloudConfigSchema,
+  jiraDerivedEgressUrls,
+} from './config.js';
 import { createJiraCloudTaskManagement, type JiraCloudOptions } from './index.js';
 import { PROVIDER_ID } from './mapping.js';
 
@@ -67,6 +71,11 @@ export const JIRA_CLOUD_PROVIDER_METADATA = {
    * brief of a refused ticket claim (TD-029 decision 5).
    */
   assignPermission: 'Assign Issues',
+  /**
+   * A service-account binding (`cloud_id`) calls `api.atlassian.com`, a host its document names
+   * nowhere as a URL; the write-time host check sweeps it from here.
+   */
+  derivedEgressUrls: jiraDerivedEgressUrls,
 } as const satisfies Pick<
   ProviderRegistration<'task_management'>,
   | 'id'
@@ -76,6 +85,7 @@ export const JIRA_CLOUD_PROVIDER_METADATA = {
   | 'secretFields'
   | 'setupGuidePath'
   | 'assignPermission'
+  | 'derivedEgressUrls'
 >;
 
 export const createJiraCloudRegistration = (

@@ -313,7 +313,7 @@ describe('assertHostIsDeclared', () => {
   const declared = createIntegrationEgressPolicy(['gitlab.example.com']);
   const refuse = (config: JsonObject, policy = declared): HttpError | null => {
     try {
-      assertHostIsDeclared(config, policy);
+      assertHostIsDeclared(config, policy, null);
       return null;
     } catch (error) {
       expect(error).toBeInstanceOf(HttpError);
@@ -399,6 +399,70 @@ describe('assertHostIsDeclared', () => {
     // A JavaScript-shaped body carries whatever JSON allows; the guard is about URLs and must not
     // turn a number into a 500 on the way to the schema that will refuse it properly.
     expect(refuse({ max_pages: 10, mint_credentials: false, project: null })).toBeNull();
+  });
+  /**
+   * A Jira service-account binding (`cloud_id`) calls `api.atlassian.com`, which its document names
+   * nowhere as a URL — so the sweep alone would admit it, and the operator would learn it from the
+   * first failed call. The provider's own `derivedEgressUrlsOf` closes that, asked of the real
+   * catalogue entry rather than a stub.
+   */
+  describe('a host the provider derives rather than reads (Jira’s cloud_id)', () => {
+    const jira = SHIPPED_PROVIDERS.find(
+      (entry) => entry.id === 'jira-cloud',
+    ) as ProviderCatalogueEntry;
+    const SITE = 'https://acme-example.atlassian.net';
+    const CLOUD_ID = '0000fa4e-0000-4000-8000-00000000c10d';
+    const refuseFor = (
+      config: JsonObject,
+      hosts: readonly string[],
+      provider: ProviderCatalogueEntry | null = jira,
+    ): HttpError | null => {
+      try {
+        assertHostIsDeclared(config, createIntegrationEgressPolicy(hosts), provider);
+        return null;
+      } catch (error) {
+        expect(error).toBeInstanceOf(HttpError);
+        return error as HttpError;
+      }
+    };
+
+    it('refuses a cloud_id while api.atlassian.com is undeclared, naming it and the setting', () => {
+      const error = refuseFor({ site_url: SITE, cloud_id: CLOUD_ID }, [
+        'acme-example.atlassian.net',
+      ]);
+
+      expect(error?.statusCode).toBe(403);
+      expect(error?.code).toBe('integration_host_not_permitted');
+      expect(error?.message).toContain('"api.atlassian.com"');
+      expect(error?.message).toContain('APP_INTEGRATION_HOSTS');
+    });
+
+    it('accepts it once both the site and the gateway are declared', () => {
+      expect(
+        refuseFor({ site_url: SITE, cloud_id: CLOUD_ID }, [
+          'acme-example.atlassian.net',
+          'api.atlassian.com',
+        ]),
+      ).toBeNull();
+    });
+
+    it('asks nothing more of a binding with no cloud_id — every existing site binding', () => {
+      expect(refuseFor({ site_url: SITE }, ['acme-example.atlassian.net'])).toBeNull();
+      expect(
+        refuseFor({ site_url: SITE, cloud_id: null }, ['acme-example.atlassian.net']),
+      ).toBeNull();
+    });
+
+    it('judges a binding overlay that only sets cloud_id', () => {
+      expect(refuseFor({ cloud_id: CLOUD_ID }, ['acme-example.atlassian.net'])).not.toBeNull();
+    });
+
+    it('derives nothing without the provider, which is the discriminating half', () => {
+      // The same document with no provider is admitted: the refusal above is the derivation's.
+      expect(
+        refuseFor({ site_url: SITE, cloud_id: CLOUD_ID }, ['acme-example.atlassian.net'], null),
+      ).toBeNull();
+    });
   });
 });
 

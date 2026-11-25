@@ -68,7 +68,7 @@ const CASES: Readonly<Record<string, Attempt>> = {
     }).request({ method: 'GET', path: '/projects/acme%2Fapi', action: 'get_project' }),
   'jira-cloud': async (double) =>
     createJiraClient({
-      siteUrl: 'https://acme-example.atlassian.net',
+      baseUrl: 'https://acme-example.atlassian.net/rest/api/3/',
       email: 'agentic-bot@example.test',
       apiToken: 'FAKE-jira-api-token-DO-NOT-USE',
       fetch: double.fetchImpl as typeof globalThis.fetch,
