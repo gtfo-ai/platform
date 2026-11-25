@@ -13,7 +13,13 @@ exists and recreates nothing; a re-run against another served build only starts 
 (its page reads needs_claude) - a stopped one too, whose page answers only once it was started; an
 `irm | iex`-style run leaves the caller's session alive with no installer function behind;
 `-Uninstall -Purge` removes the volumes and the folder; a second worker that would share another's
-control volume is refused until it names its own. Prints PASS or FAIL and exits 0 or 1.
+control volume is refused until it names its own. S-29.2 (several workers on one machine, one per
+core): -Dir naming another folder repairs this core's worker found by its updater's mount; -Name on it
+writes only APP_WORKER_LABEL; dev and a name outside the pattern are usage errors; a second core's
+worker made with -Name gets its own folder in the home folder, project, names, first free page port
+(a port a stopped container binds skipped) and label in its .env, the first untouched; a name
+another core's worker holds is refused; -Uninstall -Purge -Name removes that worker only. Prints
+PASS or FAIL and exits 0 or 1.
 #>
 $ErrorActionPreference = 'Stop'
 $failures = New-Object System.Collections.Generic.List[string]
@@ -76,6 +82,11 @@ $bundle = @(
 [IO.File]::WriteAllText((Join-Path $site 'api\worker\v1\compose.yml'), $bundle)
 [IO.File]::WriteAllText((Join-Path $site 'index.html'), '<!doctype html><title>worker</title>')
 $server = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', "$port", '--bind', '127.0.0.1', '--directory', $site) -PassThru -WindowStyle Hidden
+# The -Name leg (S-29.2) installs into the home folder, as a person's run does; it refuses to run there
+# when that folder exists, and removes only what it made.
+$namedDir = Join-Path $HOME 'agentic-worker-s292check'
+$createdNamed = $false
+$otherServer = $null
 try {
   $up = $false
   for ($i = 0; $i -lt 50 -and -not $up; $i++) {
@@ -85,7 +96,7 @@ try {
 
   $template = [IO.File]::ReadAllText((Join-Path $repository 'apps\server\src\workers\install\install.ps1'))
   $script = Join-Path $root 'install.ps1'
-  [IO.File]::WriteAllText($script, $template.Replace('@@AGENTIC_CORE_URL@@', $core))
+  [IO.File]::WriteAllText($script, $template.Replace('@@AGENTIC_CORE_URL@@', $core).Replace('@@AGENTIC_INSTANCE_SLUG@@', 'standin'))
 
   $env:PATH = "$bin;$env:PATH"
   $env:STUB_LOG = $log
@@ -208,11 +219,15 @@ try {
   Set-Content -LiteralPath (Join-Path $state 'wd') -Value '/var/lib/platform/host-bundle'
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
   Test-That ($LASTEXITCODE -eq 0) "a re-run after an update accepts its own install (it exited $LASTEXITCODE)"
-  # And a folder without the mark, meeting that same project, refuses: it is someone else's.
+  # One worker per core on a machine (S-29.2): -Dir naming a folder that holds no worker of this
+  # core, while this core's worker is elsewhere, repairs this core's worker - found by the folder its
+  # updater mounts - and puts nothing in the other folder.
   $unmarked = Join-Path $root 'unmarked'
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $unmarked -NoOpen
-  Test-That ($LASTEXITCODE -eq 3) "an unmarked folder meeting an existing project is refused (it exited $LASTEXITCODE)"
-  Test-That (-not (Test-Path -LiteralPath (Join-Path $unmarked 'compose.yaml'))) 'the refused folder gets no compose file'
+  Test-That ($LASTEXITCODE -eq 0) "-Dir elsewhere repairs this core's worker (it exited $LASTEXITCODE)"
+  Test-That (-not (Test-Path -LiteralPath (Join-Path $unmarked 'compose.yaml'))) 'the other folder gets no compose file'
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d --no-recreate') "and recreates nothing (last: $($calls[-1]))"
 
   # As `irm | iex` runs it: in the caller's own scope, which must survive with nothing of the
   # installer left. With no options it targets $HOME\agentic-worker, which has no mark, so the stub's
@@ -253,8 +268,76 @@ try {
   Test-That ($LASTEXITCODE -eq 0) "with a control volume of its own it installs (it exited $LASTEXITCODE)"
   $secondEnv = Read-EnvText (Join-Path $second '.env')
   Test-That ($secondEnv -eq "APP_WORKER_CONTROL_VOLUME=agentic-worker-2-ctl`n") "and its name is kept in .env (it holds: $secondEnv)"
+
+  # -Name (S-29.2). On this core's existing worker - found with no -Dir, by its updater's mount - it
+  # writes only the label: the worker keeps its folder and project.
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Name desk -NoOpen
+  Test-That ($LASTEXITCODE -eq 0) "-Name on this core's worker exits 0 (it exited $LASTEXITCODE)"
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d --no-recreate') "-Name on this core's worker repairs it (last: $($calls[-1]))"
+  $secondEnv = Read-EnvText (Join-Path $second '.env')
+  Test-That ($secondEnv -eq "APP_WORKER_CONTROL_VOLUME=agentic-worker-2-ctl`nAPP_WORKER_LABEL=desk`n") "-Name on it writes only APP_WORKER_LABEL (it holds: $secondEnv)"
+  Test-That (-not (Test-Path -LiteralPath (Join-Path $HOME 'agentic-worker-desk'))) '-Name on it makes no new folder'
+
+  foreach ($bad in @('dev', 'Bad', 'a_b', ('a' * 25))) {
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Name $bad -NoOpen
+    Test-That ($LASTEXITCODE -eq 2) "-Name $bad is a usage error (it exited $LASTEXITCODE)"
+  }
+
+  # A second core's worker (the same files served on a second port, which the installer takes for
+  # another core): a new install named by -Name, in the home folder, its own project, names and the
+  # first free page port - 7357 is the first worker's (and the stand-in core listens there), 7358 a
+  # stopped container's - written into its .env; the first worker untouched.
+  if (Test-Path -LiteralPath $namedDir) {
+    Test-That $false "$namedDir is free before the -Name leg (it exists: remove it and run this again)"
+  } else {
+    $createdNamed = $true
+    # A second stand-in core: the same files under another address, so another core to the installer.
+    $otherPort = 7460
+    $otherCore = "http://127.0.0.1:$otherPort"
+    $otherServer = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', "$otherPort", '--bind', '127.0.0.1', '--directory', $site) -PassThru -WindowStyle Hidden
+    $otherUp = $false
+    for ($i = 0; $i -lt 50 -and -not $otherUp; $i++) {
+      try { $null = Invoke-WebRequest -UseBasicParsing -Uri "$otherCore/" -TimeoutSec 2; $otherUp = $true } catch { Start-Sleep -Milliseconds 200 }
+    }
+    Test-That $otherUp 'the second stand-in core answers'
+    $namedSite = Join-Path $root 'named-page'
+    $null = New-Item -ItemType Directory -Force -Path $namedSite
+    [IO.File]::WriteAllText((Join-Path $namedSite 'index.html'), '<!doctype html><title>worker</title>')
+    $before = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' }).Count
+    $env:STUB_UP_PAGE_SITE = $namedSite
+    $env:STUB_BOUND_PORTS = '7358'
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Core $otherCore -Name s292check -NoOpen
+    Remove-Item -LiteralPath Env:STUB_UP_PAGE_SITE, Env:STUB_BOUND_PORTS
+    Test-That ($LASTEXITCODE -eq 0) "a second core's worker named with -Name installs (it exited $LASTEXITCODE)"
+    $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' } | Select-Object -Skip $before)
+    Test-That (($calls -join '|') -eq 'docker compose --project-name agentic-worker-s292check up -d') "only its own project is brought up (asked: $($calls -join ' | '))"
+    $namedEnv = Read-EnvText (Join-Path $namedDir '.env')
+    $expectedEnv = "COMPOSE_PROJECT_NAME=agentic-worker-s292check`nAPP_WORKER_CONTROL_VOLUME=agentic-worker-s292check-ctl`nAPP_WORKER_CACHE_VOLUME=agentic-worker-s292check-repo-cache`nAPP_WORKER_RUN_NETWORK=agentic-worker-s292check-run-egress`nAPP_WORKER_UI_PORT=7359`nAPP_WORKER_LABEL=s292check`n"
+    Test-That ($namedEnv -eq $expectedEnv) "its .env holds its project, names, first free port and label (it holds: $namedEnv)"
+    Test-That ((Read-EnvText (Join-Path $state 'projects\agentic-worker-s292check\env-at-up')) -eq $expectedEnv) 'they were in .env when Compose first read it'
+    Test-That ((Read-EnvText (Join-Path $second '.env')) -eq $secondEnv) 'the first worker''s .env is untouched'
+
+    # A name another core's worker holds is refused, naming -Name.
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Name s292check -Dir (Join-Path $root 'third') -Core 'http://127.0.0.2:7357' -NoOpen
+    Test-That ($LASTEXITCODE -eq 3) "a name another core's worker holds is refused (it exited $LASTEXITCODE)"
+
+    # -Uninstall -Name removes that install only.
+    $before = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' }).Count
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Core $otherCore -Uninstall -Purge -Name s292check
+    Test-That ($LASTEXITCODE -eq 0) "-Uninstall -Purge -Name exits 0 (it exited $LASTEXITCODE)"
+    $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' } | Select-Object -Skip $before)
+    Test-That (($calls -join '|') -eq 'docker compose --project-name agentic-worker-s292check down --volumes --remove-orphans') "-Uninstall -Name takes down its project only (asked: $($calls -join ' | '))"
+    Test-That (-not (Test-Path -LiteralPath $namedDir)) '-Uninstall -Purge -Name removes its folder'
+    Test-That (Test-Path -LiteralPath (Join-Path $state 'up')) 'the first worker is still up'
+  }
 } finally {
+  if ($createdNamed) { Remove-Item -LiteralPath $namedDir -Recurse -Force -ErrorAction SilentlyContinue }
+  foreach ($upPage in @(Get-ChildItem -LiteralPath $state -Filter 'up-page-*.pid' -ErrorAction SilentlyContinue)) {
+    Stop-Process -Id ([int](Get-Content -LiteralPath $upPage.FullName -Raw).Trim()) -Force -ErrorAction SilentlyContinue
+  }
   Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+  if ($null -ne $otherServer) { Stop-Process -Id $otherServer.Id -Force -ErrorAction SilentlyContinue }
   $pagePid = Join-Path $state 'page.pid'
   if (Test-Path -LiteralPath $pagePid) { Stop-Process -Id ([int](Get-Content -LiteralPath $pagePid -Raw).Trim()) -Force -ErrorAction SilentlyContinue }
 }

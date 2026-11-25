@@ -61,7 +61,9 @@
 # **Its volumes and run network have their own names**, so a worker and a core can share one daemon
 # (the Docker check does) without one's `ctl` volume or run network being the other's. A second
 # worker on the same machine sets `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`,
-# `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name).
+# `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name) in its folder's
+# `.env`: the installers write them, with `COMPOSE_PROJECT_NAME`, for a second core's worker or
+# `--name` (S-29.2), and `.env`'s project name beats the `name:` below.
 #
 # **Each worker's page says which platform it serves** (S-29.1, TD-031's 2026-11-24 amendment): the
 # tab title, the header and a generated tab icon show `APP_WORKER_LABEL` when set, else the

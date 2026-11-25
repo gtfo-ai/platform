@@ -505,17 +505,18 @@ instead, remove the `updater` and `updater-docker-proxy` services, download the 
 is drawn in the label's colour with the label's first letter or digit. The label is `APP_WORKER_LABEL`
 when set (in the folder's `.env`; any text, cut to 80 characters), else the platform's own name as its core
 says it on the handshake (the organisation's name — a rename shows at the next handshake), else the
-platform's host (`agentic.fontai.org` → `fontai`). A second worker on one machine sets its own project name,
-`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
-`APP_WORKER_UI_PORT` — **in its folder's `.env`**, never only on the shell: each has a default in the
-template, and a value given only on the shell goes back to it at the next update, so a second worker
-would then share the first worker's control volume, cache volume and run network. **The installers
-below cannot make a second worker yet**: their project name is fixed (`agentic-worker`), so a run from a
-second folder is refused (exit 3) as someone else's project, whatever volumes and port you give it. Until
-M29 (S-29.2: `--name`, TD-031's 2026-11-24 amendment) a second worker is a hand install: download
-`compose.yml` into its own folder, write `COMPOSE_PROJECT_NAME` and the four settings above (and, if you
-like, `APP_WORKER_LABEL`) into that folder's `.env`, and `docker compose up -d` there. Two workers on one Claude token also each find its
-usage limit by spending a run until S-29.3.
+platform's host (`agentic.fontai.org` → `fontai`). A second worker on one machine — one per core, for a
+person who works with two platforms — has its own project name, `APP_WORKER_CONTROL_VOLUME`,
+`APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT`, all **in its folder's
+`.env`**, never only on the shell: each has a default in the template, and a value given only on the
+shell goes back to it at the next update, so a second worker would then share the first worker's control
+volume, cache volume and run network. **The installers below write them for you** (S-29.2, TD-031's
+2026-11-24 amendment): run the second platform's line beside the first and it installs a second,
+independent worker in `~/agentic-worker-<platform>` — or `~/agentic-worker-<name>` with `--name` — and
+re-running either line repairs its own worker. By hand, the same is: download `compose.yml` into its
+own folder, write `COMPOSE_PROJECT_NAME` and the four settings above (and, if you like,
+`APP_WORKER_LABEL`) into that folder's `.env`, and `docker compose up -d` there. Two workers on one
+Claude token also each find its usage limit by spending a run until S-29.3.
 
 #### One-command install (S-22.20)
 
@@ -530,15 +531,41 @@ powershell -ExecutionPolicy ByPass -c "irm https://agentic.example.com/api/worke
 
 To read one first: `curl -fsSLo install.sh https://agentic.example.com/api/worker/v1/install.sh && less
 install.sh && sh install.sh`. Each checks `docker`, `docker info` and `docker compose version` and names
-what to install (Docker Desktop, or Docker Engine on Linux) when one fails; creates `~/agentic-worker`
-(`--dir`/`-Dir`), refusing a folder it did not make and a project `agentic-worker` brought up from
-another folder; downloads `compose.yml` as `compose.yaml` and writes `.agentic-worker-install` (the
-core it came from); runs `docker compose up -d`; waits until `remote-worker` and `updater` run
-(and are `healthy` if they declare a healthcheck) and `http://127.0.0.1:7357` answers; and opens it.
-**What it changes**: that folder and the compose project's containers, volumes and networks — no
-sudo, no service, no PATH or profile edit. Options: `--core` (another core), `--no-open`,
-`--uninstall` (containers only) and `--uninstall --purge` (its volumes, the launcher's repository
-cache volume and the folder too).
+what to install (Docker Desktop, or Docker Engine on Linux) when one fails; finds this core's worker or
+creates `~/agentic-worker` (`--dir`/`-Dir`; a second core's worker goes beside it, below), refusing a
+folder it did not make and a project brought up from another folder; downloads `compose.yml` as
+`compose.yaml` and writes `.agentic-worker-install` (the core it came from); runs `docker compose up
+-d`; waits until `remote-worker` and `updater` run (and are `healthy` if they declare a healthcheck)
+and its page (`http://127.0.0.1:7357` for the first worker) answers; and opens it. **What it
+changes**: that folder and the compose project's containers, volumes and networks — no sudo, no
+service, no PATH or profile edit. Options: `--name`/`-Name` (below), `--core` (another core),
+`--no-open`, `--uninstall` (containers only) and `--uninstall --purge` (its volumes, the launcher's
+repository cache volume and the folder too); `--uninstall --name <n>` removes that worker only.
+
+**One worker per core on a machine, each in its own folder** (S-29.2, TD-031's 2026-11-24 amendment,
+decision 9). Every run first looks for **this core's** worker — a folder whose `.agentic-worker-install`
+names this core — in this order: `--dir`, `~/agentic-worker`, `~/agentic-worker-<--name>`, every
+`~/agentic-worker-*` folder, and every folder an `updater` container (of any project, in any state)
+mounts. The first one found is repaired, as before (a second one is named in a warning); `--dir`
+naming another folder does not move it. None found is a **new** install: in `~/agentic-worker` when
+that folder is absent (or empty) and Docker has no project `agentic-worker` — so a single worker is
+exactly what it was — and otherwise a **named** one: `--name <n>` (`-Name`; `a-z`, `0-9` and `-`, at
+most 24, starting with a letter or digit, and not `dev`, which `pnpm worker:dev` uses), or else the
+platform's own slug, which the core renders into the script it serves (its organisation's name,
+`Autix s.r.o.` → `autix-s-r-o`, else its host, `agentic.fontai.org` → `fontai`; a rename reaches the
+next download). A named install gets the folder `~/agentic-worker-<n>` (or `--dir`), the project
+`agentic-worker-<n>`, the volumes `agentic-worker-<n>-ctl` and `agentic-worker-<n>-repo-cache`, the run
+network `agentic-worker-<n>-run-egress` and the first page port from 7357 that nothing listens on and
+no container of any state binds (a stopped worker keeps its port) — each written into that folder's
+`.env` outside the updater's block, with `COMPOSE_PROJECT_NAME`, so a `docker compose up -d` there by
+hand is the same project; a value you set in the shell wins over the installer's. A `--name` you give
+is also written as `APP_WORKER_LABEL`; the platform's slug never is, so a later rename still reaches
+the page. A name whose folder another core's worker holds, or whose compose project already exists, is
+refused (exit 3) with a sentence naming `--name`; so is a second worker when the core rendered no
+slug. **No existing worker is renamed** — its volumes hold its approval and its sign-in: `--name` on
+this core's worker writes only `APP_WORKER_LABEL` (which it shows from its next update). What it
+cannot find: a worker installed with `--dir` outside the home folder and then `--uninstall`ed
+(containers gone, folder kept); a run without `--dir` then makes a new one beside it.
 
 **It never fights the updater.** It installs only a bundle that has the `updater` service, under no
 profile, and runs Compose with the variables that would re-pin images or change what the updater
@@ -580,10 +607,12 @@ read off the bundle the installer downloaded, so it is exactly what that bundle 
 with a character other than letters, digits and `_ . : / @ % + , = -` is named and not saved: put it in
 `.env` yourself. The token and the DSN have no default, so the updater carries them already.
 `APP_WORKER_LABEL` (S-29.1) has an empty default, so it is not in that list: write it into the
-folder's `.env` yourself (S-29.2's `--name` will write it).
+folder's `.env` yourself, or give `--name` to a new install (S-29.2), which writes it (a name of
+`a-z`, `0-9` and `-` only, so it needs no quoting).
 
-**It refuses a worker that would share another worker's names** (BACKLOG 1056). Today that other
-worker is one made by hand: the installer itself cannot make a second worker before S-29.2 (above). Before it writes
+**It refuses a worker that would share another worker's names** (BACKLOG 1056) — one made by hand, or
+names set in the shell that another worker already has (a named install's own are its project's,
+above). Before it writes
 anything, it resolves `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_CACHE_VOLUME` (the shell, else `.env`, else the bundle's default) and asks Docker for the
 labels of what already has those names: a control volume or run network Compose created for another
@@ -592,12 +621,16 @@ that launcher's control volume), refuses (exit 3) with one sentence naming the v
 in the shell, and the installer saves it. What it cannot see: an object of that name with no such label
 (created by hand), and a cache volume another worker is configured with but has not created yet
 (before its first run). A hand-made second worker also needs its own `APP_WORKER_UI_PORT`; Compose's
-port conflict says so.
+port conflict says so (an installer's named worker gets a free one).
 
 **Its install is its mark.** An installer knows its own folder by the `.agentic-worker-install` it
 wrote, never by Compose's `working_dir` label, which names the updater's mount path
-(`/var/lib/platform/host-bundle`) after the first update. A folder without the mark is a new install,
-and any `agentic-worker` project already on the machine is refused as someone else's.
+(`/var/lib/platform/host-bundle`) after the first update; the updater's mount names the host folder
+outright, so a project whose updater mounts another folder of this machine is refused as someone
+else's. A folder without the mark is a new install; a new install never joins a project already on the
+machine — beside `agentic-worker` it is a named one (above), and a named one whose project exists is
+refused. A named worker's project is the `COMPOSE_PROJECT_NAME` in its `.env`; a folder with none is
+`agentic-worker` (every install made before S-29.2).
 
 **Windows** runs the same bundle as Linux containers on Docker Desktop, and updates itself since
 S-22.21: the updater reaches the folder through its fixed-path mount, whose `C:\` source Docker

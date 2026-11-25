@@ -14,9 +14,23 @@ Or read it before running it:
 What it changes on this machine, and nothing else:
   - a folder, $HOME\agentic-worker by default (-Dir). It holds compose.yaml, the core's worker
     bundle, and .agentic-worker-install, this installer's mark (which core it came from);
-  - the Docker containers, volumes and networks of the compose project 'agentic-worker', created by
-    'docker compose up -d' in that folder. Docker Desktop keeps them running while it runs.
+  - the Docker containers, volumes and networks of the worker's compose project, created by
+    'docker compose up -d' in that folder: 'agentic-worker' for the first worker on this machine.
+    Docker Desktop keeps them running while it runs.
 It needs no administrator rights, installs no service and edits no PATH or profile.
+
+One worker per core on this machine (S-29.2, TD-031's 2026-11-24 amendment, decision 9). Every run
+first looks for this core's install: a folder whose mark names this core, in this order: -Dir,
+then agentic-worker in your home folder, then agentic-worker-<-Name> there, then every
+agentic-worker-* folder there, then every folder an 'updater' container mounts. The first one found
+is repaired (a second one is named in a warning). None found is a new install: in agentic-worker
+when that folder and the project 'agentic-worker' are free (the first worker, as before), else a
+named one in agentic-worker-<name>, where the name is -Name, else this platform's own (its name as
+the core served this script). A named install gets the project 'agentic-worker-<name>', its own control
+volume, repository cache, run network and the first free page port from 7357, all written into its
+folder's .env (outside the updater's block) with COMPOSE_PROJECT_NAME, so a 'docker compose up -d'
+there by hand is the same project. A name another core's worker holds is refused. An existing
+install is never renamed: -Name on it only sets the label its page shows (APP_WORKER_LABEL).
 
 The worker's 'updater' service follows the core and verifies each build before it applies it.
 Running this script again is a repair, never an upgrade. It never changes the images an approved
@@ -31,8 +45,9 @@ first 'docker compose up': the updater carries into a new build only values with
 given in the session alone would go back to its default at the next update. Secret-looking names,
 the image and trust variables, and anything the bundle does not declare are never written.
 
-Options: -Dir DIR, -Core URL, -NoOpen, -Uninstall, -Purge (with -Uninstall). With irm | iex, pass
-them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Uninstall
+Options: -Name NAME (a-z, 0-9 and -, at most 24, not dev), -Dir DIR, -Core URL, -NoOpen,
+-Uninstall, -Purge (with -Uninstall). With irm | iex, pass them as:
+& ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Uninstall
 #>
 # Everything runs inside one script block, its options included, so `irm | iex` leaves no function,
 # variable or preference behind in the caller's session: the script has no parameters of its own and
@@ -40,6 +55,7 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
 # when this is a file run, and nowhere when it is not.
 & {
   param(
+    [string]$Name = '',
     [string]$Dir = '',
     [string]$Core = '',
     [switch]$NoOpen,
@@ -49,7 +65,17 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   $ErrorActionPreference = 'Stop'
 
   $CoreUrl = '@@AGENTIC_CORE_URL@@'
-  $Project = 'agentic-worker'
+  # This platform's slug, rendered by the core per download (TD-031's 2026-11-24 amendment,
+  # decision 9 item 3): the name of a second worker when no -Name is given. Empty when it has none.
+  $CoreSlug = '@@AGENTIC_INSTANCE_SLUG@@'
+  # The first worker's project; a named one is agentic-worker-<name>. Install-Worker and
+  # Uninstall-Worker set $Project and $WorkerDir once the install is resolved.
+  $DefaultProject = 'agentic-worker'
+  $Project = $DefaultProject
+  # What this installer itself writes into .env (S-29.2), never taken from the session: a named
+  # install's COMPOSE_PROJECT_NAME, its three names and page port where the session set none, and a
+  # person's -Name as APP_WORKER_LABEL.
+  $InstallerSettings = [ordered]@{}
   $Mark = '.agentic-worker-install'
   $Bundle = 'compose.yaml'
   $Download = '.compose.yaml.download'
@@ -130,13 +156,33 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   # The project's containers, any state, as `docker inspect` describes them (JSON: no argument
   # carries a double quote, which Windows PowerShell 5.1 does not pass to a native command intact).
   function Get-ProjectContainer {
-    $ids = Invoke-Native -File 'docker' -Arguments @('ps', '--all', '--quiet', '--filter', "label=com.docker.compose.project=$Project") -Capture
+    return (Get-ContainerList @('--filter', "label=com.docker.compose.project=$Project"))
+  }
+
+  # The containers `docker ps --all` lists with these filters, as `docker inspect` describes them.
+  # -Tolerant: a container removed between the two calls fails the inspect; keep what it printed.
+  function Get-ContainerList {
+    param([string[]]$Filter, [switch]$Tolerant)
+    $ids = Invoke-Native -File 'docker' -Arguments (@('ps', '--all', '--quiet') + $Filter) -Capture
     if ($ids.Code -ne 0) { Exit-Installer 1 'docker ps failed' }
     $list = @($ids.Output -split "`n" | Where-Object { $_.Trim() -ne '' } | ForEach-Object { $_.Trim() })
     if ($list.Count -eq 0) { return @() }
     $inspected = Invoke-Native -File 'docker' -Arguments (@('inspect', '--format', '{{json .}}') + $list) -Capture
-    if ($inspected.Code -ne 0) { Exit-Installer 1 'docker inspect failed' }
+    if ($inspected.Code -ne 0 -and -not $Tolerant) { Exit-Installer 1 'docker inspect failed' }
     return @($inspected.Output -split "`n" | Where-Object { $_.Trim() -ne '' } | ForEach-Object { $_ | ConvertFrom-Json })
+  }
+
+  # The host folders these containers mount at the updater's path (Docker reports a bind mount's
+  # source; Compose's labels do not, TD-032 decision 4).
+  function Get-MountedFolder {
+    param($Containers)
+    $folders = @()
+    foreach ($container in @($Containers)) {
+      foreach ($mount in @($container.Mounts)) {
+        if ($null -ne $mount -and [string]$mount.Destination -eq $UpdaterFolder -and [string]$mount.Source -ne '') { $folders += [string]$mount.Source }
+      }
+    }
+    return $folders
   }
 
   function Get-Label {
@@ -171,7 +217,13 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   function Assert-NothingForeignOrBusy {
     $here = $WorkerDir.TrimEnd('\')
     $containers = @(Get-ProjectContainer)
-    $foreign = @($containers | ForEach-Object { Get-Label $_ 'com.docker.compose.project.working_dir' } |
+    # The updater's mount names the host folder outright; one that is not a folder here (Docker
+    # named it another way) is skipped.
+    $updaters = @($containers | Where-Object { (Get-Label $_ 'com.docker.compose.service') -eq 'updater' })
+    $mounted = @(Get-MountedFolder $updaters | Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+        ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\', '/') })
+    $labelled = @($containers | ForEach-Object { Get-Label $_ 'com.docker.compose.project.working_dir' })
+    $foreign = @(($labelled + $mounted) |
         Where-Object { $_ -ne '' -and $_.TrimEnd('\') -ne $here -and $_ -ne $UpdaterFolder } | Sort-Object -Unique)
     if ($foreign.Count -gt 0) {
       Exit-Installer 3 "a worker bundle named $Project already runs from $($foreign -join ', '). This installer will not take it over: stop it there first (docker compose down, in that folder), or keep using it."
@@ -315,13 +367,22 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     return $value
   }
 
-  # The name a variable resolves to for Compose: this session, else .env, else the bundle's default.
+  # The name a variable resolves to for Compose: this session, else what this installer writes for a
+  # named install, else .env, else the bundle's default.
   function Get-ResolvedValue {
     param([string]$Name, [string]$BundleText)
     $value = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    if ([string]::IsNullOrEmpty($value) -and $InstallerSettings.Contains($Name)) { $value = $InstallerSettings[$Name] }
     if ([string]::IsNullOrEmpty($value)) { $value = Get-EnvFileValue $Name }
     if ([string]::IsNullOrEmpty($value)) { $value = Get-DefaultPin $BundleText $Name }
     return $value
+  }
+
+  # The value a setting is saved with: this installer's own, else this session's.
+  function Get-SettingValue {
+    param([string]$Variable)
+    if ($InstallerSettings.Contains($Variable)) { return [string]$InstallerSettings[$Variable] }
+    return [Environment]::GetEnvironmentVariable($Variable, 'Process')
   }
 
   # Writes the settings of this session into .env (BACKLOG 1055), before the first
@@ -329,9 +390,9 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   # where it stands (a later duplicate dropped), a new one appended; the updater's block is copied as
   # it is. Says in one line what it saved.
   function Save-ShellSetting {
-    $names = @()
+    $names = @($InstallerSettings.Keys)
     foreach ($variable in (Get-DefaultedVariable (Read-Text (Join-Path $WorkerDir $Download)))) {
-      if ($NotSaved -ccontains $variable) { continue }
+      if ($NotSaved -ccontains $variable -or $names -ccontains $variable) { continue }
       if ($variable -cmatch 'TOKEN|SECRET|PASSWORD|PASSWD|KEY|DSN|CREDENTIAL|PRIVATE') { continue }
       $value = [Environment]::GetEnvironmentVariable($variable, 'Process')
       if ([string]::IsNullOrEmpty($value)) { continue }
@@ -362,7 +423,7 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
         if ($line -cmatch '^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=' -and $names -ccontains $Matches[2]) {
           $name = $Matches[2]
           if (-not $written.ContainsKey($name)) {
-            $lines.Add("$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))")
+            $lines.Add("$name=$(Get-SettingValue $name)")
             $written[$name] = $true
           }
           continue
@@ -371,7 +432,7 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
       }
     }
     foreach ($name in $names) {
-      if (-not $written.ContainsKey($name)) { $lines.Add("$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))") }
+      if (-not $written.ContainsKey($name)) { $lines.Add("$name=$(Get-SettingValue $name)") }
     }
     $next = Join-Path $WorkerDir '.env.installer'
     [IO.File]::WriteAllText($next, (($lines -join "`n") + "`n"))
@@ -454,12 +515,12 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     return $port
   }
 
-  # The launcher's repository cache volume: APP_WORKER_CACHE_VOLUME (this session, else .env), or
-  # the bundle's default.
+  # The launcher's repository cache volume: APP_WORKER_CACHE_VOLUME (this session, else .env), or the
+  # project's own default (agentic-worker-repo-cache for the first worker), never another worker's.
   function Get-CacheVolume {
     $volume = [Environment]::GetEnvironmentVariable('APP_WORKER_CACHE_VOLUME', 'Process')
     if ([string]::IsNullOrEmpty($volume)) { $volume = Get-EnvFileValue 'APP_WORKER_CACHE_VOLUME' }
-    if ($volume -notmatch '^[A-Za-z0-9_.-]+\z') { $volume = 'agentic-worker-repo-cache' }
+    if ($volume -notmatch '^[A-Za-z0-9_.-]+\z') { $volume = "$Project-repo-cache" }
     return $volume
   }
 
@@ -521,8 +582,155 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     }
   }
 
+  # --- Which install: this core's, or a new one (S-29.2, decision 9 item 2) ---
+
+  # The core a folder's mark names, or '' (no mark).
+  function Get-FolderCore {
+    param([string]$Folder)
+    $text = Read-Text (Join-Path $Folder $Mark)
+    if ($null -eq $text) { return '' }
+    $found = [regex]::Match($text, '(?m)^core=(.*?)\r?$')
+    if ($found.Success) { return $found.Groups[1].Value }
+    return ''
+  }
+
+  # This core's installs, each once, in the decision's order: -Dir, agentic-worker in the home
+  # folder, the -Name folder, every agentic-worker-* folder there, and the folders the updater
+  # containers (any project, any state) mount.
+  function Get-ThisCoreInstall {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($DirGiven -ne '') { $candidates.Add($DirGiven) }
+    $candidates.Add((Join-Path $HomeFolder 'agentic-worker'))
+    if ($WorkerName -ne '') { $candidates.Add((Join-Path $HomeFolder "agentic-worker-$WorkerName")) }
+    if (Test-Path -LiteralPath $HomeFolder -PathType Container) {
+      foreach ($folder in @(Get-ChildItem -LiteralPath $HomeFolder -Directory -Filter 'agentic-worker-*' | Sort-Object Name)) { $candidates.Add($folder.FullName) }
+    }
+    foreach ($folder in @(Get-MountedFolder @(Get-ContainerList @('--filter', 'label=com.docker.compose.service=updater') -Tolerant))) { $candidates.Add($folder) }
+    $seen = @{}
+    $found = @()
+    foreach ($folder in $candidates) {
+      if ([string]::IsNullOrEmpty($folder) -or -not (Test-Path -LiteralPath $folder -PathType Container)) { continue }
+      if ((Get-FolderCore $folder) -ne $CoreAddress) { continue }
+      $key = [IO.Path]::GetFullPath($folder).TrimEnd('\', '/').ToLowerInvariant()
+      if ($seen.ContainsKey($key)) { continue }
+      $seen[$key] = $true
+      $found += [IO.Path]::GetFullPath($folder).TrimEnd('\', '/')
+    }
+    return $found
+  }
+
+  # The project of a folder: the COMPOSE_PROJECT_NAME a named install wrote into its .env, else
+  # agentic-worker (the first worker, and every install made before S-29.2).
+  function Get-FolderProject {
+    $value = Get-EnvFileValue 'COMPOSE_PROJECT_NAME'
+    if ($value -eq '') { return $DefaultProject }
+    if ($value -cmatch '^[a-z0-9][a-z0-9_-]*\z') { return $value }
+    Exit-Installer 3 "$WorkerDir\.env names the compose project '$value', which this installer does not accept. Fix that line (agentic-worker-<name>) and run this again."
+  }
+
+  # A folder a new install may take: absent, or an empty folder.
+  function Test-FolderFree {
+    param([string]$Folder)
+    if (-not (Test-Path -LiteralPath $Folder)) { return $true }
+    return ((Test-Path -LiteralPath $Folder -PathType Container) -and @(Get-ChildItem -LiteralPath $Folder -Force).Count -eq 0)
+  }
+
+  # The platform's slug, for a second worker that was given no -Name; refused when there is none.
+  function Get-NeededSlug {
+    if ($Slug -eq '') {
+      Exit-Installer 3 "another worker (the project $DefaultProject, or a folder agentic-worker in your home folder this installer did not make for this core) is already on this machine, and this script knows no name for a second one. Run it again with -Name <a name for this worker> (a-z, 0-9 and -)."
+    }
+    return $Slug
+  }
+
+  # Where a new install goes (decision 9 item 2): its folder, its name ('' for the first worker's
+  # project, agentic-worker) and its project.
+  function Get-NewInstallPlan {
+    $defaultTaken = @(Get-ContainerList @('--filter', "label=com.docker.compose.project=$DefaultProject")).Count -gt 0
+    $installName = ''
+    if ($DirGiven -ne '') {
+      $folder = $DirGiven
+      if ($WorkerName -ne '') { $installName = $WorkerName } elseif ($defaultTaken) { $installName = Get-NeededSlug }
+    } elseif ($WorkerName -ne '') {
+      $installName = $WorkerName
+      $folder = Join-Path $HomeFolder "agentic-worker-$WorkerName"
+    } elseif ((Test-FolderFree (Join-Path $HomeFolder 'agentic-worker')) -and -not $defaultTaken) {
+      $folder = Join-Path $HomeFolder 'agentic-worker'
+    } else {
+      $installName = Get-NeededSlug
+      $folder = Join-Path $HomeFolder "agentic-worker-$installName"
+    }
+    $project = $DefaultProject
+    if ($installName -ne '') { $project = "$DefaultProject-$installName" }
+    return @{ Dir = $folder; Name = $installName; Project = $project }
+  }
+
+  # The page ports Docker's containers bind, in any state (a stopped worker keeps its port).
+  function Get-BoundPort {
+    $ports = @()
+    foreach ($container in @(Get-ContainerList @() -Tolerant)) {
+      if ($null -eq $container.HostConfig -or $null -eq $container.HostConfig.PortBindings) { continue }
+      foreach ($binding in $container.HostConfig.PortBindings.PSObject.Properties) {
+        foreach ($hostPort in @($binding.Value)) {
+          if ($null -ne $hostPort -and [string]$hostPort.HostPort -match '^\d+\z') { $ports += [string]$hostPort.HostPort }
+        }
+      }
+    }
+    return $ports
+  }
+
+  # The ports something on this machine listens on, on any address (read from the TCP table, not by
+  # connecting: Windows retries a refused loopback connection for about two seconds).
+  function Get-ListeningPort {
+    $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    return @($listeners | ForEach-Object { [string]$_.Port })
+  }
+
+  # The first page port from 7357 that nothing listens on and no container binds.
+  function Get-FreePagePort {
+    $bound = @(Get-BoundPort)
+    $listening = @(Get-ListeningPort)
+    for ($port = 7357; $port -le 7456; $port++) {
+      if ($bound -contains [string]$port -or $listening -contains [string]$port) { continue }
+      return [string]$port
+    }
+    Exit-Installer 1 'no page port from 7357 to 7456 is free on this machine. Set $env:APP_WORKER_UI_PORT to a free one and run this again.'
+  }
+
+  # What a new named install writes into its .env besides the session's settings (decision 9 item
+  # 1): COMPOSE_PROJECT_NAME, and its control volume, repository cache, run network and page port
+  # where this session set none; a person's -Name also as APP_WORKER_LABEL (a platform's name never
+  # is, so a later rename still reaches the page).
+  function Add-NamedSetting {
+    $InstallerSettings['COMPOSE_PROJECT_NAME'] = $Project
+    foreach ($pair in @(@('APP_WORKER_CONTROL_VOLUME', "$Project-ctl"), @('APP_WORKER_CACHE_VOLUME', "$Project-repo-cache"), @('APP_WORKER_RUN_NETWORK', "$Project-run-egress"))) {
+      if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($pair[0], 'Process'))) { $InstallerSettings[$pair[0]] = $pair[1] }
+    }
+    if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('APP_WORKER_UI_PORT', 'Process'))) { $InstallerSettings['APP_WORKER_UI_PORT'] = Get-FreePagePort }
+    if ($WorkerName -ne '') { $InstallerSettings['APP_WORKER_LABEL'] = $WorkerName }
+  }
+
+  # --- Install (or repair) ---
+
   function Install-Worker {
     Assert-Docker
+    $found = @(Get-ThisCoreInstall)
+    $installName = ''
+    if ($found.Count -gt 0) {
+      $WorkerDir = $found[0]
+      if ($found.Count -gt 1) {
+        $Host.UI.WriteErrorLine("agentic-worker: this core has another worker on this machine too, in $(($found | Select-Object -Skip 1) -join ', '). This run takes care of $WorkerDir only; remove the other with -Uninstall -Dir <its folder>.")
+      }
+      if ($DirGiven -ne '' -and $DirGiven -ne $WorkerDir) {
+        $Host.UI.WriteErrorLine("agentic-worker: $DirGiven holds no worker of $CoreAddress; this core's worker is in $WorkerDir (one worker per core on a machine), so this run repairs that one.")
+      }
+      $Project = Get-FolderProject
+    } else {
+      $plan = Get-NewInstallPlan
+      $WorkerDir = $plan.Dir
+      $Project = $plan.Project
+      $installName = $plan.Name
+    }
     if ((Test-Path -LiteralPath $WorkerDir) -and -not (Test-Path -LiteralPath $WorkerDir -PathType Container)) {
       Exit-Installer 3 "$WorkerDir exists and is not a folder; pass another with -Dir"
     }
@@ -531,6 +739,17 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
       @(Get-ChildItem -LiteralPath $WorkerDir -Force).Count -gt 0) {
       Exit-Installer 3 "$WorkerDir exists and was not made by this installer (it has no $Mark). Pass another folder with -Dir. A worker you set up there by hand keeps itself up to date; keep running it with docker compose in that folder."
     }
+    if ($installName -ne '') {
+      # A name another worker holds: its folder marked by another core, or its project on this machine.
+      $holder = Get-FolderCore $WorkerDir
+      # A -Dir folder another core's install holds is refused below, as before (it was installed from).
+      if ($DirGiven -eq '' -and $holder -ne '' -and $holder -ne $CoreAddress) {
+        Exit-Installer 3 "the name $installName is taken on this machine: $WorkerDir holds the worker of $holder. Run this again with -Name <another name>."
+      }
+      if (@(Get-ProjectContainer).Count -gt 0) {
+        Exit-Installer 3 "the name $installName is taken on this machine: the compose project $Project already exists (another core's worker, or one made by hand). Run this again with -Name <another name>."
+      }
+    }
     if (Test-Path -LiteralPath $markPath) {
       $previous = Get-MarkedCore
       if ($previous -ne '' -and $previous -ne $CoreAddress) {
@@ -538,6 +757,19 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
       }
     }
     Assert-NothingForeignOrBusy
+
+    if ($installName -ne '') {
+      Add-NamedSetting
+      if ($WorkerName -ne '') {
+        Write-Line "Installing a worker named $installName in $WorkerDir (compose project $Project) ..."
+      } else {
+        Write-Line "Another worker already has agentic-worker in your home folder or the project $DefaultProject on this machine, so this core's worker is named after its platform: $installName, in $WorkerDir (compose project $Project). Pass -Name to choose another name."
+      }
+    } elseif ($WorkerName -ne '' -and $found.Count -gt 0) {
+      # An existing install is never renamed (its volumes hold its approval and its sign-in).
+      $InstallerSettings['APP_WORKER_LABEL'] = $WorkerName
+      Write-Line "This core's worker is already installed in $WorkerDir (compose project $Project); it keeps its folder and project, and -Name sets only the label its page shows."
+    }
 
     $madeDir = -not (Test-Path -LiteralPath $WorkerDir -PathType Container)
     $null = New-Item -ItemType Directory -Force -Path $WorkerDir
@@ -614,19 +846,43 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     Write-Line '              Sign in to Claude and approve this machine there. If the page asks for a token:'
     Write-Line "              cd '$WorkerDir'; docker compose logs remote-worker | Select-String token="
     Write-Line "  Its folder: $WorkerDir"
+    if ($Project -ne $DefaultProject) { Write-Line "  Its name:   compose project $Project (in $WorkerDir\.env, so docker compose there finds it)" }
     Write-Line "  Updates:    automatic. Its updater follows $CoreAddress; you never run this again to update."
 
     Write-Line '  Remove it:  run this script again with -Uninstall (add -Purge to remove its data too)'
   }
 
+  # Which install to remove: -Name's folder (agentic-worker-NAME in the home folder, or -Dir), else
+  # -Dir, else this core's install as a re-run finds it. Each must be this core's: removing another
+  # core's worker is that core's script's to do (or -Core's).
   function Uninstall-Worker {
     Assert-Docker
+    if ($WorkerName -ne '' -and $DirGiven -eq '') {
+      $WorkerDir = Join-Path $HomeFolder "agentic-worker-$WorkerName"
+    } elseif ($DirGiven -ne '') {
+      $WorkerDir = $DirGiven
+    } else {
+      $found = @(Get-ThisCoreInstall)
+      if ($found.Count -eq 0) {
+        Exit-Installer 3 "nothing to remove: no worker of $CoreAddress is installed on this machine (looked in agentic-worker and agentic-worker-* in your home folder, and the folders Docker's updaters mount). Pass -Dir to name its folder."
+      }
+      $WorkerDir = $found[0]
+      if ($found.Count -gt 1) {
+        $Host.UI.WriteErrorLine("agentic-worker: this core has another worker on this machine too, in $(($found | Select-Object -Skip 1) -join ', '). This run removes $WorkerDir only; remove the other with -Uninstall -Dir <its folder>.")
+      }
+    }
     if (-not (Test-Path -LiteralPath $WorkerDir -PathType Container)) { Exit-Installer 3 "nothing to remove: $WorkerDir does not exist" }
     if (-not (Test-Path -LiteralPath (Join-Path $WorkerDir $Mark))) {
       Exit-Installer 3 "$WorkerDir was not made by this installer (it has no $Mark); remove that worker yourself (docker compose down, in that folder)."
     }
+    $previous = Get-MarkedCore
+    if ($previous -ne '' -and $previous -ne $CoreAddress) {
+      Exit-Installer 3 "$WorkerDir holds the worker of $previous, not of $CoreAddress; remove it with that core's script (or add -Core $previous)."
+    }
+    $Project = Get-FolderProject
     Assert-NothingForeignOrBusy
     if (-not (Test-Path -LiteralPath (Join-Path $WorkerDir $Bundle))) { Exit-Installer 3 "$WorkerDir\$Bundle is missing, so this installer cannot tell Compose what to remove." }
+    Write-Line "Removing the worker in $WorkerDir (compose project $Project) ..."
     if ($Purge) {
       $cache = Get-CacheVolume
       if ((Invoke-Compose @('down', '--volumes', '--remove-orphans')).Code -ne 0) { Exit-Installer 1 'docker compose down failed (see above).' }
@@ -665,10 +921,28 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     if ($CoreAddress -notmatch '^https?://.') { Exit-Installer 2 "the core's address must start with https:// (or http://): $CoreAddress" }
     if ($CoreAddress -notmatch '^[-A-Za-z0-9.:/_~%]+$') { Exit-Installer 2 "the core's address has a character this installer does not accept: $CoreAddress" }
 
-    $WorkerDir = $Dir
-    if ($WorkerDir -eq '') { $WorkerDir = Join-Path $HOME 'agentic-worker' }
-    if (-not [IO.Path]::IsPathRooted($WorkerDir)) { $WorkerDir = Join-Path (Get-Location).ProviderPath $WorkerDir }
-    $WorkerDir = [IO.Path]::GetFullPath($WorkerDir).TrimEnd('\', '/')
+    # A worker's name (decision 9 item 1): ^[a-z0-9][a-z0-9-]{0,23}$, and not dev, which
+    # `pnpm worker:dev` uses (its project is agentic-worker-dev). Copied, because a function's own
+    # $name would hide the option ($Name and $name are one variable).
+    $WorkerName = $Name
+    if ($WorkerName -ceq 'dev') { Exit-Installer 2 '-Name dev is refused: pnpm worker:dev uses the project agentic-worker-dev. Pick another name.' }
+    if ($WorkerName -ne '' -and $WorkerName -cnotmatch '^[a-z0-9][a-z0-9-]{0,23}\z') {
+      Exit-Installer 2 "-Name must be 1 to 24 characters of a-z, 0-9 and -, starting with a letter or a digit (and not dev): $WorkerName"
+    }
+    # The platform's slug names a second worker only for the core that rendered it: another core
+    # given with -Core has none here, so its second worker needs -Name.
+    $Slug = $CoreSlug
+    if ($CoreAddress -ne $CoreUrl.TrimEnd('/') -or $Slug -ceq 'dev' -or $Slug -cnotmatch '^[a-z0-9][a-z0-9-]{0,23}\z') { $Slug = '' }
+
+    $HomeFolder = $HOME
+    # -Dir as given, made absolute. $WorkerDir is the folder this run works in once it is resolved.
+    $DirGiven = ''
+    if ($Dir -ne '') {
+      $DirGiven = $Dir
+      if (-not [IO.Path]::IsPathRooted($DirGiven)) { $DirGiven = Join-Path (Get-Location).ProviderPath $DirGiven }
+      $DirGiven = [IO.Path]::GetFullPath($DirGiven).TrimEnd('\', '/')
+    }
+    $WorkerDir = $DirGiven
 
     $WaitLimit = 300
     $waitSetting = [Environment]::GetEnvironmentVariable('AGENTIC_INSTALL_WAIT_SECONDS', 'Process')

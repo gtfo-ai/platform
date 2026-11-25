@@ -1081,6 +1081,37 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     }
   });
 
+  it('install.sh and install.ps1 carry the platform’s slug, rendered per request, so a rename reaches the next download (S-29.2)', async () => {
+    const w = await world();
+    const slugs = async () => {
+      const sh = await w.app.inject({ method: 'GET', url: url(WORKER_PATHS.installSh) });
+      const ps1 = await w.app.inject({ method: 'GET', url: url(WORKER_PATHS.installPs1) });
+      expect(sh.statusCode).toBe(200);
+      expect(ps1.statusCode).toBe(200);
+      for (const body of [sh.body, ps1.body]) {
+        expect(body).not.toContain('@@AGENTIC_INSTANCE_SLUG@@');
+      }
+      return {
+        sh: /^CORE_SLUG='([^']*)'$/m.exec(sh.body)?.[1],
+        ps1: /^ {2}\$CoreSlug = '([^']*)'$/m.exec(ps1.body)?.[1],
+      };
+    };
+    // No organisation yet: the host's (core.example.test → core).
+    expect(await slugs()).toEqual({ sh: 'core', ps1: 'core' });
+    w.store.setOrganisationName('FontAI');
+    expect(await slugs()).toEqual({ sh: 'fontai', ps1: 'fontai' });
+    w.store.setOrganisationName('Autix s.r.o.');
+    expect(await slugs()).toEqual({ sh: 'autix-s-r-o', ps1: 'autix-s-r-o' });
+    // A name with nothing the pattern keeps, or one that slugs to `dev`, renders the host's.
+    for (const name of ['株式会社', 'Dev', "'; rm -rf ~; '"]) {
+      w.store.setOrganisationName(name);
+      const rendered = await slugs();
+      expect(rendered, name).toEqual(
+        name === "'; rm -rf ~; '" ? { sh: 'rm-rf', ps1: 'rm-rf' } : { sh: 'core', ps1: 'core' },
+      );
+    }
+  });
+
   it('install.sh and install.ps1 answer 503 install_script_unavailable for an APP_BASE_URL they cannot quote (S-22.20)', async () => {
     const w = await world({ baseUrl: "https://core.example.test/it's" });
     for (const verb of [WORKER_PATHS.installSh, WORKER_PATHS.installPs1]) {

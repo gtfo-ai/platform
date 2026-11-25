@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * `node scripts/worker-install-check.mjs` — **the one-command install against a real core and a real
- * daemon** (S-22.20, backlog 1021). The unit tier runs `install.sh` against a stub `docker` and `curl`
- * (`apps/server/src/workers/install-script.test.ts`); this runs the line a person runs:
+ * daemon** (S-22.20, backlog 1021; the second worker, S-29.2). The unit tier runs `install.sh`
+ * against a stub `docker` and `curl` (`apps/server/src/workers/install-script.test.ts`); this runs
+ * the line a person runs:
  *
  *     curl -fsSL '<core>/api/worker/v1/install.sh' | sh -s -- --dir <folder> --no-open
  *
@@ -17,32 +18,43 @@
  *    `worker-compose-check.mjs` explains) holding the four `:<tag>` images this run built, pushed
  *    under `localhost:<port>/acme/…` and untagged again, so the installer's `docker compose up`
  *    **pulls them by registry digest** — the images of this build, never `ghcr.io`'s `latest`;
- *  - **the core**: `compose.yml`'s `app` (and what it depends on — no runner, no launcher), on a fixed
- *    port, `APP_BASE_URL` the address below, advertising those four digests
- *    (`APP_IMAGE_REPOSITORY` + `APP_WORKER_IMAGE_DIGESTS`), so the script it serves names it and the
- *    bundle it serves pins them;
- *  - **the worker, installed by the served script** into a fresh folder under the system's temporary
- *    directory, with `--no-open`. `APP_BASE_URL` is how both this host (the installer's own `curl`)
- *    and a container (the worker and its updater) reach the core: the default bridge's gateway on a
- *    Linux engine — an address of the host every bridge network routes to, as
- *    `worker-update-check.mjs` measured — and `host.docker.internal` on Docker Desktop, which the
- *    host must then resolve too (refused by name when it does not; `--host-address` overrides).
+ *  - **two cores**: `compose.yml`'s `app` (and what it depends on — no runner, no launcher) twice, as
+ *    two projects on two fixed ports, each `APP_BASE_URL` the address below with its own port,
+ *    advertising those four digests (`APP_IMAGE_REPOSITORY` + `APP_WORKER_IMAGE_DIGESTS`), so the
+ *    script each serves names it and the bundle each serves pins them. To the installer they are two
+ *    cores: its mark records the core's address;
+ *  - **the first core's worker, installed by its served script** into a fresh folder under the
+ *    system's temporary directory (`--dir`), with `--no-open`;
+ *  - **the second core's worker** (S-29.2), installed by the second core's line with no option but
+ *    `--no-open`, as a person runs it: the first worker has the project `agentic-worker`, so the
+ *    script names this one after its platform — `~/agentic-worker-<slug>`, the project
+ *    `agentic-worker-<slug>`, its own control volume, cache volume, run network and the first free
+ *    page port, written into that folder's `.env` with `COMPOSE_PROJECT_NAME`. `~` is a fresh folder
+ *    of this run (the installer's `HOME`), so nothing of a person's home is read or written.
  *
- * ## The project name
+ * `APP_BASE_URL` is how both this host (the installer's own `curl`) and a container (the worker and
+ * its updater) reach a core: the default bridge's gateway on a Linux engine — an address of the host
+ * every bridge network routes to, as `worker-update-check.mjs` measured — and `host.docker.internal`
+ * on Docker Desktop, which the host must then resolve too (refused by name when it does not;
+ * `--host-address` overrides).
  *
- * `install.sh` fixes the compose project name: `agentic-worker`, the same as a developer's own worker
- * on the same daemon (the owner's runs there). So this check **refuses to start** when the daemon has
- * any container, volume or network of that project, or any of the names below — it never joins,
+ * ## The project names
+ *
+ * `install.sh` names the first worker on a machine `agentic-worker`, the same as a developer's own
+ * worker on the same daemon (the owner's runs there), and the second after its platform. So this
+ * check **refuses to start** when the daemon has any container, volume or network of
+ * `agentic-worker`, or any of the first worker's names below — and refuses the second install when
+ * the daemon has anything of the project the second core's script would name — it never joins,
  * stops or removes somebody's worker, and a refusal is a `FAIL`, never a skip. Everything else is its
- * own: the core's project (`agentic-install-check-core-<suffix>`), the registry, the page port
- * ({@link UI_PORT}, off the default 7357), and the worker's named control volume, repository cache
- * volume and run network, which the installer passes from its shell to `docker compose`
- * (`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK`,
- * `APP_WORKER_UI_PORT`). On a CI runner the daemon is the job's own.
+ * own: the cores' projects (`agentic-install-check-core-<suffix>`, `…-core2-<suffix>`), the
+ * registry, the first worker's page port ({@link UI_PORT}, off the default 7357), and its named
+ * control volume, repository cache volume and run network, which the installer passes from its shell
+ * to `docker compose` (`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`,
+ * `APP_WORKER_RUN_NETWORK`, `APP_WORKER_UI_PORT`). On a CI runner the daemon is the job's own.
  *
  * ## What it asserts
  *
- *  1. the core serves `install.sh` (200) with its own address filled in, and `compose.yml` pinning
+ *  1. each core serves `install.sh` (200) with its own address filled in, and `compose.yml` pinning
  *     the four registry digests;
  *  2. **the install**: the piped line exits 0; every container of the project is running — the
  *     `remote-worker`, the `launcher`, the **`updater`** and both socket proxies — and each that
@@ -54,23 +66,33 @@
  *  3. **the re-run** of the same line exits 0, says the worker is already installed, and **recreates
  *     nothing**: every container id (and creation time) is the one before; the services are healthy
  *     and the page answers again;
- *  4. **`--uninstall --purge`** (the same piped line) exits 0 and leaves **nothing**: no container,
+ *  4. **the second worker** (S-29.2 (6)): the second core's line exits 0 into
+ *     `~/agentic-worker-<slug>`, whose `.env` holds `COMPOSE_PROJECT_NAME`, the three derived names
+ *     and a page port (and no `APP_WORKER_LABEL`: the name is the platform's); its project's services
+ *     are healthy and its page answers while the first's still do, the first's containers untouched;
+ *     a re-run of each line recreates nothing in either project; a hand `docker compose up -d` in the
+ *     second folder (no `-p`, no `COMPOSE_*` in its environment) hits the second project and
+ *     recreates nothing in either; and the second line's `--uninstall --purge` leaves nothing of the
+ *     second worker (no container, volume or network of its project, nor its derived names, nor its
+ *     folder) while the first keeps running healthy, its page answering;
+ *  5. **`--uninstall --purge`** (the first line) exits 0 and leaves **nothing**: no container,
  *     volume or network of the project, neither named volume nor the run network, and no folder.
  *     The launcher's repository cache volume is made first (`docker volume create`; only a run's
  *     first clone makes it, and none runs here), so the purge's removal of it is exercised;
- *  5. nothing of the check is left: the core down with its volumes, the registry and the pushed image
- *     references removed — whatever happened (`finally`).
+ *  6. nothing of the check is left: the cores down with their volumes, the second worker's objects,
+ *     the registry and the pushed image references removed — whatever happened (`finally`).
  *
- * Every exec and request is bounded, each stage by its own bound, and the bounds sum under the
- * workflow job's 30 min (see {@link INSTALL_MS}'s neighbours); a failure prints the command's output with every secret value
- * the check holds replaced by its name. Not a `verify` target, for the reason none of the Docker
- * checks are: it needs a daemon. With no daemon or no image it exits 1 naming what is missing.
+ * Every exec and request is bounded, each stage by its own bound; the bounds sum to 29.5 min, under
+ * the workflow job's 30 (see {@link INSTALL_MS}'s neighbours), and the measured run is a few minutes.
+ * A failure prints the command's output with every secret value the check holds replaced by its
+ * name. Not a `verify` target, for the reason none of the Docker checks are: it needs a daemon. With
+ * no daemon or no image it exits 1 naming what is missing.
  */
 import { execFile } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -95,20 +117,29 @@ const optionValue = (flag, fallback) => {
 };
 const TAG = optionValue('--tag', process.env.PLATFORM_TAG ?? 'dev');
 const SUFFIX = optionValue('--project-suffix', process.env.GITHUB_RUN_ID ?? 'local');
-const CORE = `agentic-install-check-core-${SUFFIX}`;
-const REGISTRY_CONTAINER = `agentic-install-check-registry-${SUFFIX}`;
-/** The project `install.sh` brings the worker up as — fixed by the script (see the header). */
-const PROJECT = 'agentic-worker';
 const CORE_PORT = Number(optionValue('--core-port', '38789'));
-/** The worker's page port, off the default and off the other worker checks' (37357, 37358). */
+/** The two cores: the first one's worker is installed with `--dir`, the second's as a person does. */
+const CORES = [
+  { project: `agentic-install-check-core-${SUFFIX}`, port: CORE_PORT, directory: '' },
+  { project: `agentic-install-check-core2-${SUFFIX}`, port: CORE_PORT + 1, directory: '' },
+];
+const REGISTRY_CONTAINER = `agentic-install-check-registry-${SUFFIX}`;
+/** The project `install.sh` brings the first worker on a machine up as (see the header). */
+const PROJECT = 'agentic-worker';
+/** The first worker's page port, off the default and off the other worker checks' (37357, 37358). */
 const UI_PORT = 37359;
-/** The installer's shell: the worker's own named objects and page port (passed to compose). */
+/** The first installer's shell: the worker's own named objects and page port (passed to compose). */
 const WORKER_NAMES = {
   APP_WORKER_CONTROL_VOLUME: `agentic-install-check-${SUFFIX}-ctl`,
   APP_WORKER_CACHE_VOLUME: `agentic-install-check-${SUFFIX}-repo-cache`,
   APP_WORKER_RUN_NETWORK: `agentic-install-check-${SUFFIX}-run-egress`,
   APP_WORKER_UI_PORT: String(UI_PORT),
 };
+/** A named install's own objects (decision 9 item 1): `<project>-ctl|-repo-cache|-run-egress`. */
+const derivedNames = (project) => ({
+  volumes: [`${project}-ctl`, `${project}-repo-cache`],
+  networks: [`${project}-run-egress`],
+});
 /** The services that keep running. */
 const LONG_RUNNING = [
   'remote-worker',
@@ -136,26 +167,29 @@ const SECRETS = { SECRET_KEY, ADMIN_PASSWORD };
 
 /**
  * The bounds, each a stage's own, so a wedged one ends with a `FAIL` line naming it. Their sum stays
- * under the workflow job's 30 min (`docker-checks.yml`): registry 1 + its answer 1 + four pushes 6 +
- * core up 3 + its health 1 + install 5 + health 1.5 + re-run 3 + health 1.5 + uninstall 2 + core down
- * 2 = 27 min, the rest for the docker queries (measured green: about 1 min to the core's first answer
- * — registry, four pushes and the core — and about 2.5 min in all).
+ * under the workflow job's 30 min (`docker-checks.yml`): registry 1 + its answer 1 + four pushes 4 +
+ * two cores up 4 + their health 2 + install 3.5 + four health waits 4 + three re-runs 3 + the second
+ * install 2 + the hand up 1 + two uninstalls 2 + two cores down 2 = 29.5 min, the rest for the docker
+ * queries (measured green before S-29.2: about 1 min to the core's first answer — registry, four
+ * pushes and the core — and about 2.5 min in all; the second install pulls nothing).
  */
 const DOCKER_QUERY_MS = 60_000;
 const REGISTRY_MS = 60_000;
-const PUSH_MS = 90_000;
-const CORE_UP_MS = 3 * 60_000;
-const CORE_DOWN_MS = 2 * 60_000;
-/** The installer's own wait for the worker (`AGENTIC_INSTALL_WAIT_SECONDS`), inside the run's bound. */
-const INSTALLER_WAIT_SECONDS = 180;
+const PUSH_MS = 60_000;
+const CORE_UP_MS = 2 * 60_000;
+const CORE_DOWN_MS = 60_000;
 /** A first install: the pull and the installer's own wait. */
-const INSTALL_MS = 5 * 60_000;
-/** A re-run: nothing to pull, the same wait. */
-const RERUN_MS = 3 * 60_000;
+const INSTALL_MS = 3.5 * 60_000;
+/** The second core's install: nothing to pull, the installer's own wait. */
+const SECOND_INSTALL_MS = 2 * 60_000;
+/** A re-run: nothing to pull, nothing to start. */
+const RERUN_MS = 60_000;
+/** A hand `docker compose up -d` in the second worker's folder, which must change nothing. */
+const HAND_UP_MS = 60_000;
 /** `--uninstall --purge`: one `compose down --volumes` and a volume removal. */
-const UNINSTALL_MS = 2 * 60_000;
+const UNINSTALL_MS = 60_000;
 /** How long every service may take to read healthy once the installer has returned. */
-const HEALTHY_MS = 90_000;
+const HEALTHY_MS = 60_000;
 /** A host-name lookup: the installer's address for the core. */
 const LOOKUP_MS = 10_000;
 
@@ -177,7 +211,8 @@ const docker = (dockerArgs, options = {}) =>
   run('docker', dockerArgs, {
     timeout: options.timeoutMs ?? DOCKER_QUERY_MS,
     maxBuffer: 64 * 1024 * 1024,
-    cwd: REPO,
+    cwd: options.cwd ?? REPO,
+    ...(options.env === undefined ? {} : { env: options.env }),
   });
 
 const lines = (stdout) =>
@@ -187,15 +222,16 @@ const lines = (stdout) =>
     .map((line) => line.trim())
     .filter(Boolean);
 
-const core = (composeArgs, timeoutMs = DOCKER_QUERY_MS) =>
+/** One core's compose, as its own project on its own port. */
+const coreCompose = (instance, composeArgs, timeoutMs = DOCKER_QUERY_MS) =>
   run(
     'docker',
     [
       'compose',
       '-p',
-      CORE,
+      instance.project,
       '--project-directory',
-      coreDirectory,
+      instance.directory,
       '-f',
       path.join(REPO, 'compose.yml'),
       ...composeArgs,
@@ -205,19 +241,19 @@ const core = (composeArgs, timeoutMs = DOCKER_QUERY_MS) =>
       env: {
         ...process.env,
         PLATFORM_TAG: TAG,
-        APP_PORT: String(CORE_PORT),
-        APP_WORKSPACE_CONTROL_VOLUME: `${CORE}-ctl`,
-        APP_WORKSPACE_CACHE_VOLUME: `${CORE}-repo-cache`,
+        APP_PORT: String(instance.port),
+        APP_WORKSPACE_CONTROL_VOLUME: `${instance.project}-ctl`,
+        APP_WORKSPACE_CACHE_VOLUME: `${instance.project}-repo-cache`,
       },
       maxBuffer: 64 * 1024 * 1024,
       timeout: timeoutMs,
     },
   );
 
-/** The core's compose, its output and errors redacted, for what a failure prints. */
-const redactedCore = async (composeArgs) => {
+/** A core's compose, its output and errors redacted, for what a failure prints. */
+const redactedCore = (instance) => async (composeArgs) => {
   try {
-    const { stdout, stderr } = await core(composeArgs);
+    const { stdout, stderr } = await coreCompose(instance, composeArgs);
     return { stdout: redact(stdout), stderr: redact(stderr) };
   } catch (error) {
     throw new Error(redact(`${String(error)}\n${error?.stdout ?? ''}${error?.stderr ?? ''}`));
@@ -265,9 +301,9 @@ const resolveHostAddress = async () => {
   return address;
 };
 
-/** Everything of the project on the daemon: containers, volumes, networks. */
-const projectObjects = async () => {
-  const filter = `label=com.docker.compose.project=${PROJECT}`;
+/** Everything of a project on the daemon: containers, volumes, networks. */
+const projectObjects = async (project = PROJECT) => {
+  const filter = `label=com.docker.compose.project=${project}`;
   const containers = lines((await docker(['ps', '--all', '--quiet', '--filter', filter])).stdout);
   const volumes = lines((await docker(['volume', 'ls', '--quiet', '--filter', filter])).stdout);
   const networks = lines(
@@ -276,13 +312,10 @@ const projectObjects = async () => {
   return { containers, volumes, networks };
 };
 
-/** Which of the worker's own named objects exist (by exact name). */
-const namedObjectsPresent = async () => {
+/** Which of the given volumes and networks exist (by exact name). */
+const objectsPresent = async ({ volumes, networks }) => {
   const present = [];
-  for (const volume of [
-    WORKER_NAMES.APP_WORKER_CONTROL_VOLUME,
-    WORKER_NAMES.APP_WORKER_CACHE_VOLUME,
-  ]) {
+  for (const volume of volumes) {
     if (
       await docker(['volume', 'inspect', volume]).then(
         () => true,
@@ -292,20 +325,40 @@ const namedObjectsPresent = async () => {
       present.push(`volume ${volume}`);
     }
   }
-  if (
-    await docker(['network', 'inspect', WORKER_NAMES.APP_WORKER_RUN_NETWORK]).then(
-      () => true,
-      () => false,
-    )
-  ) {
-    present.push(`network ${WORKER_NAMES.APP_WORKER_RUN_NETWORK}`);
+  for (const network of networks) {
+    if (
+      await docker(['network', 'inspect', network]).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      present.push(`network ${network}`);
+    }
   }
   return present;
 };
 
-/** One row per container of the project: id, service, state, health, exit code, creation, image. */
-const containerRows = async () => {
-  const { containers } = await projectObjects();
+/** Which of the first worker's own named objects exist (by exact name). */
+const namedObjectsPresent = () =>
+  objectsPresent({
+    volumes: [WORKER_NAMES.APP_WORKER_CONTROL_VOLUME, WORKER_NAMES.APP_WORKER_CACHE_VOLUME],
+    networks: [WORKER_NAMES.APP_WORKER_RUN_NETWORK],
+  });
+
+/** What is left of a project and its own named objects, one entry per object. */
+const leftOf = async (project, named) => {
+  const left = await projectObjects(project);
+  return [
+    ...left.containers.map((id) => `container ${id.slice(0, 12)}`),
+    ...left.volumes.map((name) => `volume ${name}`),
+    ...left.networks.map((name) => `network ${name}`),
+    ...(await objectsPresent(named)),
+  ];
+};
+
+/** One row per container of a project: id, service, state, health, exit code, creation, image. */
+const containerRows = async (project = PROJECT) => {
+  const { containers } = await projectObjects(project);
   if (containers.length === 0) return [];
   // The whole document, read here: a `--format` template that names `.State.Health` fails outright
   // for a container with no healthcheck (`map has no entry for key "Health"`, measured on 28.0.4).
@@ -353,11 +406,11 @@ const serviceProblems = (rows) => {
 };
 
 /** Polls until {@link serviceProblems} is empty, or the bound; answers the last rows and problems. */
-const waitHealthy = async (what) => {
+const waitHealthy = async (what, project = PROJECT) => {
   stages.set(what);
   const deadline = Date.now() + HEALTHY_MS;
   for (;;) {
-    const rows = await containerRows();
+    const rows = await containerRows(project);
     const problems = serviceProblems(rows);
     if (problems.length === 0 || Date.now() > deadline) return { rows, problems };
     await sleep(3_000);
@@ -376,14 +429,24 @@ const withoutPullProgress = (text) =>
     )
     .join('\n');
 
-/** The person's line, run by a shell with `pipefail`, so a failed download is not an empty script. */
-const pipeLine = async (url, scriptArgs, timeoutMs) => {
+/** The installer's `HOME`: a folder of this run, so no person's `~/agentic-worker*` is read. */
+let installHome = '';
+
+/**
+ * The person's line, run by a shell with `pipefail`, so a failed download is not an empty script.
+ * `settings` is what the person's shell sets (the first worker's names; none for the second, whose
+ * names are the installer's). The installer's own wait stays inside the run's bound.
+ */
+const pipeLine = async (url, scriptArgs, timeoutMs, settings = WORKER_NAMES) => {
   const line = `curl -fsSL '${url}' | sh -s -- ${scriptArgs.join(' ')}`;
   console.log(`$ ${line}`);
   const env = {
     ...process.env,
-    ...WORKER_NAMES,
-    AGENTIC_INSTALL_WAIT_SECONDS: String(INSTALLER_WAIT_SECONDS),
+    ...settings,
+    HOME: installHome,
+    // The docker CLI keeps its context (Docker Desktop's socket) under the real home's .docker.
+    DOCKER_CONFIG: process.env.DOCKER_CONFIG ?? path.join(homedir(), '.docker'),
+    AGENTIC_INSTALL_WAIT_SECONDS: String(Math.max(30, Math.floor(timeoutMs / 1000) - 30)),
   };
   // The installer unsets what would re-pin it; nothing of this process's own compose settings leaks.
   delete env.PLATFORM_TAG;
@@ -414,12 +477,12 @@ const pipeLine = async (url, scriptArgs, timeoutMs) => {
   }
 };
 
-/** The page and its state answer 200 on loopback, as the installer's address names it. */
-const pageAnswers = async () => {
+/** The page and its state answer 200 on loopback, on the given port. */
+const pageAnswers = async (port = UI_PORT) => {
   const answers = [];
   for (const route of ['/', '/api/local/state']) {
     try {
-      const { response } = await boundedFetch(stages, `http://127.0.0.1:${UI_PORT}${route}`);
+      const { response } = await boundedFetch(stages, `http://127.0.0.1:${port}${route}`);
       answers.push(`${route} ${response.status}`);
     } catch (error) {
       answers.push(`${route} ${String(error)}`);
@@ -429,8 +492,18 @@ const pageAnswers = async () => {
 };
 
 const summary = (rows) => rows.map((row) => `${row.service}=${row.state}/${row.health}`).join(' ');
+/** Each container's service, id and creation time: equal before and after means none was recreated. */
+const identity = (rows) => rows.map((row) => `${row.service} ${row.id} ${row.created}`);
+const sameContainers = (before, after) =>
+  JSON.stringify(identity(after)) === JSON.stringify(identity(before));
+const countChange = (before, after) =>
+  after.length === before.length
+    ? `${after.length} containers`
+    : `${before.length} → ${after.length} containers`;
 
-let coreDirectory = '';
+/** The value a `.env` sets for a name (the last line wins), or `undefined`. */
+const envValue = (text, name) =>
+  [...text.matchAll(new RegExp(`^${name}=(.*)$`, 'gm'))].map((match) => match[1]).at(-1);
 
 const main = async () => {
   try {
@@ -451,19 +524,15 @@ const main = async () => {
     }
   }
   // The project name is the script's (see the header): refuse rather than touch somebody's worker.
-  const before = await projectObjects();
-  const named = await namedObjectsPresent();
-  const existing = [
-    ...before.containers.map((id) => `container ${id.slice(0, 12)}`),
-    ...before.volumes.map((name) => `volume ${name}`),
-    ...before.networks.map((name) => `network ${name}`),
-    ...named,
-  ];
-  if (existing.length > 0) {
+  const before = await leftOf(PROJECT, {
+    volumes: [WORKER_NAMES.APP_WORKER_CONTROL_VOLUME, WORKER_NAMES.APP_WORKER_CACHE_VOLUME],
+    networks: [WORKER_NAMES.APP_WORKER_RUN_NETWORK],
+  });
+  if (before.length > 0) {
     console.error(
       `FAIL: worker-install-check — this daemon already has the compose project ${PROJECT} (or this check's ` +
-        `names): ${existing.join(', ')}. install.sh installs as ${PROJECT} and nothing renames it, so the ` +
-        'check refuses to run here rather than touch that worker; run it on a daemon with no worker (CI does)',
+        `names): ${before.join(', ')}. install.sh installs the first worker on a machine as ${PROJECT}, so ` +
+        'the check refuses to run here rather than touch that worker; run it on a daemon with no worker (CI does)',
     );
     process.exit(1);
   }
@@ -471,16 +540,24 @@ const main = async () => {
     console.error(`FAIL: worker-install-check — ${error.message}`);
     process.exit(1);
   });
-  const coreUrl = `http://${hostAddress}:${CORE_PORT}`;
-  console.log(`the core is ${coreUrl} to this host and to the worker's containers`);
+  const coreUrls = CORES.map((instance) => `http://${hostAddress}:${instance.port}`);
+  console.log(
+    `the cores are ${coreUrls.join(' and ')} to this host and to the workers' containers`,
+  );
 
   const directory = await mkdtemp(path.join(tmpdir(), 'worker-install-check-'));
-  coreDirectory = path.join(directory, 'core');
-  /** The installer's folder: absent, so the first run makes it (a person's `~/agentic-worker`). */
+  for (const [index, instance] of CORES.entries()) {
+    instance.directory = path.join(directory, `core-${index + 1}`);
+    await mkdir(instance.directory, { recursive: true });
+  }
+  installHome = path.join(directory, 'home');
+  await mkdir(installHome, { recursive: true });
+  /** The first installer's folder: absent, so the first run makes it (a person's `~/agentic-worker`). */
   const workerDirectory = path.join(directory, 'agentic-worker');
-  await mkdir(coreDirectory, { recursive: true });
   const pushed = [];
   let installed = false;
+  /** The second worker's project, once the second core's script names it. */
+  let secondProject = '';
   try {
     // ── The registry and this build's images ──────────────────────────────────────────────
     stages.set('the local registry');
@@ -527,45 +604,65 @@ const main = async () => {
     }
     const reference = (key) => `${namespace}/${IMAGES[key]}@${digests[key]}`;
 
-    // ── The core ──────────────────────────────────────────────────────────────────────────
-    await writeFile(
-      path.join(coreDirectory, '.env'),
-      [
-        `APP_SECRET_KEY=${SECRET_KEY}`,
-        `APP_BASE_URL=${coreUrl}`,
-        `APP_BOOTSTRAP_ADMIN_EMAIL=${ADMIN_EMAIL}`,
-        `APP_BOOTSTRAP_ADMIN_PASSWORD=${ADMIN_PASSWORD}`,
-        `APP_IMAGE_REPOSITORY=${namespace}`,
-        `APP_WORKER_IMAGE_DIGESTS=${Object.entries(digests)
-          .map(([key, digest]) => `${key}=${digest}`)
-          .join(',')}`,
-        '',
-      ].join('\n'),
-    );
-    stages.set('core: docker compose up');
-    await core(['up', '-d', '--no-build', '--wait', 'app'], CORE_UP_MS);
-    await waitForOk(stages, `http://127.0.0.1:${CORE_PORT}/healthz`, { totalMs: 60_000 });
+    // ── The two cores ─────────────────────────────────────────────────────────────────────
+    for (const [index, instance] of CORES.entries()) {
+      await writeFile(
+        path.join(instance.directory, '.env'),
+        [
+          `APP_SECRET_KEY=${SECRET_KEY}`,
+          `APP_BASE_URL=${coreUrls[index]}`,
+          `APP_BOOTSTRAP_ADMIN_EMAIL=${ADMIN_EMAIL}`,
+          `APP_BOOTSTRAP_ADMIN_PASSWORD=${ADMIN_PASSWORD}`,
+          `APP_IMAGE_REPOSITORY=${namespace}`,
+          `APP_WORKER_IMAGE_DIGESTS=${Object.entries(digests)
+            .map(([key, digest]) => `${key}=${digest}`)
+            .join(',')}`,
+          '',
+        ].join('\n'),
+      );
+      stages.set(`core ${index + 1}: docker compose up`);
+      await coreCompose(instance, ['up', '-d', '--no-build', '--wait', 'app'], CORE_UP_MS);
+      await waitForOk(stages, `http://127.0.0.1:${instance.port}/healthz`, { totalMs: 60_000 });
+    }
 
-    // 1. What the core serves.
-    stages.set('the served script and bundle');
-    const script = await boundedFetch(stages, `${coreUrl}/api/worker/v1/install.sh`);
-    check(
-      'the core serves install.sh with its own address filled in',
-      script.response.status === 200 &&
-        script.body.includes(`CORE_URL='${coreUrl}'`) &&
-        !script.body.includes('@@AGENTIC_CORE_URL@@'),
-      String(script.response.status),
-    );
-    const bundle = await boundedFetch(stages, `${coreUrl}/api/worker/v1/compose.yml`);
-    check(
-      'the core serves compose.yml pinning this build’s four registry digests',
-      bundle.response.status === 200 &&
-        Object.keys(IMAGES).every((key) => bundle.body.includes(reference(key))),
-      String(bundle.response.status),
-    );
+    // 1. What the cores serve.
+    stages.set('the served scripts and bundles');
+    const scripts = [];
+    for (const [index, coreUrl] of coreUrls.entries()) {
+      const script = await boundedFetch(stages, `${coreUrl}/api/worker/v1/install.sh`);
+      scripts.push(script.body);
+      check(
+        `core ${index + 1} serves install.sh with its own address filled in`,
+        script.response.status === 200 &&
+          script.body.includes(`CORE_URL='${coreUrl}'`) &&
+          !script.body.includes('@@AGENTIC_CORE_URL@@') &&
+          !script.body.includes('@@AGENTIC_INSTANCE_SLUG@@'),
+        String(script.response.status),
+      );
+      const bundle = await boundedFetch(stages, `${coreUrl}/api/worker/v1/compose.yml`);
+      check(
+        `core ${index + 1} serves compose.yml pinning this build’s four registry digests`,
+        bundle.response.status === 200 &&
+          Object.keys(IMAGES).every((key) => bundle.body.includes(reference(key))),
+        String(bundle.response.status),
+      );
+    }
+    const slug = /^CORE_SLUG='([a-z0-9][a-z0-9-]{0,23})'$/m.exec(scripts[1] ?? '')?.[1] ?? '';
+    check('the second core renders its platform’s slug into install.sh', slug !== '', slug);
+    secondProject = `${PROJECT}-${slug}`;
+    const secondNames = derivedNames(secondProject);
+    const secondDirectory = path.join(installHome, secondProject);
+    const secondTaken = await leftOf(secondProject, secondNames);
+    if (secondTaken.length > 0) {
+      secondProject = '';
+      throw new Error(
+        `this daemon already has what the second worker would be named: ${secondTaken.join(', ')}; ` +
+          'the check refuses to touch it',
+      );
+    }
 
     // 2. The install.
-    const installUrl = `${coreUrl}/api/worker/v1/install.sh`;
+    const installUrl = `${coreUrls[0]}/api/worker/v1/install.sh`;
     const installArgs = ['--dir', workerDirectory, '--no-open'];
     stages.set('the install');
     installed = true;
@@ -617,13 +714,10 @@ const main = async () => {
       second.output.includes('already installed'),
     );
     const afterRerun = await waitHealthy('the re-run worker’s services');
-    const identity = (rows) => rows.map((row) => `${row.service} ${row.id} ${row.created}`);
     check(
       'no container was recreated: every id and creation time is the one before',
-      JSON.stringify(identity(afterRerun.rows)) === JSON.stringify(identity(afterInstall.rows)),
-      afterRerun.rows.length === afterInstall.rows.length
-        ? `${afterRerun.rows.length} containers`
-        : `${afterInstall.rows.length} → ${afterRerun.rows.length} containers`,
+      sameContainers(afterInstall.rows, afterRerun.rows),
+      countChange(afterInstall.rows, afterRerun.rows),
     );
     check(
       'after the re-run every service runs and is healthy',
@@ -633,7 +727,130 @@ const main = async () => {
     const pageAgain = await pageAnswers();
     check('the local page answers after the re-run', pageAgain.ok, pageAgain.detail);
 
-    // 4. Uninstall and purge. The launcher makes its repository cache volume at a run's first
+    // 4. The second core's worker beside the first (S-29.2 (6)), installed as a person runs the
+    // line: no option but --no-open, nothing set in the shell.
+    const secondUrl = `${coreUrls[1]}/api/worker/v1/install.sh`;
+    stages.set('the second core’s install');
+    const beside = await pipeLine(secondUrl, ['--no-open'], SECOND_INSTALL_MS, {});
+    check('the second core’s install line exits 0', beside.ok, beside.ended);
+    check(
+      `it names the second worker after its platform (${slug}) because the first has ${PROJECT}`,
+      beside.output.includes(`named after its platform: ${slug}, in ${secondDirectory}`),
+    );
+    const secondEnv = await readFile(path.join(secondDirectory, '.env'), 'utf8').catch(() => '');
+    const secondPort = Number(envValue(secondEnv, 'APP_WORKER_UI_PORT') ?? Number.NaN);
+    check(
+      `its .env names its project, its own volumes, network and page port, and no label`,
+      envValue(secondEnv, 'COMPOSE_PROJECT_NAME') === secondProject &&
+        envValue(secondEnv, 'APP_WORKER_CONTROL_VOLUME') === `${secondProject}-ctl` &&
+        envValue(secondEnv, 'APP_WORKER_CACHE_VOLUME') === `${secondProject}-repo-cache` &&
+        envValue(secondEnv, 'APP_WORKER_RUN_NETWORK') === `${secondProject}-run-egress` &&
+        Number.isInteger(secondPort) &&
+        secondPort >= 7357 &&
+        secondPort !== UI_PORT &&
+        envValue(secondEnv, 'APP_WORKER_LABEL') === undefined,
+      secondEnv.replace(/\n/g, ' '),
+    );
+    const secondInstalled = await waitHealthy('the second worker’s services', secondProject);
+    check(
+      'the second worker’s services run and are healthy, its one-shots exited 0',
+      secondInstalled.problems.length === 0,
+      secondInstalled.problems.join('; ') || summary(secondInstalled.rows),
+    );
+    const secondPage = await pageAnswers(secondPort);
+    check(
+      `the second worker’s page answers on 127.0.0.1:${secondPort}`,
+      secondPage.ok,
+      secondPage.detail,
+    );
+    const firstBeside = await containerRows();
+    check(
+      'the second install touched none of the first worker’s containers',
+      sameContainers(afterRerun.rows, firstBeside),
+      countChange(afterRerun.rows, firstBeside),
+    );
+    const pageBeside = await pageAnswers();
+    check(
+      'the first worker’s page still answers beside the second',
+      pageBeside.ok,
+      pageBeside.detail,
+    );
+
+    // A re-run of each line recreates nothing in either project.
+    stages.set('the second core’s re-run');
+    const secondAgain = await pipeLine(secondUrl, ['--no-open'], RERUN_MS, {});
+    check(
+      'the second core’s re-run exits 0 and says its worker is already installed',
+      secondAgain.ok && secondAgain.output.includes('already installed'),
+      secondAgain.ended,
+    );
+    stages.set('the first core’s re-run beside the second');
+    const firstAgain = await pipeLine(installUrl, installArgs, RERUN_MS);
+    check(
+      'the first core’s re-run exits 0 and says its worker is already installed',
+      firstAgain.ok && firstAgain.output.includes('already installed'),
+      firstAgain.ended,
+    );
+    const firstRows = await containerRows();
+    const secondRows = await containerRows(secondProject);
+    check(
+      'the re-runs recreated nothing in either project',
+      sameContainers(afterRerun.rows, firstRows) &&
+        sameContainers(secondInstalled.rows, secondRows),
+      `${countChange(afterRerun.rows, firstRows)}; ${countChange(secondInstalled.rows, secondRows)}`,
+    );
+
+    // A hand `docker compose up -d` in the second folder: its .env's COMPOSE_PROJECT_NAME beats the
+    // bundle's `name: agentic-worker`, so it is the second project, unchanged — not the first.
+    stages.set('a hand docker compose up -d in the second folder');
+    const handEnv = { ...process.env };
+    for (const name of Object.keys(handEnv)) {
+      if (name.startsWith('COMPOSE_') || name === 'PLATFORM_TAG') delete handEnv[name];
+    }
+    const hand = await docker(['compose', 'up', '-d'], {
+      cwd: secondDirectory,
+      env: handEnv,
+      timeoutMs: HAND_UP_MS,
+    }).then(
+      () => ({ ok: true, detail: undefined }),
+      (error) => ({ ok: false, detail: redact(`${error?.stderr ?? ''}`).slice(-400) }),
+    );
+    check('a hand docker compose up -d in the second folder exits 0', hand.ok, hand.detail);
+    const firstAfterHand = await containerRows();
+    const secondAfterHand = await containerRows(secondProject);
+    check(
+      `it hit ${secondProject} and recreated nothing in either project`,
+      sameContainers(firstRows, firstAfterHand) && sameContainers(secondRows, secondAfterHand),
+      `${countChange(firstRows, firstAfterHand)}; ${countChange(secondRows, secondAfterHand)}`,
+    );
+
+    // Uninstalling the second leaves the first running.
+    stages.set('the second core’s uninstall');
+    const secondRemoved = await pipeLine(secondUrl, ['--uninstall', '--purge'], UNINSTALL_MS, {});
+    check('the second core’s uninstall line exits 0', secondRemoved.ok, secondRemoved.ended);
+    const secondLeft = await leftOf(secondProject, secondNames);
+    check(
+      `nothing of ${secondProject} is left, nor its own volumes and run network`,
+      secondLeft.length === 0,
+      secondLeft.join(', '),
+    );
+    check(
+      'the second worker’s folder is removed',
+      !(await stat(secondDirectory).then(
+        () => true,
+        () => false,
+      )),
+    );
+    const firstAlone = await waitHealthy('the first worker after the second’s uninstall');
+    check(
+      'the first worker keeps running healthy, none of its containers recreated',
+      firstAlone.problems.length === 0 && sameContainers(firstRows, firstAlone.rows),
+      firstAlone.problems.join('; ') || countChange(firstRows, firstAlone.rows),
+    );
+    const pageAlone = await pageAnswers();
+    check('the first worker’s page still answers', pageAlone.ok, pageAlone.detail);
+
+    // 5. Uninstall and purge. The launcher makes its repository cache volume at a run's first
     // clone, and no run happens here, so it is made by hand: the purge's own removal of it (a
     // volume Compose does not own) is then exercised rather than skipped.
     stages.set('the uninstall');
@@ -676,14 +893,28 @@ const main = async () => {
     installed = !(leftOver.length === 0 && !folderLeft);
   } catch (error) {
     failures.push(`${stages.current}: ${redact(String(error?.stderr ?? '') || String(error))}`);
-    await describeInstance(redactedCore, 'core ').catch(() => undefined);
-    const rows = await containerRows().catch(() => []);
-    if (rows.length > 0) console.error(`--- ${PROJECT}: ${summary(rows)}`);
+    for (const [index, instance] of CORES.entries()) {
+      await describeInstance(redactedCore(instance), `core ${index + 1} `).catch(() => undefined);
+    }
+    for (const project of [PROJECT, secondProject].filter(Boolean)) {
+      const rows = await containerRows(project).catch(() => []);
+      if (rows.length > 0) console.error(`--- ${project}: ${summary(rows)}`);
+    }
   } finally {
     stages.set('cleanup');
+    // Only what this run brought up: neither project existed before it (refused above).
+    const owned = [];
     if (installed) {
-      // Only what this run brought up: the project did not exist before it (refused above).
-      const left = await projectObjects().catch(() => ({
+      owned.push({
+        project: PROJECT,
+        volumes: [WORKER_NAMES.APP_WORKER_CONTROL_VOLUME, WORKER_NAMES.APP_WORKER_CACHE_VOLUME],
+        networks: [WORKER_NAMES.APP_WORKER_RUN_NETWORK],
+      });
+    }
+    if (secondProject !== '')
+      owned.push({ project: secondProject, ...derivedNames(secondProject) });
+    for (const { project, volumes, networks } of owned) {
+      const left = await projectObjects(project).catch(() => ({
         containers: [],
         volumes: [],
         networks: [],
@@ -692,7 +923,7 @@ const main = async () => {
         const { stdout } = await docker([
           'compose',
           '-p',
-          PROJECT,
+          project,
           'logs',
           '--no-color',
           '--tail',
@@ -701,18 +932,19 @@ const main = async () => {
         if (failures.length > 0) console.error(redact(stdout));
         await docker(['container', 'rm', '-f', ...left.containers]).catch(() => undefined);
       }
-      for (const network of [...left.networks, WORKER_NAMES.APP_WORKER_RUN_NETWORK]) {
+      for (const network of [...left.networks, ...networks]) {
         await docker(['network', 'rm', network]).catch(() => undefined);
       }
-      for (const volume of [
-        ...left.volumes,
-        WORKER_NAMES.APP_WORKER_CONTROL_VOLUME,
-        WORKER_NAMES.APP_WORKER_CACHE_VOLUME,
-      ]) {
+      for (const volume of [...left.volumes, ...volumes]) {
         await docker(['volume', 'rm', volume]).catch(() => undefined);
       }
     }
-    await core(['down', '-v', '--remove-orphans'], CORE_DOWN_MS).catch(() => undefined);
+    for (const instance of CORES) {
+      if (instance.directory === '') continue;
+      await coreCompose(instance, ['down', '-v', '--remove-orphans'], CORE_DOWN_MS).catch(
+        () => undefined,
+      );
+    }
     await docker(['container', 'rm', '-f', REGISTRY_CONTAINER]).catch(() => undefined);
     for (const image of pushed) await docker(['image', 'rm', image]).catch(() => undefined);
     await rm(directory, { recursive: true, force: true });
