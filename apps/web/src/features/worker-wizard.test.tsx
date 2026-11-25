@@ -141,6 +141,18 @@ beforeEach(() => {
 });
 
 describe('Add a worker: Install', () => {
+  it('says, before the commands, that the folder it is run from does not matter', async () => {
+    start(newWorld(), wizardUrl('install'));
+    await screen.findByRole('heading', { level: 2, name: 'Install' });
+    const note = document.querySelector('[data-install-dir]');
+    expect(note?.textContent).toContain('Run it from any folder');
+    expect(note?.textContent).toContain('~/agentic-worker');
+    expect(note?.textContent).toContain('$HOME\\agentic-worker');
+    const first = document.querySelector('[data-installer]');
+    expect(
+      note && first ? note.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING : 0,
+    ).toBeTruthy();
+  });
   it('shows the Windows PowerShell line first on a browser that says it runs on Windows', async () => {
     Object.defineProperty(window.navigator, 'platform', { configurable: true, get: () => 'Win32' });
     try {

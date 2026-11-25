@@ -180,8 +180,8 @@ const Installer = ({
       <p className="max-w-prose text-xs text-fg-muted" data-windows-note="">
         Paste it into PowerShell (Windows PowerShell 5.1 or PowerShell 7). It needs Docker Desktop
         for Windows installed and running in Linux containers mode (Windows containers are refused),
-        with the Docker Compose v2 that ships with it. No administrator rights needed: it installs
-        into <code>$HOME\agentic-worker</code>, with no service and no PATH change.
+        with the Docker Compose v2 that ships with it. No administrator rights needed: no service
+        and no PATH change.
       </p>
     ) : null}
     <p className="text-xs">
@@ -261,15 +261,15 @@ const InstallStep = ({
             <p className="text-sm">
               On the computer that will run agent work, run the one line for its system:
             </p>
+            <p className="max-w-prose text-sm text-fg-muted" data-install-dir="">
+              Run it from any folder: the worker always goes into <code>{WORKER_INSTALL_DIR}</code>{' '}
+              (<code>$HOME\agentic-worker</code> on Windows), not the folder you run it in. The
+              script checks that Docker runs, starts the worker for <code>{commands.origin}</code>{' '}
+              and opens <code>{WORKER_LOCAL_PAGE}</code>, the worker’s own page, which guides the
+              next two steps.
+            </p>
             <Installer os={firstOs} commands={commands} />
             <Installer os={firstOs === 'unix' ? 'windows' : 'unix'} commands={commands} />
-            <p className="max-w-prose text-xs text-fg-muted">
-              The script checks that Docker runs, puts the worker in{' '}
-              <code>{WORKER_INSTALL_DIR}</code> (<code>$HOME\agentic-worker</code> on Windows),
-              starts it for <code>{commands.origin}</code> and opens{' '}
-              <code>{WORKER_LOCAL_PAGE}</code>, the worker’s own page, which guides the next two
-              steps.
-            </p>
           </div>
           <DetailsDisclosure summary="Set it up by hand">
             <ByHand commands={commands} />
