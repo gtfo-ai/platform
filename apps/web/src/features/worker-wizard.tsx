@@ -278,11 +278,10 @@ const InstallStep = ({
                   it.
                 </li>
                 <li data-second-platform="">
-                  Already running a worker for another platform on this computer? The line refuses
-                  to replace it: it installs one worker per computer for now. Set the second one up
-                  by hand below, in its own folder, with its own <code>COMPOSE_PROJECT_NAME</code>,
-                  volume, network and page-port settings in that folder’s <code>.env</code>: the
-                  operator guide lists them.
+                  A worker for another platform already on this computer? Run this platform’s line
+                  too: it leaves that worker alone and installs a second one beside it, in{' '}
+                  <code>{WORKER_INSTALL_DIR}-&lt;this platform&gt;</code>, with its own page on the
+                  next free port.
                 </li>
               </ul>
             </div>
