@@ -106,6 +106,13 @@ a label and pointing the URL at a domain that does not exist changed no test at 
     The example omits `statusCategory`, which `StatusDetails` documents. →
     `project-statuses-acme.json` (`documented-adapted`). **J2** (`statuses/search`) is not used: it
     requires project administration.
+  - **J1, translated** (2026-11-25, a production bug): the same operation answered every status with
+    an `untranslatedName` the published `StatusDetails` does not declare, and under
+    `Accept-Language: *` (what Node's `fetch` sends by default) a built-in status's `name` in another
+    language. → `project-statuses-translated.json` (`composed`: the measured names on this
+    repository's ids and host). An issue's `fields.status` and a transition's `to` carried no
+    `untranslatedName` when read on the same site the same day, which is why the client also sends
+    `Accept-Language: en`.
   - **J3** `getTransitions` — the example's two target categories, `in-flight` and `completed`. →
     `transitions-category-keys.json` (`documented-adapted`).
   - **J4** `assignIssue`, `PUT /rest/api/3/issue/{issueIdOrKey}/assignee` — body `{"accountId": …}`,

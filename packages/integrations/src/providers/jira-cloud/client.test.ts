@@ -20,6 +20,7 @@ interface Recorded {
   url: string;
   method: string;
   authorization: string | null;
+  acceptLanguage: string | null;
   body: string | null;
 }
 
@@ -45,6 +46,7 @@ const clientWith = (
         url: request.url,
         method: request.method,
         authorization: request.headers.get('authorization'),
+        acceptLanguage: request.headers.get('accept-language'),
         body: request.method === 'GET' ? null : await request.text(),
       };
       calls.push(recorded);
@@ -100,6 +102,22 @@ describe('createJiraClient', () => {
       `${SITE}/rest/api/3/issue/ACME-1?fields=summary%2Clabels&maxResults=50`,
     );
     expect(calls[0]?.authorization).toBe(basicAuthHeader('agentic-bot@example.test', TOKEN));
+  });
+
+  /**
+   * Production, 2026-11-25: with no language set, Node's `fetch` sends `accept-language: *` and Jira
+   * answered built-in status names in another language. Every request, read or write, asks for `en`.
+   */
+  it('asks for English on every request, never leaving the language to the transport', async () => {
+    const { client, calls } = clientWith(() => json(200, {}));
+    await client.send({ method: 'GET', path: 'project/ACME/statuses', action: 'list_statuses' });
+    await client.send({
+      method: 'POST',
+      path: 'issue/ACME-1/transitions',
+      body: {},
+      action: 'transition',
+    });
+    expect(calls.map((call) => call.acceptLanguage)).toEqual(['en', 'en']);
   });
 
   it('sends a JSON body on a write', async () => {

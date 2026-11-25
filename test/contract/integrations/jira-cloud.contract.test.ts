@@ -1405,6 +1405,25 @@ describe('jira-cloud — reaching the provider', () => {
       ).toBe(false);
     });
 
+    /**
+     * Production, 2026-11-25: under `Accept-Language: *` Jira named the built-in statuses in another
+     * language and sent the site's own name as `untranslatedName`; a lifecycle naming "TODO" was then
+     * refused `lifecycle_status_unknown`. The name read is the untranslated one, and the request
+     * asked for `en` (`client.test.ts` holds the header).
+     */
+    it('reads a translated status by its untranslatedName, and leaves a custom one as it is', async () => {
+      binding.replay.script('project-statuses-translated.json');
+      const statuses = await binding.port.listStatuses();
+      expect(statuses.map((status) => [status.id, status.name, status.category])).toEqual([
+        ['1', 'TODO', 'todo'],
+        ['3', 'IN PROGRESS', 'in_progress'],
+        ['10017', 'WAITING FOR REVIEW', 'in_progress'],
+        ['4', 'TESTING', 'in_progress'],
+        ['10008', 'Done', 'done'],
+      ]);
+      expect(JSON.stringify(statuses)).not.toMatch(/待办|正在进行|已完成|正在测试/);
+    });
+
     it('fails loudly for a project the account cannot see, rather than answering a partial union', async () => {
       const other = createJiraBinding({ config: { project_keys: ['ACME', 'HIDDEN'] } });
       await expect(other.port.listStatuses()).rejects.toMatchObject({ code: 'not_found' });

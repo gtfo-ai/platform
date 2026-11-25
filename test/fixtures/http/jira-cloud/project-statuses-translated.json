@@ -1,0 +1,85 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/project/{projectIdOrKey}/statuses (getAllStatuses)",
+    "retrieved": "2026-11-25",
+    "evidence": "composed",
+    "note": "Shape from getAllStatuses (IssueTypeWithStatus with StatusDetails, as project-statuses-acme.json) plus `untranslatedName`, which the published StatusDetails schema does not declare and which a production site answered on every status on 2026-11-25 (a service account through the API gateway with `Accept-Language: *`). The names are the ones measured there: the built-in statuses 1, 3, 10008 and 4 came back translated (\"待办\", \"正在进行\", \"已完成\", \"正在测试\") with their untranslatedName the site's own (\"TODO\", \"IN PROGRESS\", \"Done\", \"TESTING\"); a custom status came back unchanged in both. Ids, descriptions and the host are this repository's. Served by the replay only when a test scripts it."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": [
+      {
+        "id": "10004",
+        "name": "Task",
+        "self": "https://acme-example.atlassian.net/rest/api/3/issueType/10004",
+        "subtask": false,
+        "statuses": [
+          {
+            "description": "",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "1",
+            "name": "待办",
+            "untranslatedName": "TODO",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/1",
+            "statusCategory": {
+              "key": "new",
+              "name": "To Do"
+            }
+          },
+          {
+            "description": "",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "3",
+            "name": "正在进行",
+            "untranslatedName": "IN PROGRESS",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/3",
+            "statusCategory": {
+              "key": "indeterminate",
+              "name": "In Progress"
+            }
+          },
+          {
+            "description": "",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10017",
+            "name": "WAITING FOR REVIEW",
+            "untranslatedName": "WAITING FOR REVIEW",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10017",
+            "statusCategory": {
+              "key": "indeterminate",
+              "name": "In Progress"
+            }
+          },
+          {
+            "description": "",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "4",
+            "name": "正在测试",
+            "untranslatedName": "TESTING",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/4",
+            "statusCategory": {
+              "key": "indeterminate",
+              "name": "In Progress"
+            }
+          },
+          {
+            "description": "",
+            "iconUrl": "https://acme-example.atlassian.net/images/icons/statuses/generic.png",
+            "id": "10008",
+            "name": "已完成",
+            "untranslatedName": "Done",
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10008",
+            "statusCategory": {
+              "key": "done",
+              "name": "Done"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
