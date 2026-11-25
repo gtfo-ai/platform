@@ -164,7 +164,9 @@ if ($args[0] -eq 'compose') {
     Set-Content -LiteralPath (Join-Path $state 'up-env') -Value ($names -join ',')
     if ($env:STUB_UP_PAGE_SITE) {
       $pagePort = (Get-Content -LiteralPath $publishedFile -Raw).Trim()
-      $page = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', $pagePort, '--bind', '127.0.0.1', '--directory', $env:STUB_UP_PAGE_SITE) -PassThru -WindowStyle Hidden
+      # Started outside the worker's folder: a process whose current directory is that folder holds
+      # it on Windows, and the uninstall could not remove it (CI, #184).
+      $page = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', $pagePort, '--bind', '127.0.0.1', '--directory', $env:STUB_UP_PAGE_SITE) -WorkingDirectory $env:STUB_UP_PAGE_SITE -PassThru -WindowStyle Hidden
       Set-Content -LiteralPath (Join-Path $env:STUB_STATE "up-page-$pagePort.pid") -Value $page.Id
     }
     exit 0
@@ -174,7 +176,7 @@ if ($args[0] -eq 'compose') {
     # A stopped container (no published-port: it publishes nothing) publishes its port again.
     if (-not (Test-Path -LiteralPath $publishedFile)) { Write-PublishedPort }
     if ($env:STUB_START_PAGE_SITE) {
-      $page = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', $env:STUB_START_PAGE_PORT, '--bind', '127.0.0.1', '--directory', $env:STUB_START_PAGE_SITE) -PassThru -WindowStyle Hidden
+      $page = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', $env:STUB_START_PAGE_PORT, '--bind', '127.0.0.1', '--directory', $env:STUB_START_PAGE_SITE) -WorkingDirectory $env:STUB_START_PAGE_SITE -PassThru -WindowStyle Hidden
       Set-Content -LiteralPath (Join-Path $env:STUB_STATE 'page.pid') -Value $page.Id
     }
     exit 0
