@@ -521,7 +521,7 @@ describe('the integrations list', () => {
     const hint = document.getElementById(field.getAttribute('aria-describedby') ?? '');
     expect(hint?.textContent).toMatch(/^Only for an Atlassian service account/);
     expect(hint?.textContent).toContain('api.atlassian.com');
-    expect(hint?.textContent).toContain('APP_INTEGRATION_HOSTS');
+    expect(hint?.textContent).toContain('an administrator must allow that host');
     expect(hint?.textContent).toMatch(/Key: cloud_id\.$/);
     // The note is Jira's own: no other field of the form carries it.
     expect(form.textContent?.split('Only for an Atlassian service account').length).toBe(2);

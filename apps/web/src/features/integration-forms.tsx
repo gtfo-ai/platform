@@ -190,9 +190,9 @@ export const CONFIG_FIELD_RESIDUALS: Readonly<Record<string, string>> = {
  * *Required/Optional … Key: …* hint, so the key stays the last thing the hint names.
  */
 export const CONFIG_FIELD_NOTES: Readonly<Record<string, string>> = {
-  // Atlassian service accounts: the gateway is the only place a scoped token is accepted.
+  // Atlassian service accounts: the gateway is the only place a scoped token is accepted. The host setting is named in plain words (the admin-names census, S-23.22).
   'jira-cloud:cloud_id':
-    'Only for an Atlassian service account: your site’s cloud ID (https://<site>.atlassian.net/_edge/tenant_info answers it as cloudId). Set, every call goes through api.atlassian.com — add that host to APP_INTEGRATION_HOSTS — and ticket links still use the site URL. Empty: calls go to the site URL.',
+    'Only for an Atlassian service account: your site’s cloud ID (https://<site>.atlassian.net/_edge/tenant_info answers it as cloudId). Set, every call goes through api.atlassian.com — an administrator must allow that host as well as the site — and ticket links still use the site URL. Empty: calls go to the site URL.',
 };
 
 /**
