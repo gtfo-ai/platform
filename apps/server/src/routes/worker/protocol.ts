@@ -1143,11 +1143,19 @@ export const registerWorkerProtocolRoutes = async (
           // No `response` block: the body is a script, not JSON (as `compose.yml`).
         },
       },
-      async (_request, reply) => {
-        const slug = installSlugForOrganisation(
-          await options.store.organisationName(),
-          installBaseUrl,
-        );
+      async (request, reply) => {
+        // A public download must not fail on the name read: without it the script carries the
+        // host's slug, which is what a platform with no name gets anyway.
+        let organisationName: string | null = null;
+        try {
+          organisationName = await options.store.organisationName();
+        } catch (error) {
+          request.log.warn(
+            { err: error },
+            'the organisation name could not be read; the install script carries the host’s slug',
+          );
+        }
+        const slug = installSlugForOrganisation(organisationName, installBaseUrl);
         const script = renderInstallScripts(installBaseUrl, slug, installTemplates)[name];
         if ('error' in script) {
           throw new HttpError(503, 'install_script_unavailable', script.error);

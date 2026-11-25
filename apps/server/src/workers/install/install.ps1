@@ -666,16 +666,18 @@ Options: -Name NAME (a-z, 0-9 and -, at most 24, not dev), -Dir DIR, -Core URL, 
   }
 
   # The page ports Docker's containers bind, in any state (a stopped worker keeps its port).
+  # Only each container's port bindings are asked for, and read with a pattern: the whole `docker
+  # inspect` document of a container this installer did not make can carry label keys that differ
+  # only in case, which Windows PowerShell 5.1's ConvertFrom-Json refuses.
   function Get-BoundPort {
+    $ids = Invoke-Native -File 'docker' -Arguments @('ps', '--all', '--quiet') -Capture
+    if ($ids.Code -ne 0) { Exit-Installer 1 'docker ps failed' }
+    $list = @($ids.Output -split "`n" | Where-Object { $_.Trim() -ne '' } | ForEach-Object { $_.Trim() })
+    if ($list.Count -eq 0) { return @() }
+    # A container removed between the two calls fails the inspect; what it printed is kept.
+    $inspected = Invoke-Native -File 'docker' -Arguments (@('inspect', '--format', '{{json .HostConfig.PortBindings}}') + $list) -Capture
     $ports = @()
-    foreach ($container in @(Get-ContainerList @() -Tolerant)) {
-      if ($null -eq $container.HostConfig -or $null -eq $container.HostConfig.PortBindings) { continue }
-      foreach ($binding in $container.HostConfig.PortBindings.PSObject.Properties) {
-        foreach ($hostPort in @($binding.Value)) {
-          if ($null -ne $hostPort -and [string]$hostPort.HostPort -match '^\d+\z') { $ports += [string]$hostPort.HostPort }
-        }
-      }
-    }
+    foreach ($binding in [regex]::Matches($inspected.Output, '"HostPort":"(\d+)"')) { $ports += $binding.Groups[1].Value }
     return $ports
   }
 
@@ -769,6 +771,15 @@ Options: -Name NAME (a-z, 0-9 and -, at most 24, not dev), -Dir DIR, -Core URL, 
       # An existing install is never renamed (its volumes hold its approval and its sign-in).
       $InstallerSettings['APP_WORKER_LABEL'] = $WorkerName
       Write-Line "This core's worker is already installed in $WorkerDir (compose project $Project); it keeps its folder and project, and -Name sets only the label its page shows."
+    }
+    # A first worker on a machine where a named one (of another core) already binds 7357: it takes
+    # the first free port instead, written into .env like a named install's. With 7357 free nothing
+    # is probed beyond Docker's bindings and nothing is written: the first install is today's.
+    if ($found.Count -eq 0 -and $installName -eq '' -and [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('APP_WORKER_UI_PORT', 'Process'))) {
+      if (@(Get-BoundPort) -contains '7357') {
+        $InstallerSettings['APP_WORKER_UI_PORT'] = Get-FreePagePort
+        Write-Line "Another worker on this machine has the page port 7357, so this one's page is on $($InstallerSettings['APP_WORKER_UI_PORT'])."
+      }
     }
 
     $madeDir = -not (Test-Path -LiteralPath $WorkerDir -PathType Container)

@@ -1633,3 +1633,22 @@ No migration. No TD-032 change unless V-WM11 forces item 7's fallback.
 anything else become `-` (`Mikeš` → `mikes`, not `mike-s`), and trims a hyphen the 24-character cut
 leaves at the end; and `instance.name` has its control and format characters (`\p{Cf}`, the bidi
 controls among them) made spaces before the cut, as `APP_WORKER_LABEL` does.
+
+**Clarification (S-29.2, 2026-11-26).** The implementation settles five points that items 1–2 leave
+open:
+- **`--dir` on a new install while a project `agentic-worker` exists**: the new worker is a named
+  one (`--name`, else the platform's slug) in that folder. A new install never joins an existing
+  project.
+- **`--dir` or `--name` when this core already has an install**: the existing install is found and
+  repaired, and a warning says that `--dir` was not used. This keeps one worker per core, and no
+  install is renamed.
+- **`--uninstall` with `--dir` or `--name`** acts on exactly that folder (`--name n` means
+  `~/agentic-worker-n`), and refuses a folder whose mark names another core. "Uninstall resolves the
+  same way" applies only when neither option is given, because a removal must not be redirected to a
+  folder the person did not name.
+- **A core given with `--core`** has no rendered slug in that script, so its second worker needs
+  `--name`. The script says so and exits 3.
+- **A first worker on a machine where 7357 is bound**: a named worker of another core can already
+  bind 7357 (in any state). A plain first install then takes the first free port too and writes it
+  into `.env`. When 7357 is free, it probes nothing but Docker's bindings and writes nothing, so a
+  single worker's install is exactly what it was before S-29.2.

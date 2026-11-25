@@ -86,6 +86,23 @@ if ($args[0] -eq 'ps') {
   if ($line -notmatch 'com\.docker\.compose\.service=' -and $env:STUB_BOUND_PORTS) { Write-Output 'stopped' }
   exit 0
 }
+if ($args[0] -eq 'inspect' -and $args[2] -eq '{{json .HostConfig.PortBindings}}') {
+  # One line per container: its port bindings (remote-worker's published page port), else null.
+  foreach ($id in @($args | Select-Object -Skip 3)) {
+    if ($id -eq 'stopped') {
+      $ports = @($env:STUB_BOUND_PORTS -split ' ' | Where-Object { $_ -ne '' } | ForEach-Object { "{`"HostIp`":`"127.0.0.1`",`"HostPort`":`"$_`"}" })
+      Write-Output "{`"7000/tcp`":[$($ports -join ',')]}"
+      continue
+    }
+    $portFile = Join-Path (Get-StateFolder $id) 'published-port'
+    if (Test-Path -LiteralPath $portFile) {
+      Write-Output "{`"7357/tcp`":[{`"HostIp`":`"127.0.0.1`",`"HostPort`":`"$((Get-Content -LiteralPath $portFile -Raw).Trim())`"}]}"
+    } else {
+      Write-Output 'null'
+    }
+  }
+  exit 0
+}
 if ($args[0] -eq 'inspect') {
   foreach ($id in @($args | Select-Object -Skip 3)) {
     if ($id -eq 'stopped') {

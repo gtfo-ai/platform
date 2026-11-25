@@ -178,10 +178,11 @@ case $core in
 esac
 
 # A worker's name (decision 9 item 1): ^[a-z0-9][a-z0-9-]{0,23}$, and not `dev`, which
-# `pnpm worker:dev` uses (its project is agentic-worker-dev).
+# `pnpm worker:dev` uses (its project is agentic-worker-dev). The letters are spelled out: a range such
+# as [a-z] follows the locale, and a UTF-8 shell (macOS bash 3.2) can let an uppercase letter through.
 valid_name() {
   case $1 in
-    '' | dev | -* | *[!a-z0-9-]*) return 1 ;;
+    '' | dev | -* | *[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
   esac
   [ ${#1} -le 24 ]
 }
@@ -552,14 +553,14 @@ save_settings() {
             continue
             ;;
         esac
-        name=$(assigned_name "$line")
+        setting=$(assigned_name "$line")
         case " $names " in
-          *" ${name:-.} "*)
+          *" ${setting:-.} "*)
             case $written in
-              *" $name "*) ;;
+              *" $setting "*) ;;
               *)
-                setting_line "$name"
-                written="$written$name "
+                setting_line "$setting"
+                written="$written$setting "
                 ;;
             esac
             continue
@@ -568,9 +569,9 @@ save_settings() {
         printf '%s\n' "$line"
       done <"$read_copy"
     fi
-    for name in $names; do
-      case $written in *" $name "*) continue ;; esac
-      setting_line "$name"
+    for setting in $names; do
+      case $written in *" $setting "*) continue ;; esac
+      setting_line "$setting"
     done
   } >"$next"
   unchanged=1
@@ -775,9 +776,9 @@ project_of_folder() {
     return 0
   fi
   case $value in
-    [a-z0-9]*)
+    [abcdefghijklmnopqrstuvwxyz0123456789]*)
       case $value in
-        *[!a-z0-9_-]*) ;;
+        *[!abcdefghijklmnopqrstuvwxyz0123456789_-]*) ;;
         *)
           say "$value"
           return 0
@@ -937,6 +938,17 @@ install_worker() {
     # An existing install is never renamed (its volumes hold its approval and its sign-in).
     installer_set APP_WORKER_LABEL "$name"
     say "This core's worker is already installed in $dir (compose project $PROJECT); it keeps its folder and project, and --name sets only the label its page shows."
+  fi
+  # A first worker on a machine where a named one (of another core) already binds 7357: it takes
+  # the first free port instead, written into .env like a named install's. With 7357 free nothing
+  # is probed beyond Docker's bindings and nothing is written: the first install is today's.
+  if [ -z "$found" ] && [ -z "$install_name" ] && [ -z "${APP_WORKER_UI_PORT:-}" ]; then
+    bound=$(bound_ports)
+    if printf '%s\n' "$bound" | grep -qx 7357; then
+      free_port=$(first_free_port)
+      installer_set APP_WORKER_UI_PORT "$free_port"
+      say "Another worker on this machine has the page port 7357, so this one's page is on $free_port."
+    fi
   fi
 
   made_dir=0

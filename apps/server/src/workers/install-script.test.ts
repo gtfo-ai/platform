@@ -1335,6 +1335,18 @@ describe.each(SHELLS)(
         expect(refused.out, args.join(' ')).toContain(said);
         expect(refused.calls, args.join(' ')).toEqual([]);
       }
+      // Under a UTF-8 locale too: a range like [a-z] follows the locale's collation there, and
+      // macOS's bash 3.2 then lets an uppercase letter through (review of #184).
+      for (const upper of ['Laptop', 'lapTop', 'LAPTOP', 'Ž']) {
+        const t = stage();
+        const refused = run(shell, t, ['--name', upper], {
+          LANG: 'en_US.UTF-8',
+          LC_ALL: 'en_US.UTF-8',
+        });
+        expect(refused.status, upper).toBe(2);
+        expect(refused.out, upper).toContain('--name must be 1 to 24 characters');
+        expect(refused.calls, upper).toEqual([]);
+      }
     });
 
     it('finds this core’s worker in the decision’s order and repairs the first, naming a second; --name on it writes only the label (S-29.2 (3))', () => {
@@ -1406,6 +1418,44 @@ describe.each(SHELLS)(
       expect(r.status).toBe(3);
       expect(r.out).toContain('Run it again with --name');
       expect(existsSync(path.join(s.home, 'agentic-worker-'))).toBe(false);
+    });
+
+    it('asks for --name for a second worker of a core given with --core, which has no slug here (review of #184)', () => {
+      const s = stage();
+      expect(run(shell, s, ['--core', OTHER_CORE, '--no-open']).status).toBe(0);
+      const first = folderBytes(s.dir);
+      const before = run(shell, s, ['--help']);
+      const r = run(shell, s, ['--core', 'https://third.example.test', '--no-open']);
+      expect(r.status).toBe(3);
+      expect(r.out).toContain('Run it again with --name <a name for this worker>');
+      expect(since(before, r).composeCalls).toEqual([]);
+      expect(folderBytes(s.dir)).toEqual(first);
+      expect(readdirSync(s.home)).toEqual(['agentic-worker']);
+      // With --name it installs beside the first.
+      const named = run(shell, s, ['--core', 'https://third.example.test', '--name', 'third']);
+      expect(named.status).toBe(0);
+      expect(since(r, named).composeCalls).toEqual([
+        'docker compose --project-name agentic-worker-third up -d',
+      ]);
+    });
+
+    it('gives a first worker the next free page port when a named one of another core already binds 7357 (review of #184)', () => {
+      const s = stage();
+      expect(run(shell, s, ['--core', OTHER_CORE, '--name', 'early', '--no-open']).status).toBe(0);
+      expect(read(path.join(s.home, 'agentic-worker-early', '.env'))).toContain(
+        'APP_WORKER_UI_PORT=7357\n',
+      );
+      // This core's first worker: ~/agentic-worker and the project agentic-worker are free.
+      const before = run(shell, s, ['--help']);
+      const r = run(shell, s, ['--no-open']);
+      expect(r.status).toBe(0);
+      expect(since(before, r).composeCalls).toEqual([
+        'docker compose --project-name agentic-worker up -d',
+      ]);
+      expect(r.out).toContain("has the page port 7357, so this one's page is on 7358.");
+      expect(read(path.join(s.dir, '.env'))).toBe('APP_WORKER_UI_PORT=7358\n');
+      expect(r.out).toContain('http://127.0.0.1:7358 (open it in a browser)');
+      expect(r.out).not.toContain('Its name:');
     });
 
     it('--uninstall --name removes that install only; another core’s is not its to remove (S-29.2 (5))', () => {

@@ -1110,6 +1110,18 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
         name === "'; rm -rf ~; '" ? { sh: 'rm-rf', ps1: 'rm-rf' } : { sh: 'core', ps1: 'core' },
       );
     }
+    // The name read failing (the database away) still serves the script, with the host's slug.
+    w.store.setOrganisationName('FontAI');
+    const read = w.store.organisationName;
+    w.store.organisationName = async () => {
+      throw new Error('the database is away (fake)');
+    };
+    try {
+      expect(await slugs()).toEqual({ sh: 'core', ps1: 'core' });
+    } finally {
+      w.store.organisationName = read;
+    }
+    expect(await slugs()).toEqual({ sh: 'fontai', ps1: 'fontai' });
   });
 
   it('install.sh and install.ps1 answer 503 install_script_unavailable for an APP_BASE_URL they cannot quote (S-22.20)', async () => {

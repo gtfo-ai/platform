@@ -549,7 +549,7 @@ names this core — in this order: `--dir`, `~/agentic-worker`, `~/agentic-worke
 mounts. The first one found is repaired, as before (a second one is named in a warning); `--dir`
 naming another folder does not move it. None found is a **new** install: in `~/agentic-worker` when
 that folder is absent (or empty) and Docker has no project `agentic-worker` — so a single worker is
-exactly what it was — and otherwise a **named** one: `--name <n>` (`-Name`; `a-z`, `0-9` and `-`, at
+exactly what it was (unless a named worker already binds 7357: then it takes the first free port, written into its `.env`) — and otherwise a **named** one: `--name <n>` (`-Name`; `a-z`, `0-9` and `-`, at
 most 24, starting with a letter or digit, and not `dev`, which `pnpm worker:dev` uses), or else the
 platform's own slug, which the core renders into the script it serves (its organisation's name,
 `Autix s.r.o.` → `autix-s-r-o`, else its host, `agentic.fontai.org` → `fontai`; a rename reaches the
