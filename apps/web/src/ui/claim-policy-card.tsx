@@ -103,7 +103,8 @@ export interface ClaimPolicyCardProps {
   readonly onOpenChange?: (open: boolean) => void;
   /**
    * Open the controls on mount, as *Change* would (the *Add a worker* wizard's *Choose projects*
-   * step, where choosing is the step's whole point). Needs `onSave`; focus is left where it is.
+   * step, where choosing is the step's whole point). Needs `onSave`; focus is left where it is, and
+   * `onOpenChange(true)` is not called for it.
    */
   readonly startOpen?: boolean;
 }

@@ -35,7 +35,12 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { type ReactElement, type ReactNode, useEffect } from 'react';
 import { queryKeys } from '../api/keys.js';
-import { useProjects, useSession, useSettingsCommands } from '../app/queries.js';
+import {
+  useProjects,
+  useProjectsExecutionFor,
+  useSession,
+  useSettingsCommands,
+} from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { Blankslate } from '../ui/blankslate.js';
@@ -565,13 +570,22 @@ const WorkerChoice = ({
     name: row.name,
     key: row.key,
   }));
+  // Asked for this machine (`?worker_id=`), so the owner's other machines count as takers too —
+  // the plain read counts only somebody else's (BACKLOG 1456; the Workers screen asks the same).
+  const executions = useProjectsExecutionFor(
+    rows.map((row) => row.id),
+    worker.id,
+    true,
+  );
   const unassignedHasTaker: Record<string, boolean> = {};
-  for (const row of rows) {
-    if (row.execution !== null) unassignedHasTaker[row.id] = row.execution.others_take_unassigned;
-  }
+  rows.forEach((row, index) => {
+    const known = executions[index]?.data?.others_take_unassigned;
+    if (known !== undefined) unassignedHasTaker[row.id] = known;
+  });
   return (
     <div data-worker-choice="">
       <ClaimPolicyCard
+        key={worker.id}
         stored={storedClaimPolicyOf(worker)}
         projects={projects}
         surface="workers"
