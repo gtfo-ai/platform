@@ -65,6 +65,7 @@ const EXPECTED_TABLES = [
   'integration_actions',
   'integration_idempotency',
   'integrations',
+  'job_queue_migrations',
   'kb_chunks',
   'kb_documents',
   'kb_health_reports',
@@ -299,6 +300,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // whatever eventually does will delete rows. Registered rather than defaulted, so the
       // "registry lists every table" invariant above stays true.
       row('integration_idempotency', 'read_write', null),
+      // BD-034 (migration 0123): the queue migrations migrate applied, written once each.
+      row('job_queue_migrations', 'append_only', null),
       // WP-48 (migration 0036): the mark that a curation happened, and the recovery's own columns
       // beside it. `read_write` because a row is written once by the curation, or written by the
       // recovery pass and then updated at most twice — its attempt, then its curation or its

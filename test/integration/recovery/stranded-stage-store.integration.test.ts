@@ -89,7 +89,7 @@ const seedRun = async (
      values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer', 1,
              $4::run_status, now() - interval '5 minutes', $5::run_terminal_reason,
              case when $6::int is null then null else now() - ($6::int * interval '1 minute') end,
-             $7::int, $8::jsonb)`,
+             coalesce($7::int, 0), $8::jsonb)`,
     [
       taskId,
       stage.rows[0]?.id,
@@ -206,6 +206,8 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
       terminalReason: 'lease_expired',
       // Its entry counted no loss (a row from before WP-286), so no re-plan is owed.
       replanOwed: false,
+      model: 'claude-opus-5',
+      effort: 'high',
     });
     expect(found.find((entry) => entry.taskId === stranded)?.endedRun).toBeNull();
     expect(await foundIds(query({ olderThan: minutesAgo(-1) }))).toContain(justCancelled);
@@ -574,10 +576,13 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
       );
     }
     const [row] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === task);
+    // A run that never started (no CLI spawned) is not a turnless re-plan: none was owed.
     expect(row?.endedRun).toEqual({
       status: 'failed',
       terminalReason: 'error_during_execution',
       replanOwed: false,
+      model: 'claude-opus-5',
+      effort: 'high',
     });
   });
 
@@ -590,6 +595,8 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
       status: 'cancelled',
       terminalReason: 'cancelled',
       replanOwed: false,
+      model: 'claude-opus-5',
+      effort: 'high',
     });
     expect(await store.markStageAttempt(tx, { row: row as StrandedStage, at: minutesAgo(0) })).toBe(
       false,

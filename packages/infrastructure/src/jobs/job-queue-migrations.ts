@@ -23,6 +23,9 @@
  * A recorded name this build does not carry is **ignored**: it was written by a newer build, and the
  * options it set are data an older worker reads like any other (TD-032 — no schema changed).
  *
+ * **Before the record table exists** — a database migrated with a directory that stops short of
+ * 0123 — nothing is applied; the `migrate` that creates the table applies every row.
+ *
  * ## What it does not do
  *
  * It never touches a job: pg-boss copies the retry options onto each job row at insert, so a job
@@ -88,6 +91,14 @@ export const applyJobQueueMigrations = async (
   ports: JobQueueMigrationPorts,
   migrations: readonly JobQueueMigration[] = JOB_QUEUE_MIGRATIONS,
 ): Promise<readonly string[]> => {
+  // A database migrated with a directory that stops before 0123 (an upgrade test's "before" state)
+  // has no record table: nothing is applied there, and the migrate that reaches 0123 applies all.
+  const [table] = await ports.query(
+    "select to_regclass('job_queue_migrations') is not null as present",
+  );
+  if (table?.present !== true) {
+    return [];
+  }
   const recorded = new Map(
     (await ports.query('select name, options::text as options from job_queue_migrations')).map(
       (row) => [String(row.name), String(row.options)] as const,
