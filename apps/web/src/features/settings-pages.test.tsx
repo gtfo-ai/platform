@@ -337,6 +337,8 @@ describe('the org settings sub-routes', () => {
       'Keyboard shortcuts',
       // S-26.8a: a person's own accounts, everybody's.
       'Your accounts',
+      // Their own password, everybody's.
+      'Password',
     ]);
     expect(world.requested).not.toContain('/api/org/dead-letters');
     // Linked accounts is the administrator's on the server (`org.users.manage`) too.
