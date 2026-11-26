@@ -1018,6 +1018,9 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           path: `/projects/${encodeProjectId(project)}/access_tokens`,
           json: body,
           action: 'mint_credential',
+          // The response's `token` is the credential itself: exempt from redaction, the rest of
+          // the response is not (`http.ts`, `unredactedMintedToken`).
+          unredactedMintedToken: true,
         }),
       ),
 

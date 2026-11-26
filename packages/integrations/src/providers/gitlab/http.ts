@@ -60,6 +60,13 @@
  *        exact-match redactor matches a secret in a *name* only when the secret is itself lower
  *        case. Values are untouched by that and are matched in full.
  *
+ *     **One field is exempt, and only one** (2026-11-26): the `token` a project access token mint
+ *     answers (`POST /projects/:id/access_tokens`) is handed back unredacted, because it is the
+ *     credential the platform asked GitLab to create and the pattern rules of TD-012 step 2
+ *     rewrote it into a placeholder before the adapter could read it. Every other byte of that
+ *     response keeps all four passes, and a parse failure there keeps no `cause`.
+ *     {@link GitLabRequestSpec.unredactedMintedToken} carries the reasoning and the guards.
+ *
  *     **Where each pass sits relative to the success test, corrected:** the *request* pass runs
  *     before the call, so it covers every branch. The three response passes run in `request()` and
  *     `requestText()`, which `send()` reaches **only on a 2xx** — the failure branch never gets
@@ -203,6 +210,28 @@ export interface GitLabRequestSpec {
    * (`response-ceiling.test.ts`).
    */
   readonly keepTail?: true;
+  /**
+   * **The one carve-out from property 4** (the run-credential mint fix, 2026-11-26): the
+   * top-level string `token` of the response is handed back **unredacted**, and every other byte
+   * of the response keeps all four passes. Set by `createProjectAccessToken` only — `POST
+   * …/access_tokens`, action `mint_credential` — and refused at run time on any other spec;
+   * `http.test.ts` holds the census.
+   *
+   * Why the field is exempt: it is a credential GitLab mints **for the platform**, and the
+   * platform's whole use of it is the value. With TD-012 step 2 composed into the binding's
+   * redactor (`platformRedactorFor`: run secrets + `patternRedactor()`), the `gitlab-token` rule
+   * replaced the first 40 characters of a routable `glpat-…` token (up to its first `.`) with a
+   * 24-character placeholder, so every mint answered a 37-character "token", failed the shape check
+   * and was revoked — measured on a GitLab 19.5.8 self-managed instance. A legacy 26-character
+   * token would have been redacted whole. What the exemption does not lose: the value's **shape**
+   * is committed beside the mint's audit row (`minted_credential_shapes`, every process's pattern
+   * redactor), the value itself joins the run-secrets registry once the mint is accepted
+   * (`apps/server/src/workspaces.ts`, `runSecrets.add`) and a refused one is revoked, the audit row
+   * records `describeResult` (scope, expiry, revoke id) and never the value, and a parse failure on
+   * this endpoint carries **no** `cause`, because V8's parse error quotes the raw text. (The
+   * adapter's own `credentials` registry stores addresses, never values.)
+   */
+  readonly unredactedMintedToken?: true;
 }
 
 export interface GitLabResponse<TBody> {
@@ -445,7 +474,97 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     );
   };
 
+  /**
+   * {@link GitLabRequestSpec.unredactedMintedToken}: the mint response with its top-level `token`
+   * lifted out before the text and document passes and put back after them. The remainder goes
+   * through both passes as any response does — the raw-text pass included, because the
+   * `generic-api-key` rule matches `"token":"…"` across the key and would rewrite the value in the
+   * text before the document pass ever saw it. A body of any other shape gets no exemption at all.
+   */
+  /**
+   * The text pass over a document already parsed: serialised, redacted, parsed again. A placeholder
+   * holds no character JSON escapes, so the second parse fails only if a rule's match spanned a
+   * quote; that is refused like any unparseable answer, and with no `cause` either.
+   */
+  const reparseRedacted = (spec: GitLabRequestSpec, value: unknown): unknown => {
+    try {
+      return JSON.parse(redactText(spec.action, JSON.stringify(value))) as unknown;
+    } catch {
+      throw new IntegrationError(
+        'invalid_response',
+        GITLAB_PROVIDER_ID,
+        `${spec.method} ${spec.path} answered a document its redaction could not keep as JSON`,
+        { action: spec.action },
+      );
+    }
+  };
+
+  const requestMintedToken = async <TBody>(
+    spec: GitLabRequestSpec,
+  ): Promise<GitLabResponse<TBody> | null> => {
+    if (
+      spec.method !== 'POST' ||
+      spec.action !== 'mint_credential' ||
+      !/^\/projects\/[^/]+\/access_tokens$/.test(spec.path)
+    ) {
+      // A programming error, refused before anything is sent: the exemption is one endpoint's.
+      throw new IntegrationError(
+        'invalid_request',
+        GITLAB_PROVIDER_ID,
+        `${spec.method} ${spec.path} may not exempt a response field from redaction; only the project access token mint may`,
+        { action: spec.action },
+      );
+    }
+    const result = await send(spec, 'application/json');
+    if (result === null) {
+      return null;
+    }
+    let raw: unknown = null;
+    if (result.text.trim() !== '') {
+      try {
+        raw = JSON.parse(result.text) as unknown;
+      } catch {
+        // **No `cause`**: V8's parse error quotes a fragment of the input, and this input is the one
+        // response no redaction pass has seen.
+        throw new IntegrationError(
+          'invalid_response',
+          GITLAB_PROVIDER_ID,
+          `${spec.method} ${spec.path} did not answer JSON (the parse error is not kept: the text may hold a minted credential)`,
+          { action: spec.action },
+        );
+      }
+    }
+    const headers = redactedHeaders(spec.action, result.response.headers);
+    if (
+      raw === null ||
+      typeof raw !== 'object' ||
+      Array.isArray(raw) ||
+      typeof (raw as { token?: unknown }).token !== 'string'
+    ) {
+      // Not the documented shape: every pass, no exemption, and the schema refuses it downstream.
+      return {
+        status: result.response.status,
+        body: redactDocument(spec.action, reparseRedacted(spec, raw)) as TBody,
+        headers,
+      };
+    }
+    const { token, ...rest } = raw as { token: string } & Record<string, unknown>;
+    // The same two passes `request` makes, over everything but the minted value.
+    const redacted = redactDocument(spec.action, reparseRedacted(spec, rest)) as Record<
+      string,
+      unknown
+    >;
+    return {
+      status: result.response.status,
+      body: { ...redacted, token } as TBody,
+      headers,
+    };
+  };
+
   const request = async <TBody>(spec: GitLabRequestSpec): Promise<GitLabResponse<TBody> | null> => {
+    if (spec.unredactedMintedToken === true) {
+      return requestMintedToken<TBody>(spec);
+    }
     const result = await send(spec, 'application/json');
     if (result === null) {
       return null;

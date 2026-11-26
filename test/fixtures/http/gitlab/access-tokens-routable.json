@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Frouted/access_tokens",
+      "status": 201,
+      "body": {
+        "id": 61,
+        "name": "agentic-push-2026-06-02",
+        "description": null,
+        "scopes": ["read_repository", "write_repository"],
+        "created_at": "2026-06-01T08:00:00.000Z",
+        "expires_at": "2026-06-02",
+        "access_level": 30,
+        "active": true,
+        "revoked": false,
+        "user_id": 167,
+        "token": "glpat-FAKE0routable0token0DO0NOT0USE0000.01.0fake0abc"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/project_access_tokens/",
+        "retrieved": "2026-11-26",
+        "kind": "documented-adapted",
+        "note": "\"Create a project access token\" example response; the page abbreviates its token (\"D4y...Wzr\"). The token here is adapted to the routable format a GitLab 19.5.8 self-managed instance measurably answered on 2026-11-26: 53 characters, the glpat- prefix, only [A-Za-z0-9_.-], and dots at indices 40 and 43 (glpat- + 34 + .01. + 9 base36). The value is fake and carries the FAKE marker (BD-002). The layout is described by GitLab's routable-token design document (SOURCES.md). A separate project path (acme/routed) keeps it from turning acme/api's mint into a sequence."
+      }
+    }
+  ]
+}

@@ -443,6 +443,9 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
    * registry deliberately stores no token values (`credentials.ts`). But the caller cannot supply
    * one in `input.redactor` either, because `create()` runs **before** any mint — so the port's
    * deferred obligation is not dischargeable as written, and that is **Q55**, owned by WP-15.
+   * The mint's own response is the one place this redactor must **not** reach the value: it would
+   * rewrite the token `mintCredential` returns (the pattern rules did, on every routable `glpat-`
+   * token), so the transport exempts exactly that field (`http.ts`, `unredactedMintedToken`).
    *
    * The values are the **effective** ones — what `create` actually sends and verifies with.
    * `bindingSecretRedactor` skips anything under `MIN_SECRET_LENGTH`, so a blank or a stub cannot

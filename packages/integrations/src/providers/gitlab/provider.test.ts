@@ -6,6 +6,7 @@
  * else's — the asynchronous `merge_status` transition, the protected-branch check, what a mint
  * failure means on a Free gitlab.com plan, and the redaction TD-012 puts on a CI job log.
  */
+import { inspect } from 'node:util';
 import {
   allowAnyIntegrationHost,
   createIntegrationActionExecutor,
@@ -285,6 +286,32 @@ describe('credential minting', () => {
    * A value that does not start with it is still returned with the declared shape; the caller's
    * `hasMintedCredentialShape` check is what refuses (and revokes) it.
    */
+  /**
+   * The mint response's `token` reaches the schema unredacted (`http.ts`, `unredactedMintedToken`),
+   * so a response the schema refuses must not carry it out on the error: the `ZodError` on `cause`
+   * names paths and messages, never the input.
+   */
+  it('refuses a mint response the schema rejects without carrying the minted token', async () => {
+    const minted = 'glpat-FAKE0routable0token0DO0NOT0USE0000.01.0fake0abc';
+    const { port } = build({
+      [`POST /projects/${P}/access_tokens`]: {
+        status: 201,
+        body: { ...created, id: 'not-a-number', token: minted },
+      },
+    });
+    let caught: unknown;
+    try {
+      await port.mintCredential({ project: PROJECT, scope: 'read', ttlSeconds: 60 });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const everything = inspect(caught, { depth: Number.POSITIVE_INFINITY, showHidden: true });
+    expect(everything, 'the whole error, cause chain and hidden properties included').not.toContain(
+      'FAKE0routable',
+    );
+  });
+
   it('declares the shape with the binding’s token_prefix, glpat- by default', async () => {
     const { port } = build({
       [`POST /projects/${P}/access_tokens`]: { status: 201, body: created },

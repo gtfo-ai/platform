@@ -5,7 +5,11 @@
  * It lives beside the suites rather than inside a test file so that importing it does not register
  * somebody else's `describe` blocks.
  */
-import { exactSecretRedactor } from '@platform/application';
+import {
+  composeSecretRedactors,
+  exactSecretRedactor,
+  type SecretRedactor,
+} from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import {
   createGitLabProvider,
@@ -86,6 +90,12 @@ export const gitlabReplayContext = (
     readonly mintCredentials?: boolean;
     /** Binding configuration for `port` (WP-209: `max_pages`). */
     readonly config?: Readonly<Record<string, unknown>>;
+    /**
+     * The composition root's half of the redactor, composed after the binding's own secrets — the
+     * production shape is `platformRedactorFor` (run secrets + `patternRedactor()`), which the
+     * mint-redaction tests pass (2026-11-26).
+     */
+    readonly redactor?: SecretRedactor;
   } = {},
 ): GitLabReplayContext => {
   // Every fixture file on disk, not a list somebody has to remember to extend (rule 7): a file
@@ -120,11 +130,14 @@ export const gitlabReplayContext = (
       clock: fixedClock(CLOCK_AT),
       // Required since WP-11 (standing rule 31): the binding's own credentials are what this suite
       // is about, and the composition root is where they become a redactor.
-      redactor: exactSecretRedactor([
-        { name: 'gitlab_token', value: FAKE_BINDING_TOKEN },
-        { name: 'gitlab_webhook_secret_token', value: FAKE_SECRET_TOKEN },
-        { name: 'gitlab_webhook_signing_token', value: FAKE_SIGNING_TOKEN },
-      ]),
+      redactor: composeSecretRedactors(
+        exactSecretRedactor([
+          { name: 'gitlab_token', value: FAKE_BINDING_TOKEN },
+          { name: 'gitlab_webhook_secret_token', value: FAKE_SECRET_TOKEN },
+          { name: 'gitlab_webhook_signing_token', value: FAKE_SIGNING_TOKEN },
+        ]),
+        ...(overrides.redactor === undefined ? [] : [overrides.redactor]),
+      ),
     });
   const port = build(overrides.config);
 

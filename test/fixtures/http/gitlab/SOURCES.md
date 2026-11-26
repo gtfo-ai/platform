@@ -4,7 +4,10 @@ WP-09 was implemented **without access to a GitLab instance**. Nothing here was 
 live call, and pretending otherwise is exactly how a provider adapter passes its own tests and
 fails in production. Every document is derived from GitLab's *published* documentation, and every
 recorded interaction carries a `source` block naming that page, the date it was retrieved and how
-far the interaction sits from it.
+far the interaction sits from it. The one value shaped by a measurement rather than a page is the
+routable token in `access-tokens-routable.json` (2026-11-26): its *format* was measured on a
+self-managed instance, the document around it is still the published example, and nothing in it was
+recorded.
 
 ## The provenance lives on the interaction, not on the file
 
@@ -113,6 +116,12 @@ carrying its own date.
   revoked** answers `404` rather than `204` — also `inferred` from "does not exist", unmeasured
   against a real GitLab, and the reason the recovery records `not_found` as *unconfirmed* rather
   than as revoked.
+  `access-tokens-routable.json` (2026-11-26) is the same "Create" example with its token adapted to
+  the **routable** format: the page abbreviates the value (`D4y...Wzr`) and states no format, so the
+  layout — `glpat-` + 34 + `.01.` + 9 base36, 53 characters — is the one a GitLab 19.5.8
+  self-managed instance answered that day, measured rather than published, and GitLab's design
+  document describes it: `https://handbook.gitlab.com/handbook/engineering/architecture/design-documents/cells/routable_tokens/`.
+  It exists because the platform's pattern redactor rewrote exactly that value in the mint response.
 - `https://docs.gitlab.com/api/rest/troubleshooting/` — the REST status table: "404 Not Found — A
   resource could not be accessed", "409 Conflict — A conflicting resource already exists".
 - `https://docs.gitlab.com/user/project/integrations/webhook_events/` — the Merge Request, Note and
@@ -307,7 +316,9 @@ troubleshooting page's table and its message **inferred**.
   time from obviously fake strings so that the repository's own secret scanner has nothing to find
   (BD-002).
 - **Credentials.** The minted project access token in `access-tokens.json` is shaped like nothing
-  GitLab issues, for the same reason.
+  GitLab issues, for the same reason. The one in `access-tokens-routable.json` is deliberately
+  shaped like a routable `glpat-` token, because its shape is what the test is about; it carries the
+  `FAKE` marker inside the value so the secret scanner's allowlist (`.gitleaks.toml`) admits it.
 - **Sequencing.** These files are *recorded exchanges*, not a state machine. `gitlab-replay.ts`
   decides which recorded response answers which request, counts what was served, and fails on a
   fixture nothing exercises; its divergence register says where the double is not GitLab.

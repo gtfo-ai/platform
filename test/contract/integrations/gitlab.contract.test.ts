@@ -10,6 +10,14 @@
  * documentation URL it was transcribed from and whether that shape is `documented` or `inferred`.
  * The adapter's `fetch` is injected, so nothing here opens a socket, sleeps or reads a wall clock.
  */
+import { inspect } from 'node:util';
+import {
+  composeSecretRedactors,
+  exactSecretRedactor,
+  hasMintedCredentialShape,
+  IntegrationError,
+} from '@platform/application';
+import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { PROVENANCE_KINDS } from '../support/integrations/fixture-provenance.js';
 import { runGitProviderContract } from '../support/integrations/git-provider-contract-suite.js';
@@ -447,5 +455,77 @@ describe('GitLab in replay: a discussion list cut at max_pages', () => {
     expect(replay.requests.map((request) => request.key)).toEqual([
       'GET /projects/acme%2Fapi/merge_requests/31/discussions?page=1&per_page=100',
     ]);
+  });
+});
+
+/**
+ * The production defect of 2026-11-26 (TD-012's amendment of that date): with the pattern redactor
+ * composed into the binding's redactor — `platformRedactorFor` is run secrets + `patternRedactor()`
+ * — the `gitlab-token` rule rewrote the minted token inside GitLab's own mint response. A routable
+ * token (53 characters) reached `mintCredential` as 37, failed `hasMintedCredentialShape` and was
+ * revoked, on every run of every `mint_credentials: true` binding. The redactor here is that
+ * composition; the fixture is `access-tokens-routable.json`.
+ */
+describe('GitLab in replay: a routable token minted through the production redactor', () => {
+  const ROUTED_PROJECT = 'acme/routed';
+  const ROUTABLE = (
+    (loadReplayFixture('access-tokens-routable')[0] as ReplayInteraction).body as {
+      readonly token: string;
+    }
+  ).token;
+  /** `platformRedactorFor` at the moment of a mint: the run-secrets registry holds nothing yet. */
+  const platformRedactor = () =>
+    composeSecretRedactors(exactSecretRedactor([]), redactionAdapters.patternRedactor());
+
+  it('mints the token GitLab answered, byte for byte, with its 53-character shape', async () => {
+    expect(
+      platformRedactor().redactText(ROUTABLE).value,
+      'the arbiter: the production redactor does rewrite this value wherever it reaches it',
+    ).not.toBe(ROUTABLE);
+    const { port, replay } = gitlabReplayContext({ redactor: platformRedactor() });
+    const minted = await port.mintCredential({
+      project: ROUTED_PROJECT,
+      scope: 'push',
+      branchPatterns: ['agentic/*'],
+      ttlSeconds: 3600,
+    });
+    expect(minted.value).toBe(ROUTABLE);
+    expect(minted.shape).toEqual({ prefix: 'glpat-', charset: 'token_dotted', length: 53 });
+    expect(
+      hasMintedCredentialShape(minted.shape, minted.value),
+      'the check that refused, and revoked, every production mint',
+    ).toBe(true);
+    expect(minted.revokeId).toBe(`${ROUTED_PROJECT}#61`);
+    expect(replay.requests.map((request) => request.key)).toEqual([
+      'POST /projects/acme%2Frouted/access_tokens',
+    ]);
+  });
+
+  it('refuses a mint response that is not JSON without quoting a byte of the token', async () => {
+    const { port, replay } = gitlabReplayContext({ redactor: platformRedactor() });
+    replay.script({
+      method: 'POST',
+      path: '/projects/acme%2Frouted/access_tokens',
+      status: 201,
+      text: `${ROUTABLE} is not JSON`,
+      source: {
+        url: 'https://docs.gitlab.com/api/project_access_tokens/',
+        retrieved: '2026-11-26',
+        kind: 'inferred',
+        note: 'A scripted malformed body: V8 quotes the start of the input in its parse error.',
+      },
+    });
+    let caught: unknown;
+    try {
+      await port.mintCredential({ project: ROUTED_PROJECT, scope: 'read', ttlSeconds: 60 });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(IntegrationError);
+    expect((caught as IntegrationError).code).toBe('invalid_response');
+    expect((caught as Error).cause, 'no parse error rides along').toBeUndefined();
+    const everything = inspect(caught, { depth: Number.POSITIVE_INFINITY, showHidden: true });
+    expect(everything).not.toContain(ROUTABLE.slice(0, 10));
+    expect(everything).not.toContain('FAKE0routable');
   });
 });

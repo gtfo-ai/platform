@@ -8,6 +8,8 @@
  * below walks the whole error — message, own properties, and the `cause` chain — the way pino's
  * serialiser does.
  */
+
+import { readFileSync } from 'node:fs';
 import {
   composeSecretRedactors,
   exactSecretRedactor,
@@ -612,5 +614,148 @@ describe('every document that crosses the transport is redacted (TD-012, propert
     });
     await clean.http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
     expect(quiet, 'a call that carried no secret is not an event').toEqual([]);
+  });
+});
+
+/**
+ * The one exemption from property 4 (2026-11-26): the `token` a project access token mint answers.
+ * With TD-012 step 2 composed into the binding's redactor, the pattern rules rewrote it before the
+ * adapter read it, and every mint was refused and revoked in production. The redactor here knows
+ * the minted value itself, so a pass that reached it would visibly replace it. The production
+ * composition (`patternRedactor()`) is driven in `test/contract/integrations/gitlab.contract.test.ts`,
+ * because this ring may not import it.
+ */
+describe('the minted token is the one value a mint response keeps (unredactedMintedToken)', () => {
+  /** Routable layout, obviously fake (BD-002): `glpat-` + 34 + `.01.` + 9 base36, 53 characters. */
+  const MINTED = 'glpat-FAKE0routable0token0DO0NOT0USE0000.01.0fake0abc';
+  const PLANTED = 'FAKE-planted-binding-credential-0123456789';
+  const MINT_SPEC = {
+    method: 'POST',
+    path: '/projects/acme%2Fapi/access_tokens',
+    action: 'mint_credential',
+    json: { name: 'agentic-push-2026-06-02' },
+    unredactedMintedToken: true,
+  } as const;
+  const knowsBoth = (): SecretRedactor =>
+    exactSecretRedactor([
+      { name: 'minted', value: MINTED },
+      { name: 'planted', value: PLANTED },
+    ]);
+
+  it('hands back the token unredacted and redacts every other field of the response', async () => {
+    const events: { action: string; count: number }[] = [];
+    const { http } = httpWith(
+      () =>
+        json(
+          201,
+          {
+            id: 58,
+            name: `agentic ${PLANTED}`,
+            description: `copy of ${MINTED}`,
+            scopes: ['write_repository'],
+            token: MINTED,
+          },
+          { 'x-echo': PLANTED },
+        ),
+      { redactor: knowsBoth(), onRedaction: (event) => events.push(event) },
+    );
+    const response = await http.request<Record<string, unknown>>(MINT_SPEC);
+    expect(MINTED).toHaveLength(53);
+    expect(response?.body.token, 'the credential the platform asked for, byte for byte').toBe(
+      MINTED,
+    );
+    expect(response?.body.name).toBe('agentic [REDACTED:integration:planted]');
+    expect(
+      response?.body.description,
+      'the exemption is the field, not the value: a copy elsewhere is still redacted',
+    ).toBe('copy of [REDACTED:integration:minted]');
+    expect(response?.headers['x-echo']).toBe('[REDACTED:integration:planted]');
+    expect(events.reduce((sum, event) => sum + event.count, 0)).toBe(3);
+  });
+
+  /**
+   * The raw-text pass stays on the rest of the document. TD-012 step 2's generic rule matches a
+   * `"secret":"…"` pair across its key, which the document pass (one string at a time) cannot see;
+   * modelled by a redactor that does exactly that on text and nothing on documents. It would match
+   * `"token":"…"` too, which is the half of the production defect the document pass alone missed.
+   */
+  it('keeps the raw-text pass over the rest of the document, and skips the token there too', async () => {
+    const keyed = /("(?:secret|token)"\s*:\s*")([^"]{8,})/g;
+    const textOnly: SecretRedactor = {
+      redactText: (text) => {
+        let count = 0;
+        const value = text.replace(keyed, (_match, key: string) => {
+          count += 1;
+          return `${key}[KEYED]`;
+        });
+        return { value, count };
+      },
+      redactJson: (value) => ({ value, count: 0 }),
+    };
+    const { http } = httpWith(
+      () => json(201, { id: 58, secret: 'FAKE-value-only-the-text-pass-sees', token: MINTED }),
+      { redactor: textOnly },
+    );
+    const response = await http.request<Record<string, unknown>>(MINT_SPEC);
+    expect(response?.body.token).toBe(MINTED);
+    expect(response?.body.secret).toBe('[KEYED]');
+  });
+
+  it('refuses a response that is not JSON with no cause and no fragment of the text', async () => {
+    const { http } = httpWith(
+      () =>
+        new Response(`${MINTED} is not JSON`, {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        }),
+      { redactor: noSecretsRedactor() },
+    );
+    let caught: unknown;
+    try {
+      await http.request(MINT_SPEC);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(IntegrationError);
+    expect((caught as IntegrationError).code).toBe('invalid_response');
+    expect(
+      (caught as Error).cause,
+      'V8 quotes the raw text in a parse error, and this text was never redacted',
+    ).toBeUndefined();
+    const serialised = serialiseLikePino(caught);
+    expect(serialised).not.toContain(MINTED.slice(0, 10));
+    expect(serialised).not.toContain('FAKE0routable');
+  });
+
+  it('gives a body of another shape no exemption at all', async () => {
+    const { http } = httpWith(() => json(201, { id: 58, token: { value: MINTED } }), {
+      redactor: knowsBoth(),
+    });
+    const response = await http.request<Record<string, unknown>>(MINT_SPEC);
+    expect(JSON.stringify(response?.body)).not.toContain(MINTED);
+    expect(JSON.stringify(response?.body)).toContain('[REDACTED:integration:minted]');
+  });
+
+  it('refuses the exemption on any other endpoint, before anything is sent', async () => {
+    const { http, calls } = httpWith(() => json(200, { token: MINTED }), {
+      redactor: knowsBoth(),
+    });
+    for (const spec of [
+      { ...MINT_SPEC, action: 'get_merge_request' },
+      { ...MINT_SPEC, method: 'GET' as const },
+      { ...MINT_SPEC, path: '/projects/acme%2Fapi/deploy_keys' },
+    ]) {
+      await expect(http.request(spec)).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(calls, 'a refused exemption reaches no request').toEqual([]);
+  });
+
+  it('is set by the project access token mint and by nothing else', () => {
+    const client = readFileSync(new URL('./client.ts', import.meta.url), 'utf8');
+    expect(client.match(/\bunredactedMintedToken: true\b/g) ?? []).toHaveLength(1);
+    const at = client.indexOf('unredactedMintedToken: true');
+    const call = client.slice(client.lastIndexOf('createProjectAccessToken:', at), at);
+    expect(call, 'inside createProjectAccessToken').toContain('/access_tokens`');
+    expect(call).toContain("action: 'mint_credential'");
   });
 });
