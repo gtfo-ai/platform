@@ -103,6 +103,9 @@ export interface RunletSpawnOptions {
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
+/** The socket errors that mean only "the shim's end is closed" (backlog 556). */
+const PEER_GONE_CODES: ReadonlySet<string> = new Set(['EPIPE', 'ECONNRESET']);
+
 /** Receives the CLI's stderr, one frame's payload at a time, as UTF-8. */
 export type RunletStderrSink = (chunk: string) => void;
 
@@ -567,7 +570,25 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
 
     state.connection = createFrameConnection(socket, {
       onFrame: (decoded) => onFrame(decoded.frame, decoded.payload),
-      onError: (error) => fail(error),
+      onError: (error) => {
+        // Backlog 556: a write that finds the shim already gone fails with `EPIPE` (or the read
+        // with `ECONNRESET`), and the socket reports that **before** its `close`. After the
+        // session's result or the platform's own stop that is the same teardown `onClose` reads
+        // as benign — the SDK ending stdin, or the SIGTERM frame, racing the launcher's stop — so
+        // it is left to the `close` that always follows it, rather than failing the transport.
+        // A protocol error, or any other socket error, still fails it.
+        if (
+          (resultRead || spawnOptions.signal.aborted) &&
+          PEER_GONE_CODES.has((error as NodeJS.ErrnoException).code ?? '')
+        ) {
+          logger.info(
+            { code: (error as NodeJS.ErrnoException).code },
+            'the run shim was gone when the runner used the control connection; its close ends the process',
+          );
+          return;
+        }
+        fail(error);
+      },
       onClose: () => {
         if (state.exited) {
           return;

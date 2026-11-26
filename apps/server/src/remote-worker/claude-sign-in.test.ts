@@ -514,14 +514,22 @@ describe('never trapped at “Checking with Claude” (the owner’s report, 202
     const storeGate = new Promise<void>((resolve) => {
       releaseStore = resolve;
     });
+    let storingA = false;
     const { session, checks, stored } = begin(async (token) => {
-      if (token === TOKEN_A) await storeGate;
+      if (token === TOKEN_A) {
+        storingA = true;
+        await storeGate;
+      }
     });
     session.acceptToken(TOKEN_A);
     await until('the first check', () => checks.length === 1);
     checks[0]?.answer('accepted');
-    // A's verdict is in and its store is under way when the person cancels and pastes B.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // A's verdict is in and its store is under way when the person cancels and pastes B. Waited
+    // for as the store being entered, never as a sleep: between the verdict and the store the
+    // check removes its temporary HOME on the real file system, and a cancel that lands before
+    // that `rm` ends supersedes A before it is stored — so A never is, and the test timed out on a
+    // loaded CI runner (run 44742519089, attempt 1) waiting for it.
+    await until('A’s store is under way', () => storingA);
     session.cancel();
     session.acceptToken(TOKEN_B);
     await until('the second check', () => checks.length === 2);

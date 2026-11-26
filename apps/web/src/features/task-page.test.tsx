@@ -15,7 +15,7 @@ import {
 import { TICKET_TEMPLATES } from '@platform/domain';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { stageLabel } from '../ui/humanize.js';
@@ -429,6 +429,13 @@ const primaries = (): string[] =>
   [...document.querySelectorAll('main button, main a')]
     .filter((element) => element.className.includes('border-primary-line'))
     .map((element) => element.textContent ?? '');
+
+// The task page's lazy chunk, imported before the first timed wait: see `features/agents.test.tsx`.
+// Without it the file's first test paid the chunk's on-demand transform inside `findByRole`'s 1 s
+// bound and lost it on a loaded CI runner (run 44757043856, attempt 1: 1158 ms, no heading yet).
+beforeAll(async () => {
+  await import('./task-detail.js');
+}, 60_000);
 
 afterEach(() => {
   cleanup();

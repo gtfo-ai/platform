@@ -453,6 +453,52 @@ describe('the runner-side SpawnedProcess', () => {
       );
     });
 
+    /**
+     * Backlog 556: the conformance case above, on CI, failed with `write EPIPE` twice. The SDK's
+     * last write (its stdin's end) — or the SIGTERM frame of the platform's stop — met a shim the
+     * launcher had already stopped, and the socket reported the failed write as an `error`
+     * **before** its `close`, which `onError` turned into a transport failure without asking what
+     * `onClose` asks. Here the order is forced: the shim's end is closed and gone, and the runner
+     * writes in the same turn, before its socket can have read the end — so the write fails.
+     * Canary: `onError` back to a bare `fail(error)`, and `errors` holds the `EPIPE`.
+     */
+    it.each([
+      ['the session’s result', 'result'],
+      ['the platform’s own stop', 'abort'],
+    ] as const)(
+      'reads a write that finds the shim gone after %s as the close, not a failure (backlog 556)',
+      async (_name, after) => {
+        const { logger, lines } = recordingLogger();
+        const abort = new AbortController();
+        const { spawn, child, errors, peer } = await started(logger, abort.signal);
+        const exited = exitOf(child);
+        if (after === 'result') {
+          spawn.noteSessionResult();
+        }
+        peer.close();
+        await peer.closed;
+        // No await from here: the write happens before the runner's socket reads the shim's end.
+        if (after === 'result') {
+          child.stdin.write('the SDK’s last bytes');
+        } else {
+          abort.abort();
+        }
+        expect(await exited).toEqual([null, null]);
+        expect(errors).toEqual([]);
+        expect(lines.filter((line) => line.level === 'error')).toEqual([]);
+        // The branch that ran (rule 10): the write failed first, and the close then ended it.
+        expect(
+          lines
+            .filter(
+              (line) =>
+                line.message ===
+                'the run shim was gone when the runner used the control connection; its close ends the process',
+            )
+            .map((line) => ['EPIPE', 'ECONNRESET'].includes(String(line.fields['code']))),
+        ).toEqual([true]);
+      },
+    );
+
     it('still fails the transport, at error, for a close with neither an exit frame nor a result, and no stop', async () => {
       const { logger, lines } = recordingLogger();
       const { child, errors, peer } = await started(logger);
