@@ -316,7 +316,12 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > nobody, on a binding that claims, assigns the binding's own account instead (`assignToSelf`, keyed
 > `ticket_owner_assign_fallback:<task>:<event>`), records it as a claim's assign and drops a live
 > claim's `held_by: 'platform_owner'`, so the release unassigns it. A ticket a person holds is never
-> touched.
+> touched. With **no** claim held yet, the assign is recorded as a claim stale `stopped` (a cancellation's
+> release unassigns it, the next admission claims afresh), and a claim that keeps the ticket for the
+> write-back while the **binding's own account** holds it records no `held_by`, so its release takes
+> that account off (BACKLOG 1676). A write-back whose last try **expires** is re-enqueued once by the
+> `expired_job` recovery row with `fallback_only: true` — no owner written back, only that fallback
+> (`EXPIRY_FALLBACK_DUTIES`, BACKLOG 1675); it never escalates.
 > *As built at S-26.5 (TD-031's 2026-11-06 amendment item 8):* a run waiting for a claimant is a
 > **read**, never a state: no event and no column. The task read, the board and the Agents rows
 > derive `waiting` from the open offer and the claim's own predicates (technical/08, *Why a run

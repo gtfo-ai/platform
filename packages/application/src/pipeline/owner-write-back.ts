@@ -47,8 +47,9 @@
  *      — on a binding whose lifecycle claims, while the ticket still names nobody and the owner is
  *      still the event's — assigns the **binding's own account** as an ordinary claim would
  *      (`assignBindingAccountOverNobody`), so the agent never works a ticket that shows nobody. A
- *      ticket a person holds is never touched. An **expired** last try does not reach it (BACKLOG
- *      1675).
+ *      ticket a person holds is never touched. An **expired** last try reaches it through the
+ *      `expired_job` recovery row, which enqueues the duty again with `fallback_only: true`: that
+ *      job writes no owner back and runs only this step (BACKLOG 1675).
  *
  * **Residuals, stated.** Jira has no conditional assign: a person who changes the tracker between
  * the preset and the `PUT` is overwritten by it, and the next tracker read then follows the ticket
@@ -57,7 +58,13 @@
  * read after the `PUT` lands moves it back: TD-031's *"a sync racing the call reads no change"*
  * holds only for reads made after the call (backlog 1422).
  */
-import type { ExternalIdentity, Id, IsoDateTime, TicketAssignee } from '@platform/contracts';
+import type {
+  ExternalIdentity,
+  Id,
+  IsoDateTime,
+  StoredTicketClaim,
+  TicketAssignee,
+} from '@platform/contracts';
 import {
   assignOwnerOn,
   intendedTicketAssignee,
@@ -209,6 +216,14 @@ export type OwnerWriteBackOutcome =
         | 'provider_cannot_assign';
     }
   | {
+      /**
+       * BACKLOG 1675: the `expired_job` row's re-enqueue (`fallback_only`) — no write-back, only
+       * the binding's own account over nobody.
+       */
+      readonly kind: 'fallback';
+      readonly bindingAccountAssigned: boolean;
+    }
+  | {
       readonly kind: 'refused';
       readonly code: IntegrationError['code'];
       /**
@@ -276,6 +291,36 @@ export const runTicketOwnerAssign = async (
     );
     return { kind: 'skipped', reason };
   };
+
+  if (data.fallback_only === true) {
+    // BACKLOG 1675: the write-back's last try expired, so whether it landed is unknown. Nothing is
+    // written back again; the fallback re-reads the ticket and acts only while it names nobody.
+    const loaded = await options.unitOfWork.transaction(async (scope) =>
+      options.store.tasks.load(scope.tx, taskId),
+    );
+    if (loaded === null) {
+      return skip('task_gone');
+    }
+    if (isTerminalTaskState(loaded.task.state)) {
+      return skip('task_finished');
+    }
+    if (loaded.task.mode === 'shadow' || !namesAProviderTicket(loaded.task.ticket)) {
+      return { kind: 'fallback', bindingAccountAssigned: false };
+    }
+    const fallbackIntegrations = await integrationsForProject(
+      options.integrations,
+      loaded.task.projectId,
+      noRunScopedSecrets(),
+    );
+    const bindingAccountAssigned = await assignBindingAccountOverNobody(options, {
+      stored: loaded,
+      integrations: fallbackIntegrations,
+      event,
+      causeEventId: data.cause_event_id as Id,
+      logger,
+    });
+    return { kind: 'fallback', bindingAccountAssigned };
+  }
 
   // 1–2. Re-validate on fire, and find the owner's account — one transaction, no provider call.
   const read = await options.unitOfWork.transaction(async (scope) => {
@@ -597,6 +642,27 @@ const assignBindingAccountOverNobody = async (
             await options.store.tasks.saveTicketClaim(scope.tx, task.id, {
               ...assignedClaim,
               account_id: self.external_id.slice(0, 255),
+            });
+          } else if (claim === null || claim.released_at !== null) {
+            /**
+             * BACKLOG 1676: no claim holds the ticket yet (a manual Start's write-back refused
+             * before its first stage claimed), so the release would find nothing to give back. The
+             * assign is recorded as a claim **stale because its task stopped** between the assign
+             * and the record — the shape a claim's own interrupted assign leaves: a cancellation's
+             * release unassigns it (the port takes off only the binding's own account, never a
+             * person), and the next agent admission claims afresh as a first claim
+             * (`ticketClaimIsFirst`), which then records the binding's own holding as releasable
+             * (`ticket-claim.ts`). The lifecycle duty does not move a ticket on a stale claim.
+             */
+            await options.store.tasks.saveTicketClaim(scope.tx, task.id, {
+              account_id: self.external_id.slice(0, 255),
+              claimed_at: options.clock.now() as StoredTicketClaim['claimed_at'],
+              status: 'confirmed',
+              in_progress_written: false,
+              stale: true,
+              released_at: null,
+              release_cause: null,
+              stale_cause: 'stopped',
             });
           }
         }),

@@ -597,6 +597,12 @@ export interface PipelineOutboundData {
    */
   readonly run_id?: string;
   readonly revoke_id?: string;
+  /**
+   * `ticket_owner_assign` only (BACKLOG 1675): the `expired_job` recovery row's re-enqueue of a
+   * write-back whose last try expired — it writes no owner back and only assigns the binding's own
+   * account over an unassigned ticket (`runTicketOwnerAssign`).
+   */
+  readonly fallback_only?: boolean;
   readonly [key: string]: unknown;
 }
 

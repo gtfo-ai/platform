@@ -2755,6 +2755,26 @@ describe('a manual Start: the starter wins, in the tracker too, and the claim do
     expect(assigns(ticket)).toBe(0);
   });
 
+  /**
+   * BACKLOG 1676: the claim keeps a ticket the binding's own account holds for the starter's
+   * write-back too — no assign, no re-read — but records it with no `held_by`, so a release takes
+   * the platform's account off again (a refused write-back's fallback assign leaves exactly this).
+   */
+  it('a ticket the binding’s own account holds: kept for the write-back, but recorded so its release unassigns it', async () => {
+    const ticket = tracker({ assignee: SELF_ID, assignsOthers: true });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    harness.holdOutbound(isWriteBack);
+    await harness.publish([manualStart(ALICE)]);
+
+    expect(assigns(ticket)).toBe(0);
+    const claim = await claimOf(harness);
+    expect(claim).toMatchObject({ stale: false, released_at: null });
+    // Canary: before BACKLOG 1676 this read `held_by: 'platform_owner'`, and the release skipped it.
+    expect(claim?.held_by).toBeUndefined();
+    // Nothing was assigned, so the stored assignee is not rewritten by the claim.
+    expect(ticket.calls).toContain('transition:Doing');
+  });
+
   it('a ticket a linked member holds goes to the starter, and the write-back moves it to them (BACKLOG 1662’s precedence)', async () => {
     const ticket = tracker({ assignee: 'bob', assignsOthers: true });
     const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));

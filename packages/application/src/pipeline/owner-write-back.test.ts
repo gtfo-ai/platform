@@ -22,6 +22,7 @@ import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/t
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import { staticPipelineIntegrations } from './integrations.js';
 import {
   assignOwnerOnClaim,
   assignOwnerOnPick,
@@ -29,7 +30,8 @@ import {
   type TaskOwnerCommandDependencies,
 } from './owner-sync.js';
 import { assignsOwner } from './owner-write-back.js';
-import type { TicketLifecycleReadingKind } from './settings.js';
+import { staticProjectSettings, type TicketLifecycleReadingKind } from './settings.js';
+import { releaseTicket } from './ticket-release.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const ALICE = '00000000-0000-4000-8000-00000000a11c' as Id;
@@ -81,6 +83,7 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
   /** Every `assignToSelf` — the binding's own account (BACKLOG 1674's fallback). */
   const selfAssigns: AssignCall[] = [];
   let reads = 0;
+  let unassigns = 0;
   let peekStored: () => TicketAssignee | null = () => null;
   const port: Partial<TaskManagementPort> = {
     capabilities: () =>
@@ -124,6 +127,15 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
       state.assignee = 'bot';
       return { changed, assignee: identity('bot') };
     },
+    // The port's rule: only the binding's own account is taken off, never a person.
+    unassign: async () => {
+      unassigns += 1;
+      if (state.assignee !== 'bot') {
+        return { changed: false };
+      }
+      state.assignee = null;
+      return { changed: true };
+    },
   };
   return {
     state,
@@ -131,6 +143,7 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
     calls,
     selfAssigns,
     reads: () => reads,
+    unassigns: () => unassigns,
     watch: (peek: () => TicketAssignee | null) => {
       peekStored = peek;
     },
@@ -503,6 +516,19 @@ describe('with the switch on, one assignTo through the executor (criterion 2)', 
   });
 });
 
+/** What a release is called with — the pipeline's options over the harness's ports. */
+const releaseOptions = (harness: PipelineHarness) => ({
+  store: harness.store,
+  eventStore: harness.memory.store,
+  settings: staticProjectSettings(() => harness.settings),
+  jobs: harness.jobs,
+  integrations: staticPipelineIntegrations(harness.integrations),
+  ids: harness.ids,
+  clock: harness.clock,
+  calendar: harness.calendar,
+  unitOfWork: harness.memory,
+});
+
 // ── BACKLOG 1674: a refused write-back leaves the platform's account, not nobody ──
 
 describe('a refused write-back over nobody assigns the binding’s account, as a claim would (BACKLOG 1674)', () => {
@@ -555,7 +581,7 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     expect(claim?.held_by).toBeUndefined();
   });
 
-  it('assigns it too when the refusal comes before any claim is held', async () => {
+  it('assigns it too when the refusal comes before any claim is held, and records it releasable (BACKLOG 1676)', async () => {
     const ticket = tracker(null);
     const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
     await harness.publish([ticketMatched()]);
@@ -569,10 +595,52 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     expect(harness.store.ownershipOf(taskId).ticketAssignee).toMatchObject({
       external_id: 'acct-bot',
     });
+    // BACKLOG 1676: recorded as a claim stale because its task stopped between the assign and the
+    // record — a cancellation's release unassigns it, and the next admission claims afresh.
     const claim = await harness.memory.transaction(async (scope) =>
       harness.store.tasks.ticketClaim(scope.tx, taskId),
     );
-    expect(claim).toBeNull();
+    expect(claim).toMatchObject({
+      account_id: 'acct-bot',
+      stale: true,
+      stale_cause: 'stopped',
+      released_at: null,
+    });
+    expect(claim?.held_by).toBeUndefined();
+  });
+
+  it('a cancellation’s release then takes the binding’s account off, and never a person (BACKLOG 1676)', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    ticket.state.refuse = forbidden();
+    await assign(harness, BOB);
+    expect(ticket.state.assignee).toBe('bot');
+
+    await releaseTicket(releaseOptions(harness), {
+      taskId,
+      cause: 'cancelled',
+      keySuffix: 'cancelled:test',
+      causeEventId: null,
+    });
+    expect(ticket.unassigns()).toBe(1);
+    expect(ticket.state.assignee).toBeNull();
+
+    // The control: a person who took the ticket meanwhile is left alone by the same release.
+    const kept = tracker(null);
+    const other = harnessFor(kept, { slots: { claim: true, assign_owner: true } });
+    await other.publish([ticketMatched()]);
+    kept.state.refuse = forbidden();
+    await assign(other, BOB);
+    kept.state.assignee = 'carol';
+    await releaseTicket(releaseOptions(other), {
+      taskId: taskIdOf(other),
+      cause: 'cancelled',
+      keySuffix: 'cancelled:test',
+      causeEventId: null,
+    });
+    expect(kept.state.assignee).toBe('carol');
   });
 
   it('a refused fallback is logged and ends the job like the refusal: no throw, nothing recorded', async () => {
@@ -602,6 +670,42 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
           line.level === 'warn' && line.message.includes('binding’s own account could not be'),
       ),
     ).toHaveLength(1);
+  });
+
+  /**
+   * BACKLOG 1675: an expired last try is re-enqueued by the `expired_job` row with
+   * `fallback_only` — it writes no owner back (it may have landed) and only assigns the binding's
+   * account over nobody.
+   */
+  it('a fallback_only job writes nothing back and assigns the binding’s account over nobody (BACKLOG 1675)', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
+    await harness.publish([ticketMatched()]);
+    harness.holdOutbound((data) => data.duty === 'ticket_owner_assign');
+    await assign(harness, BOB);
+    const [job] = harness.jobs.take(JOB_QUEUES.pipelineOutbound);
+    expect(job?.data?.duty).toBe('ticket_owner_assign');
+    const outbound = harness.jobs.handlers.get(JOB_QUEUES.pipelineOutbound);
+
+    await outbound?.({
+      id: 'expired-fallback',
+      queue: JOB_QUEUES.pipelineOutbound,
+      data: { ...job?.data, fallback_only: true },
+    } as never);
+
+    expect(ticket.calls).toEqual([]);
+    expect(ticket.selfAssigns).toHaveLength(1);
+    expect(ticket.state.assignee).toBe('bot');
+
+    // The expired write-back had landed after all: the fallback sees a person and does nothing.
+    ticket.state.assignee = 'bob';
+    await outbound?.({
+      id: 'expired-fallback-again',
+      queue: JOB_QUEUES.pipelineOutbound,
+      data: { ...job?.data, fallback_only: true },
+    } as never);
+    expect(ticket.selfAssigns).toHaveLength(1);
+    expect(ticket.state.assignee).toBe('bob');
   });
 
   it('never touches a ticket a person holds', async () => {

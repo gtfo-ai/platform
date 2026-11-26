@@ -368,7 +368,7 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   },
   ticket_owner_assign: {
     shape: 'notification_shaped',
-    why: 'one assign of the ticket to the owner a person set on the platform, unless the binding sets `lifecycle.assign_owner: false` (S-26.3, TD-031’s second 2026-11-26 amendment); the platform’s owner stands whether or not the tracker shows it, a refused call puts the stored assignee back and is logged, and a lost wake-up leaves the tracker as it was until the next owner change, which writes back again',
+    why: 'one assign of the ticket to the owner a person set on the platform, unless the binding sets `lifecycle.assign_owner: false` (S-26.3, TD-031’s second 2026-11-26 amendment); the platform’s owner stands whether or not the tracker shows it, a refused call puts the stored assignee back and is logged, and a lost wake-up leaves the tracker as it was until the next owner change, which writes back again; a last try that **expires** is read by the `expired_job` row all the same — not escalated, but enqueued once more as a fallback that only assigns the binding’s own account over an unassigned ticket (TD-031’s 2026-11-27 amendment item 5, BACKLOG 1675; `EXPIRY_FALLBACK_DUTIES`)',
   },
   ticket_status_recheck: {
     shape: 'notification_shaped',

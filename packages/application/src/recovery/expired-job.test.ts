@@ -9,12 +9,13 @@
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { boundAndEscalateTargets } from '../ports/job-exhaustion.js';
+import { boundAndEscalateTargets, outboundDutyExhaustionOf } from '../ports/job-exhaustion.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
   describeExpiredJob,
+  EXPIRY_FALLBACK_DUTIES,
   EXPIRY_RECOVERED_ELSEWHERE,
   type ExpiredJob,
   type ExpiredJobRecoveryStore,
@@ -151,6 +152,21 @@ describe('which queues the expired_job row reads (WP-156 (c))', () => {
     );
     expect(outbound?.duties).toContain('dependency_gate');
     expect(outbound?.duties).not.toContain('workpad');
+    // BACKLOG 1675: the outbound target is its bound-and-escalate duties plus the fallback duties,
+    // one sorted list — the queues read are unchanged.
+    const escalating =
+      boundAndEscalateTargets().find((target) => target.queue === JOB_QUEUES.pipelineOutbound)
+        ?.duties ?? [];
+    expect(outbound?.duties).toEqual(
+      [...new Set([...escalating, ...Object.keys(EXPIRY_FALLBACK_DUTIES)])].sort(),
+    );
+    expect(Object.keys(EXPIRY_FALLBACK_DUTIES)).toEqual(['ticket_owner_assign']);
+  });
+
+  it('reads a fallback duty that is not bound-and-escalate, so it never escalates (BACKLOG 1675)', () => {
+    for (const duty of Object.keys(EXPIRY_FALLBACK_DUTIES)) {
+      expect(outboundDutyExhaustionOf(duty)?.shape, duty).toBe('notification_shaped');
+    }
   });
 
   it('asks the store for one day back, the targets and the pass’s grace', async () => {
@@ -221,6 +237,51 @@ describe('the brief an expired job is described with', () => {
         expired({ task_id: task, project_id: PROJECT }, { queue: JOB_QUEUES.stageExecute }),
       ),
     ).toBeNull();
+  });
+});
+
+describe('an expired fallback duty is enqueued once more, never escalated (BACKLOG 1675)', () => {
+  const writeBack = (taskId: Id, extra: Record<string, unknown> = {}) => ({
+    duty: 'ticket_owner_assign',
+    project_id: PROJECT,
+    task_id: taskId,
+    cause_event_id: CAUSE,
+    owner_user_id: '00000000-0000-4000-8000-0000000001f1',
+    owner_changed_at: '2026-06-01T10:00:00.000Z',
+    ...extra,
+  });
+
+  it('marks the job, then enqueues the duty with fallback_only — and escalates nothing', async () => {
+    const { harness, taskId } = await harnessWithTask();
+    const built = recordingStore([expired(writeBack(taskId))]);
+    const report = await pass(harness, built.store);
+
+    expect(built.marks).toEqual([{ jobId: JOB, queue: JOB_QUEUES.pipelineOutbound, taskId }]);
+    const enqueued = harness.jobs.take(JOB_QUEUES.pipelineOutbound);
+    expect(enqueued.map((job) => job.data)).toEqual([
+      { ...writeBack(taskId), fallback_only: true },
+    ]);
+    expect(escalations(harness)).toEqual([]);
+    expect(report.find((site) => site.site === 'expired_job')).toMatchObject({
+      found: 1,
+      reEnqueued: 1,
+      ended: 0,
+    });
+
+    // Another pass over the same row: the mark says it was taken, so nothing is enqueued again.
+    await pass(harness, built.store);
+    expect(harness.jobs.take(JOB_QUEUES.pipelineOutbound)).toEqual([]);
+  });
+
+  it('marks an expired fallback and enqueues nothing: the one-attempt bound', async () => {
+    const { harness, taskId } = await harnessWithTask();
+    const built = recordingStore([expired(writeBack(taskId, { fallback_only: true }))]);
+    const report = await pass(harness, built.store);
+
+    expect(built.marks).toHaveLength(1);
+    expect(harness.jobs.take(JOB_QUEUES.pipelineOutbound)).toEqual([]);
+    expect(escalations(harness)).toEqual([]);
+    expect(report.find((site) => site.site === 'expired_job')?.reEnqueued).toBe(0);
   });
 });
 

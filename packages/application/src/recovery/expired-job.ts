@@ -43,6 +43,13 @@
  * call may have landed (the measured live case keeps running after pg-boss gave up on it), and a
  * second post is worse than a person reading a brief.
  *
+ * ## A duty whose expiry runs a fallback (BACKLOG 1675)
+ *
+ * {@link EXPIRY_FALLBACK_DUTIES} are read too, though nobody waits on them: their expired last try
+ * is marked the same way and then enqueued **once** again as a fallback (`fallback_only: true`),
+ * never escalated. The fallback makes no call the expired job might have made twice — for
+ * `ticket_owner_assign` it assigns the binding's own account only while the ticket names nobody.
+ *
  * ## What it does not reach
  *
  *  - **`stage.execute`** is bound-and-escalate too, and its expiry is recovered elsewhere: the run
@@ -62,8 +69,8 @@ import {
   type ExhaustedJobEscalationOptions,
   escalateExhaustedJob,
 } from '../pipeline/job-escalation.js';
-import type { OutboundJobData, ReviewWindowData } from '../pipeline/jobs.js';
-import { describeExhaustedReviewWindow } from '../pipeline/jobs.js';
+import type { OutboundJobData, PipelineOutboundData, ReviewWindowData } from '../pipeline/jobs.js';
+import { describeExhaustedReviewWindow, enqueueOutbound } from '../pipeline/jobs.js';
 import { describeExhaustedOutbound } from '../pipeline/outbound.js';
 import { type BoundAndEscalateTarget, boundAndEscalateTargets } from '../ports/job-exhaustion.js';
 import type { Jobs } from '../ports/jobs.js';
@@ -89,11 +96,61 @@ export const EXPIRY_RECOVERED_ELSEWHERE: Readonly<Record<string, string>> = {
   [JOB_QUEUES.stageExecute]: 'run_lease, stranded_stage',
 };
 
-/** The queues and duties this row reads: every bound-and-escalate target not recovered elsewhere. */
-export const expiredJobTargets = (): readonly BoundAndEscalateTarget[] =>
-  boundAndEscalateTargets().filter(
+/**
+ * **`pipeline.outbound` duties whose expired last try runs a fallback, never an escalation** (TD-031's
+ * 2026-11-27 amendment item 5, BACKLOG 1675). They are not bound-and-escalate — nobody waits on
+ * them, so no task is escalated — but an expiry loses an effect a person sees: for
+ * `ticket_owner_assign`, a write-back that never landed leaves the ticket with nobody while the
+ * claim keeps it for the owner. The row marks the job like any other, then enqueues the duty again
+ * with `fallback_only: true`, which writes no owner back and only assigns the binding's own account
+ * over nobody (`runTicketOwnerAssign`). An expired fallback is marked and not enqueued again: the
+ * row's one-attempt bound.
+ */
+export const EXPIRY_FALLBACK_DUTIES: Readonly<Record<string, string>> = {
+  ticket_owner_assign:
+    'the binding’s own account over an unassigned ticket, as a refused write-back does (BACKLOG 1674, 1675)',
+};
+
+/**
+ * The queues and duties this row reads: every bound-and-escalate target not recovered elsewhere,
+ * and on `pipeline.outbound` the {@link EXPIRY_FALLBACK_DUTIES} too (one target per queue, its
+ * duties sorted).
+ */
+export const expiredJobTargets = (): readonly BoundAndEscalateTarget[] => {
+  const escalating = boundAndEscalateTargets().filter(
     (target) => !Object.hasOwn(EXPIRY_RECOVERED_ELSEWHERE, target.queue),
   );
+  const fallbacks = Object.keys(EXPIRY_FALLBACK_DUTIES);
+  const outbound = escalating.find((target) => target.queue === JOB_QUEUES.pipelineOutbound);
+  if (outbound === undefined) {
+    return [...escalating, { queue: JOB_QUEUES.pipelineOutbound, duties: [...fallbacks].sort() }];
+  }
+  return escalating.map((target) =>
+    target === outbound && target.duties !== null
+      ? { ...target, duties: [...new Set([...target.duties, ...fallbacks])].sort() }
+      : target,
+  );
+};
+
+/**
+ * The payload of an expired {@link EXPIRY_FALLBACK_DUTIES} job, or `null` for any other job. Read
+ * back from a table, so checked rather than cast: an `pipeline.outbound` job naming such a duty, a
+ * task and a project.
+ */
+export const expiredFallbackOf = (job: ExpiredJob): PipelineOutboundData | null => {
+  const { data } = job;
+  if (
+    job.queue !== JOB_QUEUES.pipelineOutbound ||
+    !isRecord(data) ||
+    typeof data.duty !== 'string' ||
+    !Object.hasOwn(EXPIRY_FALLBACK_DUTIES, data.duty) ||
+    !idSchema.safeParse(data.task_id).success ||
+    !idSchema.safeParse(data.project_id).success
+  ) {
+    return null;
+  }
+  return data as unknown as PipelineOutboundData;
+};
 
 /** Which of pg-boss's two writers failed the job — measured at WP-156. */
 export type ExpiryWriter = 'worker_timer' | 'supervisor';
@@ -178,7 +235,10 @@ export const describeExpiredJob = (job: ExpiredJob): Omit<ExhaustedJob, 'tries'>
 export interface ExpiredJobRecoveryReport {
   readonly site: 'expired_job';
   readonly found: number;
-  /** Always 0: an expired call may have landed, so nothing is re-enqueued. */
+  /**
+   * Fallback jobs enqueued for an expired {@link EXPIRY_FALLBACK_DUTIES} job (BACKLOG 1675). A
+   * bound-and-escalate job is never re-enqueued: an expired call may have landed.
+   */
   readonly reEnqueued: number;
   /** Jobs whose task this pass escalated, amended or notified. */
   readonly ended: number;
@@ -193,7 +253,50 @@ export const recoverExpiredJobs = async (
 ): Promise<ExpiredJobRecoveryReport> => {
   const logger = options.logger ?? silentLogger;
   let ended = 0;
+  let reEnqueued = 0;
   for (const row of rows) {
+    const fallback = expiredFallbackOf(row);
+    if (fallback !== null) {
+      const fallbackFields = {
+        job_id: row.jobId,
+        queue: row.queue,
+        duty: fallback.duty,
+        writer: row.writer,
+        task_id: fallback.task_id ?? null,
+      };
+      const markedFallback = await options.unitOfWork.transaction(async (scope) =>
+        site.store.markExpiredJob(scope.tx, {
+          jobId: row.jobId,
+          queue: row.queue,
+          taskId: (fallback.task_id ?? null) as Id | null,
+          at: now,
+        }),
+      );
+      if (!markedFallback) continue;
+      if (fallback.fallback_only === true) {
+        // The fallback itself expired: the one-attempt bound, logged and left on the list.
+        logger.warn(
+          fallbackFields,
+          'an expired job’s fallback ran past its expiry too; it is not enqueued again (BACKLOG 1675)',
+        );
+        continue;
+      }
+      try {
+        // After the mark's commit, never inside it (TD-004): no provider call in the pass.
+        await enqueueOutbound(options.jobs, { ...fallback, fallback_only: true });
+        reEnqueued += 1;
+        logger.warn(
+          fallbackFields,
+          'a job whose effect a person sees ran past its expiry on its last try; its fallback is enqueued (TD-031’s 2026-11-27 amendment item 5, BACKLOG 1675)',
+        );
+      } catch (error) {
+        logger.error(
+          { ...fallbackFields, err: error },
+          'an expired job’s fallback could not be enqueued; the failed job is still listed, and the pass does not try it again (BACKLOG 1675)',
+        );
+      }
+      continue;
+    }
     const described = describeExpiredJob(row);
     const fields = {
       job_id: row.jobId,
@@ -246,5 +349,5 @@ export const recoverExpiredJobs = async (
       'a job a person waits on ran past its expiry on its last try, which pg-boss fails without the handler throwing, so the recovery pass escalated its task with a brief (TD-004’s M7 amendment, PROGRESS backlog 421)',
     );
   }
-  return { site: 'expired_job', found: rows.length, reEnqueued: 0, ended };
+  return { site: 'expired_job', found: rows.length, reEnqueued, ended };
 };

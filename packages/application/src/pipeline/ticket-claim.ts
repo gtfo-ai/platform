@@ -39,7 +39,10 @@
  * `held_by: 'platform_owner'` whoever holds it, and writes no assign: otherwise it would put the
  * binding's account over the starter, or read the starter as *elsewhere* on its re-read. An owner
  * set by a worker's automatic claim (`via: claim`) is never written back, so the tracker gets the
- * binding's account as before. A pre-read that lands **between the write-back's preset and its
+ * binding's account as before. A ticket kept that way while the **binding's own account** holds it
+ * (a refused write-back's fallback assign, BACKLOG 1676) is recorded with no `held_by`, so the
+ * release takes that account off; nothing is assigned and the stored assignee is left alone. A
+ * pre-read that lands **between the write-back's preset and its
  * `PUT`** reads the assignee the `PUT` is replacing; it is not applied as a tracker change while the
  * write-back is owed and the stored assignee already names the owner (`syncOwnerOnClaimRead`), so it
  * cannot clear the owner and turn the keep into an assign or a refusal. The residual: a person who
@@ -119,6 +122,7 @@ import {
   compilePipeline,
   isRunnableTaskState,
   lifecycleClaims,
+  sameAccount,
   type TicketStatusPolicy,
   ticketClaimIsFirst,
   ticketClaimNeeded,
@@ -431,6 +435,14 @@ interface ClaimAttempt {
    * on a task a person on the platform owns. Either way nothing was assigned.
    */
   readonly heldBy: TicketClaimHeldBy | null;
+  /**
+   * The claim kept the ticket for a platform owner's write-back, but the **binding's own account**
+   * already held it (BACKLOG 1676: the write-back's fallback assign, or an earlier claim's). Nothing
+   * was assigned and the stored assignee is left alone — a write-back's preset may be in it — but the
+   * claim is recorded with no `held_by`, so its release takes the binding's account off (the port
+   * unassigns only that account, never a person). `false` on every other attempt.
+   */
+  readonly bindingHeld?: boolean;
   /** The binding's account display name, redacted — what `ticket_assignee` stores after an assign. */
   readonly selfDisplayName: string | null;
   /**
@@ -607,7 +619,10 @@ const claim = async (
   if (decision.kind === 'keep') {
     // The holder keeps the ticket — a linked member, or anybody on a platform-owned task: no
     // assign, and no re-read — the platform wrote nothing, so there is no race of its own to
-    // decide. The `in_progress` move is still the claim's.
+    // decide. The `in_progress` move is still the claim's. BACKLOG 1676: a ticket kept for the
+    // owner's write-back that the binding's own account holds is the platform's to give back.
+    const bindingHeld =
+      decision.heldBy === 'platform_owner' && holder !== null && sameAccount(self, holder);
     const inProgressWritten = await moveToInProgress(
       options,
       integrations,
@@ -620,7 +635,8 @@ const claim = async (
       inProgressWritten,
       shadow,
       readback: { kind: 'held' },
-      heldBy: decision.heldBy,
+      heldBy: bindingHeld ? null : decision.heldBy,
+      bindingHeld,
       selfDisplayName: null,
       statusRefusal: null,
     };
@@ -719,7 +735,9 @@ const recordClaim = async (
     ...(attempt.heldBy === null ? {} : { held_by: attempt.heldBy }),
   };
   /** Whether the binding's account now holds the ticket because of this claim's assign. */
-  const assigned = !attempt.shadow && attempt.heldBy === null;
+  const assigned = !attempt.shadow && attempt.heldBy === null && attempt.bindingHeld !== true;
+  /** Whether the binding's account holds the ticket so that a release must take it off. */
+  const releasable = assigned || (!attempt.shadow && attempt.bindingHeld === true);
   const outcome = await inTaskTransaction(
     options,
     task.id,
@@ -756,7 +774,7 @@ const recordClaim = async (
         );
         // A shadow claim assigned nothing; a kept one (member-held, platform-owned) assigned
         // nothing either, so there is nothing to give back and no release to owe.
-        if (!assigned) {
+        if (!releasable) {
           return null;
         }
         // `stale_cause: 'stopped'` (WP-178, backlog 543): the next claim is a first claim even if
