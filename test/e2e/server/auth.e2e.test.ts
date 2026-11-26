@@ -79,6 +79,73 @@ describe('login', () => {
   });
 });
 
+describe('changing your own password (Settings → Password)', () => {
+  // A user of its own: the bootstrap administrator's password is every other case's credential.
+  const EMAIL = 'changes-password@example.test';
+  const OLD = 'an-old-fake-password-1111';
+  const NEW = 'a-new-fake-password-2222';
+
+  it('verifies the current password, stores the new one, and signs out the other sessions', async () => {
+    const admin = await signIn(BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD);
+    const created = await admin.post('/api/auth/admin/create-user', {
+      email: EMAIL,
+      password: OLD,
+      name: 'Changes Password',
+      role: 'member',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+
+    const here = await signIn(EMAIL, OLD);
+    const elsewhere = await signIn(EMAIL, OLD);
+
+    // The server's minimum (`PASSWORD_MIN_LENGTH`, the bootstrap's 12), not Better Auth's 8.
+    const short = await here.post('/api/auth/change-password', {
+      currentPassword: OLD,
+      newPassword: 'eleven-char',
+      revokeOtherSessions: true,
+    });
+    expect(short.status).toBe(400);
+
+    // A wrong current password changes nothing.
+    const wrong = await here.post('/api/auth/change-password', {
+      currentPassword: 'not-the-current-password',
+      newPassword: NEW,
+      revokeOtherSessions: true,
+    });
+    expect(wrong.status).toBe(400);
+    await signIn(EMAIL, OLD);
+
+    const changed = await here.post('/api/auth/change-password', {
+      currentPassword: OLD,
+      newPassword: NEW,
+      revokeOtherSessions: true,
+    });
+    expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+
+    // This browser has a fresh, working session; the other one is gone.
+    const mine = await here.json<{ user: { email: string } } | null>('/api/auth/get-session');
+    expect(mine.body?.user.email).toBe(EMAIL);
+    const theirs = await elsewhere.json<{ error: { code: string } }>('/api/org/users');
+    expect(theirs.status).toBe(401);
+
+    // The old password no longer signs in; the new one does (Argon2id, through the field maps).
+    const old = await new Client(instance.baseUrl).post('/api/auth/sign-in/email', {
+      email: EMAIL,
+      password: OLD,
+    });
+    expect(old.status).toBeGreaterThanOrEqual(400);
+    await signIn(EMAIL, NEW);
+  });
+
+  it('refuses an anonymous caller', async () => {
+    const response = await new Client(instance.baseUrl).post('/api/auth/change-password', {
+      currentPassword: OLD,
+      newPassword: NEW,
+    });
+    expect(response.status).toBe(401);
+  });
+});
+
 describe('RBAC delegates to packages/domain can()', () => {
   it('lets a member read the user list but not the audit log', async () => {
     const admin = await signIn(BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD);

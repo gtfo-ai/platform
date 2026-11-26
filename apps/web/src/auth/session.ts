@@ -54,13 +54,12 @@ export interface ChangePasswordRequest {
 }
 
 /**
- * Better Auth's password length bounds (its defaults: `authOptions` sets neither). The form checks
- * them before it sends, because Better Auth's refusal is `{ code, message }` — not the platform's
- * problem document — so the client sees every `400` as `unexpected_response` and cannot tell a
- * short password from a wrong current one. Checked here, a `400` can only mean the current password.
+ * The password length bounds the server sets on Better Auth (`@platform/contracts`). The form
+ * checks them before it sends, because Better Auth's refusal is `{ code, message }` — not the
+ * platform's problem document — so the client sees every `400` as `unexpected_response` and cannot
+ * tell a short password from a wrong current one. Checked here, a `400` means the current password.
  */
-export const PASSWORD_MIN_LENGTH = 8;
-export const PASSWORD_MAX_LENGTH = 128;
+export { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@platform/contracts';
 
 export interface AuthApi {
   readonly getSession: () => Promise<SessionResponse>;

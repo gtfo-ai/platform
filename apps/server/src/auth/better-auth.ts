@@ -29,6 +29,7 @@
 
 import type { Algorithm } from '@node-rs/argon2';
 import { hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@platform/contracts';
 import { type BetterAuthOptions, betterAuth } from 'better-auth';
 import { admin } from 'better-auth/plugins/admin';
 import type pg from 'pg';
@@ -182,6 +183,10 @@ export const authOptions = (options: CreateAuthOptions): BetterAuthOptions => {
     emailAndPassword: {
       enabled: true,
       disableSignUp: !config.allowSignUp,
+      // One bound for every way a password is set (`@platform/contracts`): the bootstrap's 12,
+      // so changing a password (Settings → Password) cannot make it shorter than the first one.
+      minPasswordLength: PASSWORD_MIN_LENGTH,
+      maxPasswordLength: PASSWORD_MAX_LENGTH,
       // Better Auth's default is scrypt; TD-022 says Argon2id at OWASP parameters.
       password: {
         hash: async (password) => argon2Hash(password, argon2Options),

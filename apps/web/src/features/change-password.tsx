@@ -19,6 +19,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, type ReactElement, useState } from 'react';
 import { ApiError, NetworkError } from '../api/http.js';
 import { queryKeys } from '../api/keys.js';
+import { useSession } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../auth/session.js';
 import { Flash } from '../ui/flash.js';
@@ -44,8 +45,11 @@ export const CHANGE_PASSWORD_WORDS = {
   unchanged: 'The new password is the same as the current one.',
   wrongCurrent: 'Your current password was not accepted. Nothing was changed.',
   signedOut: 'Your session has ended. Sign in again, then change the password.',
-  unreachable: 'The server could not be reached. Nothing was changed.',
-  failed: 'The password was not changed.',
+  unreachable: 'The server could not be reached, so the change was not confirmed.',
+  // Not "was not changed": Better Auth stores the new hash before it revokes the other sessions,
+  // so a failure after that point leaves the new password in place.
+  failed:
+    'The change was not confirmed. Try signing in with the new password to see whether it took.',
 } as const;
 
 /** Why the form cannot be sent yet, or `null` when it can. Only shown once a field has a value. */
@@ -74,6 +78,7 @@ const explained = (error: unknown): boolean =>
 export const ChangePassword = (): ReactElement => {
   const { auth } = useServices();
   const queryClient = useQueryClient();
+  const email = useSession().data?.user.email ?? '';
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -125,7 +130,14 @@ export const ChangePassword = (): ReactElement => {
           className="flex max-w-sm flex-col gap-4"
         >
           {/* For password managers: which account this password belongs to. */}
-          <input type="text" name="username" autoComplete="username" hidden readOnly />
+          <input
+            type="text"
+            name="username"
+            autoComplete="username"
+            value={email}
+            hidden
+            readOnly
+          />
           <Field
             label={CHANGE_PASSWORD_WORDS.current}
             type="password"

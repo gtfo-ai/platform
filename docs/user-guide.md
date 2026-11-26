@@ -2130,7 +2130,7 @@ administrator; anybody else who opens one of their addresses lands where *Settin
   task you already own stays yours until the ticket's assignee changes), and **Link an account**,
   below.
 - **Password** — change the password you sign in with: your **current password**, the **new
-  password** (at least 8 characters) twice, and **Sign out my other sessions**, on by default —
+  password** (at least 12 characters) twice, and **Sign out my other sessions**, on by default —
   every other browser signed in as you is signed out, this one stays signed in. A wrong current
   password changes nothing and says so. There is no *forgot password* and no administrator reset
   of somebody else's password yet.

@@ -21,7 +21,11 @@ import {
   defaultWorkingCalendarConfig,
   workingCalendarSchema,
 } from '@platform/application';
-import { coreImageDigestsSchema, providerModeSchema } from '@platform/contracts';
+import {
+  coreImageDigestsSchema,
+  PASSWORD_MIN_LENGTH,
+  providerModeSchema,
+} from '@platform/contracts';
 import { db, errorReporting, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
 import { isTrustProxyEntry } from './client-address.js';
@@ -132,7 +136,7 @@ const serverConfigFields = z.strictObject({
   /** When set and no user exists yet, this account is created as `admin` at boot. */
   bootstrapAdminEmail: z.email().nullable(),
   bootstrapAdminName: z.string().min(1),
-  bootstrapAdminPassword: z.string().min(12).nullable(),
+  bootstrapAdminPassword: z.string().min(PASSWORD_MIN_LENGTH).nullable(),
   sessionTtlDays: z.int().min(1).max(365),
 
   /** Optional basic auth on `/metrics` (TD-023). Both halves or neither. */

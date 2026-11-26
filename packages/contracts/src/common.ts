@@ -30,6 +30,17 @@ export const slugSchema = z.string().regex(SLUG_PATTERN, 'expected a lower_snake
 
 export const nonEmptyStringSchema = z.string().min(1);
 
+/**
+ * A sign-in password's length, for every way one is set: the bootstrap administrator's
+ * (`APP_BOOTSTRAP_ADMIN_PASSWORD`), Better Auth's sign-up, admin create-user and change-password
+ * (`emailAndPassword.minPasswordLength`/`maxPasswordLength`), and the *Password* settings form,
+ * which checks it before sending. 12 is the bootstrap's long-standing minimum, applied to all of
+ * them so changing a password cannot weaken it; 128 is Better Auth's default maximum. An existing
+ * shorter password still signs in — the bound is checked only where a password is set.
+ */
+export const PASSWORD_MIN_LENGTH = 12;
+export const PASSWORD_MAX_LENGTH = 128;
+
 /** A repository-relative path or a glob (`protected_paths`, `risk_classes[].paths`). */
 export const pathPatternSchema = z.string().min(1).max(512);
 
