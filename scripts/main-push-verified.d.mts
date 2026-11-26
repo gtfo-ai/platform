@@ -8,4 +8,7 @@ export declare const decide: (input: {
   workflow: string;
   runs: unknown[];
   pulls: unknown[];
+  jobs: unknown[];
 }) => { verified: boolean; reason: string };
+export declare const TREE_STEP: string;
+export declare const newestRun: (runs: unknown[], sha: string, workflow: string) => unknown;

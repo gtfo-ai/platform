@@ -16,13 +16,18 @@
  * request into another branch. A "skipped" check reads as a pass, so the default must be to run:
  *
  *  1. the event is a `push` to `refs/heads/main`, not forced, and its `after` is `GITHUB_SHA`;
- *  2. a run of **this workflow file**, event `pull_request`, with `head_sha` equal to the pushed
- *     commit, is `completed` with conclusion `success`;
- *  3. the commit is the head of a pull request whose base is `main`, and no pull request with that
- *     head targets another branch (its merge would have tested another tree).
- *
- * A workflow run's own `pull_requests` list is empty once the pull request is merged (measured on
- * #194's runs), so rule 3 reads `GET /repos/{repo}/commits/{sha}/pulls`, which still names it.
+ *  2. the **newest** run of **this workflow file**, event `pull_request`, with `head_sha` equal to the
+ *     pushed commit, is `completed` with conclusion `success` — a later red run is not outvoted by an
+ *     earlier green one;
+ *  3. that run **recorded that it tested the head's own tree**: its step {@link TREE_STEP} succeeded.
+ *     A pull request's run tests GitHub's merge of the head into the base *as the base was then*,
+ *     which is the head's tree only when that base was an ancestor of the head — not after `main`
+ *     was rewound, nor for a pull request retargeted after its run (review of #200). The step runs
+ *     only when `HEAD^{tree}` equals the head's tree, so a skipped or absent step is no proof;
+ *  4. the commit is the head of a pull request whose base is `main`, and none with that head targets
+ *     another branch. `GET /repos/{repo}/commits/{sha}/pulls` still named #194 after its merge
+ *     (measured; a workflow run's own `pull_requests` list is empty by then). It is a second guard;
+ *     rule 3 is the one about the tree.
  *
  *     node scripts/main-push-verified.mjs --workflow .github/workflows/ci.yml [--github-output]
  *
@@ -36,18 +41,29 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import process from 'node:process';
 import { isProgram } from './is-program.mjs';
 
+/** The step a pull request run of each workflow has only when it tested the head's own tree. */
+export const TREE_STEP = "the tested tree is the head's tree";
+
+/** The newest `pull_request` run of `workflow` at `sha`, or undefined. */
+export const newestRun = (runs, sha, workflow) =>
+  runs
+    .filter(
+      (run) => run?.event === 'pull_request' && run?.head_sha === sha && run?.path === workflow,
+    )
+    .sort((a, b) => (b?.run_number ?? 0) - (a?.run_number ?? 0) || (b?.id ?? 0) - (a?.id ?? 0))[0];
+
 /**
  * The decision, from what the API answered. `runs` is the `workflow_runs` of
  * `GET /actions/runs?event=pull_request&head_sha=<sha>`, `pulls` the answer of
- * `GET /commits/<sha>/pulls`.
+ * `GET /commits/<sha>/pulls`, `jobs` the `jobs` of the newest run's `GET /actions/runs/<id>/jobs`.
  *
  * @param {{
  *   event: string, ref: string, sha: string, forced: boolean, after: string | undefined,
- *   workflow: string, runs: unknown[], pulls: unknown[],
+ *   workflow: string, runs: unknown[], pulls: unknown[], jobs: unknown[],
  * }} input
  * @returns {{ verified: boolean, reason: string }}
  */
-export const decide = ({ event, ref, sha, forced, after, workflow, runs, pulls }) => {
+export const decide = ({ event, ref, sha, forced, after, workflow, runs, pulls, jobs }) => {
   const no = (reason) => ({ verified: false, reason });
   if (event !== 'push') return no(`event is ${event}, not a push`);
   if (ref !== 'refs/heads/main') return no(`ref is ${ref}, not refs/heads/main`);
@@ -67,13 +83,19 @@ export const decide = ({ event, ref, sha, forced, after, workflow, runs, pulls }
   }
   if (intoMain.length === 0) return no('no pull request into main has this commit as its head');
 
-  const mine = runs.filter(
-    (run) => run?.event === 'pull_request' && run?.head_sha === sha && run?.path === workflow,
-  );
-  const green = mine.find((run) => run?.status === 'completed' && run?.conclusion === 'success');
-  if (green === undefined) {
-    const seen = mine.map((run) => `${run?.id} ${run?.status}/${run?.conclusion}`).join(', ');
-    return no(`no successful pull_request run of ${workflow} for ${sha} (${seen || 'none'})`);
+  const green = newestRun(runs, sha, workflow);
+  if (green === undefined) return no(`no pull_request run of ${workflow} for ${sha}`);
+  if (green.status !== 'completed' || green.conclusion !== 'success') {
+    return no(`the newest pull_request run ${green.id} is ${green.status}/${green.conclusion}`);
+  }
+  const proof = jobs
+    .filter((job) => job?.run_id === undefined || job?.run_id === green.id)
+    .flatMap((job) => (Array.isArray(job?.steps) ? job.steps : []))
+    .find((step) => step?.name === TREE_STEP);
+  if (proof?.conclusion !== 'success') {
+    return no(
+      `run ${green.id} did not record that it tested this head's own tree (step '${TREE_STEP}': ${proof?.conclusion ?? 'absent'})`,
+    );
   }
   return {
     verified: true,
@@ -121,18 +143,26 @@ const main = async (args) => {
       after: payload?.after,
       workflow,
     };
-    const early = decide({ ...facts, runs: [], pulls: [] });
+    const early = decide({ ...facts, runs: [], pulls: [], jobs: [] });
     if (!early.verified && !early.reason.startsWith('no pull request')) {
       result = early;
     } else {
-      const runs = await api(
+      const listed = await api(
         `/repos/${repository}/actions/runs?event=pull_request&head_sha=${sha}&per_page=100`,
       );
+      const runs = Array.isArray(listed?.workflow_runs) ? listed.workflow_runs : [];
       const pulls = await api(`/repos/${repository}/commits/${sha}/pulls?per_page=100`);
+      const newest = newestRun(runs, sha, workflow);
+      const jobs =
+        newest === undefined
+          ? []
+          : ((await api(`/repos/${repository}/actions/runs/${newest.id}/jobs?per_page=100`))
+              ?.jobs ?? []);
       result = decide({
         ...facts,
-        runs: Array.isArray(runs?.workflow_runs) ? runs.workflow_runs : [],
+        runs,
         pulls: Array.isArray(pulls) ? pulls : [],
+        jobs: Array.isArray(jobs) ? jobs : [],
       });
     }
   } catch (error) {

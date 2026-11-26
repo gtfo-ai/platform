@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { afterAll, describe, expect, it } from 'vitest';
-import { decide } from './main-push-verified.mjs';
+import { decide, TREE_STEP } from './main-push-verified.mjs';
 
 const SHA = 'a'.repeat(40);
 const CI = '.github/workflows/ci.yml';
@@ -35,6 +35,7 @@ const proven = {
   workflow: CI,
   runs: [greenRun],
   pulls: [pullIntoMain],
+  jobs: [{ run_id: 1, steps: [{ name: TREE_STEP, conclusion: 'success' }] }] as unknown[],
 };
 
 describe('the decision', () => {
@@ -74,13 +75,30 @@ describe('the decision', () => {
     ],
     ['a green run of another commit', { runs: [{ ...greenRun, head_sha: 'b'.repeat(40) }] }],
     ['a green push run, not a pull request run', { runs: [{ ...greenRun, event: 'push' }] }],
-    ['garbage from the API', { runs: [null, 3, 'x'], pulls: [null, {}] }],
+    ['garbage from the API', { runs: [null, 3, 'x'], pulls: [null, {}], jobs: [null, 1] }],
+    [
+      'a newer red run beside an older green one',
+      { runs: [greenRun, { ...greenRun, id: 2, run_number: 9, conclusion: 'failure' }] },
+    ],
+    ['a run that did not record the tree proof', { jobs: [{ run_id: 1, steps: [] }] }],
+    [
+      'a run whose tree step was skipped (it tested another tree)',
+      { jobs: [{ run_id: 1, steps: [{ name: TREE_STEP, conclusion: 'skipped' }] }] },
+    ],
+    [
+      'a tree proof from another run',
+      { jobs: [{ run_id: 99, steps: [{ name: TREE_STEP, conclusion: 'success' }] }] },
+    ],
+    ['no jobs at all', { jobs: [] }],
   ])('is not verified for %s', (_name, change) => {
     expect(decide({ ...proven, ...change } as typeof proven).verified).toBe(false);
   });
 
-  it('is verified when one of several runs is green (a re-run after a cancelled one)', () => {
-    const runs = [{ ...greenRun, id: 0, conclusion: 'cancelled' }, greenRun];
+  it('decides on the newest run: a green re-run after a cancelled one is verified', () => {
+    const runs = [
+      { ...greenRun, id: 0, run_number: 3, conclusion: 'cancelled' },
+      { ...greenRun, run_number: 4 },
+    ];
     expect(decide({ ...proven, runs }).verified).toBe(true);
   });
 });
@@ -115,6 +133,7 @@ describe('the command', () => {
   });
 
   it('decides a pull_request event without asking anything', () => {
+    writeFileSync(join(scratch, 'event.json'), JSON.stringify({ forced: false, after: SHA }));
     const result = run(['--workflow', CI], {
       GITHUB_EVENT_NAME: 'pull_request',
       GITHUB_REF: 'refs/pull/7/merge',
@@ -128,9 +147,30 @@ describe('the command', () => {
   });
 
   it('runs everything with no event payload', () => {
-    const result = run(['--workflow', CI], { GITHUB_EVENT_NAME: 'push' });
+    const result = run(['--workflow', CI], {
+      GITHUB_EVENT_NAME: 'push',
+      GITHUB_REF: 'refs/heads/main',
+      GITHUB_SHA: SHA,
+      GITHUB_REPOSITORY: 'owner/repo',
+      GITHUB_EVENT_PATH: join(scratch, 'absent.json'),
+    });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe('verified=false\n');
+    expect(result.stderr).toContain('absent.json');
+  });
+
+  it('reads a payload with no forced field as a force push, before asking anything', () => {
+    const event = join(scratch, 'unforced.json');
+    writeFileSync(event, JSON.stringify({ after: SHA }));
+    const result = run(['--workflow', CI], {
+      GITHUB_EVENT_NAME: 'push',
+      GITHUB_REF: 'refs/heads/main',
+      GITHUB_SHA: SHA,
+      GITHUB_REPOSITORY: 'owner/repo',
+      GITHUB_EVENT_PATH: event,
+    });
+    expect(result.stdout).toBe('verified=false\n');
+    expect(result.stderr).toContain('force push');
   });
 
   it('refuses a missing or foreign --workflow', () => {
@@ -162,6 +202,27 @@ describe('the workflows that skip on it', () => {
     expect(main).toMatch(/\n {4}uses: \.\/\.github\/workflows\/ci\.yml(?: #.*)?\n/);
     // The caller's group is not the callee's prefix, or they would wait for each other.
     expect(main).toMatch(/\nconcurrency:\n {2}group: ci-main-/);
+  });
+
+  it.each([
+    ['ci.yml', CI, 'lint'],
+    ['docker-checks.yml', '.github/workflows/docker-checks.yml', 'plan'],
+  ])('%s records the tree proof the script requires, in a full-history job', (_name, path, job) => {
+    const text = read(path);
+    const start = text.indexOf(`\n  ${job}:\n`);
+    const rest = text.slice(start + 1);
+    const next = /\n {2}[a-z][\w-]*:\n/.exec(rest);
+    const body = next === null ? rest : rest.slice(0, next.index);
+    expect(start).toBeGreaterThan(-1);
+    const step = body.indexOf(`- name: ${TREE_STEP}\n`);
+    expect(step, 'the proof step').toBeGreaterThan(-1);
+    expect(body.slice(step)).toMatch(
+      /^- name: [^\n]+\n {8}if: steps\.tree\.outputs\.same == 'true'\n/,
+    );
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell text is the text under test.
+    expect(body).toContain('if [ "${tested}" = "${head}" ]; then');
+    expect(body.indexOf('fetch-depth: 0')).toBeGreaterThan(-1);
+    expect(body.indexOf('fetch-depth: 0')).toBeLessThan(step);
   });
 
   it('docker-checks.yml plans no check only when its own proof says verified', () => {

@@ -4,8 +4,8 @@ name: ci
 # pushed commit has **not** already passed this workflow on its pull request
 # (`scripts/main-push-verified.mjs`: `main` moves only by fast-forwarding to a green pull request's
 # head, so that run tested the same tree, and a second run of it took a third of the organisation's
-# twenty runner slots). Called, the jobs below see the push's own event: the same commit range, the
-# same concurrency group.
+# twenty runner slots). Called, the jobs below see the push's own event and its commit range; the
+# concurrency group below then carries the caller's workflow name, still one group per pushed commit.
 on:
   pull_request:
   merge_group:
@@ -46,6 +46,30 @@ jobs:
           # `migrations:check` (WP-271) compares the migrations with the push's base commit, which a
           # shallow clone does not have; it refuses one by name rather than pass.
           fetch-depth: 0
+      # **The proof a push to `main` reads** (`scripts/main-push-verified.mjs`, `ci-main.yml`): a
+      # pull request's run tests GitHub's merge of the head into the base *as the base was then*, which
+      # is the head's own tree only when that base was an ancestor of the head. When it was not (`main`
+      # rewound since, or the pull request retargeted after its run), the push of the head to `main`
+      # must run again, so the second step exists only when the trees are equal and the script
+      # requires it to have succeeded. Neither step can fail a pull request.
+      - id: tree
+        name: compare the tested tree with the head's
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          tested=$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo unknown)
+          head=$(git rev-parse "${PR_HEAD}^{tree}" 2>/dev/null || echo none)
+          if [ "${tested}" = "${head}" ]; then
+            echo "same=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "same=false" >> "$GITHUB_OUTPUT"
+            echo "this run tests a merge whose tree is not ${PR_HEAD}'s; its push to main runs again"
+          fi
+      - name: the tested tree is the head's tree
+        if: steps.tree.outputs.same == 'true'
+        run: echo "a push of this head to main may skip this workflow"
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

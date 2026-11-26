@@ -53,6 +53,30 @@ jobs:
           persist-credentials: false
           # The diff needs the pull request's base, or the push's previous head.
           fetch-depth: 0
+      # **The proof a push to `main` reads** (`scripts/main-push-verified.mjs`, `ci-main.yml`): a
+      # pull request's run tests GitHub's merge of the head into the base *as the base was then*, which
+      # is the head's own tree only when that base was an ancestor of the head. When it was not (`main`
+      # rewound since, or the pull request retargeted after its run), the push of the head to `main`
+      # must run again, so the second step exists only when the trees are equal and the script
+      # requires it to have succeeded. Neither step can fail a pull request.
+      - id: tree
+        name: compare the tested tree with the head's
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          tested=$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo unknown)
+          head=$(git rev-parse "${PR_HEAD}^{tree}" 2>/dev/null || echo none)
+          if [ "${tested}" = "${head}" ]; then
+            echo "same=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "same=false" >> "$GITHUB_OUTPUT"
+            echo "this run tests a merge whose tree is not ${PR_HEAD}'s; its push to main runs again"
+          fi
+      - name: the tested tree is the head's tree
+        if: steps.tree.outputs.same == 'true'
+        run: echo "a push of this head to main may skip this workflow"
       # No dependency is installed — the script is plain Node — so there is no cache to restore.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
