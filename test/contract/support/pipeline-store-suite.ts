@@ -3797,7 +3797,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
       /**
        * BD-034's bound: a stage entry's runs that ended before the model took a turn, counted from
-       * the runs. Per entry, and only a zero-turn `failed` ending of a turnless reason counts.
+       * the runs. Per entry, and only a zero-turn `failed` / `error_during_execution` counts.
        */
       it('counts the turnless failures of one stage entry, and of nothing else (BD-034)', async () => {
         const stored = task();
@@ -3863,7 +3863,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           });
         };
         await endedRun(1, 'shutdown', 0);
+        // A crash reads 0 turns because no result was read — not counted.
         await endedRun(1, 'crash', 0);
+        await endedRun(1, 'error_during_execution', 0);
         await endedRun(1, 'error_during_execution', 0);
         // The model took a turn: not turnless.
         await endedRun(1, 'error_during_execution', 2);

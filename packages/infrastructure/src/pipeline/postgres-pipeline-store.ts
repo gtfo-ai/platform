@@ -2901,9 +2901,9 @@ export const createPostgresPipelineStore = (
            from runs r
            join task_stages s on s.id = r.task_stage_id
           where r.task_id = $1 and s.stage = $2 and s.attempt = $3
-            and r.status in ('failed', 'stalled')
+            and r.status = 'failed'
             and r.num_turns = 0
-            and r.terminal_reason in ('error_during_execution', 'crash', 'stalled')
+            and r.terminal_reason = 'error_during_execution'
             and r.exit_detail is null`,
         [entry.taskId, entry.stage, entry.attempt],
       );

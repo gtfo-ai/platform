@@ -2367,11 +2367,9 @@ export const createMemoryPipelineStore = (
           run.taskId === entry.taskId &&
           run.stage === entry.stage &&
           run.attempt === entry.attempt &&
-          (run.status === 'failed' || run.status === 'stalled') &&
+          run.status === 'failed' &&
           run.numTurns === 0 &&
-          (run.terminalReason === 'error_during_execution' ||
-            run.terminalReason === 'crash' ||
-            run.terminalReason === 'stalled') &&
+          run.terminalReason === 'error_during_execution' &&
           !startFailures.has(run.id),
       ).length,
     totalsFor: async (_tx, taskId) => {

@@ -2908,9 +2908,9 @@ export interface RunRepository {
     entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
   ): Promise<number>;
   /**
-   * How many of this **stage entry's** runs ended before the model took a single turn — `failed` or
-   * `stalled`, `num_turns = 0`, ended `error_during_execution`, `crash` or `stalled`, with **no**
-   * start failure recorded (`runs.exit_detail` null; those are {@link startFailures}'). BD-034: such
+   * How many of this **stage entry's** runs ended before the model took a single turn — `failed`,
+   * `error_during_execution`, `num_turns = 0` (the CLI's own `result` said so; a `crash` or a stall
+   * reads 0 because no result was read, and is not counted), with **no** start failure recorded (`runs.exit_detail` null; those are {@link startFailures}'). BD-034: such
    * an ending is the infrastructure's (no route to the model, a CLI that died before its first
    * answer, a worker that was not ready), never the model's, so it re-plans the entry rather than
    * escalating it, up to `MAX_TURNLESS_REPLANS` (`settle.ts`). Counted from the runs, like

@@ -183,12 +183,16 @@ export const MAX_USAGE_LIMITED_REPLANS = 3;
 
 /**
  * How many times one stage entry is planned again after a run that ended before the model took a
- * single turn (BD-034, `RunRepository.turnlessFailures`): six. Such an ending — `failed` or
- * `stalled` with `num_turns = 0` and `error_during_execution`, `crash` or `stalled` — is the
- * infrastructure's (no route to the model, a CLI that died before its first answer, a worker whose
- * Claude sign-in was not ready yet), never the model's, so it is worth another try; the re-plan
- * waits `turnlessReplanDelayMs` (1 min doubling to 16 min, about three quarters of an hour in all),
- * and the seventh such ending escalates with a brief naming them.
+ * single turn (BD-034, `RunRepository.turnlessFailures`): six. Such an ending — `failed` /
+ * `error_during_execution` with the CLI's own `result` reporting `num_turns = 0` — is the
+ * infrastructure's (no route to the model, an API error on the first request, a worker whose Claude
+ * sign-in was not ready yet), never the model's, so it is worth another try; the re-plan waits
+ * `turnlessReplanDelayMs` (1 min doubling to 16 min, about three quarters of an hour in all), and the
+ * seventh such ending escalates with a brief naming them.
+ *
+ * **Only `error_during_execution`, never `crash` or `stalled`** (review of BD-034): their `num_turns`
+ * is 0 because no `result` message was read (`claude-runner.ts`), not because the model never
+ * answered — a crash forty minutes into real work reads 0 too. Those keep their escalation.
  */
 export const MAX_TURNLESS_REPLANS = 6;
 
@@ -201,11 +205,9 @@ export const turnlessReplanDelayMs = (replans: number): number =>
  * `RunRepository.turnlessFailures` counts, applied to the outcome being settled.
  */
 export const isTurnlessFailure = (outcome: RunOutcome): boolean =>
-  (outcome.status === 'failed' || outcome.status === 'stalled') &&
+  outcome.status === 'failed' &&
   outcome.numTurns === 0 &&
-  (outcome.terminalReason === 'error_during_execution' ||
-    outcome.terminalReason === 'crash' ||
-    outcome.terminalReason === 'stalled') &&
+  outcome.terminalReason === 'error_during_execution' &&
   outcome.startFailure === undefined;
 
 /** The name WP-12 puts on `run_stopped.data.reason` when the CLI reported no usable cost. */
@@ -1152,7 +1154,7 @@ const recordTurnless = async (
   const failed = failRun(
     run,
     {
-      status: outcome.status as 'failed' | 'stalled',
+      status: 'failed',
       terminalReason: outcome.terminalReason,
       error: outcome.error ?? outcome.terminalReason,
       ...failedSpendOf(outcome),
@@ -1189,8 +1191,11 @@ const recordTurnless = async (
         `${String(job.attempt)}; the last is ${run.id}) and each ended before the model answered a ` +
         `single turn — the last as ${outcome.terminalReason}: ${(outcome.error ?? outcome.terminalReason).slice(0, 300)}. ` +
         `The first ${String(MAX_TURNLESS_REPLANS)} were offered again automatically, waiting 1 minute and then ` +
-        'twice as long each time up to 16 minutes; this one is not. No agent work was lost, because ' +
-        'none was done. This is the infrastructure, not the task: check that the machines that ran ' +
+        'twice as long each time up to 16 minutes; this one is not. ' +
+        (outcome.savedWork === undefined
+          ? 'No agent work was lost, because the model never answered. '
+          : `${savedWorkSentence(outcome.savedWork)} `) +
+        'This is the infrastructure, not the task: check that the machines that ran ' +
         "these runs can reach the model (network, proxy, the Claude sign-in or API key) and look at the runs' pages, then " +
         'hand the task back at this stage.',
     );

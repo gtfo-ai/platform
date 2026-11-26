@@ -44,7 +44,7 @@ As built on 2026-11-26:
 | Any other gate answering "not yet" (rebase gate mergeability, custom `on`-event gate) | 5 checks × 30 s | time from the entry, backoff from 30 s up to 5 min: 60 min for a provider computation, 24 h for a declared event |
 | Provider outage at a gate | 60 min (the CI gate: its CI timeout) | 24 h from the first failure (the CI gate: the later of that and its CI timeout) |
 | Transport failure to start a run | 3 attempts, 30 s apart (≈1 min) | 8 attempts, backoff 30 s → 10 min (≈35 min) |
-| Run ended before the model took a turn (`failed`/`stalled`, 0 turns, `error_during_execution`/`crash`/`stalled`) | escalate at once | re-plan the same stage entry, 1 → 16 min apart, 6 times (≈47 min), then escalate naming the runs |
+| Run ended before the model took a turn (`failed` / `error_during_execution`, the CLI's result reporting 0 turns) | escalate at once | re-plan the same stage entry, 1 → 16 min apart, 6 times (≈47 min), then escalate naming the runs |
 | `runner` stopped mid-run (shutdown hand-back) | 2 hand-backs | 5 hand-backs |
 | Usage limit ended the run | 1 re-plan | 3 re-plans |
 | Worker lost the run's lease | 1 re-plan | 3 re-plans, each excluding the machines that lost it |
@@ -52,7 +52,7 @@ As built on 2026-11-26:
 ## Rationale
 An escalation costs a person's attention and stops the task for hours, which is far more than another provider read or another offer of a run that never started. The conditions above end by themselves: a pipeline finishes, a provider answers again, a worker reconnects, a usage limit resets. Escalating them makes people watch the platform's infrastructure for it, and it hides the escalations that do need a person among ones that do not.
 
-Money stays bounded. A gate read costs nothing, and a run that never started or never reached the model costs what the CLI measured, which is usually nothing. Every run that is re-run is charged as any run is, so the task's budget (BD-010) still caps the retries that do spend. A run nobody measured (a `crash`, or a start that had already asked for its CLI) is held at its reservation against the task cap (rule 16). A long series of those therefore ends in a budget **pause**, not an unbounded spend.
+Money stays bounded. A gate read costs nothing, and a run that never started or never reached the model costs what the CLI measured, which is usually nothing. Every run that is re-run is charged as any run is, so the task's budget (BD-010) still caps the retries that do spend. A start that had already asked for its CLI but measured nothing is held at its reservation against the task cap (rule 16). A long series of those therefore ends in a budget **pause**, not an unbounded spend.
 
 ## Alternatives considered
 - **Raise only the counts and keep the 30 s cadence.** Rejected because a count tuned for one provider's latency is wrong for the next one. A time bound measured from the stage entry survives restarts and replays (TD-004), and backoff keeps a long wait cheap.
@@ -68,7 +68,7 @@ Money stays bounded. A gate read costs nothing, and a run that never started or 
   - a held `manual` pipeline unchanged on retry, and a `manual` pipeline or no pipeline at the CI timeout;
   - non-retryable start failures (`invalid_spec`, a forbidden mint, a CLI spawn the platform refused), permission refusals and secret leaks;
   - the offer timeout;
-  - a failure after the agent took turns (`error_max_turns`, `timed_out`, a stall or an API error mid-run, a missing artifact or merge request). The run did real work, so another run would spend again on what may be the same ending. A person reads the transcript.
+  - a failure after the agent took turns (`error_max_turns`, `timed_out`, an API error mid-run, a missing artifact or merge request), and a `crash` or a stall, whose turn count reads 0 only because no result was read and which may follow real work. Another run would spend again on what may be the same ending. A person reads the transcript.
 - **Left unchanged, because they are already bounded retries of infrastructure** (BACKLOG 1659 has the review of each):
   - write-conflict exhaustion (`MAX_TASK_CONFLICT_ATTEMPTS`, 3, which is a hot write loop, not a provider);
   - a `stage.execute` job that keeps throwing (pg-boss's two retries, then one stranded-stage re-enqueue, then an escalation naming the error class);

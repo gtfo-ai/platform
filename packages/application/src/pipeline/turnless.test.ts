@@ -105,7 +105,7 @@ const nextWake = async (harness: PipelineHarness): Promise<number> => {
 };
 
 describe('a run that ended before the model took a turn (BD-034)', () => {
-  it('reads only a zero-turn failure, crash or stall that is not a start failure as turnless', () => {
+  it('reads only a zero-turn error_during_execution that is not a start failure as turnless', () => {
     const outcome = {
       runId: 'r' as Id,
       status: 'failed',
@@ -121,9 +121,10 @@ describe('a run that ended before the model took a turn (BD-034)', () => {
       redactionCount: 0,
     } as unknown as Parameters<typeof isTurnlessFailure>[0];
     expect(isTurnlessFailure(outcome)).toBe(true);
-    expect(isTurnlessFailure({ ...outcome, terminalReason: 'crash' })).toBe(true);
+    // A crash or a stall reads 0 turns because no result was read — after real work too.
+    expect(isTurnlessFailure({ ...outcome, terminalReason: 'crash' })).toBe(false);
     expect(isTurnlessFailure({ ...outcome, status: 'stalled', terminalReason: 'stalled' })).toBe(
-      true,
+      false,
     );
     // The model took a turn: its failure is the model's, and escalates as before.
     expect(isTurnlessFailure({ ...outcome, numTurns: 1 })).toBe(false);
@@ -208,6 +209,17 @@ describe('a run that ended before the model took a turn (BD-034)', () => {
     for (const runId of refinementRunIds(harness)) {
       expect((await runOf(harness, runId))?.terminalReason).toBe('error_during_execution');
     }
+    expect(stageJobs(harness)).toEqual([]);
+  });
+
+  it('escalates a crash at once, as before, though it reads zero turns', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: { refinement: { ...TURNLESS, terminalReason: 'crash', error: 'the CLI exited' } },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(refinementRunIds(harness)).toHaveLength(1);
+    expect(taskOf(harness).task.state).toBe('needs_human');
     expect(stageJobs(harness)).toEqual([]);
   });
 

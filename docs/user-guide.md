@@ -2491,16 +2491,16 @@ current run). The platform's Workers page says the same reasons for each worker,
 and a project's execution settings say which workers would take its runs and how many waiting runs no
 worker may take now.
 Stopping the worker's container is not a cancel; the platform gives the stage to another computer
-— once: a second lost run of the same stage goes to *Needs you*, naming both runs
-and the machines that held them.
+— up to three times: a fourth lost run of the same stage goes to *Needs you*, naming every run
+and the machine that held it.
 
 When a worker reaches its Claude **usage limit** the run it was doing ends — not as the task's failure
 — its unfinished work is pushed to the task's branch, and the stage is offered once more, continuing
-from that work: another worker takes it at once, or the same one once its limit resets. The limited
+from that work (up to three times for one stage): another worker takes it at once, or the same one once its limit resets. The limited
 worker takes no work until then, and carries on by itself. Its own page and the Workers screen both say **Paused — usage limit
 until 14:00** (in the organisation's timezone on the platform's screens; *until about* when the limit
 did not say when it resets, and the worker waits an hour), and the run's page says the same beside
-*Runs on*. A second usage limit on the same stage goes to *Needs you*. A person's *Pause* is a
+*Runs on*. A fourth usage limit on the same stage goes to *Needs you*. A person's *Pause* is a
 different hold: the end of a usage limit never lifts it.
 
 **What a machine takes.** The worker's own page has a card, **What this machine takes**, with one
