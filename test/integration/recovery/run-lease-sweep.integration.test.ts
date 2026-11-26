@@ -24,6 +24,7 @@
 import type { Commitment, ExpiredRunQuery, Transaction, UnitOfWork } from '@platform/application';
 import {
   declarePipelineQueues,
+  MAX_LOST_RUN_REPLANS,
   runStrandedRecovery,
   sweepExpiredRunLeases,
 } from '@platform/application';
@@ -540,7 +541,7 @@ describe('a question whose run the sweep ended', () => {
  * between its commit and its enqueue leaves an entry the stranded-stage row re-plans — once — rather
  * than escalates.
  */
-describe('a lost worker re-plans its stage entry once (WP-286)', () => {
+describe('a lost worker re-plans its stage entry (WP-286; three times since BD-034)', () => {
   let boss: ReturnType<typeof jobsAdapters.createPgBossJobs>;
   let workerId: string;
 
@@ -754,28 +755,38 @@ describe('a lost worker re-plans its stage entry once (WP-286)', () => {
     await expect(offerAgain()).rejects.toThrow(/run_offers_one_live_stage_per_task/);
   });
 
-  it('escalates the entry’s second loss, naming both runs and both machines', async () => {
+  it('re-plans the entry’s next losses and escalates the one past the bound, naming every run and machine (BD-034)', async () => {
     const first = await seedLostEntry();
     await sweepWith({ order: [] });
-    // The re-planned run is lost too, under the server's claimant this time.
     const stage = await pool.query<{ id: string }>(
       `select id from task_stages where task_id = $1 and attempt = 1`,
       [taskId],
     );
-    const second = await pool.query<{ id: string }>(
-      `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
-                         attempt, status, started_at, lease_owner, lease_expires_at)
-       values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer', 1,
-               'running', $4::timestamptz, 'server:core-1', $5::timestamptz) returning id`,
-      [taskId, stage.rows[0]?.id, projectId, at(-20), at(-10)],
-    );
-    const order: string[] = [];
-    expect(await sweepWith({ order })).toMatchObject({ ended: 1, replanned: 0 });
-    expect(order).toEqual([]);
-    const task = await pool.query<{ state: string }>('select state from tasks where id = $1', [
-      taskId,
-    ]);
-    expect(task.rows[0]?.state).toBe('needs_human');
+    // Each re-planned run is lost too, under the server's claimant this time.
+    const later: string[] = [];
+    for (let loss = 2; loss <= MAX_LOST_RUN_REPLANS + 1; loss += 1) {
+      const lost = await pool.query<{ id: string }>(
+        `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                           attempt, status, started_at, lease_owner, lease_expires_at)
+         values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer', 1,
+                 'running', $4::timestamptz, $6, $5::timestamptz) returning id`,
+        [taskId, stage.rows[0]?.id, projectId, at(-20), at(-10), `server:core-${String(loss)}`],
+      );
+      later.push(lost.rows[0]?.id as string);
+      const order: string[] = [];
+      const report = await sweepWith({ order });
+      const state = (
+        await pool.query<{ state: string }>('select state from tasks where id = $1', [taskId])
+      ).rows[0]?.state;
+      if (loss <= MAX_LOST_RUN_REPLANS) {
+        expect(report, `loss ${String(loss)}`).toMatchObject({ ended: 1, replanned: 1 });
+        expect(state, `loss ${String(loss)}`).toBe('active');
+      } else {
+        expect(report, `loss ${String(loss)}`).toMatchObject({ ended: 1, replanned: 0 });
+        expect(order).toEqual([]);
+        expect(state).toBe('needs_human');
+      }
+    }
     const brief = await pool.query<{ brief: string }>(
       `select payload ->> 'blocker_brief' as brief from events
         where stream_type = 'task' and stream_id = $1 and type = 'task.escalated'`,
@@ -783,7 +794,10 @@ describe('a lost worker re-plans its stage entry once (WP-286)', () => {
     );
     expect(brief.rows[0]?.brief).toContain(`run ${first} (held by worker ${workerId})`);
     expect(brief.rows[0]?.brief).toContain(
-      `run ${second.rows[0]?.id} (held by the server's runner (core-1))`,
+      `run ${later.at(-1)} (held by the server's runner (core-${String(MAX_LOST_RUN_REPLANS + 1)}))`,
+    );
+    expect(brief.rows[0]?.brief).toContain(
+      `lost its run ${String(MAX_LOST_RUN_REPLANS + 1)} times`,
     );
   });
 });

@@ -18,6 +18,7 @@ import {
   createWorkingCalendar,
   INITIAL_TASK_VERSION,
   LeaseLostError,
+  MAX_RUN_START_ATTEMPTS,
   type PipelineStore,
   type RunOutcome,
   type SettleRunDeps,
@@ -466,31 +467,37 @@ describe('a start failure settled as not_started (WP-275a)', () => {
       )
     ).rows[0]?.exit_detail;
 
-  it('escalates on the third failure across two settling processes, and retries the two before', async () => {
+  it('escalates on the last attempt across two settling processes, and retries the ones before (BD-034)', async () => {
     const first = await notStarted(undefined, true, 'a');
     expect(first.settled.outcome.kind).toBe('retry');
     expect(first.enqueued).toHaveLength(1);
-    const second = await notStarted(first.taskId, true, 'b');
-    expect(second.settled.outcome.kind).toBe('retry');
+    const runs = [first];
+    for (let attempt = 2; attempt < MAX_RUN_START_ATTEMPTS; attempt += 1) {
+      const next = await notStarted(first.taskId, true, attempt % 2 === 0 ? 'b' : 'a');
+      expect(next.settled.outcome.kind, `attempt ${String(attempt)}`).toBe('retry');
+      runs.push(next);
+    }
     expect(await taskState(first.taskId)).toBe('active');
-    const third = await notStarted(first.taskId, true, 'a');
-    expect(third.settled.outcome.kind).toBe('failed');
-    expect(third.enqueued).toEqual([]);
+    const last = await notStarted(first.taskId, true, 'a');
+    expect(last.settled.outcome.kind).toBe('failed');
+    expect(last.enqueued).toEqual([]);
     expect(await taskState(first.taskId)).toBe('needs_human');
-    expect(
-      await Promise.all([first, second, third].map((entry) => startFailureOf(entry.runId))),
-    ).toEqual([
-      expect.objectContaining({ attempt: 1, retryable: true }),
-      expect.objectContaining({ attempt: 2, retryable: true }),
-      expect.objectContaining({ attempt: 3, retryable: false }),
-    ]);
+    runs.push(last);
+    expect(await Promise.all(runs.map((entry) => startFailureOf(entry.runId)))).toEqual(
+      runs.map((_, index) =>
+        expect.objectContaining({
+          attempt: index + 1,
+          retryable: index + 1 < MAX_RUN_START_ATTEMPTS,
+        }),
+      ),
+    );
     // The run's sealed plan would be cleared by these endings too (there is none on a seeded run).
     const started = await pool.query<{ n: string }>(
       "select count(*) as n from events where type = 'run.started' and stream_id = any($1::uuid[])",
-      [[first.runId, second.runId, third.runId]],
+      [runs.map((entry) => entry.runId)],
     );
     expect(Number(started.rows[0]?.n)).toBe(0);
-  }, 60_000);
+  }, 120_000);
 
   it('restarts the count after a shutdown hand-back', async () => {
     const first = await notStarted(undefined, true, 'a');
