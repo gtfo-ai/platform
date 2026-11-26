@@ -1148,9 +1148,14 @@ empty, because the server claims within `fallback_after`. A tampered worker can 
        stuck at *Checking with Claude…*).
    - **What it reads**, and nothing else:
      - the sign-in URL: a primary *Open Claude sign-in* through `safeHref`, only if it is `https:` on the Anthropic host list the slice measures;
-     - the paste prompt: a field, *Paste the code Claude shows you*;
+     - the paste prompt: a *Paste code* button that reads the clipboard on its click, and a focused
+       field; a `code#state`-shaped paste is sent at once, anything else waits for *Continue*
+       (amended 2026-11-26, the owner's report: copying and pasting the code was the step everybody
+       tripped on). The code is written to the CLI and Enter **as a write of its own**, because the
+       CLI takes `code\r` in one chunk as a paste and never submits it (re-measured that day,
+       research/17 § 11);
      - the token, by shape (V-WM4).
-   - **The localhost callback cannot complete**, because the CLI listens inside the container on an unpublished port. Pasting the code is the route (V-WM10).
+   - **The localhost callback cannot complete**, because the CLI listens inside the container on an unpublished port. Pasting the code is the route (V-WM10). Re-read 2026-11-26 in CLI 2.1.267: `setup-token` takes no port option and starts its listener on `127.0.0.1`, port 0 (`MCP_OAUTH_CALLBACK_PORT` is MCP's alone), and a page cannot read another origin's tab, so a codeless sign-in would mean the worker owning the OAuth client — which this amendment rules out.
    - **Never logged.** CLI output enters no log line or tail. The code and the token join the exact redactor at once.
    - **Fallback, always visible:** *Paste a token instead*, with `claude setup-token` in a `CopyField`.
      A paste **always wins** over a browser sign-in in progress: that session is ended and the

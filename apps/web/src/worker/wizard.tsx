@@ -62,6 +62,19 @@ const failureWords = (error: unknown): string => {
   return (error as Error).message;
 };
 
+/**
+ * The shape of the code Claude's page shows after a sign-in: the authorisation code, `#`, the
+ * state (measured: `code#state`, research/17 § 11). Only a paste of this shape is sent on by
+ * itself; anything else is left in the field for *Continue*, so a changed shape never blocks.
+ */
+export const looksLikeClaudeCode = (text: string): boolean =>
+  /^[A-Za-z0-9._~-]{8,1024}#[A-Za-z0-9._~-]{8,512}$/.test(text.trim());
+
+export const CLIPBOARD_REFUSED_WORDS =
+  'This browser did not let the page read the clipboard. Paste the code into the field below.';
+export const CLIPBOARD_NOT_A_CODE_WORDS =
+  'The clipboard holds no code from Claude. Copy the code Claude shows, then click Paste code again.';
+
 /** A labelled single-line field; also the *Error reporting* setting's (`error-reporting.tsx`). */
 export const TextField = ({
   label,
@@ -69,12 +82,17 @@ export const TextField = ({
   onChange,
   placeholder,
   secret = false,
+  autoFocus = false,
+  onPaste,
 }: {
   readonly label: string;
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly placeholder?: string;
   readonly secret?: boolean;
+  readonly autoFocus?: boolean;
+  /** The pasted text; answering `true` takes the paste (it is then not typed into the field). */
+  readonly onPaste?: (pasted: string) => boolean;
 }): ReactElement => {
   const id = useId();
   return (
@@ -89,7 +107,16 @@ export const TextField = ({
         spellCheck={false}
         value={value}
         placeholder={placeholder}
+        // biome-ignore lint/a11y/noAutofocus: the one field the step asks for, shown on its own.
+        autoFocus={autoFocus}
         onChange={(event) => onChange(event.target.value)}
+        onPaste={
+          onPaste === undefined
+            ? undefined
+            : (event) => {
+                if (onPaste(event.clipboardData.getData('text'))) event.preventDefault();
+              }
+        }
         className={cx(
           'h-9 rounded-md border border-line-input bg-inset px-3 font-mono text-sm text-fg placeholder:text-fg-subtle',
           FOCUS_RING,
@@ -263,6 +290,7 @@ const ClaudeStep = ({
   readonly restarted: boolean;
 }): ReactElement => {
   const [code, setCode] = useState('');
+  const [pasteProblem, setPasteProblem] = useState<string | null>(null);
   /** Why the worker would not start a sign-in now (a drain, BACKLOG 1054), until the next press. */
   const [startProblem, setStartProblem] = useState<string | null>(null);
   const [token, setToken] = useState('');
@@ -298,6 +326,34 @@ const ClaudeStep = ({
         throw error;
       }
     });
+  };
+  const submitCode = (value: string): void => {
+    const pasted = value.trim();
+    if (pasted === '') return;
+    setCode('');
+    setPasteProblem(null);
+    void act(() => client.claudeCode(pasted));
+  };
+  /**
+   * One click reads the clipboard (a click is what every browser asks for before it hands the
+   * clipboard over — Safari and Firefox show their own *Paste* confirmation). A code goes straight
+   * on; anything else is said, and the field below is still there.
+   */
+  const pasteFromClipboard = (): void => {
+    void (async () => {
+      let pasted: string;
+      try {
+        pasted = (await navigator.clipboard.readText()).trim();
+      } catch {
+        setPasteProblem(CLIPBOARD_REFUSED_WORDS);
+        return;
+      }
+      if (!looksLikeClaudeCode(pasted)) {
+        setPasteProblem(CLIPBOARD_NOT_A_CODE_WORDS);
+        return;
+      }
+      submitCode(pasted);
+    })();
   };
   const running = showsCode || signIn.phase === 'checking';
   const submitToken = (): void => {
@@ -379,22 +435,43 @@ const ClaudeStep = ({
               />
             </span>
           </li>
-          <li>Claude shows a code. Copy it.</li>
+          <li>Claude shows a code. Copy it, then come back to this page.</li>
           <li>
             <form
               className="flex flex-col gap-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                const pasted = code.trim();
-                if (pasted === '') return;
-                setCode('');
-                void act(() => client.claudeCode(pasted));
+                submitCode(code);
               }}
             >
+              <div>
+                <Button
+                  tone="primary"
+                  disabled={busy || signIn.phase !== 'waiting_for_code'}
+                  onClick={pasteFromClipboard}
+                  data-paste-code=""
+                >
+                  Paste code
+                </Button>
+              </div>
+              {pasteProblem === null ? null : (
+                <p className="text-sm text-fg" role="status" data-paste-code-problem="">
+                  {pasteProblem}
+                </p>
+              )}
               <TextField
-                label="Paste the code Claude shows you"
+                label="Or paste it here yourself"
                 value={code}
                 onChange={setCode}
+                onPaste={(pasted) => {
+                  // A code-shaped paste goes straight on; anything else waits for Continue.
+                  if (!looksLikeClaudeCode(pasted) || signIn.phase !== 'waiting_for_code') {
+                    return false;
+                  }
+                  submitCode(pasted);
+                  return true;
+                }}
+                autoFocus
                 secret
               />
               <div>

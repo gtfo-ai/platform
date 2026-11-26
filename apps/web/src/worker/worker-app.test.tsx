@@ -27,6 +27,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import { LocalCallError, type LocalClient } from './client.js';
 import { CONNECTION_STATUS } from './model.js';
+import {
+  CLIPBOARD_NOT_A_CODE_WORDS,
+  CLIPBOARD_REFUSED_WORDS,
+  looksLikeClaudeCode,
+} from './wizard.js';
 import { WorkerApp } from './worker-app.js';
 
 const NOW = Date.parse('2026-11-05T10:05:00.000Z');
@@ -529,12 +534,76 @@ describe('the first-run wizard (WP-294)', () => {
     expect(open.getAttribute('href')).toBe(
       'https://claude.com/cai/oauth/authorize?code=true&state=abc',
     );
-    await userEvent.type(screen.getByLabelText('Paste the code Claude shows you'), 'abc#def');
+    await userEvent.type(screen.getByLabelText('Or paste it here yourself'), 'abc#def');
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(client.claudeCode).toHaveBeenCalledWith('abc#def');
     // The fallback is always there, with the command to copy.
     expect(container.querySelector('[data-paste-token]')).not.toBeNull();
     expect(screen.getByDisplayValue('claude setup-token')).toBeTruthy();
+  });
+
+  describe('the code goes on by itself once it is pasted (the owner’s report, 2026-11-26)', () => {
+    const CODE = `${'c'.repeat(40)}#${'s'.repeat(43)}`;
+    const waiting = () =>
+      fakeClient(
+        unconnected('needs_claude', {
+          claude_source: null,
+          sign_in: {
+            phase: 'waiting_for_code',
+            url: 'https://claude.com/cai/oauth/authorize?code=true&state=abc',
+            failure: null,
+          },
+        }),
+      );
+    it('the field has the cursor, and a code-shaped paste is sent with no Continue', async () => {
+      const client = waiting();
+      renderPage(client);
+      const field = await screen.findByLabelText('Or paste it here yourself');
+      expect(document.activeElement).toBe(field);
+      await userEvent.paste(` ${CODE}\n`);
+      expect(client.claudeCode).toHaveBeenCalledWith(CODE);
+    });
+
+    it('anything else pasted stays in the field for Continue', async () => {
+      const client = waiting();
+      renderPage(client);
+      await screen.findByLabelText('Or paste it here yourself');
+      await userEvent.paste('not a code');
+      expect(client.claudeCode).not.toHaveBeenCalled();
+      expect(screen.getByDisplayValue('not a code')).toBeTruthy();
+    });
+
+    it('Paste code reads the clipboard and sends a code', async () => {
+      const user = userEvent.setup();
+      const client = waiting();
+      renderPage(client);
+      const button = await screen.findByRole('button', { name: 'Paste code' });
+      await navigator.clipboard.writeText(`${CODE}\n`);
+      await user.click(button);
+      await waitFor(() => expect(client.claudeCode).toHaveBeenCalledWith(CODE));
+    });
+
+    it('Paste code says so when the clipboard holds no code, or the browser refuses it', async () => {
+      const user = userEvent.setup();
+      const client = waiting();
+      renderPage(client);
+      const button = await screen.findByRole('button', { name: 'Paste code' });
+      await navigator.clipboard.writeText('something else');
+      await user.click(button);
+      expect(await screen.findByText(CLIPBOARD_NOT_A_CODE_WORDS)).toBeTruthy();
+      vi.spyOn(navigator.clipboard, 'readText').mockRejectedValue(new Error('NotAllowedError'));
+      await user.click(button);
+      expect(await screen.findByText(CLIPBOARD_REFUSED_WORDS)).toBeTruthy();
+      expect(client.claudeCode).not.toHaveBeenCalled();
+    });
+
+    it('takes only the code#state shape by itself', () => {
+      expect(looksLikeClaudeCode(CODE)).toBe(true);
+      expect(looksLikeClaudeCode(`  ${CODE}\n`)).toBe(true);
+      for (const other of ['abc#def', 'no hash here at all', `${CODE}#x`, 'sk-ant-oat01-abc', '']) {
+        expect(looksLikeClaudeCode(other), other).toBe(false);
+      }
+    });
   });
 
   it('says why a sign-in failed, and offers to sign in again', async () => {
