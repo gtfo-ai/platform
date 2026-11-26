@@ -1389,8 +1389,8 @@ Afterwards: *"Merged by the platform at 14:02, commit abc1234 — plan approved 
 *plan approved by the platform as low-risk*, *no plan approval required*), and the task moves on when
 GitLab reports the merge, exactly as for a person's merge. A refused merge says why and what to do —
 *"The platform's merge was refused: GitLab said the branch moved (409) — merge it yourself or Send
-back."* — and is not tried again for that commit; if GitLab cannot be reached after three tries the
-page says so and the merge is left to a person. Each is announced once in the chat channel.
+back."* — and is not tried again for that commit; if GitLab cannot be reached for about five hours of
+retries (BD-034) the page says so and the merge is left to a person. Each is announced once in the chat channel.
 
 ### QA, and sending a task back from QA or Ready
 

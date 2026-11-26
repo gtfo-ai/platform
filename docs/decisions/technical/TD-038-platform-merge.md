@@ -46,7 +46,8 @@ migration 0118) and resolves the platform's own threads. `tasks.ready_head_sha` 
    (port error carrying the status word), anything else → transport failure.
 5. **Bounds** — **one decisive call per (task, head)**: a refusal is final for that head and leaves the merge to a person;
    a transport failure is retried by the job **3 tries** total, each try first re-reading the MR (already `merged` →
-   done). The last try records `failed` and tells the people; the task stays at Ready (a person's stage), it is not
+   done) — *amended 2026-11-26 (BD-034's follow-ups): `pipeline.outbound`'s tries are 25 over about five hours
+   (TD-004's 2026-11-26 amendment), so a transport failure is retried that long.* The last try records `failed` and tells the people; the task stays at Ready (a person's stage), it is not
    escalated. Declared in `JOB_EXHAUSTION` as bound-and-tell. A new head (after a return and re-review) is a new key.
 6. **One path to `merged_gate`.** The duty never advances the task. It records `task_merges` (migration 0119,
    additive: task, head, outcome `merged | refused | failed`, provider status word, merge commit, attempted_at, and the
