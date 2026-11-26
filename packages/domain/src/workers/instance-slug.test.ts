@@ -5,6 +5,8 @@ import {
   INSTANCE_SLUG_MAX_CHARS,
   INSTANCE_SLUG_PATTERN,
   instanceSlug,
+  platformNameOf,
+  SEEDED_ORGANISATION_NAME,
   slugOfHost,
   slugOfText,
 } from './instance-slug.js';
@@ -92,4 +94,17 @@ describe('a platform’s slug (S-29.1, TD-031 2026-11-24 decision 9)', () => {
     },
     PROPERTY_TEST_TIMEOUT_MS,
   );
+
+  it('reads the seeded placeholder name as no name, and every other name as itself', () => {
+    expect(SEEDED_ORGANISATION_NAME).toBe('Default organisation');
+    expect(platformNameOf(SEEDED_ORGANISATION_NAME)).toBeNull();
+    expect(platformNameOf(null)).toBeNull();
+    expect(platformNameOf('Autix s.r.o.')).toBe('Autix s.r.o.');
+    // Only the exact placeholder: a name a person chose that merely resembles it is theirs.
+    expect(platformNameOf('Default organisation 2')).toBe('Default organisation 2');
+    expect(platformNameOf('default organisation')).toBe('default organisation');
+    expect(
+      instanceSlug({ name: platformNameOf(SEEDED_ORGANISATION_NAME), host: 'agentic.autix.eu' }),
+    ).toBe('autix');
+  });
 });

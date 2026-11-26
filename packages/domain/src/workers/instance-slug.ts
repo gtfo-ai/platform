@@ -18,6 +18,22 @@
  * (`株式会社`) has nothing left and falls back to the host.
  */
 
+/**
+ * The name onboarding gives the organisation it seeds (`ensureOrganisation`), which nothing in the
+ * product can change yet (backlog 1645). It is a placeholder, not the platform's name: every core
+ * seeded it, so a worker labelled or an install folder named after it tells no two platforms apart.
+ */
+export const SEEDED_ORGANISATION_NAME = 'Default organisation';
+
+/**
+ * The organisation's name as a platform's name for its workers — the install script's slug (S-29.2)
+ * and the handshake's `instance.name` (S-29.1) both read it through here: the stored name, or
+ * `null` when there is none or it is exactly {@link SEEDED_ORGANISATION_NAME}, so both fall back to
+ * the core's host (`agentic.autix.eu` → `autix`).
+ */
+export const platformNameOf = (name: string | null): string | null =>
+  name === null || name === SEEDED_ORGANISATION_NAME ? null : name;
+
 /** The longest slug (decision 9 item 1). */
 export const INSTANCE_SLUG_MAX_CHARS = 24;
 

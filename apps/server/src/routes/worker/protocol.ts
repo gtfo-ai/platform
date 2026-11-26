@@ -112,6 +112,7 @@ import {
   workerUpdateReportRequestSchema,
   workerUpgradeRequiredBodySchema,
 } from '@platform/contracts';
+import { platformNameOf } from '@platform/domain';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 /** S-28.12: the platform's own pattern rules over a worker-sent workspace error line. */
@@ -591,10 +592,11 @@ export const registerWorkerProtocolRoutes = async (
       }
       const paused = row.pausedUntil !== null && row.pausedUntil.getTime() > now().getTime();
       // S-29.1: the platform's display name, cut for the wire — and only to a worker that reads it
-      // (a version-5 worker's strict schema refuses the key). A name with nothing left sends none.
+      // (a version-5 worker's strict schema refuses the key). A name with nothing left sends none,
+      // and so does the name onboarding seeds (`platformNameOf`): the worker then says the host's.
       const instanceName =
         protocolOf(request) >= WORKER_PROTOCOL_INSTANCE_NAME
-          ? instanceNameOf(await options.store.organisationName())
+          ? instanceNameOf(platformNameOf(await options.store.organisationName()))
           : null;
       return {
         protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [...ACCEPTED_WORKER_PROTOCOLS] },

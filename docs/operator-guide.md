@@ -505,7 +505,9 @@ instead, remove the `updater` and `updater-docker-proxy` services, download the 
 is drawn in the label's colour with the label's first letter or digit. The label is `APP_WORKER_LABEL`
 when set (in the folder's `.env`; any text, cut to 80 characters), else the platform's own name as its core
 says it on the handshake (the organisation's name — a rename shows at the next handshake), else the
-platform's host (`agentic.fontai.org` → `fontai`). A second worker on one machine — one per core, for a
+platform's host (`agentic.fontai.org` → `fontai`). The name onboarding seeds, `Default organisation`, is
+not a name — every platform starts with it and nothing in the product renames it yet (backlog 1645) — so
+a platform still called that is labelled, and slugged below, by its host. A second worker on one machine — one per core, for a
 person who works with two platforms — has its own project name, `APP_WORKER_CONTROL_VOLUME`,
 `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT`, all **in its folder's
 `.env`**, never only on the shell: each has a default in the template, and a value given only on the
@@ -552,8 +554,8 @@ that folder is absent (or empty) and Docker has no project `agentic-worker` — 
 exactly what it was (unless a named worker already binds 7357: then it takes the first free port, written into its `.env`) — and otherwise a **named** one: `--name <n>` (`-Name`; `a-z`, `0-9` and `-`, at
 most 24, starting with a letter or digit, and not `dev`, which `pnpm worker:dev` uses), or else the
 platform's own slug, which the core renders into the script it serves (its organisation's name,
-`Autix s.r.o.` → `autix-s-r-o`, else its host, `agentic.fontai.org` → `fontai`; a rename reaches the
-next download). A named install gets the folder `~/agentic-worker-<n>` (or `--dir`), the project
+`Autix s.r.o.` → `autix-s-r-o`, else its host, `agentic.fontai.org` → `fontai` — the host's too for
+the seeded `Default organisation`; a rename reaches the next download). A named install gets the folder `~/agentic-worker-<n>` (or `--dir`), the project
 `agentic-worker-<n>`, the volumes `agentic-worker-<n>-ctl` and `agentic-worker-<n>-repo-cache`, the run
 network `agentic-worker-<n>-run-egress` and the first page port from 7357 that nothing listens on and
 no container of any state binds (a stopped worker keeps its port) — each written into that folder's

@@ -706,7 +706,9 @@ written for). No new verb: `handshake` answers a top-level `instance: { name }` 
 (`WorkerStore.organisationName`), control and format characters (bidi controls included) made spaces, trimmed, cut to 80 UTF-16 units between
 code points (`instanceNameOf` in `packages/contracts/src/worker.ts`) — only at protocol 6, because a
 version-5 worker's strict `workerHandshakeResponseSchema` refuses the key; a name with nothing left sends no
-`instance`. The worker keeps the last name in `worker-state` (`instance-name`, beside the core's origin, so
+`instance`, and neither does the name onboarding seeds (`Default organisation`, read as none by
+`platformNameOf` in `packages/domain/src/workers/instance-slug.ts`, which the install script's slug reads
+too — backlog 1645). The worker keeps the last name in `worker-state` (`instance-name`, beside the core's origin, so
 a restart shows it before the next handshake and another core's file is never read) and serves the page
 `identity: {label, source, core_host}` on `GET /api/local/state`: the label is `APP_WORKER_LABEL` >
 the platform's name > the host's slug (`instanceSlug`/`slugOfHost`, `packages/domain/src/workers/

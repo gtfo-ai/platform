@@ -1579,6 +1579,9 @@ worker (`apps/server/src/remote-worker/runtime.ts:807`), so a second worker spen
      scripts are rendered per request (today once, `routes/worker/protocol.ts:1112`), so a rename
      reaches the next download. Residual: the slug of the organisation's name is public, as
      `APP_BASE_URL` already is in the same file.
+     *2026-11-26:* the name onboarding seeds, `Default organisation`, counts as **no name** for both
+     ways (`platformNameOf`, `packages/domain/src/workers/instance-slug.ts`): every core carried it and
+     nothing renames it yet (backlog 1645), so it falls back to the host's.
    - **The running worker** learns the display name on `handshake`: **protocol 6**, accepted `[5, 6]`
      (decision 7's `[N-1, N]`), top-level `instance: { name }` (≤ 80 characters, cut by the core), sent
      only at `≥ 6` because `workerHandshakeResponseSchema` is strict (`packages/contracts/src/worker.ts:689`).

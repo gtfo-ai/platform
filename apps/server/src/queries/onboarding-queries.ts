@@ -50,7 +50,11 @@ import type {
   ProjectRecord,
 } from '@platform/contracts';
 import { projectRecordSchema } from '@platform/contracts';
-import { DEFAULT_AUTONOMY_LEVEL, materialiseAutonomy } from '@platform/domain';
+import {
+  DEFAULT_AUTONOMY_LEVEL,
+  materialiseAutonomy,
+  SEEDED_ORGANISATION_NAME,
+} from '@platform/domain';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
 import {
@@ -132,7 +136,7 @@ export const ensureOrganisation = async (database: Database): Promise<string> =>
     }
     const inserted = await tx
       .insert(organizations)
-      .values({ name: 'Default organisation' })
+      .values({ name: SEEDED_ORGANISATION_NAME })
       .returning({ id: organizations.id });
     const created = inserted[0]?.id;
     if (created === undefined) {

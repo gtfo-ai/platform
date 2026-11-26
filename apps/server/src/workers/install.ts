@@ -31,7 +31,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { INSTANCE_SLUG_PATTERN, instanceSlug, slugOfHost } from '@platform/domain';
+import { INSTANCE_SLUG_PATTERN, instanceSlug, platformNameOf, slugOfHost } from '@platform/domain';
 
 export const INSTALL_CORE_URL_PLACEHOLDER = '@@AGENTIC_CORE_URL@@';
 export const INSTALL_SLUG_PLACEHOLDER = '@@AGENTIC_INSTANCE_SLUG@@';
@@ -96,7 +96,10 @@ export const installSlugOf = (slug: string, baseUrl: string): string => {
   return usableSlug(fallback) ? fallback : '';
 };
 
-/** The platform's slug for a script: the organisation's name's, else the host's (S-29.1's function). */
+/**
+ * The platform's slug for a script: the organisation's name's, else the host's (S-29.1's function).
+ * The seeded placeholder name is no name (`platformNameOf`), so it renders the host's.
+ */
 export const installSlugForOrganisation = (name: string | null, baseUrl: string): string => {
   let host = '';
   try {
@@ -104,7 +107,7 @@ export const installSlugForOrganisation = (name: string | null, baseUrl: string)
   } catch {
     // An unparseable base URL renders no script at all (installCoreUrlOf); no host, no fallback.
   }
-  return installSlugOf(instanceSlug({ name, host }), baseUrl);
+  return installSlugOf(instanceSlug({ name: platformNameOf(name), host }), baseUrl);
 };
 
 /** The script's template text, from beside this module. */

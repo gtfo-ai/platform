@@ -74,7 +74,7 @@ import {
   workerTranscriptResponseSchema,
   workerUpgradeRequiredBodySchema,
 } from '@platform/contracts';
-import { DEFAULT_WIP_LIMITS, isActiveRunStatus } from '@platform/domain';
+import { DEFAULT_WIP_LIMITS, isActiveRunStatus, SEEDED_ORGANISATION_NAME } from '@platform/domain';
 import { launcher as launcherAdapters } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -1102,6 +1102,9 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(await slugs()).toEqual({ sh: 'fontai', ps1: 'fontai' });
     w.store.setOrganisationName('Autix s.r.o.');
     expect(await slugs()).toEqual({ sh: 'autix-s-r-o', ps1: 'autix-s-r-o' });
+    // The name onboarding seeds is no name: the host's, not `default-organisation` (backlog 1645).
+    w.store.setOrganisationName(SEEDED_ORGANISATION_NAME);
+    expect(await slugs()).toEqual({ sh: 'core', ps1: 'core' });
     // A name with nothing the pattern keeps, or one that slugs to `dev`, renders the host's.
     for (const name of ['株式会社', 'Dev', "'; rm -rf ~; '"]) {
       w.store.setOrganisationName(name);
@@ -2731,7 +2734,8 @@ describe('the worker protocol (S-29.1): protocol 6, the platform’s name on the
     expect(
       workerHandshakeResponseSchema.parse((await handshakeAt(w, '6')).json()).instance,
     ).toEqual({ name: 'Autix  s.r.o.' });
-    for (const nothing of [null, '', '  \t\n ']) {
+    // The name onboarding seeds is no name either: the worker says its core's host (backlog 1645).
+    for (const nothing of [null, '', '  \t\n ', SEEDED_ORGANISATION_NAME]) {
       w.store.setOrganisationName(nothing);
       const answer = await handshakeAt(w, '6');
       expect(answer.statusCode).toBe(200);

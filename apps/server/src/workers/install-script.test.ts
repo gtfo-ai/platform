@@ -32,6 +32,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SEEDED_ORGANISATION_NAME } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { MANAGED_BLOCK_BEGIN, MANAGED_BLOCK_END, managedBlock } from '../updater/env-file.js';
 import { APPLY_LABEL } from '../updater/updater.js';
@@ -198,12 +199,23 @@ describe('the install scripts the core renders', () => {
     expect(installSlugForOrganisation('株式会社', 'https://agentic.fontai.org')).toBe('fontai');
     // A platform named Dev would name its second worker agentic-worker-dev: the host's instead.
     expect(installSlugForOrganisation('Dev', 'https://agentic.fontai.org')).toBe('fontai');
+    // The name onboarding seeds is no name: every core has it, so the host's (backlog 1645).
+    expect(installSlugForOrganisation(SEEDED_ORGANISATION_NAME, 'https://agentic.autix.eu')).toBe(
+      'autix',
+    );
     const scripts = renderInstallScripts(
       'https://agentic.fontai.org',
-      installSlugForOrganisation('Default organisation', 'https://agentic.fontai.org'),
+      installSlugForOrganisation(SEEDED_ORGANISATION_NAME, 'https://agentic.fontai.org'),
     );
     expect('text' in scripts['install.sh'] && scripts['install.sh'].text).toContain(
-      "CORE_SLUG='default-organisation'\n",
+      "CORE_SLUG='fontai'\n",
+    );
+    const ps1 = renderInstallScripts(
+      'https://agentic.autix.eu',
+      installSlugForOrganisation(SEEDED_ORGANISATION_NAME, 'https://agentic.autix.eu'),
+    );
+    expect('text' in ps1['install.ps1'] && ps1['install.ps1'].text).toContain(
+      "$CoreSlug = 'autix'\n",
     );
   });
 
