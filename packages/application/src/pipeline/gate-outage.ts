@@ -36,9 +36,10 @@
  * `MAX_GATE_CHECKS`. The gate re-asks after {@link GATE_OUTAGE_FIRST_RECHECK_MS}, doubling up to
  * {@link GATE_OUTAGE_MAX_RECHECK_MS}, and stops at a deadline:
  *
- *  - **the CI gate** (on every git binding since 2026-11-26) keeps WP-136's clock: `pipeline.limits.ci_timeout_minutes`
- *    from the gate's entry (`task_stages.entered_at`), so an outage cannot extend the wait a person
- *    configured, and the last re-check is moved up to the deadline rather than past it;
+ *  - **the CI gate** (on every git binding since 2026-11-26) keeps WP-136's clock — `pipeline.limits.ci_timeout_minutes`
+ *    from the gate's entry (`task_stages.entered_at`) — or {@link GATE_OUTAGE_LIMIT_MINUTES} from the
+ *    first failure in a row, whichever ends later (BD-034: an outage that began near the timeout is
+ *    not cut short by it), and the last re-check is moved up to the deadline rather than past it;
  *  - **every other gate** gets {@link GATE_OUTAGE_LIMIT_MINUTES} from the first failure in a row,
  *    which travels in the job's payload (`provider_failing_since`) because the process that re-asks
  *    may not be the one that failed. One answer — even a `pending` — clears it.
@@ -125,11 +126,13 @@ export const GATE_OUTAGE_FIRST_RECHECK_MS = 30_000;
 export const GATE_OUTAGE_MAX_RECHECK_MS = 5 * 60_000;
 
 /**
- * How long a gate other than the CI gate keeps asking a provider that does not answer —
- * the default CI timeout's sixty minutes (`DEFAULT_CI_TIMEOUT_MINUTES`), so every gate tolerates the
- * outage the CI gate tolerates out of the box.
+ * How long a gate keeps asking a provider that does not answer, from the first failure in a row: a
+ * day (BD-034; sixty minutes until 2026-11-26). A provider that is down is a condition the platform
+ * recovers from by itself the moment it answers again — a maintenance window, a night-long outage —
+ * so the task waits rather than calling a person; one read every five minutes costs nothing. The CI
+ * gate gets the longer of this and its own CI timeout from the entry.
  */
-export const GATE_OUTAGE_LIMIT_MINUTES = 60;
+export const GATE_OUTAGE_LIMIT_MINUTES = 24 * 60;
 
 const MINUTE_MS = 60_000;
 

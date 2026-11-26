@@ -7,12 +7,16 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
+  CI_WAIT_CEILING_MINUTES,
   CI_WAIT_EARLY_RECHECK_MS,
   CI_WAIT_LATE_RECHECK_MS,
+  CI_WAIT_OVERTIME_RECHECK_MS,
   ciWaitBackstopChecks,
   ciWaitBrief,
+  ciWaitCeilingMinutes,
   ciWaitReason,
   decideCiWait,
+  isProgressingPipeline,
 } from './ci-wait.js';
 import { MAX_GATE_CHECKS } from './gates.js';
 import { GATE_RECHECK_MS } from './jobs.js';
@@ -24,9 +28,15 @@ describe('the CI wait decision (WP-136)', () => {
   it('keeps the gate’s thirty seconds for the first checks, and states the backstop the ruling gives', () => {
     expect(CI_WAIT_EARLY_RECHECK_MS).toBe(GATE_RECHECK_MS);
     expect(CI_WAIT_LATE_RECHECK_MS).toBe(MINUTE);
-    expect(ciWaitBackstopChecks(60)).toBe(65);
-    expect(ciWaitBackstopChecks(10)).toBe(15);
+    // The ruling's `ceil(timeout / 60 s) + 5`, plus the overtime's reads five minutes apart up to
+    // the day's ceiling (BD-034).
+    expect(CI_WAIT_CEILING_MINUTES).toBe(1440);
+    expect(CI_WAIT_OVERTIME_RECHECK_MS).toBe(5 * MINUTE);
+    expect(ciWaitBackstopChecks(60)).toBe(65 + 276);
+    expect(ciWaitBackstopChecks(10)).toBe(15 + 286);
     expect(ciWaitBackstopChecks(1440)).toBe(1445);
+    expect(ciWaitCeilingMinutes(60)).toBe(1440);
+    expect(ciWaitCeilingMinutes(1440)).toBe(1440);
   });
 
   it('re-checks 60 seconds later at 59 minutes and times out at 60', () => {
@@ -50,8 +60,54 @@ describe('the CI wait decision (WP-136)', () => {
 
   it('stops at the backstop count even when the clock says there is time left', () => {
     expect(
-      decideCiWait({ enteredAtMs: ENTERED, nowMs: ENTERED, checks: 65, timeoutMinutes: 60 }),
-    ).toEqual({ kind: 'backstop', limit: 65 });
+      decideCiWait({ enteredAtMs: ENTERED, nowMs: ENTERED, checks: 341, timeoutMinutes: 60 }),
+    ).toEqual({ kind: 'backstop', limit: 341 });
+    expect(
+      decideCiWait({
+        enteredAtMs: ENTERED,
+        nowMs: ENTERED + 90 * MINUTE,
+        checks: 341,
+        timeoutMinutes: 60,
+        progressing: true,
+      }),
+    ).toEqual({ kind: 'backstop', limit: 341 });
+  });
+
+  /**
+   * BD-034 (2026-11-26, GO-705): a pipeline still `pending` or `running` at the timeout is waited
+   * for overtime, one read every five minutes, up to the day's ceiling; `manual` and no pipeline
+   * time out as before.
+   */
+  it('waits overtime for a progressing pipeline up to the ceiling, and times out anything else', () => {
+    expect(isProgressingPipeline({ id: '1', status: 'running' })).toBe(true);
+    expect(isProgressingPipeline({ id: '1', status: 'pending' })).toBe(true);
+    expect(isProgressingPipeline({ id: '1', status: 'manual' })).toBe(false);
+    expect(isProgressingPipeline(null)).toBe(false);
+    const at = (elapsedMinutes: number, progressing: boolean) =>
+      decideCiWait({
+        enteredAtMs: ENTERED,
+        nowMs: ENTERED + elapsedMinutes * MINUTE,
+        checks: 70,
+        timeoutMinutes: 60,
+        progressing,
+      });
+    expect(at(60, false)).toEqual({ kind: 'timed_out' });
+    expect(at(60, true)).toEqual({
+      kind: 'recheck',
+      delayMs: CI_WAIT_OVERTIME_RECHECK_MS,
+      overtime: true,
+    });
+    expect(at(1438, true)).toEqual({ kind: 'recheck', delayMs: 2 * MINUTE, overtime: true });
+    expect(at(1440, true)).toEqual({ kind: 'ceiling', minutes: 1440 });
+    expect(
+      decideCiWait({
+        enteredAtMs: Number.NaN,
+        nowMs: ENTERED,
+        checks: 2,
+        timeoutMinutes: 60,
+        progressing: true,
+      }),
+    ).toEqual({ kind: 'timed_out' });
   });
 
   it('parks rather than waits on an instant that does not parse (standing rule 16)', () => {
@@ -60,7 +116,7 @@ describe('the CI wait decision (WP-136)', () => {
     ).toEqual({ kind: 'timed_out' });
   });
 
-  it('never re-checks past the timeout, and never sooner than thirty seconds (property)', () => {
+  it('never re-checks past the timeout when the pipeline is not progressing, and never sooner than thirty seconds (property)', () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 10, max: 1440 }),
@@ -91,6 +147,26 @@ describe('the CI wait decision (WP-136)', () => {
 });
 
 describe('the CI wait brief (WP-136)', () => {
+  it('says how long it waited overtime and how often it asked when it stops at the ceiling (BD-034)', () => {
+    const wait = {
+      timeoutMinutes: 60,
+      provider: 'gitlab',
+      pollOnly: false,
+      pipeline: { id: '19204', status: 'running' },
+    } as const;
+    const brief = ciWaitBrief(wait, { kind: 'ceiling', minutes: 1440 }, 341);
+    expect(brief).toBe(
+      'The CI pipeline 19204 for this merge request was still running after 1440 minutes. ' +
+        'The platform waited past the CI timeout (`pipeline.limits.ci_timeout_minutes = 60`) because the pipeline was still progressing, ' +
+        'reading it every minute up to the timeout and every 5 minutes after, 341 reads in all, and no pipeline event settled it. ' +
+        'A pipeline that has not finished in this long is stuck — usually no runner picks up its jobs. ' +
+        'Look at the pipeline; when it has finished, hand the task back at ci_gate.',
+    );
+    expect(ciWaitReason(wait, { kind: 'ceiling', minutes: 1440 }, 341)).toBe(
+      'the CI gate on a gitlab binding waited 1440 minutes, past its CI timeout of 60 because the pipeline was still progressing, and stopped at its ceiling: the merge request was still running (pipeline 19204) at check 341',
+    );
+  });
+
   it('names the backstop when the count, not the clock, stopped the wait', () => {
     const brief = ciWaitBrief(
       {

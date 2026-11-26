@@ -262,9 +262,12 @@ export interface CiPlayJobs {
 }
 
 /**
- * How many times a gate may answer `pending` before the task is parked for a human — every gate,
- * except the CI gate, whose bound is a time (WP-136, {@link CiWait}). The rebase gate keeps the
- * count: it waits on the provider computing mergeability, not on a process that runs for minutes.
+ * The first five checks of a gate. Until BD-034 (2026-11-26) a gate that answered `pending` this
+ * many times was parked for a human; now every gate waits by **time** from its entry — the CI gate by
+ * its CI timeout (WP-136, {@link CiWait}, with overtime for a pipeline still running), every other
+ * gate by `gate-wait.ts`'s limit, backing off. The count survives as the CI wait's early cadence
+ * (thirty seconds for these checks, then a minute) and as the bound of an attempt with **no**
+ * `task_stages` row, which has no instant to time a wait from.
  */
 export const MAX_GATE_CHECKS = 5;
 

@@ -149,11 +149,14 @@ describe('the outage delay and bound', () => {
     expect(
       decideGateOutage({ nowMs: 0, deadlineMs: Number.NaN, failures: 1, limitMinutes: 60 }),
     ).toEqual({ kind: 'timed_out' });
+    // BD-034: a day of outage (sixty minutes until 2026-11-26), so the backstop is 2881 reads.
+    expect(GATE_OUTAGE_LIMIT_MINUTES).toBe(24 * 60);
     const limit = gateOutageBackstop(GATE_OUTAGE_LIMIT_MINUTES);
-    expect(limit).toBe(121);
+    expect(limit).toBe(2881);
+    expect(gateOutageBackstop(60)).toBe(121);
     expect(
-      decideGateOutage({ nowMs: 0, deadlineMs: 60 * MINUTE, failures: limit, limitMinutes: 60 }),
-    ).toEqual({ kind: 'backstop', limit });
+      decideGateOutage({ nowMs: 0, deadlineMs: 60 * MINUTE, failures: 121, limitMinutes: 60 }),
+    ).toEqual({ kind: 'backstop', limit: 121 });
   });
 
   it('cannot run past its bound however the clock is driven', () => {

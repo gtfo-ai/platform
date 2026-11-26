@@ -37,6 +37,7 @@ import type {
 import {
   domainEventSchemasByType,
   effortSchema,
+  isBuiltinGateStageId,
   lifecycleStatusKey,
   MAX_LIFECYCLE_STATUS_NAME_CHARS,
   type TicketLifecycle,
@@ -77,7 +78,7 @@ import {
   isUnchangedHeldRetry,
 } from './ci-pending-read.js';
 import { enqueueCiPlays } from './ci-play.js';
-import { ciWaitBrief, ciWaitReason, decideCiWait } from './ci-wait.js';
+import { ciWaitBrief, ciWaitReason, decideCiWait, isProgressingPipeline } from './ci-wait.js';
 import {
   decideGateOutage,
   GATE_OUTAGE_LIMIT_MINUTES,
@@ -85,6 +86,12 @@ import {
   gateOutageBrief,
   gateOutageReason,
 } from './gate-outage.js';
+import {
+  decideGateWait,
+  gateWaitBrief,
+  gateWaitLimitMinutes,
+  gateWaitReason,
+} from './gate-wait.js';
 import {
   CI_GATE_STAGE,
   type CiGateRead,
@@ -737,9 +744,9 @@ export const retryWindowMs = (policy: {
  * How long a gate waits before asking again after answering "not yet".
  *
  * It is a `startAfter`, not a sleep, and it is not zero: a gate that re-enqueues itself with no
- * delay spins through {@link MAX_GATE_CHECKS} in a few milliseconds and parks the task for a human
- * before the pipeline it is waiting for has even started. Thirty seconds against a five-check
- * budget gives a gate two and a half minutes. **Not the CI gate** (WP-136, on every git binding
+ * delay spins through its checks in a few milliseconds. Since BD-034 every other gate backs off from
+ * it (`gate-wait.ts`) up to its time limit; an attempt with no stage row keeps five checks at this
+ * delay. **Not the CI gate** (WP-136, on every git binding
  * since 2026-11-26): a real pipeline routinely runs longer than that, so the CI gate keeps this
  * delay for its first five checks, then asks every minute until
  * `pipeline.limits.ci_timeout_minutes` (`ci-wait.ts`) — unless the pipeline's own
@@ -1065,24 +1072,14 @@ export const stageExecuteHandler = (
       ) {
         return;
       }
-      if (checks >= MAX_GATE_CHECKS) {
-        await settle(options, request, {
-          kind: 'escalate',
-          outcome: 'undecided',
-          reason: `the "${request.stage}" gate could not be decided after ${checks} attempts: ${detail}`,
-          blockerBrief:
-            `The "${request.stage}" gate for this task still has no answer after ${checks} checks (${detail}). ` +
-            'Look at the merge request or the pipeline yourself, then hand the task back.',
-        });
-        return;
-      }
-      // The gate has no answer yet. `stately` frees the queued slot the moment this job starts, so
-      // re-enqueuing here is the timer that asks again — delayed, or it is a spin.
-      await enqueueStage(options.jobs, {
-        ...request,
-        gateChecks: checks,
-        startAfter: new Date(Date.parse(options.clock.now()) + GATE_RECHECK_MS),
-      });
+      // BD-034: every other gate waits by time from its entry, backing off (`gate-wait.ts`).
+      await waitForGate(
+        options,
+        request,
+        detail,
+        checks,
+        gateWaitLimitMinutes(!isBuiltinGateStageId(stage.id) && stage.on.length > 0),
+      );
       return;
     }
 
@@ -1339,8 +1336,16 @@ const waitForCi = async (
     nowMs: now,
     checks,
     timeoutMinutes: wait.timeoutMinutes,
+    // BD-034: past the timeout a pipeline still pending or running is waited for, not escalated.
+    progressing: isProgressingPipeline(wait.pipeline),
   });
   if (decision.kind === 'recheck') {
+    if (decision.overtime === true) {
+      logger.info(
+        { ...fields, checks, timeout_minutes: wait.timeoutMinutes, pipeline: wait.pipeline },
+        'the CI timeout has passed but the pipeline is still progressing; the gate keeps waiting',
+      );
+    }
     await enqueueStage(options.jobs, {
       ...request,
       gateChecks: checks,
@@ -1365,9 +1370,83 @@ const waitForCi = async (
     reason: `${ciWaitReason(wait, decision, checks)}; the last read: ${detail}`,
     blockerBrief: ciWaitBrief(wait, decision, checks),
     // Backlog 1078: the timeout is the ending the page words; the backstop stays a plain no-answer.
-    ...(decision.kind === 'timed_out' ? { ciEnding: 'ci_timed_out' as const } : {}),
+    ...(decision.kind === 'timed_out' || decision.kind === 'ceiling'
+      ? { ciEnding: 'ci_timed_out' as const }
+      : {}),
   });
   return true;
+};
+
+/**
+ * **A gate with no answer yet** (BD-034, `gate-wait.ts`): re-check with a growing delay until the
+ * gate's time limit from its entry, then park the task with a brief naming what was tried. An
+ * attempt with no `task_stages` row has no instant to time from and keeps the five checks thirty
+ * seconds apart (standing rule 16); a **closed** row is an attempt somebody left, and this fire does
+ * nothing (TD-004: a timer cannot be cancelled, so it re-validates).
+ */
+const waitForGate = async (
+  options: PipelineJobOptions,
+  request: StageExecutionJob,
+  detail: string,
+  checks: number,
+  limitMinutes: number,
+): Promise<void> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const fields = { task_id: request.taskId, stage: request.stage, attempt: request.attempt };
+  const entry = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.stageAttemptEntry(scope.tx, request.taskId, request.stage, request.attempt),
+  );
+  if (entry !== null && !entry.open) {
+    logger.info(fields, 'a gate check of an attempt that is no longer open does nothing');
+    return;
+  }
+  const nowMs = Date.parse(options.clock.now());
+  if (entry === null) {
+    logger.warn(
+      fields,
+      'the gate has no stage row to time its wait from; it keeps the five checks',
+    );
+    if (checks < MAX_GATE_CHECKS) {
+      await enqueueStage(options.jobs, {
+        ...request,
+        gateChecks: checks,
+        startAfter: new Date(nowMs + GATE_RECHECK_MS),
+      });
+      return;
+    }
+  }
+  const enteredAtMs = entry === null ? Number.NaN : Date.parse(entry.enteredAt);
+  const decision =
+    entry === null
+      ? ({ kind: 'backstop', limit: MAX_GATE_CHECKS } as const)
+      : decideGateWait({ enteredAtMs, nowMs, checks, limitMinutes });
+  if (decision.kind === 'recheck') {
+    // The gate has no answer yet. `stately` frees the queued slot the moment this job starts, so
+    // re-enqueuing here is the timer that asks again — delayed, or it is a spin.
+    await enqueueStage(options.jobs, {
+      ...request,
+      gateChecks: checks,
+      startAfter: new Date(nowMs + decision.delayMs),
+    });
+    return;
+  }
+  const facts = {
+    stage: request.stage,
+    detail,
+    checks,
+    limitMinutes,
+    minutes: Number.isFinite(enteredAtMs) ? Math.round((nowMs - enteredAtMs) / 60_000) : null,
+  };
+  logger.info(
+    { ...fields, checks, limit_minutes: limitMinutes, ending: decision.kind, detail },
+    'the gate stopped waiting; the task is parked',
+  );
+  await settle(options, request, {
+    kind: 'escalate',
+    outcome: 'undecided',
+    reason: gateWaitReason(facts, decision),
+    blockerBrief: gateWaitBrief(facts),
+  });
 };
 
 /**
@@ -1424,9 +1503,18 @@ const waitForProvider = async (
       logger.info(fields, 'a gate read of an attempt that is no longer open does nothing');
       return;
     }
-    bound = { kind: 'ci_timeout', minutes: outage.ciTimeoutMinutes };
-    deadlineMs =
+    const ciDeadlineMs =
       (entry === null ? sinceMs : Date.parse(entry.enteredAt)) + outage.ciTimeoutMinutes * 60_000;
+    const outageDeadlineMs = sinceMs + GATE_OUTAGE_LIMIT_MINUTES * 60_000;
+    // BD-034: an outage that starts late in the CI wait — or in its overtime — still gets the whole
+    // outage limit from its first failure; the CI timeout never cuts a provider's recovery short.
+    if (ciDeadlineMs >= outageDeadlineMs || Number.isNaN(outageDeadlineMs)) {
+      bound = { kind: 'ci_timeout', minutes: outage.ciTimeoutMinutes };
+      deadlineMs = ciDeadlineMs;
+    } else {
+      bound = { kind: 'ceiling', minutes: GATE_OUTAGE_LIMIT_MINUTES };
+      deadlineMs = outageDeadlineMs;
+    }
   }
 
   const decision = decideGateOutage({ nowMs, deadlineMs, failures, limitMinutes: bound.minutes });

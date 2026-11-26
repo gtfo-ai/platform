@@ -21,6 +21,15 @@
  *  - **the backstop** is a count, {@link ciWaitBackstopChecks}, so no chain is unbounded even if the
  *    clock were wrong (TD-004: a timer cannot be cancelled, and every fire re-validates).
  *
+ * **A pipeline that is still running at the timeout is not a reason to call a person** (BD-034, the
+ * product owner's rule of 2026-11-26: *anything the platform can recover from by itself must not
+ * escalate*). When the clock reaches the timeout and the last read saw a pipeline that is `pending` or
+ * `running` — it is progressing, and its own ending will settle the gate (or send a failure to the
+ * CI-fix loop) — the gate keeps waiting **overtime**: one read every {@link CI_WAIT_OVERTIME_RECHECK_MS}
+ * until {@link ciWaitCeilingMinutes} from the entry. Only a pipeline that does not finish by itself
+ * (`manual`: a person must start a job), no pipeline at all, or the ceiling parks the task — and the
+ * ceiling's brief says how long the platform waited and how often it asked.
+ *
  * This module is the pure half — the decision and the brief; `jobs.ts` reads the entry, applies the
  * decision and settles. A resume of a task paused at the gate is **not** a new entry (a pause closes
  * no `task_stages` row), so its clock keeps running; a hand-back at `ci_gate` is the fresh one.
@@ -36,36 +45,88 @@ export const CI_WAIT_EARLY_RECHECK_MS = 30_000;
 /** The delay after the first {@link MAX_GATE_CHECKS} checks: one provider read a minute. */
 export const CI_WAIT_LATE_RECHECK_MS = 60_000;
 
-const MINUTE_MS = 60_000;
+/**
+ * The delay between reads once the timeout has passed on a pipeline that is still progressing
+ * (BD-034): five minutes — at most twelve provider reads an hour for a task waiting overtime.
+ */
+export const CI_WAIT_OVERTIME_RECHECK_MS = 5 * 60_000;
 
 /**
- * The backstop count — `ceil(timeout / 60 s) + 5`, the ruling's: one more than the checks the
- * cadence can make before the clock runs out, so it is reached only if the clock were wrong.
+ * How long, from the gate's entry, the CI gate waits for a pipeline that is still `pending` or
+ * `running` (BD-034): a day, or the configured timeout when that is longer. A real pipeline ends
+ * well inside it — GitLab's own job timeout defaults to an hour — so reaching it means the pipeline
+ * is stuck (a runner that never picks it up), which a person has to look at.
+ */
+export const CI_WAIT_CEILING_MINUTES = 24 * 60;
+
+const MINUTE_MS = 60_000;
+
+/** The overtime's end, in minutes from the entry: {@link CI_WAIT_CEILING_MINUTES} or the timeout. */
+export const ciWaitCeilingMinutes = (timeoutMinutes: number): number =>
+  Math.max(CI_WAIT_CEILING_MINUTES, timeoutMinutes);
+
+/**
+ * The backstop count — the checks the cadence can make before the ceiling, plus the first five: one
+ * minute apart up to the timeout (`ceil(timeout / 60 s) + 5`, the ruling's), then five minutes
+ * apart up to the ceiling (BD-034). It is reached only if the clock were wrong.
  */
 export const ciWaitBackstopChecks = (timeoutMinutes: number): number =>
-  Math.ceil((timeoutMinutes * MINUTE_MS) / CI_WAIT_LATE_RECHECK_MS) + MAX_GATE_CHECKS;
+  Math.ceil((timeoutMinutes * MINUTE_MS) / CI_WAIT_LATE_RECHECK_MS) +
+  MAX_GATE_CHECKS +
+  Math.ceil(
+    ((ciWaitCeilingMinutes(timeoutMinutes) - timeoutMinutes) * MINUTE_MS) /
+      CI_WAIT_OVERTIME_RECHECK_MS,
+  );
+
+/**
+ * Is this pipeline still on its way to an ending of its own (BD-034)? `pending` (queued for a
+ * runner, created, scheduled) and `running` are; `manual` waits for a person and is not.
+ */
+export const isProgressingPipeline = (pipeline: CiWait['pipeline']): boolean =>
+  pipeline !== null && (pipeline.status === 'pending' || pipeline.status === 'running');
 
 export type CiWaitDecision =
-  | { readonly kind: 'recheck'; readonly delayMs: number }
+  | { readonly kind: 'recheck'; readonly delayMs: number; readonly overtime?: true }
   | { readonly kind: 'timed_out' }
+  | { readonly kind: 'ceiling'; readonly minutes: number }
   | { readonly kind: 'backstop'; readonly limit: number };
 
 /**
  * What a pending CI read does next. `checks` is this fire's count (the
  * first evaluation is 1). An instant that does not parse is **not** "within the timeout" (standing
  * rule 16): `NaN` fails the comparison and the gate parks rather than waiting for ever.
+ *
+ * `progressing` is {@link isProgressingPipeline} of the read this fire made: past the timeout, a
+ * progressing pipeline is waited for overtime (BD-034) up to the ceiling, and anything else times
+ * out as before.
  */
 export const decideCiWait = (input: {
   readonly enteredAtMs: number;
   readonly nowMs: number;
   readonly checks: number;
   readonly timeoutMinutes: number;
+  readonly progressing?: boolean;
 }): CiWaitDecision => {
   const elapsedMs = input.nowMs - input.enteredAtMs;
-  if (!(elapsedMs < input.timeoutMinutes * MINUTE_MS)) {
-    return { kind: 'timed_out' };
-  }
   const limit = ciWaitBackstopChecks(input.timeoutMinutes);
+  if (!(elapsedMs < input.timeoutMinutes * MINUTE_MS)) {
+    if (input.progressing !== true || Number.isNaN(elapsedMs)) {
+      return { kind: 'timed_out' };
+    }
+    const ceiling = ciWaitCeilingMinutes(input.timeoutMinutes);
+    if (!(elapsedMs < ceiling * MINUTE_MS)) {
+      return { kind: 'ceiling', minutes: ceiling };
+    }
+    if (!(input.checks < limit)) {
+      return { kind: 'backstop', limit };
+    }
+    // The last overtime read is moved up to the ceiling rather than a step past it.
+    return {
+      kind: 'recheck',
+      delayMs: Math.min(CI_WAIT_OVERTIME_RECHECK_MS, ceiling * MINUTE_MS - elapsedMs),
+      overtime: true,
+    };
+  }
   if (!(input.checks < limit)) {
     return { kind: 'backstop', limit };
   }
@@ -107,7 +168,9 @@ export const ciWaitReason = (
 ): string =>
   decision.kind === 'timed_out'
     ? `the CI gate on ${bindingWords(wait)} timed out: the merge request ${sawWhat(wait)} after ${String(wait.timeoutMinutes)} minutes (${timeoutKey(wait)})`
-    : `the CI gate on ${bindingWords(wait)} stopped at its backstop of ${String(decision.limit)} checks before its clock reached ${String(wait.timeoutMinutes)} minutes (${timeoutKey(wait)}); the merge request ${sawWhat(wait)} at check ${String(checks)}`;
+    : decision.kind === 'ceiling'
+      ? `the CI gate on ${bindingWords(wait)} waited ${String(decision.minutes)} minutes, past its CI timeout of ${String(wait.timeoutMinutes)} because the pipeline was still progressing, and stopped at its ceiling: the merge request ${sawWhat(wait)} at check ${String(checks)}`
+      : `the CI gate on ${bindingWords(wait)} stopped at its backstop of ${String(decision.limit)} checks before its clock reached ${String(wait.timeoutMinutes)} minutes (${timeoutKey(wait)}); the merge request ${sawWhat(wait)} at check ${String(checks)}`;
 
 /**
  * The brief a person reads on the task page — the ruling's (e) sentence, with the provider's id
@@ -122,6 +185,16 @@ export const ciWaitBrief = (
     wait.pipeline === null
       ? `No CI pipeline has started for the head commit of this merge request after ${String(wait.timeoutMinutes)} minutes`
       : `The CI pipeline ${wait.pipeline.id} for this merge request was still ${wait.pipeline.status} after ${String(wait.timeoutMinutes)} minutes`;
+  if (decision.kind === 'ceiling') {
+    const pipeline =
+      wait.pipeline === null
+        ? 'No CI pipeline had started for the head commit'
+        : `The CI pipeline ${wait.pipeline.id} for this merge request was still ${wait.pipeline.status}`;
+    return (
+      `${pipeline} after ${String(decision.minutes)} minutes. The platform waited past the CI timeout (\`${timeoutKey(wait)}\`) because the pipeline was still progressing, reading it every minute up to the timeout and every ${String(CI_WAIT_OVERTIME_RECHECK_MS / MINUTE_MS)} minutes after, ${String(checks)} reads in all, and no pipeline event settled it. ` +
+      'A pipeline that has not finished in this long is stuck — usually no runner picks up its jobs. Look at the pipeline; when it has finished, hand the task back at ci_gate.'
+    );
+  }
   const head =
     decision.kind === 'timed_out'
       ? `${what} — the CI timeout (\`${timeoutKey(wait)}\`).`
