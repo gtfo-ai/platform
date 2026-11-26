@@ -14,7 +14,7 @@
  * sender, so each case keys them by a task id of its own.
  */
 import type { StrandedStage, Transaction } from '@platform/application';
-import { JOB_QUEUES } from '@platform/application';
+import { JOB_QUEUES, MAX_LOST_RUN_REPLANS } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
 import { db, jobs, pipeline, recovery as recoveryAdapters } from '@platform/infrastructure';
@@ -76,6 +76,8 @@ const seedRun = async (
   taskId: Id,
   status: string,
   ended: { readonly reason: string | null; readonly minutesAgo: number } | null = null,
+  /** BD-034 (BACKLOG 1657): the turn count and the start failure tell the re-planned endings apart. */
+  detail: { readonly numTurns?: number; readonly exitDetail?: object } = {},
 ): Promise<void> => {
   const stage = await client.query<{ id: string }>(
     'select id from task_stages where task_id = $1',
@@ -83,10 +85,11 @@ const seedRun = async (
   );
   await client.query(
     `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
-                       attempt, status, started_at, terminal_reason, ended_at)
+                       attempt, status, started_at, terminal_reason, ended_at, num_turns, exit_detail)
      values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer', 1,
              $4::run_status, now() - interval '5 minutes', $5::run_terminal_reason,
-             case when $6::int is null then null else now() - ($6::int * interval '1 minute') end)`,
+             case when $6::int is null then null else now() - ($6::int * interval '1 minute') end,
+             $7::int, $8::jsonb)`,
     [
       taskId,
       stage.rows[0]?.id,
@@ -94,6 +97,8 @@ const seedRun = async (
       status,
       ended?.reason ?? null,
       ended?.minutesAgo ?? null,
+      detail.numTurns ?? null,
+      detail.exitDetail === undefined ? null : JSON.stringify(detail.exitDetail),
     ],
   );
 };
@@ -220,7 +225,7 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
    * re-plan; the second does not, and neither does an entry whose counter is 0. The mark is written
    * for the owed one only.
    */
-  it('reads a re-plan as owed for an entry’s first lost or usage-limited ending, and marks only it', async () => {
+  it('reads a re-plan as owed for an entry’s lost or usage-limited ending inside its bound, and marks only it', async () => {
     const lost = await seedTask({});
     await seedRun(lost, 'failed', { reason: 'lease_expired', minutesAgo: 3 });
     await client.query('update task_stages set lost_runs = 1 where task_id = $1', [lost]);
@@ -229,9 +234,17 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     await client.query('update task_stages set usage_limited_runs = 1 where task_id = $1', [
       limited,
     ]);
+    // BD-034 raised the bound to three re-plans: a second loss is owed one too (BACKLOG 1657) …
     const lostTwice = await seedTask({});
     await seedRun(lostTwice, 'failed', { reason: 'lease_expired', minutesAgo: 3 });
     await client.query('update task_stages set lost_runs = 2 where task_id = $1', [lostTwice]);
+    // … and a loss past the bound is not (its ending escalated the task in the same transaction).
+    const lostPast = await seedTask({});
+    await seedRun(lostPast, 'failed', { reason: 'lease_expired', minutesAgo: 3 });
+    await client.query('update task_stages set lost_runs = $2 where task_id = $1', [
+      lostPast,
+      MAX_LOST_RUN_REPLANS + 1,
+    ]);
     // A counter for the *other* ending owes nothing.
     const crossed = await seedTask({});
     await seedRun(crossed, 'failed', { reason: 'rate_limited', minutesAgo: 3 });
@@ -241,14 +254,84 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     const owed = (taskId: Id) => found.find((row) => row.taskId === taskId)?.endedRun?.replanOwed;
     expect(owed(lost)).toBe(true);
     expect(owed(limited)).toBe(true);
-    expect(owed(lostTwice)).toBe(false);
+    expect(owed(lostTwice)).toBe(true);
+    expect(owed(lostPast)).toBe(false);
     expect(owed(crossed)).toBe(false);
     const rowOf = (taskId: Id) => found.find((row) => row.taskId === taskId) as StrandedStage;
     const at = new Date().toISOString() as IsoDateTime;
     expect(await store.markStageAttempt(tx, { row: rowOf(lost), at })).toBe(true);
-    expect(await store.markStageAttempt(tx, { row: rowOf(lostTwice), at })).toBe(false);
+    expect(await store.markStageAttempt(tx, { row: rowOf(lostPast), at })).toBe(false);
     // Marked once: the next read has the mark, and a second mark writes nothing.
     expect(await store.markStageAttempt(tx, { row: rowOf(lost), at })).toBe(false);
+  });
+
+  /**
+   * BD-034 (BACKLOG 1657): a shutdown hand-back, a transport failure to start and a run that ended
+   * before the model took a turn each re-plan the entry after the settle's commit, so a process that
+   * died in between leaves an ended run the pass must re-plan, not escalate. A failure after real
+   * turns, a cancel and a stall are not re-planned endings.
+   */
+  it('reads a re-plan as owed for a hand-back, a start failure and a turnless run, and not for a run that worked', async () => {
+    const handedBack = await seedTask({});
+    await seedRun(handedBack, 'failed', { reason: 'shutdown', minutesAgo: 3 }, { numTurns: 7 });
+    const notStarted = await seedTask({});
+    await seedRun(
+      notStarted,
+      'failed',
+      { reason: 'error_during_execution', minutesAgo: 3 },
+      { numTurns: 0, exitDetail: { phase: 'create', failure: 'transport', retryable: true } },
+    );
+    const turnless = await seedTask({});
+    await seedRun(
+      turnless,
+      'failed',
+      { reason: 'error_during_execution', minutesAgo: 3 },
+      { numTurns: 0 },
+    );
+    const worked = await seedTask({});
+    await seedRun(
+      worked,
+      'failed',
+      { reason: 'error_during_execution', minutesAgo: 3 },
+      { numTurns: 12 },
+    );
+    const stalled = await seedTask({});
+    await seedRun(stalled, 'stalled', { reason: 'stalled', minutesAgo: 3 }, { numTurns: 0 });
+    const cancelled = await seedTask({});
+    await seedRun(cancelled, 'cancelled', { reason: 'cancelled', minutesAgo: 3 });
+
+    const found = await store.strandedStages(tx, query());
+    const owed = (taskId: Id) => found.find((row) => row.taskId === taskId)?.endedRun?.replanOwed;
+    expect(owed(handedBack)).toBe(true);
+    expect(owed(notStarted)).toBe(true);
+    expect(owed(turnless)).toBe(true);
+    expect(owed(worked)).toBe(false);
+    expect(owed(stalled)).toBe(false);
+    expect(owed(cancelled)).toBe(false);
+  });
+
+  /**
+   * BD-034 (BACKLOG 1657): one entry may owe several re-plans, so the pass's mark counts only for
+   * the run it was written after. A mark from before the entry's newest ending reads as no mark, and
+   * that ending is re-planned once in its turn.
+   */
+  it('reads a mark older than the entry’s newest ended run as no mark, and marks the new debt once', async () => {
+    const task = await seedTask({ enteredMinutesAgo: 30 });
+    // The pass re-planned an earlier ending of this entry twenty minutes ago …
+    const [first] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === task);
+    expect(
+      await store.markStageAttempt(tx, { row: first as StrandedStage, at: minutesAgo(20) }),
+    ).toBe(true);
+    // … that re-plan ran and was handed back three minutes ago, and its enqueue was lost too.
+    await seedRun(task, 'failed', { reason: 'shutdown', minutesAgo: 3 });
+    const [again] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === task);
+    expect(again?.endedRun?.replanOwed).toBe(true);
+    expect(again?.recoveryAttemptedAt).toBeNull();
+    const at = minutesAgo(0);
+    expect(await store.markStageAttempt(tx, { row: again as StrandedStage, at })).toBe(true);
+    expect(await store.markStageAttempt(tx, { row: again as StrandedStage, at })).toBe(false);
+    const ending = await store.strandedStages(tx, query({ endingBefore: minutesAgo(-1) }));
+    expect(ending.find((r) => r.taskId === task)?.recoveryAttemptedAt).toBe(at);
   });
 
   it('finds a task again once pg-boss has given up on its stage job (backlog 325)', async () => {
@@ -318,6 +401,7 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
       causeName: 'TimeoutError',
       causeCode: '23',
       expired: false,
+      jobs: 1,
     });
     expect(JSON.stringify(row)).not.toContain('FAKE-token');
     expect(found.find((entry) => entry.taskId === otherAttempt)?.failedJob).toBeNull();
@@ -348,6 +432,29 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     expect(failedOf(thrownError)).toMatchObject({ errorName: 'Error', expired: false });
     expect(failedOf(failed)).toMatchObject({ expired: false });
     expect(JSON.stringify(again)).not.toContain('FAKE');
+
+    /**
+     * BD-034 (BACKLOG 1659): the entry's failed jobs are counted — the pass's bound — and a failed
+     * job newer than the pass's mark is a new failure, so the mark reads as none for it.
+     */
+    const twice = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
+    await failJob(twice, { stage: 'ci_gate', attempt: 1 }, 20);
+    const [first] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === twice);
+    expect(first?.failedJob?.jobs).toBe(1);
+    expect(
+      await store.markStageAttempt(tx, { row: first as StrandedStage, at: minutesAgo(15) }),
+    ).toBe(true);
+    // The re-enqueued job failed too, five minutes ago: counted, and the mark predates it.
+    await failJob(twice, { stage: 'ci_gate', attempt: 1 }, 5);
+    const [second] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === twice);
+    expect(second?.failedJob?.jobs).toBe(2);
+    expect(second?.recoveryAttemptedAt).toBeNull();
+    expect(
+      await store.markStageAttempt(tx, { row: second as StrandedStage, at: minutesAgo(0) }),
+    ).toBe(true);
+    expect(
+      await store.markStageAttempt(tx, { row: second as StrandedStage, at: minutesAgo(0) }),
+    ).toBe(false);
   });
 
   it('marks an entry once, only while it is stranded, and reads the mark back as that entry’s', async () => {

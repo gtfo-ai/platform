@@ -951,8 +951,8 @@ const withSavedBranch = (stored: StoredTask, outcome: RunOutcome): StoredTask =>
  * **The task is not touched** on the hand-back: still `active` at this stage on this attempt with
  * its stage row open, which is exactly what `revalidateOpen` admits when the re-enqueued job fires
  * — the caller's enqueue, after this commits (`Jobs.enqueue` does not join a transaction; a process
- * that dies between the two leaves the entry to the stranded-stage recovery, which escalates an
- * attempt whose run ended, naming `shutdown`). A task a person moved meanwhile (paused, cancelled,
+ * that dies between the two leaves the entry to the stranded-stage recovery, which re-plans it
+ * once, as it re-plans every owed ending since BD-034 (BACKLOG 1657)). A task a person moved meanwhile (paused, cancelled,
  * sent elsewhere) is recorded onto and never re-run: the job re-validates on fire (TD-004).
  */
 const recordHandBack = async (
@@ -1548,7 +1548,8 @@ const taskGone = (): SettleRunResult => ({
  * BD-034), a hand-back's re-run after `SHUTDOWN_HAND_BACK_DELAY_MS` (WP-144), a usage limit's
  * re-plan at once (WP-285), a turnless run's re-plan after its `delayMs` (BD-034). The attempt's model and effort ride along as the run
  * row recorded them, so a person's per-attempt override survives a flap as it did on the payload.
- * A process that dies between the commit and this leaves the entry to the stranded-stage recovery.
+ * A process that dies between the commit and this leaves the entry to the stranded-stage recovery,
+ * which re-plans it once with the run's model and effort (BD-034, BACKLOG 1657).
  */
 const enqueueFollowOn = async (
   deps: SettleRunDeps,

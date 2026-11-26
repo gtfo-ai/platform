@@ -98,7 +98,7 @@ already closed the run's offer (`finish`, so the per-task index admits the next 
 - **the second** escalates, with a brief naming both runs and the machines that held them.
 
 A pass that dies between the commit and the enqueue leaves an entry with an ended `lease_expired`
-run, `lost_runs = 1` and no successor offer: the stranded-stage row re-plans it once
+run, `lost_runs` inside `MAX_LOST_RUN_REPLANS` and no successor offer: the stranded-stage row re-plans it once
 (`./stranded-stage.ts`'s `replanOwed`), never escalates it. A run that is not at its task's current
 entry (a person moved the task, an ask's run) ends as before this change.
 

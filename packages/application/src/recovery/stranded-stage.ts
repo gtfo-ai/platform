@@ -48,10 +48,13 @@
  * task's stage and attempt), and `stage.execute` re-validates it on fire like any other.
  *
  * **An attempt whose run already ended is never re-enqueued** (WP-108 review round 1) — **except
- * one owed a re-plan** (WP-285, WP-286): the first `lease_expired` or `rate_limited` ending of an
- * entry re-plans it in its terminal writer's own process, after the commit, and a process that died
- * in between leaves exactly this row; {@link StrandedStage.endedRun}'s `replanOwed` names it, and it
- * takes the one re-enqueue an entry nothing ran takes. The stage's minted credential is the WP-77
+ * one owed a re-plan** (WP-285, WP-286; BD-034, BACKLOG 1657): a lost or usage-limited run inside
+ * its bound, a shutdown hand-back, a transport failure to start and a run that ended before the
+ * model took a turn each re-plan the entry in their terminal writer's own process, after the
+ * commit, and a process that died in between leaves exactly this row;
+ * {@link StrandedStage.endedRun}'s `replanOwed` names it, and it takes the one re-enqueue an entry
+ * nothing ran takes — once **per ended run**, because one entry may owe several re-plans in turn —
+ * carrying the ended run's model and effort as the live re-plan does. The stage's minted credential is the WP-77
  * pass's to revoke then (a pass interval after the run ended); the sweep's own revoke-then-re-plan
  * order is not repeated here, a residual of the crash it recovers. A run
  * cancelled with no live lease pauses its task — except from `merged` and `retro`, which have no
@@ -122,14 +125,24 @@ export interface StrandedStage {
     /** `run_terminal_reason`, a platform enum value, or `null`. */
     readonly terminalReason: string | null;
     /**
-     * **The entry was owed a re-plan that never happened** (WP-285, WP-286, TD-031 §12): the run
-     * ended `lease_expired` with the entry's `lost_runs = 1`, or `rate_limited` with its
-     * `usage_limited_runs = 1` — the first such ending, which re-plans the entry — and, being the
-     * entry's newest run, it has no successor offer. The process that ended it died between its
-     * commit and the enqueue. Such an attempt is **re-enqueued once**, like an entry nothing ran,
-     * and escalated only if that does not take.
+     * **The entry was owed a re-plan that never happened** (WP-285, WP-286, TD-031 §12; BD-034,
+     * BACKLOG 1657): the run ended in a way its settling process re-plans after its commit —
+     * `lease_expired` with the entry's `lost_runs` inside `MAX_LOST_RUN_REPLANS`, `rate_limited`
+     * with `usage_limited_runs` inside `MAX_USAGE_LIMITED_REPLANS`, a `shutdown` hand-back, a
+     * transport failure to start (a recorded start failure), or a run that ended before the model
+     * took a turn — and, being the entry's newest run, it has no successor. Each of those endings
+     * past its bound escalates in the same transaction, so a task still active here was owed one.
+     * The process that ended it died between its commit and the enqueue. Such an attempt is
+     * **re-enqueued once per ended run** (the mark counts only when it is not older than the run's
+     * ending), like an entry nothing ran, and escalated only if that does not take.
      */
     readonly replanOwed: boolean;
+    /**
+     * The ended run's model and effort (BD-034, BACKLOG 1657): the re-plan the ending's process
+     * owed carried them, so a person's per-attempt choice survives the recovery's re-plan too.
+     */
+    readonly model?: string;
+    readonly effort?: string;
   } | null;
   /**
    * The newest `stage.execute` job of **this entry** that pg-boss moved to `failed` — every retry
@@ -156,6 +169,12 @@ export interface StrandedStage {
      * by the store, never optional, so no producer can leave a guard reading an absent field.
      */
     readonly expired: boolean;
+    /**
+     * How many of this entry's `stage.execute` jobs pg-boss failed (BACKLOG 1659), counting this
+     * one; absent reads as 1. The pass's bound on re-enqueuing a stage whose job keeps failing:
+     * {@link MAX_TRANSIENT_STAGE_JOB_FAILURES} for a failure another try may fix, one otherwise.
+     */
+    readonly jobs?: number;
   } | null;
 }
 
@@ -291,8 +310,8 @@ export const failedJobError = (failed: NonNullable<StrandedStage['failedJob']>):
 
 /**
  * Does the failure read as a provider that did not answer? The same classes and codes
- * `pipeline/gate-outage.ts` treats as transient, read off the stored names — a hint in the brief,
- * never a decision.
+ * `pipeline/gate-outage.ts` treats as transient, read off the stored names — the brief's hint, and
+ * since BD-034 (BACKLOG 1659) half of {@link isTransientStageJobFailure}.
  */
 const looksUnreachable = (failed: NonNullable<StrandedStage['failedJob']>): boolean =>
   [failed.errorName, failed.errorCode, failed.causeName, failed.causeCode].some(
@@ -302,6 +321,80 @@ const looksUnreachable = (failed: NonNullable<StrandedStage['failedJob']>): bool
       value === 'rate_limited' ||
       (value !== null && NETWORK_ERROR_CODES.has(value)),
   );
+
+/**
+ * PostgreSQL's SQLSTATEs for a database that is restarting, failing over, out of connections or
+ * resolving a conflict between transactions (BACKLOG 1659): class `08` (connection exception),
+ * `57P01`–`57P03` (an administrator's or a crash's shutdown, not accepting connections yet),
+ * `53300` (too many connections), `40001`/`40P01` (serialisation failure, deadlock). A **closed**
+ * list, like {@link NETWORK_ERROR_CODES}: a code not on it is not guessed at.
+ */
+export const TRANSIENT_DATABASE_CODES: ReadonlySet<string> = new Set([
+  '08000',
+  '08001',
+  '08003',
+  '08004',
+  '08006',
+  '57P01',
+  '57P02',
+  '57P03',
+  '53300',
+  '40001',
+  '40P01',
+]);
+
+/**
+ * **May another try of this stage's job succeed without anything else changing?** (BD-034, BACKLOG
+ * 1659.) A provider or the database that did not answer — the classes and codes above, by name, never
+ * by message — or a write that lost its races (`TaskConflictExhaustedError`). An expired try is not:
+ * a stage job that ran for `stage.execute`'s two hours is not waiting for a network. Everything else
+ * (a `ZodError`, a `TypeError`, an error whose class was not recorded) is a fault another try repeats,
+ * and keeps the one re-enqueue it had before.
+ */
+export const isTransientStageJobFailure = (
+  failed: NonNullable<StrandedStage['failedJob']>,
+): boolean =>
+  !failed.expired &&
+  (looksUnreachable(failed) ||
+    [failed.errorName, failed.causeName].includes('TaskConflictExhaustedError') ||
+    [failed.errorCode, failed.causeCode].some(
+      (value) => value !== null && TRANSIENT_DATABASE_CODES.has(value),
+    ));
+
+/**
+ * How many failed `stage.execute` jobs of one stage entry the pass re-enqueues past, for a transient
+ * failure (BD-034, BACKLOG 1659): eight jobs — the first re-enqueued at once, the next ones 5, 10, 20,
+ * 40 and then 60 minutes after the failure ({@link failedStageJobDelayMs}), **about four hours** of
+ * an outage absorbed (each job's own two retries on top) before the ninth failure escalates. Until
+ * 2026-11-26 every failure got one re-enqueue, which a provider outage longer than a few minutes
+ * outlasted. A failure that is not transient keeps that one.
+ */
+export const MAX_TRANSIENT_STAGE_JOB_FAILURES = 8;
+
+/** How long the re-enqueue after the entry's `failedJobs`-th failed job waits: 0, 5, 10, 20, 40, 60, 60, 60 minutes. */
+export const failedStageJobDelayMs = (failedJobs: number): number =>
+  failedJobs <= 1 ? 0 : Math.min(60 * 60_000, 5 * 60_000 * 2 ** Math.min(failedJobs - 2, 10));
+
+/** `255 min` → `about 4 hours`; `15 min` → `15 minutes`. */
+const spanWords = (ms: number): string => {
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 120
+    ? `${String(minutes)} minutes`
+    : `about ${String(Math.round(minutes / 60))} hours`;
+};
+
+/** The waits before the re-enqueues of an entry's first `failedJobs` failed jobs, summed. */
+export const failedStageJobDelaysTotalMs = (failedJobs: number): number => {
+  let total = 0;
+  for (let jobs = 1; jobs <= failedJobs; jobs += 1) {
+    total += failedStageJobDelayMs(jobs);
+  }
+  return total;
+};
+
+/** How many failed jobs of an entry the pass re-enqueues past, for this failure. */
+export const failedStageJobBound = (failed: NonNullable<StrandedStage['failedJob']>): number =>
+  isTransientStageJobFailure(failed) ? MAX_TRANSIENT_STAGE_JOB_FAILURES : 1;
 
 /**
  * `stage.execute`'s declared expiry, read off the queue table and never written here (WP-166 (b)):
@@ -333,21 +426,42 @@ const lastTryOutcome = (
     ? `${threw === 'threw' ? 'ran' : 'running'} past ${limitText(STAGE_EXECUTE_EXPIRE_SECONDS)}, so the queue expired it`
     : `${threw} ${failedJobError(failed)}`;
 
+/**
+ * How many times the platform re-enqueued an entry whose job failed, when its ending is written:
+ * every failed job but the newest was re-enqueued; when the pass's own last re-enqueue was lost
+ * (`attemptedAt` set), the newest was too.
+ */
+const reEnqueuesOf = (
+  failed: NonNullable<StrandedStage['failedJob']>,
+  attemptedAt: IsoDateTime | null,
+): number => Math.max(1, (failed.jobs ?? 1) - (attemptedAt === null ? 1 : 0));
+
 /** Why a task whose stage's job **failed** was parked (PROGRESS backlog 490). Platform text only. */
 export const failedJobReason = (
   row: StrandedStage,
   failed: NonNullable<StrandedStage['failedJob']>,
-  attemptedAt: IsoDateTime,
-): string =>
-  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and its stage.execute job failed: the queue spent its retries (${String(failed.tries)} tries), the last one at ${failed.failedAt} ${lastTryOutcome(failed, 'throwing')}; the platform re-enqueued the stage once at ${attemptedAt} and it is still stuck`;
+  attemptedAt: IsoDateTime | null,
+): string => {
+  const reEnqueues = reEnqueuesOf(failed, attemptedAt);
+  return `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and its stage.execute job failed: the queue spent its retries (${String(failed.tries)} tries), the last one at ${failed.failedAt} ${lastTryOutcome(failed, 'throwing')}; ${
+    reEnqueues === 1
+      ? `the platform re-enqueued the stage once at ${attemptedAt ?? row.enteredAt} and it is still stuck`
+      : `the platform re-enqueued the stage ${String(reEnqueues)} times, waiting longer each time up to an hour, and it is still stuck`
+  }`;
+};
 
 /** The brief for a stage whose job kept failing — not one that "never started". */
 export const failedJobBrief = (
   row: StrandedStage,
   failed: NonNullable<StrandedStage['failedJob']>,
   ticketKey: string,
+  attemptedAt: IsoDateTime | null = null,
 ): string =>
-  `${ticketKey} is at "${row.stage}", and the job that runs this stage kept failing: the queue spent its retries (${String(failed.tries)} tries) and the last one ${lastTryOutcome(failed, 'threw')}; one re-enqueue by the platform did not get the stage past it either. The stage did start — it is the job that failed, not a job that was lost.${
+  `${ticketKey} is at "${row.stage}", and the job that runs this stage kept failing: the queue spent its retries (${String(failed.tries)} tries) and the last one ${lastTryOutcome(failed, 'threw')}; ${
+    reEnqueuesOf(failed, attemptedAt) === 1
+      ? 'one re-enqueue by the platform did not get the stage past it either'
+      : `${String(reEnqueuesOf(failed, attemptedAt))} re-enqueues by the platform over ${spanWords(failedStageJobDelaysTotalMs(reEnqueuesOf(failed, attemptedAt)))}, each waiting longer up to an hour, did not get the stage past it either`
+  }. The stage did start — it is the job that failed, not a job that was lost.${
     !failed.expired && looksUnreachable(failed)
       ? ' That error means a provider did not answer: check that it is reachable from the platform’s host.'
       : ''
@@ -396,8 +510,8 @@ export const endStrandedStage = async (
                 }
               : failed !== null
                 ? {
-                    reason: failedJobReason(row, failed, attemptedAt ?? row.enteredAt),
-                    blockerBrief: failedJobBrief(row, failed, stored.task.ticket.key),
+                    reason: failedJobReason(row, failed, attemptedAt),
+                    blockerBrief: failedJobBrief(row, failed, stored.task.ticket.key, attemptedAt),
                   }
                 : {
                     reason: strandedStageReason(row, attemptedAt ?? row.enteredAt),
