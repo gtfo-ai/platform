@@ -593,3 +593,53 @@ smaller, but a fast tail (no CI gate, QA off) reaches *Ready* before the `approv
 the entry (amendment (f)) and returns nothing by status — one window (2 min) after entry; a thread or *Send back* still
 returns. A person who moves the ticket to the very status a late platform write put there in the same stage attempt is
 not heard by status.
+
+## Amendment G (2026-11-26, the owner's ruling on a live Jira Cloud install; S-28.24) — QA passes only on the statuses a binding names
+
+**Context.** The owner's workflow: *CR ACCEPTED* (waiting for a tester, the `qa` slot) → *TESTING* (QA in progress) →
+*IN PROGRESS* (rejected) or *RELESABLE* (accepted) → *Done*; the binding maps `qa: CR ACCEPTED`, `in_progress: IN
+PROGRESS`, `done: RELESABLE`, `returned: [TODO, WAITING FOR REVIEW]`, `closed: [Done]`. *"Releasable can merge, nothing
+else."* `isPass` (`packages/domain/src/lifecycle/human-return.ts:408-433`) passes on **any** status that is neither `qa`,
+a return status nor a platform write, so CR ACCEPTED → TESTING passed QA, the task reached `ready_for_merge` and, with
+`policies.merge.by: platform` (TD-038), could be merged while the tester was testing. A `ready_for_merge` slot of
+RELESABLE is no remedy: that slot is written **by the platform** after the pass, and the single slots are pairwise
+distinct (`packages/contracts/src/config.ts`, the `superRefine` of `ticketLifecycleSchema`), so it cannot also be `done`.
+
+**Decision.**
+1. **`qa_pass?: string[]`** on `ticketLifecycleSchema` — a **status policy** key beside `start_from`/`closed`
+   (`LIFECYCLE_STATUS_POLICY_KEYS`): never written by the platform, not a slot, does not switch the claim on, not in
+   `ticketStatusPolicyOf`'s `platformStatuses`. **Absent = today's rule**, so no other install changes.
+2. **The pass** (decision 9, Amendment F.1): when `qa_pass` is set, `isPass` additionally requires the current status to
+   be in it; every other conjunct is unchanged (`leftQa || wasAtQa`, not a return status, not in `platformStatuses`). So,
+   at `qa`: CR ACCEPTED and TESTING — and any status the list does not name — **wait** (`none`); IN PROGRESS, TODO,
+   WAITING FOR REVIEW **return** as before; RELESABLE after CR ACCEPTED → TESTING passes through `leftQa = TESTING`.
+   A re-entry into `qa` (a default-branch move through `rebase_gate`) writes CR ACCEPTED again, so QA is asked again;
+   should that write fail, RELESABLE is the entry and neither `leftQa` nor `wasAtQa` holds, so it waits — fail-safe.
+3. **Same name as `done` is allowed** (here it is required). At `qa`, `done` stays *forward* (rule 7): only words
+   written after the move to RELESABLE return the task — the tester's acceptance outranks older threads, unchanged.
+   `merged_gate` then writes `done` = RELESABLE, a no-op at the provider (`jira-cloud/index.ts:896`, *transition only
+   if not already there*): **the platform never moves this ticket to Done**; a person does, and `closed` then ends it.
+4. **The merge asks again — "nothing else".** TD-038 decision 3's fresh check gains one item: for a task whose frozen
+   `tasks.qa_stage` is true and whose binding sets `qa_pass`, the ticket's fresh status must be in `qa_pass`, else the
+   new reason **`ticket_not_qa_passed`** (a wait on the page, never an attempt). A ticket at a `qa_pass` status reads
+   `open` there even when it is no slot (today RELESABLE reads `open` only because it is the `done` slot,
+   `status-disposition.ts:70-79`; an unlisted name would be judged by its Jira category and could read hands-off).
+   This also covers a person moving the ticket back to TESTING **after** the pass, which no return rule hears.
+5. **Validation** — schema: at least one name, each once, needs `qa` mapped, disjoint from `qa`, `in_progress`,
+   `in_review`, `approved`, `returned`, `start_from` and `closed`; equal to `done` or `ready_for_merge` is allowed.
+   Binding schema: disjoint from `pickup_status`. Server at save (WP-181, `apps/server/src/lifecycle-check.ts`): every
+   name in the tracker's loaded set (`422 lifecycle_status_unknown`, slot `qa_pass`). The settings page's lifecycle
+   editor shows it as *QA passes only on* when `qa` is mapped; the DTO is the binding overlay, schemas regenerated.
+6. **Live, not frozen.** The lifecycle block is read per firing from the binding (`jobs.ts:2137`,
+   `settings.ticketLifecycle`); only `tasks.qa_stage` is frozen. Saving `qa_pass` therefore reaches in-flight tasks at
+   their next window firing, and decision 4 holds any task that already passed on TESTING at Ready.
+7. **Unchanged:** `ticket-status-recheck.ts` (human stages stay exempt, `qa_pass` joins no exemption there),
+   `observeEntryStatus`, Amendment F's `platformStatuses`, the window's timing.
+
+**Rejected.** (a) A hold list (`qa_hold: [TESTING]`) — a deny list: the next workflow status the owner adds passes, which
+is what *nothing else* forbids. (b) Lifting slot distinctness so `ready_for_merge` = `done` = RELESABLE — the platform
+would write the status that signals QA's acceptance, and the reverse sync's own-write exemption would hide the person's.
+(c) Reading the pass off the `done` slot — `done` means *merged* in every other install.
+
+**Residuals.** A ticket moved RELESABLE → TESTING between the fresh check and the provider's merge call is merged (one
+call's length). A binding that sets `qa_pass` but no `qa` is refused, not ignored. BACKLOG 1663.
