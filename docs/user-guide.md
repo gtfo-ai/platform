@@ -297,8 +297,10 @@ member — and the switch **Also start tickets already assigned to a person** no
 Because a broad pick-up rule (*every To Do ticket*) now starts members' assigned tickets too, a team
 whose tracker assigns everything narrows intake with a pick-up label.
 
-**Label a claimed ticket** (optional, beside the claim switches; the binding's `claim_label`).
-With a label set — say `agentic-working` — the platform adds it to the Jira ticket every time a task
+**Label a ticket the platform owns** (optional, beside the claim switches; the binding's `claim_label`).
+The label says the platform **owns** the ticket — a task is open for it, running or waiting for a
+person — and never that an agent is running right now; the task page shows that. With a label set
+— say `agentic-owned` — the platform adds it to the Jira ticket every time a task
 claims it (its own assignment, a member's ticket it keeps, or a ticket kept after somebody **Take**s
 the task) and removes it when the task lets go of the ticket (a cancel, a *Rework*). It edits that
 one label only, never the ticket's other labels. It cannot contain spaces and cannot be the pick-up

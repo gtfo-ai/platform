@@ -146,7 +146,8 @@ export const jiraCloudConfigSchema = z
     /**
      * The label the platform puts on a ticket **while a task holds it** (BACKLOG 1611): added when
      * the task claims the ticket, removed when it releases it, so a person reading Jira sees that the
-     * platform is working it. Off (`null`) by default. One edit-issue `update` operation, never a
+     * platform **owns** it — a task is open for it, running or waiting for a person; it never says an
+     * agent is running now. Off (`null`) by default. One edit-issue `update` operation, never a
      * rewrite of the ticket's labels, so every other label stays as it is.
      *
      * Never the pick-up label (refused below, compared case-insensitively as JQL compares labels): a
@@ -196,7 +197,7 @@ export const jiraCloudConfigSchema = z
         code: 'custom',
         path: ['claim_label'],
         message:
-          'claim_label names the label pickup_label names; the label a claim adds cannot be the label tickets are picked up by — choose another (e.g. "agentic-working")',
+          'claim_label names the label pickup_label names; the label a claim adds cannot be the label tickets are picked up by — choose another (e.g. "agentic-owned")',
       });
     }
     const pickup = binding.pickup_status;

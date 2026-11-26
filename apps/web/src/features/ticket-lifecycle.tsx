@@ -21,8 +21,10 @@
  * - **The `claim`, `take_assigned_tickets` and `assign_owner` switches** are the block's own keys. `claim` is seeded
  *   from the stored block, or **on** when there is none, because that is what the block means once
  *   it is saved (`ticketLifecycleSchema`'s docblock): the switch shows what saving puts in force.
- * - **The claim label** (BACKLOG 1611): a text field, *Label a claimed ticket*, the binding's
- *   `claim_label` — added to a ticket while a task holds it and removed when the task lets go. Empty
+ * - **The claim label** (BACKLOG 1611): a text field, *Label a ticket the platform owns*, the binding's
+ *   `claim_label` — added to a ticket while a task holds it and removed when the task lets go. It
+ *   says the platform **owns** the ticket, never that an agent is running now (fontai, 2026-11-26:
+ *   `agentic-working` on a ticket waiting at Ready read as "a worker is on it"). Empty
  *   is none: sent absent, or `null` when the integration's own configuration sets one. A label with a
  *   space, or the pick-up label, is the server's `400 invalid_binding_config`.
  * - **`assign_owner` is the third switch** (S-26.3's owner write-back; S-26.8a, product/06's M26
@@ -1042,9 +1044,9 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
       </label>
       <div className="max-w-sm" data-lifecycle-claim-label="">
         <Field
-          label="Label a claimed ticket"
-          hint="Added when the platform claims the ticket (only while it claims tickets). It stays on a done ticket, so the tracker records that the platform did the work, and is removed only when the task lets go of the ticket (a cancel or a Rework). No spaces, and not the pick-up label. Empty: no label. Key: claim_label."
-          placeholder="agentic-working"
+          label="Label a ticket the platform owns"
+          hint="Says the platform owns the ticket: a task is open for it, running or waiting for a person. It does not mean an agent is running right now — the task page shows that. Added when the platform claims the ticket (only while it claims tickets). It stays on a done ticket, so the tracker records that the platform did the work, and is removed only when the task lets go of the ticket (a cancel or a Rework). No spaces, and not the pick-up label. Empty: no label. Key: claim_label."
+          placeholder="agentic-owned"
           value={draft.claimLabel}
           onChange={(event) => setDraft({ ...draft, claimLabel: event.target.value })}
         />
