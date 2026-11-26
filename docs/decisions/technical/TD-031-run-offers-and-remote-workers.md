@@ -1730,3 +1730,18 @@ amendment item 2), and the tracker keeps the binding's account.
    offer's `excluded_worker_ids` never leaves the owner with no machine that may take it: an excluded machine of the
    owner's becomes eligible again after BD-034's backoff for that exclusion, and the task's page says it waits for the
    owner's worker. The offer's expiry escalation names the owner.
+
+## Amendment (2026-11-27, orchestrator-authorised, BACKLOG 1670–1674) — the ownership amendments' follow-ups
+
+1. **The owner's backoff is per machine and per offer** (1670): a machine whose owner-exclusion backoff has lapsed is
+   not carried into the next re-plan's `excluded_worker_ids` unless it was lost again, and another machine's release
+   does not restart its clock.
+2. **The backoff fits the offer** (1671): it is `min(10 min, offer_timeout_seconds / 2)`, so the owner's machine may
+   always take an owned re-offer before that offer expires.
+3. **An unreadable binding writes nothing back** (1672): a project whose task-management binding is ambiguous or whose
+   lifecycle block fails its schema reads `assign_owner` as **off** in the pipeline, as the task DTO already does.
+4. **An automatic claim recorded as a pick before the 2026-11-26 amendment is read as a claim** (1673): a `via: pick`
+   owner change with no take-audit row of the same worker and run is a claim for the write-back-owed reading.
+5. **A refused write-back leaves the ticket with the platform's account, not with nobody** (1674): on a terminal refusal
+   (or an expired job) of `ticket_owner_assign`, while the ticket is still unassigned, the binding's account is
+   assigned as an ordinary claim would; a ticket a person holds is never touched.
