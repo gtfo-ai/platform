@@ -18,7 +18,8 @@
  *
  *  - the **sign-in address**, offered only when it is `https:` on {@link CLAUDE_SIGN_IN_HOSTS};
  *  - the **paste prompt** (*Paste code here if prompted*): the container's localhost callback can
- *    never complete, so pasting the code is the route;
+ *    never complete, so pasting the code is the route — written, and then Enter as a write of its
+ *    own ({@link CODE_ENTER_GAP_MS}), because the CLI takes `code\r` in one chunk as a paste;
  *  - the **token**, by shape (`sk-ant-oat01-…`), joined across a wrapped line if a terminal wrapped it
  *    — and, failing that, read whitespace-insensitively to its measured length ({@link looseTokenOf}).
  *
@@ -65,6 +66,12 @@ export const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
  * prints it within seconds; past this the screen is one this worker does not read.
  */
 export const AFTER_CODE_TIMEOUT_MS = 60_000;
+/**
+ * The pause between writing the pasted code and writing Enter. A separate write is what matters
+ * (a `\r` inside the code's chunk is taken as pasted text); the pause keeps the two from being
+ * coalesced into one read on the pty's side.
+ */
+export const CODE_ENTER_GAP_MS = 100;
 /** The token check's cap: one turn, no tools. */
 export const TOKEN_CHECK_TIMEOUT_MS = 120_000;
 /** How much of the CLI's screen output is kept to read — the tail, which is where the token is. */
@@ -611,7 +618,14 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
         endSession();
         fail('no_token_after_code');
       }, options.afterCodeTimeoutMs ?? AFTER_CODE_TIMEOUT_MS);
-      current.cli.child.stdin?.write(`${trimmed}\r`);
+      // The code, then Enter **as a write of its own**: the CLI's input reads a multi-character
+      // chunk as a paste, so `code\r` in one write leaves the code masked in the field and never
+      // submitted (measured 2026-11-26 with CLI 2.1.267 in the worker image: one write → the
+      // masked code and nothing else; a separate `\r`, even 0 ms later → Claude answered).
+      current.cli.child.stdin?.write(trimmed);
+      setTimeout(() => {
+        if (session === current && !current.done) current.cli.child.stdin?.write('\r');
+      }, CODE_ENTER_GAP_MS);
     },
     acceptToken: (pasted) => {
       const token = normaliseClaudeToken(pasted);
