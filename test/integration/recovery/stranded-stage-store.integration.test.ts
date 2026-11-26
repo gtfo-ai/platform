@@ -455,6 +455,24 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     expect(
       await store.markStageAttempt(tx, { row: second as StrandedStage, at: minutesAgo(0) }),
     ).toBe(false);
+
+    // Review of BD-034's follow-ups: an owed re-plan counts only the failed jobs after its run
+    // ended — so the re-plan's own failing jobs bound it, and an older failure is history.
+    const replanned = await seedTask({ stage: 'ci_gate', enteredMinutesAgo: 30 });
+    await failJob(replanned, { stage: 'ci_gate', attempt: 1 }, 25);
+    await seedRun(replanned, 'failed', { reason: 'shutdown', minutesAgo: 20 });
+    const [owed] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === replanned);
+    expect(owed?.endedRun?.replanOwed).toBe(true);
+    expect(owed?.failedJob).toBeNull();
+    expect(
+      await store.markStageAttempt(tx, { row: owed as StrandedStage, at: minutesAgo(15) }),
+    ).toBe(true);
+    await failJob(replanned, { stage: 'ci_gate', attempt: 1 }, 5);
+    const [failing] = (await store.strandedStages(tx, query())).filter(
+      (r) => r.taskId === replanned,
+    );
+    expect(failing?.failedJob?.jobs).toBe(1);
+    expect(failing?.recoveryAttemptedAt).toBeNull();
   });
 
   it('marks an entry once, only while it is stranded, and reads the mark back as that entry’s', async () => {

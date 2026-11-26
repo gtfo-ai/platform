@@ -448,6 +448,24 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
       );
     });
 
+    it('bounds an owed re-plan whose re-enqueued job keeps failing, and escalates it as a failed job (review)', async () => {
+      const { harness } = setup();
+      const taskId = await lostDiscovery(harness);
+      const { store, calls } = harnessStore(harness, {
+        endedRun: { status: 'failed', terminalReason: 'shutdown', replanOwed: true },
+        failedJob: unreachable(MAX_TRANSIENT_STAGE_JOB_FAILURES + 1),
+      });
+      harness.clock.advance(GRACE_MS + 1);
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 0, ended: 1 });
+      expect(calls).toEqual([]);
+      expect((await loaded(harness, taskId)).task.state).toBe('needs_human');
+      const escalated = harness.events().filter((event) => event.type === 'task.escalated');
+      const payload = (
+        escalated[0] as Extract<(typeof escalated)[number], { type: 'task.escalated' }>
+      ).payload;
+      expect(payload.reason).toContain('its stage.execute job failed');
+    });
+
     it('escalates a failure another try does not fix at its second failed job, as before', async () => {
       const { harness } = setup();
       const taskId = await lostDiscovery(harness);

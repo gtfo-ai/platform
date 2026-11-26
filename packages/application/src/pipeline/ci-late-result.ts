@@ -25,6 +25,12 @@
  *  - the event is a **result** (`ci.pipeline.finished`); a held pipeline (`ci.pipeline.held`) is
  *    not, and wakes nothing here.
  *
+ * **Decided, not overlooked** (review of BD-034's follow-ups): a brief **added** to the parked task
+ * afterwards (`amendEscalation`, e.g. a provider fact that arrived while it waited) does not stop the
+ * resume — the state is still the CI wait's ending, and the resumed gate re-reads the merge request
+ * itself; a fact that ends the task (the merge request closed or merged) is refused above by the live
+ * read.
+ *
  * ## How it resumes
  *
  * It re-enters the gate as the pipeline itself would — `applyDecision` with an `enter` decision, by

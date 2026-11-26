@@ -501,9 +501,11 @@ export const endStrandedStage = async (
           }
           const ended = row.endedRun;
           const failed = row.failedJob;
+          // An owed re-plan whose re-enqueued job then kept failing ends as the failed job it is.
+          const failedAfterReplan = failed !== null && ended !== null && ended.replanOwed;
           const escalated = escalateTask(
             stored.task,
-            ended !== null
+            ended !== null && !failedAfterReplan
               ? {
                   reason: endedRunReason(row, ended),
                   blockerBrief: endedRunBrief(row, ended, stored.task.ticket.key),
