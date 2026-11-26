@@ -1702,3 +1702,31 @@ person the owner, a re-planned entry's offer (a lost or usage-limited machine, d
 names that owner; **a machine the offer excludes does not make its assignee online** (§8's
 `assigneeOnline`), so an owner whose only machine was lost gets no head start nobody can use, and an
 `everything` machine of another person takes the re-offer at once.
+
+## Amendment (2026-11-26, the product owner's ruling after the GO-992 deploy) — the 2026-11-06 amendment's items 4 and 5 and this file's previous amendment: a person's own act is written to the tracker on every project; an automatic pickup keeps the platform's account in the tracker; the owner keeps the task
+
+**Ruling** (product owner, 2026-11-26): *whoever starts a ticket by hand is assigned it both on the platform and in
+Jira, on every project; the platform's own account is the tracker assignee only for a ticket picked up
+automatically.* For an automatic pickup the claiming worker's person owns the task on the platform (previous
+amendment item 2), and the tracker keeps the binding's account.
+
+1. **A person's own act writes the tracker, by default.** A `task.owner.changed` with `source: platform` and `via`
+   `command` (*Start*, *Take it*, *Assign…*) or `pick` (the worker page's *take this one*) enqueues
+   `ticket_owner_assign` on **every** task-management binding unless it sets `lifecycle.assign_owner: false`
+   explicitly — the switch's default becomes **true** (the 2026-11-06 amendment's item 4 amended). The duty's
+   re-validation, compare-and-set and refusal rules are unchanged.
+2. **A worker's automatic claim is not a person's act.** Its owner change records the new `via: claim` (contract
+   enum widened), sets the platform owner as before, and **never** writes the tracker, whatever the switch says.
+3. **A manual Start's starter always wins** (the previous amendment's item 1 amended): whoever holds the ticket in
+   the tracker — a linked member, an unlinked person, the binding's account — the starter becomes the owner (if they
+   may own in the project) and, by item 1, the tracker assignee. Intake never skips a manual start as `assigned`,
+   whatever `take_assigned_tickets` says (BACKLOG 1662).
+4. **A recovered Start keeps its starter** (BACKLOG 1660): `pipeline.intake.reconcile`'s re-emitted `ticket.matched`
+   carries the lost event's `user` actor and `rule: 'manual'`, so the task gets its owner and its pick-up label as an
+   un-lost start does.
+5. **The owner keeps the task** (BACKLOG 1661, the owner's word: *yes*): an owner — set by a person or by an automatic
+   claim — is **not** given back when a claim is released or its run fails; only that person's machines (and
+   `everything` machines) take its later offers. So that this waits for the owner rather than strands the task, an
+   offer's `excluded_worker_ids` never leaves the owner with no machine that may take it: an excluded machine of the
+   owner's becomes eligible again after BD-034's backoff for that exclusion, and the task's page says it waits for the
+   owner's worker. The offer's expiry escalation names the owner.
