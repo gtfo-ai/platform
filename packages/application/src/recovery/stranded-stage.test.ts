@@ -24,7 +24,10 @@ import {
   errorIdentifier,
   failedJobBrief,
   failedJobError,
+  failedStageJobDelayMs,
   isDrivenStage,
+  isTransientStageJobFailure,
+  MAX_TRANSIENT_STAGE_JOB_FAILURES,
   STAGE_EXECUTE_EXPIRE_SECONDS,
   STRANDED_STAGE_COMPONENT,
   type StrandedStage,
@@ -309,7 +312,7 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
       'a person cancelled the run of this attempt',
     ],
     [
-      // The entry's **second** loss: its first re-planned it, so this one owes nothing.
+      // A loss past the entry's bound (BD-034: MAX_LOST_RUN_REPLANS) owes nothing.
       { status: 'failed', terminalReason: 'lease_expired', replanOwed: false },
       'the run of this attempt ended “failed”',
     ],
@@ -382,6 +385,104 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
     expect(payload.blocker_brief).toBe(
       `${(await loaded(harness, taskId)).task.ticket.key} is at "discovery", and the job that runs this stage kept failing: the queue spent its retries (3 tries) and the last one threw IntegrationError (unavailable), caused by TimeoutError (23); one re-enqueue by the platform did not get the stage past it either. The stage did start — it is the job that failed, not a job that was lost. That error means a provider did not answer: check that it is reachable from the platform’s host. The failed job and its message are in the organisation’s failed-jobs list. Fix the cause, then hand the task back at "discovery" — or cancel it if it is no longer wanted.`,
     );
+  });
+
+  /**
+   * BD-034 (BACKLOG 1659): a stage whose job keeps failing for a reason another try may fix is
+   * re-enqueued once per failed job, backing off, up to eight; one that keeps failing for any other
+   * reason keeps its one re-enqueue; past the bound the task escalates naming how many.
+   */
+  describe('a stage job that keeps failing (BD-034, BACKLOG 1659)', () => {
+    const unreachable = (jobs: number) => ({
+      failedAt: '2026-10-06T05:41:12.000Z' as IsoDateTime,
+      tries: 3,
+      errorName: 'IntegrationError',
+      errorCode: 'unavailable',
+      causeName: null,
+      causeCode: null,
+      expired: false,
+      jobs,
+    });
+
+    it('re-enqueues a transient failure again once the backoff for its count of failed jobs has passed', async () => {
+      const { harness } = setup();
+      const taskId = await lostDiscovery(harness);
+      harness.clock.advance(GRACE_MS + 1);
+      // The third failed job failed just now: its re-enqueue is due ten minutes after it.
+      const failedJob = { ...unreachable(3), failedAt: harness.clock.now() as IsoDateTime };
+      const { store, calls } = harnessStore(harness, { failedJob });
+      expect(failedStageJobDelayMs(3)).toBe(10 * 60_000);
+      const asked = harness.jobs.history.length;
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 0, ended: 0 });
+      expect(calls, 'not marked before it is due').toEqual([]);
+      harness.clock.advance(failedStageJobDelayMs(3) - 1);
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 0, ended: 0 });
+      harness.clock.advance(1);
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 1, ended: 0 });
+      expect(calls).toEqual([`mark:${taskId}`]);
+      // Enqueued to run now, never as a job queued ahead (the queue is stately per task).
+      const [job] = stageJobsSince(harness, asked);
+      expect(job?.startAfter).toBeUndefined();
+      expect((await loaded(harness, taskId)).task.state).toBe('active');
+    });
+
+    it('escalates a transient failure past its bound, saying how many re-enqueues over how long', async () => {
+      const { harness } = setup();
+      const taskId = await lostDiscovery(harness);
+      const { store, calls } = harnessStore(harness, {
+        failedJob: unreachable(MAX_TRANSIENT_STAGE_JOB_FAILURES + 1),
+      });
+      harness.clock.advance(GRACE_MS + 1);
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 0, ended: 1 });
+      expect(calls).toEqual([]);
+      expect((await loaded(harness, taskId)).task.state).toBe('needs_human');
+      const escalated = harness.events().filter((event) => event.type === 'task.escalated');
+      const payload = (
+        escalated[0] as Extract<(typeof escalated)[number], { type: 'task.escalated' }>
+      ).payload;
+      expect(payload.reason).toContain(
+        `the platform re-enqueued the stage ${String(MAX_TRANSIENT_STAGE_JOB_FAILURES)} times, waiting longer each time up to an hour, and it is still stuck`,
+      );
+      expect(payload.blocker_brief).toContain(
+        `${String(MAX_TRANSIENT_STAGE_JOB_FAILURES)} re-enqueues by the platform over about 4 hours, each waiting longer up to an hour`,
+      );
+    });
+
+    it('escalates a failure another try does not fix at its second failed job, as before', async () => {
+      const { harness } = setup();
+      const taskId = await lostDiscovery(harness);
+      const { store } = harnessStore(harness, {
+        failedJob: { ...unreachable(2), errorName: 'ZodError', errorCode: null },
+      });
+      harness.clock.advance(GRACE_MS + 1);
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 0, ended: 1 });
+      expect((await loaded(harness, taskId)).task.state).toBe('needs_human');
+    });
+
+    it('reads a provider, the database or a lost write race as transient, by class and code only', () => {
+      const failed = (fields: Partial<NonNullable<StrandedStage['failedJob']>>) => ({
+        ...unreachable(1),
+        errorName: null,
+        errorCode: null,
+        ...fields,
+      });
+      expect(isTransientStageJobFailure(failed({ errorName: 'TimeoutError' }))).toBe(true);
+      expect(isTransientStageJobFailure(failed({ causeCode: 'ECONNREFUSED' }))).toBe(true);
+      expect(isTransientStageJobFailure(failed({ errorCode: '57P01' }))).toBe(true);
+      expect(isTransientStageJobFailure(failed({ errorName: 'TaskConflictExhaustedError' }))).toBe(
+        true,
+      );
+      expect(isTransientStageJobFailure(failed({ errorName: 'ZodError' }))).toBe(false);
+      expect(isTransientStageJobFailure(failed({ errorCode: '23505' }))).toBe(false);
+      expect(isTransientStageJobFailure(failed({}))).toBe(false);
+      // An expired try is not a network that did not answer.
+      expect(isTransientStageJobFailure(failed({ errorName: 'TimeoutError', expired: true }))).toBe(
+        false,
+      );
+      expect([1, 2, 3, 4, 5, 6, 7, 8].map((jobs) => failedStageJobDelayMs(jobs) / 60_000)).toEqual([
+        0, 5, 10, 20, 40, 60, 60, 60,
+      ]);
+    });
   });
 
   it('quotes a failed job’s class and code only when they are identifiers, never text (BD-022)', () => {
@@ -636,6 +737,34 @@ describe('stage.execute refuses an attempt whose stage row is closed (WP-108 rev
       expect(stageJobsSince(harness, asked)).toHaveLength(1);
       expect((await loaded(harness, taskId)).task.state).toBe('active');
       expect(harness.events().filter((event) => event.type === 'task.escalated')).toHaveLength(0);
+    },
+  );
+
+  /**
+   * BD-034 (BACKLOG 1657): a hand-back, a start failure and a turnless run are re-planned endings
+   * too, and the recovery's re-plan carries the ended run's model and effort as the live one does.
+   */
+  it.each([
+    { status: 'failed', terminalReason: 'shutdown', replanOwed: true },
+    { status: 'failed', terminalReason: 'error_during_execution', replanOwed: true },
+  ] as const)(
+    're-plans a lost %o re-plan with the ended run’s model and effort',
+    async (ending) => {
+      const { harness } = setup();
+      const taskId = await lostDiscovery(harness);
+      const { store } = harnessStore(harness, {
+        endedRun: { ...ending, model: 'claude-opus-5', effort: 'medium' },
+      });
+      harness.clock.advance(GRACE_MS + 1);
+      const asked = harness.jobs.history.length;
+      expect(siteOf(await pass(harness, store))).toMatchObject({ reEnqueued: 1, ended: 0 });
+      const [job] = stageJobsSince(harness, asked);
+      expect(job?.data).toMatchObject({
+        task_id: taskId,
+        model: 'claude-opus-5',
+        effort: 'medium',
+      });
+      expect((await loaded(harness, taskId)).task.state).toBe('active');
     },
   );
 

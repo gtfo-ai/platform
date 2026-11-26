@@ -29,7 +29,7 @@ import type {
   StrandedStageRecoveryStore,
   Transaction,
 } from '@platform/application';
-import { JOB_QUEUES } from '@platform/application';
+import { JOB_QUEUES, MAX_LOST_RUN_REPLANS, MAX_USAGE_LIMITED_REPLANS } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
@@ -48,8 +48,11 @@ interface Row extends Record<string, unknown> {
   readonly attempted_at: Date | string | null;
   readonly ended_status: string | null;
   readonly ended_reason: string | null;
-  /** The ended run was the entry's first lost or usage-limited ending (WP-285, WP-286). */
+  /** The ended run owes its entry a re-plan (WP-285, WP-286, BD-034's BACKLOG 1657). */
   readonly replan_owed: boolean | null;
+  /** The ended run's model and effort, which the live re-plan carries (BACKLOG 1657). */
+  readonly ended_model: string | null;
+  readonly ended_effort: string | null;
   readonly failed_at: Date | string | null;
   readonly failed_tries: number | null;
   readonly failed_name: string | null;
@@ -60,6 +63,8 @@ interface Row extends Record<string, unknown> {
   readonly failed_value_message: string | null;
   /** The serialised error's `message`, only when short enough to be a signature. */
   readonly failed_message: string | null;
+  /** How many of the entry's stage jobs pg-boss failed (BACKLOG 1659). */
+  readonly failed_jobs: number | null;
 }
 
 /**
@@ -96,6 +101,8 @@ const toStranded = (row: Row): StrandedStage => ({
           status: row.ended_status,
           terminalReason: row.ended_reason,
           replanOwed: row.replan_owed === true,
+          ...(row.ended_model === null ? {} : { model: row.ended_model }),
+          ...(row.ended_effort === null ? {} : { effort: row.ended_effort }),
         },
   failedJob:
     row.failed_at === null
@@ -108,6 +115,7 @@ const toStranded = (row: Row): StrandedStage => ({
           causeName: row.failed_cause_name,
           causeCode: row.failed_cause_code,
           expired: isExpiredJobOutput(row),
+          jobs: Math.max(1, Number(row.failed_jobs ?? 1)),
         },
 });
 
@@ -129,18 +137,37 @@ const strandedSql = (schema: string): string => `
   select t.id as task_id, t.project_id, t.current_stage as stage, s.attempt,
          to_char(s.entered_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as entered_at,
          s.entered_at as entered_instant,
-         case when t.stage_recovery_attempted_at >= s.entered_at
+         -- The mark counts for this entry only — and, since BD-034 (BACKLOG 1657), only when it is
+         -- not older than the entry's newest ended run: one entry may owe several re-plans, each
+         -- its own run's, and a mark the pass wrote for an earlier one says nothing about this one.
+         -- BACKLOG 1659: likewise a failed stage.execute job newer than the mark is a new failure,
+         -- which the pass decides on again (bounded by the entry's count of failed jobs).
+         case when t.stage_recovery_attempted_at >= greatest(s.entered_at, er.ended_at, fj.completed_on)
               then t.stage_recovery_attempted_at end as attempted_at,
          er.status as ended_status, er.terminal_reason as ended_reason,
-         er.ended_at as ended_instant,
-         -- WP-285/WP-286: the entry's first lost or usage-limited ending owes it a re-plan; being
-         -- the entry's newest run, it has no successor offer.
-         coalesce((er.terminal_reason = 'lease_expired' and s.lost_runs = 1)
-                  or (er.terminal_reason = 'rate_limited' and s.usage_limited_runs = 1), false)
+         er.ended_at as ended_instant, er.model as ended_model, er.effort as ended_effort,
+         -- WP-285/WP-286, BD-034 (BACKLOG 1657): the entry's newest run ended in a way that owes the
+         -- entry a re-plan, which its settling process enqueues after its commit; being the entry's
+         -- newest run, it has no successor. Each of these endings leaves the task active at this
+         -- stage with the row open **only** while its bound is not spent — the ending past the bound
+         -- escalates in the same transaction, moving the task out of the states this query admits —
+         -- so the ending alone names the debt; the two endings counted on the row also check it.
+         coalesce((er.terminal_reason = 'lease_expired'
+                   and s.lost_runs between 1 and ${MAX_LOST_RUN_REPLANS})
+                  or (er.terminal_reason = 'rate_limited'
+                      and s.usage_limited_runs between 1 and ${MAX_USAGE_LIMITED_REPLANS})
+                  -- A shutdown hand-back (WP-144), up to MAX_SHUTDOWN_HAND_BACKS.
+                  or (er.status = 'failed' and er.terminal_reason = 'shutdown')
+                  -- A transport failure to start (Q59(a)): its start failure is recorded.
+                  or (er.status = 'failed' and er.terminal_reason = 'error_during_execution'
+                      and er.exit_detail is not null)
+                  -- A run that ended before the model took a turn (BD-034's turnless re-plan).
+                  or (er.status = 'failed' and er.terminal_reason = 'error_during_execution'
+                      and er.exit_detail is null and er.num_turns = 0), false)
            as replan_owed,
          fj.completed_on as failed_at, fj.tries as failed_tries,
          fj.failed_name, fj.failed_code, fj.failed_cause_name, fj.failed_cause_code,
-         fj.failed_value_message, fj.failed_message
+         fj.failed_value_message, fj.failed_message, fc.failed_jobs
     from tasks t
     join task_stages s
       on s.task_id = t.id and s.stage = t.current_stage
@@ -148,7 +175,8 @@ const strandedSql = (schema: string): string => `
     -- WP-108 review round 1: the newest run this attempt already had. Live runs are excluded
     -- below, so a row here is an **ended** run, and the pass never re-enqueues such an attempt.
     left join lateral (
-      select r.status::text as status, r.terminal_reason::text as terminal_reason, r.ended_at
+      select r.status::text as status, r.terminal_reason::text as terminal_reason, r.ended_at,
+             r.num_turns, r.exit_detail, r.model, r.effort::text as effort
         from runs r
        where r.task_stage_id = s.id
        -- Run ids are random (v4) UUIDs, so the newest is the latest creation (WP-108 review round 2).
@@ -179,6 +207,15 @@ const strandedSql = (schema: string): string => `
        order by j.completed_on desc
        limit 1
     ) fj on true
+    -- BACKLOG 1659: how many of this entry's stage.execute jobs pg-boss failed — the pass's bound on
+    -- re-enqueuing a stage whose job keeps failing for a reason another try may fix.
+    left join lateral (
+      select count(*)::int as failed_jobs
+        from ${schema}.job j
+       where j.name = $1 and j.singleton_key = 'task:' || t.id::text and j.state = 'failed'
+         and j.data ->> 'stage' = t.current_stage and j.data ->> 'attempt' = s.attempt::text
+         and j.completed_on >= s.entered_at
+    ) fc on true
    where t.state in ('active', 'merged', 'retro')
      and s.state = 'running' and s.exited_at is null
      and (t.template_snapshot is null

@@ -186,6 +186,10 @@ export * from './pipeline/saga.js';
 export * from './pipeline/settings.js';
 export * from './pipeline/settings-snapshot.js';
 export {
+  MAX_RUN_START_ATTEMPTS,
+  MAX_SHUTDOWN_HAND_BACKS,
+  MAX_TURNLESS_REPLANS,
+  MAX_USAGE_LIMITED_REPLANS,
   type RunEnding,
   type SettleOptions,
   type SettleRunDeps,

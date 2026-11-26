@@ -139,6 +139,7 @@
  * The **ending** window is deliberately not that number — see {@link STRANDED_ENDING_AFTER_MS}.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
+import { effortSchema } from '@platform/contracts';
 import { enqueueAsk } from '../ask/commands.js';
 import { enqueueCuration } from '../knowledge/librarian.js';
 import { IMMEDIATE_UNDELIVERED_AFTER_MS } from '../notify/undelivered.js';
@@ -209,6 +210,8 @@ import { sweepExpiredRunLeases } from './run-lease.js';
 import {
   endStrandedStage,
   failedJobError,
+  failedStageJobBound,
+  failedStageJobDelayMs,
   type StrandedStage,
   type StrandedStageRecoverySite,
   strandedStagesIn,
@@ -1335,9 +1338,27 @@ const recoverStrandedStages = async (
     };
     // An attempt whose run already ended is never woken again (WP-108 review round 1): that would
     // be a fresh paid run of a stage a person cancelled, or one whose run failed. It is escalated —
-    // unless its ending was the entry's first lost or usage-limited run, whose re-plan the ending's
-    // process owed and never enqueued (WP-285, WP-286): that one is woken once, like a lost wake-up.
-    if (row.recoveryAttemptedAt === null && (row.endedRun === null || row.endedRun.replanOwed)) {
+    // unless its ending owed the entry a re-plan its process never enqueued (WP-285, WP-286; BD-034,
+    // BACKLOG 1657: a lost or usage-limited run inside its bound, a hand-back, a start failure or a
+    // turnless run): that one is woken once per ended run, like a lost wake-up.
+    // BD-034 (BACKLOG 1659): an entry whose stage job keeps failing is re-enqueued once per failed
+    // job — eight times, backing off to an hour, while the failure is one another try may fix (a
+    // provider or the database not answering, a write that lost its races), once otherwise — and
+    // escalated when the entry's failed jobs pass that bound.
+    const failed = row.endedRun === null ? row.failedJob : null;
+    const failedBoundSpent = failed !== null && (failed.jobs ?? 1) > failedStageJobBound(failed);
+    if (
+      row.recoveryAttemptedAt === null &&
+      !failedBoundSpent &&
+      (row.endedRun === null || row.endedRun.replanOwed)
+    ) {
+      // The backoff is waited out **before** the enqueue, never as a delayed job: `stage.execute`
+      // is `stately` per task, and a job queued an hour ahead would swallow a person's hand-back
+      // meanwhile. Until it is due, the entry is left as it is, unmarked, for a later pass.
+      const waitMs = failed === null ? 0 : failedStageJobDelayMs(failed.jobs ?? 1);
+      if (failed !== null && waitMs > 0 && Date.parse(now) < Date.parse(failed.failedAt) + waitMs) {
+        continue;
+      }
       const marked = await options.unitOfWork.transaction(async (scope) =>
         site.store.markStageAttempt(scope.tx, { row, at: now }),
       );
@@ -1345,11 +1366,24 @@ const recoverStrandedStages = async (
         continue;
       }
       // The entry's own wake-up, as `transitions.ts`'s `enter` scheduled it; it re-validates on fire.
+      // An owed re-plan carries the ended run's model and effort, as the live one does (BACKLOG 1657).
+      const effort =
+        row.endedRun?.effort === undefined
+          ? undefined
+          : effortSchema.safeParse(row.endedRun.effort);
       await enqueueStage(options.jobs, {
         taskId: row.taskId,
         projectId: row.projectId,
         stage: row.stage,
         attempt: row.attempt,
+        ...(row.endedRun === null
+          ? {}
+          : {
+              overrides: {
+                ...(row.endedRun.model === undefined ? {} : { model: row.endedRun.model }),
+                ...(effort?.success === true ? { effort: effort.data } : {}),
+              },
+            }),
       });
       reEnqueued += 1;
       logger.warn(
