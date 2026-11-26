@@ -21,6 +21,7 @@ import { db as dbAdapters } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { KnowledgeCommands } from '../knowledge.js';
 import type { OnboardingCommands } from '../onboarding.js';
@@ -124,6 +125,7 @@ describe('a project-stream race the retry could not win, at the route', () => {
     const instance = await build((target) =>
       registerOnboardingRoutes(target, {
         database,
+        visibleProjects: everyProjectVisible,
         secretKey: 'FAKE-app-secret-key-for-tests-only-000000',
         onboarding: {
           recordInterview: async (input: unknown) => {
@@ -149,6 +151,7 @@ describe('a project-stream race the retry could not win, at the route', () => {
     const instance = await build((target) =>
       registerKbRoutes(target, {
         database,
+        visibleProjects: everyProjectVisible,
         knowledge: {
           decide: async (input: unknown) => {
             calls.push(input);
@@ -173,6 +176,7 @@ describe('a project-stream race the retry could not win, at the route', () => {
     const instance = await build((target) =>
       registerKbRoutes(target, {
         database,
+        visibleProjects: everyProjectVisible,
         knowledge: {
           decide: async () => {
             throw new StreamConflictError('task', PROPOSAL as Id, 3);

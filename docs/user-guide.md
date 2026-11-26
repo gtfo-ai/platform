@@ -49,6 +49,18 @@ server on every request — the browser only hides what you cannot do.
 | approve a plan or a budget, cancel a task, return it to a stage, rework it, decide a knowledge proposal, set budgets, run discovery | maintainer |
 | create a project, add an integration, manage users | admin |
 
+**Which projects you see** (BD-035). An administrator sees every project. Anybody else sees the
+projects they work in: the projects their workers take (*What this machine takes* on **Workers**; a
+machine set to *every project* means every project), the projects they are a member of, and the
+projects of tasks they own that are not finished. Somebody who has chosen nothing — no worker and no
+project membership — sees every project. A project you do not see is not there for you: it is not on
+**Projects**, Home, the board, the Inbox, **Agents**, **Statistics** or the live updates, and a link to
+it, or to one of its tasks or runs, says *No such project* or *No such task*. This only narrows what you
+see; what you may do in a project you see is still your role. **To see a project again, widen your
+machine**: **Workers → What this machine takes → Change** offers every project you may run in, the ones
+you do not see now included — tick it (or choose every project) and **Save**. A new machine starts at
+every project, so until you choose its projects you see everything again.
+
 ### The top navigation
 
 **Home · Projects · Inbox · Agents · Statistics** — the row under the top bar, the five screens of
@@ -838,6 +850,9 @@ are still shown, on a seat named from the run); and an escalated task with no qu
 (Home's *Needs you* lists those).
 
 ## 3. The board
+
+The board, like every list, shows only projects you see (BD-035, *Which projects you see* in *Signing
+in*); a project you do not see answers *No such project*.
 
 **A project → Board**, the project's first tab. Five columns — **Queued**, **Active**, **Needs you**,
 **Ready to merge** and **Done** — each headed by its name and how many tasks it holds; *Needs you*
@@ -1770,8 +1785,8 @@ computed from whatever two samples the browser happened to see is a number with 
 
 ## 6. Inbox — questions and approvals
 
-**Inbox** in the top navigation: everything pending for you, across every project, answerable in
-place — laid out like GitHub's notifications. The left column filters the list: **All**,
+**Inbox** in the top navigation: everything pending for you, across every project you see (BD-035,
+*Which projects you see* above), answerable in place — laid out like GitHub's notifications. The left column filters the list: **All**,
 **Questions**, **Approvals**, **Stopped**, or one project, each with its count. Each row starts with the
 *needs you* bell, then the question's first line (or what the approval is about — *Plan v2 · size L ·
 6 files*), and under it
@@ -2404,7 +2419,9 @@ pressed; if nobody does before the offer times out, the task stops naming the ma
 cause.
 
 **Workers** lists the machines registered to run agent stages for this platform — yours, or every
-one if you are an administrator. **Add a worker** at the top opens the wizard below, and **Approve a
+one if you are an administrator. What your machines take is also what you see (BD-035, *Which projects
+you see* above): the card's **Change** offers every project you may run in, including the ones you do
+not see now, so this is where you widen it again. **Add a worker** at the top opens the wizard below, and **Approve a
 machine** the approval page. Each row says first **whether the machine can take work**, as the
 platform itself decides it: **Ready**, or **Can't take work** with the first reason — *Not connected
 to the platform — last seen 3 h ago*, *Paused by its owner*, *Paused — usage limit until 14:00*, *It
@@ -2423,8 +2440,8 @@ else's — an administrator sees every machine — with their name (*This machin
 tasks**, in **all their projects**.*) and nothing to press, because only a machine's owner changes it.
 On your own machine, under *Only my tasks*, the card warns *Unassigned tasks in Autix have nowhere to
 run.* for each project where neither the platform server nor any other machine — your others included —
-takes unassigned tasks by itself, as the machine's own page does; the screen asks once you press
-**Change**, so before that, when the platform did not answer, and on somebody else's machine it says
+takes unassigned tasks by itself, as the machine's own page does; the screen reads it with the projects
+your machine may take, so when the platform did not answer, and on somebody else's machine, it says
 nothing. A muted *Skipped 3 runs this machine doesn't take* counts the waiting runs its choice leaves
 for others. **A ready machine that runs nothing says why** (S-28.6), in one sentence under its
 state, with the numbers: *All 2 of its places are busy: it takes the next run when one of them ends.*;

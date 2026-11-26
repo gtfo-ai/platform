@@ -120,7 +120,7 @@ describe('refused inbound deliveries (WP-44, backlog 198)', () => {
   });
 
   it('lists the newest refused deliveries of the integration, and says which predate the list', async () => {
-    const items = await listRefusedDeliveries(drizzled, integrationId);
+    const items = await listRefusedDeliveries(drizzled, integrationId, null);
     expect(items.map((item) => item.delivery_id)).toEqual(['d3', 'd2', 'd1', 'd0']);
     expect(items.find((item) => item.delivery_id === 'd0')?.unmapped).toBeNull();
     // d0 predates migration 0055 too: no codes, served because it cannot be told apart.
@@ -129,6 +129,39 @@ describe('refused inbound deliveries (WP-44, backlog 198)', () => {
     expect(items.find((item) => item.delivery_id === 'd1')?.unmapped).toEqual([
       { provider: 'slack', external_id: 'U1' },
     ]);
+  });
+
+  it('omits an account bound only to projects the caller does not see (BD-035, S-30.2)', async () => {
+    const ids = async (visible: readonly string[] | null) =>
+      (await listRefusedDeliveries(drizzled, integrationId, visible)).map(
+        (item) => item.delivery_id,
+      );
+    const every = ['d3', 'd2', 'd1', 'd0'];
+    // Bound to nothing: the deliveries belong to the account, kept for every caller.
+    expect(await ids([])).toEqual(every);
+    const org = await pool.query<{ org_id: string }>(
+      'select org_id from integrations where id = $1',
+      [integrationId],
+    );
+    const project = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'refused_vis', 'Refused', 'https://git.example.test/acme/refused.git')
+       returning id`,
+      [org.rows[0]?.org_id],
+    );
+    const projectId = project.rows[0]?.id as string;
+    await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+      projectId,
+      integrationId,
+    ]);
+    try {
+      expect(await ids([])).toEqual([]);
+      expect(await ids(['00000000-0000-4000-8000-0000000dead0'])).toEqual([]);
+      expect(await ids([projectId])).toEqual(every);
+      expect(await ids(null)).toEqual(every);
+    } finally {
+      await pool.query('delete from bindings where project_id = $1', [projectId]);
+    }
   });
 
   it('offers each unmapped account once, newest first, and never one somebody has mapped', async () => {
@@ -207,7 +240,7 @@ describe('refused deliveries on a busy binding (backlog 206)', () => {
       client.release();
     }
 
-    const items = await listRefusedDeliveries(drizzled, busy);
+    const items = await listRefusedDeliveries(drizzled, busy, null);
     expect(items.map((item) => [item.delivery_id, item.reasons])).toEqual([
       ['refused', ['decision_refused']],
     ]);

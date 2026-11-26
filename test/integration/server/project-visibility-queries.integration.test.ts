@@ -92,8 +92,7 @@ beforeAll(async () => {
     ).id;
   }
   const read = createVisibleProjects(async (userId) => readVisibilitySources(drizzled, userId));
-  visible = async (userId, role) =>
-    read({ userId, role, email: 'x@example.test', name: 'x', sessionId: 's' });
+  visible = async (userId, role) => read({ userId, role });
 }, 120_000);
 
 afterAll(async () => {

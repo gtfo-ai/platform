@@ -22,15 +22,30 @@
  *
  * Everything the check needs from the database arrives as a function, so the whole policy is
  * testable without a schema; `sse/routes.ts` binds those functions to the real queries.
+ *
+ * ## Visibility before the role (BD-035, TD-022's visibility amendment item 7)
+ *
+ * A `project:`, `task:` or `run:` topic of a project the person does not see is refused **404** with
+ * the body a missing one gets (`topic <topic> does not exist`), before `can()`, at `/events` and at
+ * `/events/subscriptions` alike. The set read for the check is returned with each topic's project,
+ * so the hub filters the `org` topic by it and stops a scoped topic whose project later becomes
+ * hidden (`hub.ts`).
  */
 import type { UserRole } from '@platform/contracts';
 import { can, type PermissionAction } from '@platform/domain';
 import { effectiveRole } from '../auth/rbac.js';
+import {
+  isProjectVisible,
+  type VisibleProjects,
+  type VisibleProjectsReader,
+} from '../auth/visibility.js';
 import { ForbiddenError, NotFoundError } from '../errors.js';
 
 export interface TopicAccessDependencies {
   /** The caller's role in a project, or `null` when they hold no membership in it. */
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** Whether a project exists. */
   readonly projectExists: (projectId: string) => Promise<boolean>;
   /** The project a task belongs to, or `null` when there is no such task. */
@@ -115,11 +130,21 @@ export const resolveTopic = async (
  * stream that looks subscribed and is quietly missing half of what they asked for, which is the
  * failure mode hardest to notice from a UI.
  */
+/** What an authorised subscription carries to the hub (BD-035). */
+export interface AuthorisedTopics {
+  /** The person's visible projects, read for this check. */
+  readonly visible: VisibleProjects;
+  /** Each `project:`, `task:` and `run:` topic's project. */
+  readonly topicProjects: ReadonlyMap<string, string>;
+}
+
 export const authoriseTopics = async (
   dependencies: TopicAccessDependencies,
   actor: { readonly userId: string; readonly role: UserRole },
   topics: readonly string[],
-): Promise<void> => {
+): Promise<AuthorisedTopics> => {
+  const visible = await dependencies.visibleProjects(actor);
+  const topicProjects = new Map<string, string>();
   // One membership lookup per project, not per topic: a tab watching a board plus five of its
   // tasks is six topics in one project.
   const membership = new Map<string, UserRole | null>();
@@ -135,9 +160,17 @@ export const authoriseTopics = async (
 
   for (const topic of topics) {
     const subject = await resolveTopic(dependencies, topic);
+    if (subject.projectId !== null) {
+      // BD-035: a hidden project's topic is one that does not exist — the same 404, before the role.
+      if (!isProjectVisible(visible, subject.projectId)) {
+        throw new NotFoundError(`topic ${topic}`);
+      }
+      topicProjects.set(topic, subject.projectId);
+    }
     const role = await roleFor(subject.projectId);
     if (!can(role, subject.action)) {
       throw new ForbiddenError(`${subject.action} on ${topic}`, role);
     }
   }
+  return { visible, topicProjects };
 };

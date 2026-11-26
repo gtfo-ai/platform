@@ -82,6 +82,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { generateInviteToken, hashInviteToken, inviteUrl } from '../auth/invite-token.js';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError } from '../errors.js';
 import type { InviteRecord } from '../queries/invite-queries.js';
 
@@ -141,6 +142,8 @@ export interface InviteRoutesOptions {
    */
   readonly invites: InviteCommands;
   readonly projectRole: PermissionGuardDependencies['projectRole'];
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** `APP_BASE_URL` — the link is its origin, `/invite`, and the token as the fragment. */
   readonly baseUrl: string;
   /** The id of a new link; injectable for a test. */
@@ -199,7 +202,10 @@ export const registerInviteRoutes = async (
   options: InviteRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.projectRole };
+  const guard = {
+    projectRole: options.projectRole,
+    visibleProjects: options.visibleProjects,
+  };
   const manage = requirePermission(guard, 'org.users.manage');
 
   const commandsOf = (): InviteCommands => options.invites;

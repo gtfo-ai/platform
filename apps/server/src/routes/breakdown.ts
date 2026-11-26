@@ -53,6 +53,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { effectiveRole, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { commandRefusal, HttpError, NotFoundError } from '../errors.js';
 import {
   claimIdempotentAttempt,
@@ -65,6 +66,8 @@ import { scopedProject, scopeToProject } from './scope.js';
 export interface BreakdownQueries {
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly claimAttempt: IdempotencyRecords['claimAttempt'];
   readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: {
@@ -103,7 +106,10 @@ export const registerBreakdownRoutes = async (
   options: BreakdownRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
   const scope = scopeToProject({
     param: 'task_id',
     what: 'task',

@@ -20,6 +20,7 @@ import type { Id, IsoDateTime, UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import {
   createManualJobsSeenReader,
@@ -170,6 +171,7 @@ const build = async (): Promise<void> => {
     }
   });
   await registerProjectCiJobsRoutes(app, {
+    visibleProjects: everyProjectVisible,
     projectRole: async () => world.role,
     projectExists: async (projectId) => projectId === PROJECT,
     manualJobsSeen: async (projectId) =>
@@ -307,6 +309,7 @@ describe('GET /api/projects/:project_id/ci/manual-jobs (S-28.7)', () => {
       };
     });
     await registerProjectCiJobsRoutes(app, {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => 'maintainer',
       projectExists: async () => true,
       manualJobsSeen: null,

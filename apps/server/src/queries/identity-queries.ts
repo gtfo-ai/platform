@@ -20,7 +20,7 @@
  */
 import type { AuditEntry, IdentityCandidate, UserRole, UserSummary } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
 
 const {
   configAudit,
@@ -465,11 +465,31 @@ export interface AuditPage {
  */
 export const listAuditEntries = async (
   database: Database,
-  options: { readonly limit: number; readonly cursor?: Date; readonly entityType?: string },
+  options: {
+    readonly limit: number;
+    readonly cursor?: Date;
+    readonly entityType?: string;
+    /**
+     * BD-035: the caller's visible projects. A row about a project (`entity_type = 'project'`)
+     * outside them is left out; a row about anything else belongs to the organisation and is kept.
+     * `null` keeps every row.
+     */
+    readonly visible: readonly string[] | null;
+  },
 ): Promise<AuditPage> => {
   const conditions = [
     ...(options.cursor === undefined ? [] : [lt(configAudit.createdAt, options.cursor)]),
     ...(options.entityType === undefined ? [] : [eq(configAudit.entityType, options.entityType)]),
+    ...(options.visible === null
+      ? []
+      : [
+          options.visible.length === 0
+            ? ne(configAudit.entityType, 'project')
+            : or(
+                ne(configAudit.entityType, 'project'),
+                inArray(configAudit.entityId, [...options.visible]),
+              ),
+        ]),
   ];
 
   const rows = await database

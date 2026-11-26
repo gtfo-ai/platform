@@ -54,6 +54,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { BadRequestError, HttpError } from '../errors.js';
 
 /** The page a screen asks for when it names none. */
@@ -119,6 +120,8 @@ export interface FailedJobRoutesOptions {
   readonly read: FailedJobsReader | null;
   /** Unused by an org-scoped guard, and required by its type: no project is named here. */
   readonly projectRole: PermissionGuardDependencies['projectRole'];
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** TD-012's pattern rules — an HTTP request carries no run-scoped credential (Q55). */
   readonly redactor: SecretRedactor;
 }
@@ -161,7 +164,10 @@ export const registerFailedJobRoutes = async (
   options: FailedJobRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.projectRole };
+  const guard = {
+    projectRole: options.projectRole,
+    visibleProjects: options.visibleProjects,
+  };
 
   typed.get(
     '/api/org/failed-jobs',

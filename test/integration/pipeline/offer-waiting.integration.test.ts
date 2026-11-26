@@ -836,7 +836,7 @@ describe('where it is carried: the task read, the board and the Agents rows (cri
     expect(taskListItemSchema.parse(item).waiting).toEqual(expected);
 
     const agents = agentsResponseSchema.parse(
-      await listRunningAgents(drizzled, { coreDigests: CORE }),
+      await listRunningAgents(drizzled, null, { coreDigests: CORE }),
     );
     expect(agents.items.find((entry) => entry.run.id === offline.runId)?.waiting).toEqual(expected);
 
@@ -1029,7 +1029,7 @@ describe('the CI wait on the board and the inbox (backlog 1300, 1301)', () => {
     expect(byId.get(running)?.gate_wait?.status).toBe('running');
     expect(byId.get(paused)?.gate_wait).toBeNull();
 
-    const inbox = inboxResponseSchema.parse(await listInbox(drizzled));
+    const inbox = inboxResponseSchema.parse(await listInbox(drizzled, null));
     const listed = (inbox.ci_held ?? []).map((entry) => entry.task_id);
     expect(listed).toContain(held);
     expect(listed).not.toContain(running);

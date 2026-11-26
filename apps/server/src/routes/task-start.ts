@@ -55,6 +55,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError, projectStreamContention } from '../errors.js';
 import type { TaskStartCommands } from '../task-start.js';
 import {
@@ -65,6 +66,8 @@ import {
 
 export interface TaskStartQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<string | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly projectExists: (projectId: string) => Promise<boolean>;
   readonly claimAttempt: IdempotencyRecords['claimAttempt'];
   readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
@@ -124,6 +127,7 @@ export const registerTaskStartRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       (await options.queries.projectRole(projectId, userId)) as never,
+    visibleProjects: options.queries.visibleProjects,
   };
   // The guard runs before validation, so it copes with a segment the schema has not checked yet
   // (`routes/onboarding.ts` carries the argument).

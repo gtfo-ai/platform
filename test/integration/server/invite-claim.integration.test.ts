@@ -15,6 +15,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hashInviteToken } from '../../../apps/server/src/auth/invite-token.js';
+import { everyProjectVisible } from '../../../apps/server/src/auth/visibility.test-fixture.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { createInviteCommands } from '../../../apps/server/src/invites.js';
 import {
@@ -108,6 +109,7 @@ beforeAll(async () => {
       database: drizzled,
       auth,
     }),
+    visibleProjects: everyProjectVisible,
     projectRole: async () => null,
     baseUrl: 'http://localhost:8080',
     newId,

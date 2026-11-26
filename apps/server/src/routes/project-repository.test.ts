@@ -11,6 +11,7 @@ import type { JsonObject, ProjectRecord, UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
 import {
@@ -97,6 +98,7 @@ const build = async (): Promise<void> => {
   });
   await registerProjectRepositoryRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.role,
       projectRepository: async () =>
         world.exists ? { defaultBranch: world.branch, liveTasks: world.liveTasks } : null,

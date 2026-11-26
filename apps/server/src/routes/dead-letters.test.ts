@@ -21,6 +21,7 @@ import { redaction } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { parseDeadLetterCursor, REQUEUE_ACTION, registerDeadLetterRoutes } from './dead-letters.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
@@ -116,6 +117,7 @@ const build = async (composed = true): Promise<void> => {
         }
       },
     },
+    visibleProjects: everyProjectVisible,
     projectRole: async () => null,
     redactor: redaction.patternRedactor(),
   });

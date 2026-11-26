@@ -33,6 +33,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type * as z from 'zod';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import {
   type listPeopleTaskLoads,
@@ -46,6 +47,8 @@ import { recordWipRaise } from '../wip-raise.js';
 /** What the routes read and write — the database's in production, a test's own otherwise. */
 export interface TaskLimitQueries {
   readonly projectRole: PermissionGuardDependencies['projectRole'];
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** The organisation's two values; throws the `409 invalid_organisation_config` for a bad document. */
   readonly organisationLimits: () => Promise<OrganisationOwnerLimits>;
   readonly personLoad: (userId: string, holders: number) => Promise<PersonTaskLoad | null>;
@@ -70,7 +73,10 @@ export const registerTaskLimitRoutes = async (
   options: TaskLimitRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
 
   const actorOf = (request: FastifyRequest): { readonly userId: string } => {
     const actor = request.actor;

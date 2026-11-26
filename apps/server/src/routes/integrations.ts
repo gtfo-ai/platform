@@ -63,6 +63,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import { type VisibleProjectsReader, visibleIdsFor } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole } from '../queries/identity-queries.js';
@@ -76,6 +77,8 @@ import {
 
 export interface IntegrationRoutesOptions {
   readonly database: Database;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** `APP_BASE_URL`; the origin the webhook URL is built on (technical/08 — one origin). */
   readonly baseUrl: string;
   /**
@@ -102,6 +105,7 @@ export const registerIntegrationRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       findProjectRole(options.database, projectId, userId),
+    visibleProjects: options.visibleProjects,
   };
 
   typed.get(
@@ -141,7 +145,14 @@ export const registerIntegrationRoutes = async (
       const role = request.effectiveRole;
       return {
         // S-25.3: the read's own instant — "recently" is a question about now.
-        items: await integrationSummaries(options.database, rows, credentials, new Date()),
+        // BD-035: `used_by` names only the projects the caller sees.
+        items: await integrationSummaries(
+          options.database,
+          rows,
+          credentials,
+          new Date(),
+          await visibleIdsFor(request, options.visibleProjects),
+        ),
         // S-23.23: whether this caller may write integrations — the write routes' own capability
         // (`integration.write`, `routes/onboarding.ts`) over the organisation role this guard
         // resolved, so the screens offer New, Edit, Replace credentials and Retire only to someone
@@ -235,7 +246,13 @@ export const registerIntegrationRoutes = async (
       if ((await findIntegrationRow(options.database, integrationId)) === undefined) {
         throw new NotFoundError(`integration ${integrationId}`);
       }
-      return { items: await listRefusedDeliveries(options.database, integrationId) };
+      return {
+        items: await listRefusedDeliveries(
+          options.database,
+          integrationId,
+          await visibleIdsFor(request, options.visibleProjects),
+        ),
+      };
     },
   );
 };

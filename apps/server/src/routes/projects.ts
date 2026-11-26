@@ -82,6 +82,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import { type VisibleProjectsReader, visibleIdsFor } from '../auth/visibility.js';
 import { organisationSettingsForRequest, repositorySnapshotFrom } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import { findProjectTimezone, listProjectBudgets, projectSpend } from '../queries/cost-queries.js';
@@ -105,6 +106,8 @@ import { appliedTicketLifecycle, type ProjectTicketLifecycle } from '../ticket-l
 
 export interface ProjectRoutesOptions {
   readonly database: Database;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /**
    * TD-012 step 2 — the platform's pattern rules, injected.
    *
@@ -535,6 +538,7 @@ export const registerProjectRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       findProjectRole(options.database, projectId, userId),
+    visibleProjects: options.visibleProjects,
   };
 
   typed.get(
@@ -542,9 +546,9 @@ export const registerProjectRoutes = async (
     {
       preHandler: requirePermission(guard, 'project.read'),
       schema: {
-        summary: 'Every project, with its open work and its recent spend',
+        summary: 'The projects you see, with their open work and their recent spend',
         description:
-          '`open_tasks` counts the tasks that are neither `done` nor `cancelled` — `merged` and `retro` are still in flight. `spent_usd_30d` sums `cost_rollup_daily` over the last thirty calendar days **in the organisation’s timezone** (Q12), so it agrees with the budget windows about when a day turned. Project names and repository URLs come from configuration, not from a model.',
+          'The projects the caller sees (BD-035): every project for an administrator, otherwise the projects their workers take, their memberships and the projects of their unfinished tasks — or every project when nothing narrows it. `open_tasks` counts the tasks that are neither `done` nor `cancelled` — `merged` and `retro` are still in flight. `spent_usd_30d` sums `cost_rollup_daily` over the last thirty calendar days **in the organisation’s timezone** (Q12), so it agrees with the budget windows about when a day turned. Project names and repository URLs come from configuration, not from a model.',
         tags: ['projects'],
         response: { 200: projectsResponseSchema },
       },
@@ -554,7 +558,12 @@ export const registerProjectRoutes = async (
     async (request) => {
       const role = request.effectiveRole;
       return {
-        ...(await listProjectSummaries(options.database, new Date().toISOString() as IsoDateTime)),
+        // BD-035: only the projects the caller sees — every one for an administrator.
+        ...(await listProjectSummaries(
+          options.database,
+          new Date().toISOString() as IsoDateTime,
+          await visibleIdsFor(request, options.visibleProjects),
+        )),
         // S-23.23: whether this caller may create a project — `POST /api/projects`'s own
         // capability over the organisation role this guard resolved, so the screens offer *New
         // project* only to someone the route would admit.

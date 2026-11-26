@@ -114,7 +114,12 @@ export const dayMinus = (day: string, days: number): string => {
 export const listProjectSummaries = async (
   database: Database,
   at: IsoDateTime,
+  /** BD-035: the caller's visible projects — `null` every project, otherwise only these. */
+  visible: readonly string[] | null,
 ): Promise<Pick<ProjectsResponse, 'items'>> => {
+  if (visible !== null && visible.length === 0) {
+    return { items: [] };
+  }
   const rows = await database
     .select({
       id: projects.id,
@@ -133,6 +138,7 @@ export const listProjectSummaries = async (
     })
     .from(projects)
     .innerJoin(organizations, eq(organizations.id, projects.orgId))
+    .where(visible === null ? undefined : inArray(projects.id, [...visible]))
     .orderBy(asc(projects.key));
   if (rows.length === 0) {
     return { items: [] };

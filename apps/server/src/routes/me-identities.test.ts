@@ -19,6 +19,7 @@ import type { Id, IsoDateTime, JsonObject, UserRole } from '@platform/contracts'
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { MyIdentityRow } from '../queries/identity-link-queries.js';
 import { memoryAttemptRecords, scopeOf } from './idempotency-memory.js';
@@ -167,6 +168,7 @@ const build = async (): Promise<World> => {
     now: () => NOW,
     queries: {
       ...records,
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.projectRole,
       listMine: async () => world.mine,
       unlinkMine: async (input) => {

@@ -22,12 +22,15 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ProjectReadiness } from '../queries/project-queries.js';
 import type { ProjectTicketLifecycle } from '../ticket-lifecycle.js';
 
 export interface ProjectReadinessQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** The newest evaluation, or why there is none (`findProjectReadiness`). */
   readonly readiness: (projectId: string) => Promise<ProjectReadiness>;
   /** The pipeline's own reading of the binding's lifecycle (`findProjectTicketLifecycle`). */
@@ -76,7 +79,10 @@ export const registerProjectReadinessRoutes = async (
   options: { readonly queries: ProjectReadinessQueries },
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
 
   typed.get(
     '/api/projects/:project_id/readiness',

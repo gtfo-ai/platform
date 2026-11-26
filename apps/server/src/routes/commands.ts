@@ -125,6 +125,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import type { TaskCommands } from '../commands.js';
 import { commandRefusal, HttpError, NotFoundError } from '../errors.js';
 import {
@@ -148,6 +149,8 @@ export interface CommandQueries {
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly runProjectId: (runId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly taskPosition: (
     taskId: string,
   ) => Promise<{ readonly state: TaskState; readonly currentStage: string | null } | null>;
@@ -267,7 +270,10 @@ export const registerCommandRoutes = async (
   options: CommandRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
 
   /**
    * The project a task or a run belongs to, resolved before the guard decides.

@@ -26,6 +26,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Actor } from '../../../apps/server/src/auth/rbac.js';
+import { everyProjectVisible } from '../../../apps/server/src/auth/visibility.test-fixture.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { findProjectRole } from '../../../apps/server/src/queries/identity-queries.js';
 import { findOwnerCandidates } from '../../../apps/server/src/queries/owner-candidate-queries.js';
@@ -154,6 +155,7 @@ beforeAll(async () => {
   });
   await registerOwnerCandidateRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async (project, userId) => findProjectRole(drizzled, project, userId),
       candidates: async (project) => findOwnerCandidates(drizzled, project),
       // S-26.3: each candidate's `writes_back`; this project has no binding, so every one is false

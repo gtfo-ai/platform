@@ -42,6 +42,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { OnboardingCommands } from '../onboarding.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
@@ -54,6 +55,8 @@ import {
 
 export interface RediscoveryQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<string | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly projectExists: (projectId: string) => Promise<boolean>;
   readonly claimAttempt: IdempotencyRecords['claimAttempt'];
   readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
@@ -106,6 +109,7 @@ export const registerRediscoveryRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       (await options.queries.projectRole(projectId, userId)) as never,
+    visibleProjects: options.queries.visibleProjects,
   };
   // The guards run before validation (`routes/onboarding.ts` carries the argument).
   const projectOf = (request: FastifyRequest): string | undefined => {

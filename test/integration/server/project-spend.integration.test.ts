@@ -19,6 +19,7 @@ import { db } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../../../apps/server/src/auth/visibility.test-fixture.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { projectSpend } from '../../../apps/server/src/queries/cost-queries.js';
 import { registerProjectRoutes } from '../../../apps/server/src/routes/projects.js';
@@ -220,7 +221,11 @@ describe('the project spend projection (S-25.7)', () => {
       };
     });
     // The spend route reads nothing the redactor guards (`invalid_stored_config` is another route's).
-    await registerProjectRoutes(app, { database: drizzled, redactor: {} as never });
+    await registerProjectRoutes(app, {
+      database: drizzled,
+      visibleProjects: everyProjectVisible,
+      redactor: {} as never,
+    });
     await app.ready();
     try {
       const response = await app.inject({

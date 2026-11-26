@@ -12,6 +12,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Actor } from '../auth/rbac.js';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { OwnerCandidate } from '../queries/owner-candidate-queries.js';
 import { registerOwnerCandidateRoutes } from './owner-candidates.js';
@@ -61,6 +62,7 @@ const serve = async (input: {
   });
   await registerOwnerCandidateRoutes(server, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async (projectId, userId) =>
         projectId === PROJECT && userId === CALLER ? input.membership : null,
       candidates: async (projectId) => {

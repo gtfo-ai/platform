@@ -54,6 +54,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ArtifactBody, TaskEventRow } from '../queries/pipeline-queries.js';
 import {
@@ -80,6 +81,8 @@ export interface TaskQueries {
   readonly taskDetail: (taskId: string) => Promise<TaskDetailRecord | null>;
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly artifactBody: (artifactId: string) => Promise<ArtifactBody>;
   readonly artifactProjectId: (artifactId: string) => Promise<string | null>;
   /**
@@ -173,7 +176,10 @@ export const registerTaskRoutes = async (
   options: TaskRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
   const scope = scopeToProject({
     param: 'task_id',
     what: 'task',

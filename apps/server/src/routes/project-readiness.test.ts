@@ -26,6 +26,7 @@ import { createFakeTaskManagement } from '@platform/integrations';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { checkProposedLifecycles, readProposedAccountIdentities } from '../lifecycle-check.js';
 import {
@@ -166,6 +167,7 @@ beforeEach(async () => {
   ) => assertBindingItemsWritable(executor, project, proposed, rows, egress);
   await registerProjectBindingRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => 'admin',
       projectExists: async () => true,
       listBindings: async () => [],
@@ -197,6 +199,7 @@ beforeEach(async () => {
   });
   await registerProjectReadinessRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => 'viewer',
       readiness: async () => ({ found: true, recorded: true, response: EVALUATED }),
       ticketLifecycle: async () =>

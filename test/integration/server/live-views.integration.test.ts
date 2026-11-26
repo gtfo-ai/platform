@@ -234,7 +234,7 @@ afterAll(async () => {
 
 describe('GET /api/org/agents — seat and activity (S-23.15)', () => {
   it('classifies each run by its newest entry and publishes no text, input or hostile name', async () => {
-    const agents = agentsResponseSchema.parse(await listRunningAgents(drizzled));
+    const agents = agentsResponseSchema.parse(await listRunningAgents(drizzled, null));
     const byRun = new Map(agents.items.map((item) => [item.run.id, item]));
     expect(byRun.get(runIds.server as string)?.activity).toEqual({
       kind: 'tool',
@@ -261,7 +261,7 @@ describe('GET /api/org/agents — seat and activity (S-23.15)', () => {
   });
 
   it('publishes the runner’s stop reason on the run it stopped, and null on every other (S-25.22)', async () => {
-    const agents = agentsResponseSchema.parse(await listRunningAgents(drizzled));
+    const agents = agentsResponseSchema.parse(await listRunningAgents(drizzled, null));
     const stopReason = (name: string) =>
       agents.items.find((item) => item.run.id === runIds[name])?.run.stop_reason;
     expect(stopReason('stopped')).toBe('cost_unreported');
@@ -271,7 +271,7 @@ describe('GET /api/org/agents — seat and activity (S-23.15)', () => {
   });
 
   it('seats a server claim, a named worker’s claim, and leaves the queue and an offerless run unseated', async () => {
-    const agents = await listRunningAgents(drizzled);
+    const agents = await listRunningAgents(drizzled, null);
     const seat = (name: string) => agents.items.find((item) => item.run.id === runIds[name])?.seat;
     expect(seat('server')).toEqual({ kind: 'server', worker_id: null, worker_name: null });
     expect(seat('worker')).toEqual({

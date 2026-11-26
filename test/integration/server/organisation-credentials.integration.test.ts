@@ -17,6 +17,7 @@ import { db, secrets as secretAdapters } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../../../apps/server/src/auth/visibility.test-fixture.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import {
   createOrganisationAccountCredentials,
@@ -149,6 +150,7 @@ beforeAll(async () => {
   });
   await registerIntegrationRoutes(app, {
     database: drizzle(pool, { schema: db.schema }),
+    visibleProjects: everyProjectVisible,
     baseUrl: 'https://agentic.example.test',
     organisationCredentials: createOrganisationAccountCredentials(pool, SECRET),
   });

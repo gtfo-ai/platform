@@ -110,7 +110,7 @@ const storeSubject = async (approvalId: string) => {
 
 const readBoth = async (taskId: string, approvalId: string) => {
   const detail = await findTaskDetail(drizzled, taskId);
-  const inbox = await listInbox(drizzled);
+  const inbox = await listInbox(drizzled, null);
   const fromTask = detail?.approvals.find((row) => row.id === approvalId) as ApprovalView;
   const fromInbox = inbox.approvals.find((row) => row.id === approvalId) as ApprovalView;
   // One function serves both reads: the page that decides and the list that points at it agree.

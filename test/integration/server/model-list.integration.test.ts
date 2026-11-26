@@ -18,6 +18,7 @@ import { db } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../../../apps/server/src/auth/visibility.test-fixture.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { listedModelIds } from '../../../apps/server/src/queries/cost-queries.js';
 import { registerOrgRoutes } from '../../../apps/server/src/routes/org.js';
@@ -89,6 +90,7 @@ describe('the model list after every migration (WP-159)', () => {
     });
     await registerOrgRoutes(app, {
       database: drizzled,
+      visibleProjects: everyProjectVisible,
       identities: {} as never,
       // `apps/server/src/app.ts`'s binding, verbatim.
       models: async () => listedModelIds(drizzled, new Date()),

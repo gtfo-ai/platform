@@ -1562,6 +1562,20 @@ same daemon. (Or remove that one volume after your next `down -v`.)
 
 The honest version, in one place.
 
+**Who sees which project** (BD-035, TD-022's visibility amendment). The four roles decide what a person
+may **do**; a second rule decides what they **see**. An organisation `admin` sees every project. Anybody
+else sees the projects their workers that are not revoked take (`workers.claim_project_ids`; a machine of
+every project means every project), their `project_members` rows, and the projects of their unfinished
+owned tasks — or every project when they have no worker and no membership. The server enforces it: a
+hidden project, and its tasks, runs, artifacts and shadow batches, answers `404` exactly as a missing id
+does; every list and aggregate (projects, inbox, agents, statistics, the audit log's project rows, an
+integration's `used_by` and refused deliveries) leaves it out; and the `org` event stream drops its frames
+per connection, with the set re-read at every subscription change and at least once a minute. It is a
+**focus filter, not a confidentiality boundary**: anybody at `member` or above can widen their own machine
+on **Workers** (whose card lists every project they may run in) and see the project again. A `maintainer`
+is narrowed like a `member` (Q136), and a newly approved machine starts at every project (Q135). The rule
+is one function, `apps/server/src/auth/visibility.ts`, over one statement.
+
 **The Docker socket is in exactly one container, and it is not the platform's.**
 `docker-socket-proxy` is the only service with `/var/run/docker.sock` bound, read-only. It exposes a
 filtered Engine API (`CONTAINERS`, `NETWORKS`, `VOLUMES`, `IMAGES`, `INFO`, `POST` on; `EXEC`,

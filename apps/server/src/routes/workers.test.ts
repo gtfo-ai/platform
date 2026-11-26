@@ -32,6 +32,7 @@ import {
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import type { TrustProxySetting } from '../client-address.js';
 import { HttpError, toApiError } from '../errors.js';
 import type { IdleCandidate, WorkerIdleReader } from '../queries/worker-idle.js';
@@ -111,6 +112,7 @@ const build = async (
   });
   await registerWorkerRoutes(instance, {
     store,
+    visibleProjects: everyProjectVisible,
     projectRole: async () => null,
     now,
     ...(options.coreDigests === undefined ? {} : { coreDigests: options.coreDigests }),

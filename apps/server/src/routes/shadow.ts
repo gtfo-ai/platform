@@ -48,6 +48,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
@@ -70,6 +71,8 @@ import { scopedProject, scopeToProject } from './scope.js';
  */
 export interface ShadowQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<string | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly projectExists: (projectId: string) => Promise<boolean>;
   /** The `Idempotency-Key` record (WP-67): claimed before the batch starts, released if it did not. */
   readonly claimAttempt: IdempotencyRecords['claimAttempt'];
@@ -126,6 +129,7 @@ export const registerShadowRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       (await options.queries.projectRole(projectId, userId)) as never,
+    visibleProjects: options.queries.visibleProjects,
   };
   // The guards run before validation, so this copes with a segment the schema has not checked yet
   // (`routes/onboarding.ts` carries the argument).

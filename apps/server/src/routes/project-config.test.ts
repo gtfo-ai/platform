@@ -20,6 +20,7 @@ import { config as configAdapters } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { type MemoryAttempt, memoryAttemptRecords } from './idempotency-memory.js';
 import {
@@ -102,6 +103,7 @@ beforeEach(async () => {
   });
   await registerProjectConfigRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.role,
       exportableProject: async () => world.project,
       ...memoryAttemptRecords(attempts),

@@ -16,6 +16,7 @@ import type { JsonObject, TicketBreakdownItem, UserRole } from '@platform/contra
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { type BreakdownQueries, registerBreakdownRoutes } from './breakdown.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
@@ -105,6 +106,7 @@ const build = async (overrides: Partial<BreakdownQueries> = {}): Promise<World> 
   await registerBreakdownRoutes(app, {
     queries: {
       taskProjectId: async (taskId) => (taskId === TASK ? PROJECT : null),
+      visibleProjects: everyProjectVisible,
       projectRole: async () => null,
       ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
@@ -164,6 +166,7 @@ const buildReadOnly = async (): Promise<FastifyInstance> => {
   await registerBreakdownRoutes(app, {
     queries: {
       taskProjectId: async () => PROJECT,
+      visibleProjects: everyProjectVisible,
       projectRole: async () => null,
       ...memoryAttemptRecords(new Map()),
       recordAction: async () => {},

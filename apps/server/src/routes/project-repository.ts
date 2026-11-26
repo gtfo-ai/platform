@@ -57,6 +57,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
 import {
@@ -79,6 +80,8 @@ export type DefaultBranchWrite =
 
 export interface ProjectRepositoryQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** The stored default branch and the count of tasks that are not finished, or `null`. */
   readonly projectRepository: (
     projectId: string,
@@ -198,7 +201,10 @@ export const registerProjectRepositoryRoutes = async (
   options: ProjectRepositoryRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
   /** The guards run before validation (`routes/settings.ts`): a non-uuid is organisation-scoped. */
   const projectOf = (request: FastifyRequest): string | undefined => {
     const value = (request.params as { project_id?: unknown }).project_id;

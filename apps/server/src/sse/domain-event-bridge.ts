@@ -56,6 +56,13 @@
  *     broadcast and the pool on the lines after it. The flag first, then the subscription, then
  *     the wait — bounded by the work, never by a timer.
  *
+ * ## Visibility (BD-035, TD-022's visibility amendment item 7)
+ *
+ * Every frame is published with the project it is about beside it (`PublishMeta`, never on the
+ * wire): the projection's `project_id`, else the project the read resolved through the event's
+ * task or run. The hub drops an `org` frame of a project a connection does not see — live and
+ * replayed — and one with no project for a narrowed connection.
+ *
  * ## Authorisation: unchanged, and stated
  *
  * This module adds **no** subscription surface. Who may subscribe to `org`, `project:<id>` or
@@ -117,6 +124,12 @@ export interface LiveEventReadRequest {
 /** A stored live event, as the bridge reads it: its position and the projection's source. */
 export interface LiveEventRow extends LiveDomainEventSource {
   readonly position: number;
+  /**
+   * The project the event is about, resolved by the read (BD-035): the payload's `project_id`, else
+   * the project of its `task_id` or `run_id`, else of its own task or run stream. `null` or absent
+   * when nothing resolved one — the hub then drops the `org` frame for a narrowed person.
+   */
+  readonly projectId?: string | null;
 }
 
 /** Reads live events in `(after, upTo]`, in position order. The bridge's only database dependency. */
@@ -238,13 +251,16 @@ export const startDomainEventBridge = async (
     for (const topic of topics) {
       // **The publisher owns `seq`** (`sse/hub.ts`): the global position, one numbering for every
       // topic an event is fanned into, so a `Last-Event-ID` names the same row on all three.
-      options.hub.publish({
-        frame: 'domain_event',
-        topic,
-        seq: row.position,
-        type: data.type,
-        data,
-      });
+      options.hub.publish(
+        {
+          frame: 'domain_event',
+          topic,
+          seq: row.position,
+          type: data.type,
+          data,
+        },
+        { projectId: data.project_id ?? row.projectId ?? null },
+      );
     }
   };
 

@@ -37,6 +37,7 @@ import {
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../../../apps/server/src/auth/visibility.test-fixture.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js';
 import {
@@ -1245,7 +1246,7 @@ describe('the task projection', () => {
       ]),
     );
 
-    const inbox = inboxResponseSchema.parse(await listInbox(drizzled));
+    const inbox = inboxResponseSchema.parse(await listInbox(drizzled, null));
     const ours = inbox.escalated.filter((row) => row.project_id === project.id);
     // Oldest escalation first — the briefless one by its escalation's instant too.
     expect(ours.map((row) => row.ticket.key)).toEqual(['ESR-2', 'ESR-1', 'ESR-4']);
@@ -1283,6 +1284,14 @@ describe('the task projection', () => {
     expect(await listEscalatedTasks(drizzled, 2)).toEqual(all.slice(0, 2));
     expect(await listEscalatedTasks(drizzled, 1)).toEqual(all.slice(0, 1));
     expect(inbox.escalated).toEqual(all.slice(0, MAX_INBOX_ESCALATED));
+
+    // BD-035 (S-30.2): the escalated list is filtered in its statement too.
+    const seen = inboxResponseSchema.parse(await listInbox(drizzled, [project.id]));
+    expect(seen.escalated.every((row) => row.project_id === project.id)).toBe(true);
+    expect(seen.escalated.map((row) => row.ticket.key)).toEqual(['ESR-2', 'ESR-1', 'ESR-4']);
+    expect(
+      await listEscalatedTasks(drizzled, 10_000, ['00000000-0000-4000-8000-0000000dead0']),
+    ).toEqual([]);
   });
 
   /**
@@ -2059,7 +2068,7 @@ describe('the list projections', () => {
 
     // A run with no stage is refused by name rather than dropped from the list — a list that
     // silently omitted it would show fewer agents than are working (standing rule 10).
-    await expect(listRunningAgents(drizzled)).rejects.toThrow(/is not linked to a stage/);
+    await expect(listRunningAgents(drizzled, null)).rejects.toThrow(/is not linked to a stage/);
 
     const stage = await pool.query<{ id: string }>(
       `insert into task_stages (task_id, stage, attempt, state)
@@ -2071,7 +2080,7 @@ describe('the list projections', () => {
       stage.rows[0]?.id,
     ]);
 
-    const agents = await listRunningAgents(drizzled);
+    const agents = await listRunningAgents(drizzled, null);
     const ids = agents.items.map((item) => item.run.id);
     // Both directions (standing rule 42): the two non-terminal runs are present and the two
     // `completed` ones are absent, so neither "everything" nor "nothing" would pass.
@@ -2088,17 +2097,39 @@ describe('the list projections', () => {
     // Never started, so it has produced nothing — a fact, not a missing value.
     expect(item?.last_output_at).toBeNull();
 
+    // BD-035 (S-30.2): filtered in the statement by the caller's projects, both directions.
+    const seen = await listRunningAgents(drizzled, [projectId]);
+    expect(seen.items.map((entry) => entry.run.id)).toContain(startingRunId);
+    expect(seen.items.every((entry) => entry.project_id === projectId)).toBe(true);
+    const hidden = await listRunningAgents(drizzled, ['00000000-0000-4000-8000-0000000dead0']);
+    expect(hidden.items.map((entry) => entry.run.id)).not.toContain(startingRunId);
+    expect(await listRunningAgents(drizzled, [])).toEqual({ items: [] });
+
     await pool.query('delete from runs where id = $1', [startingRunId]);
   });
 
   it('lists the open questions and the pending approvals, oldest first', async () => {
-    const inbox = await listInbox(drizzled);
+    const inbox = await listInbox(drizzled, null);
     expect(inbox.questions.map((question) => question.text)).toEqual(['Which payment provider?']);
     expect(inbox.questions[0]?.stage).toBe('refinement');
     // Both directions: the answered question and the decided approval are *absent*, and the
     // pending ones are present — a filter that dropped everything would satisfy only one of them.
     expect(inbox.approvals.map((approval) => approval.kind)).toEqual(['plan']);
     expect(inbox.approvals[0]?.status).toBe('pending');
+
+    // BD-035 (S-30.2): a caller who sees this project reads the same; one who does not, nothing.
+    const seen = await listInbox(drizzled, [projectId]);
+    expect(seen.questions.map((question) => question.text)).toEqual(['Which payment provider?']);
+    expect(seen.approvals.map((approval) => approval.kind)).toEqual(['plan']);
+    const hidden = await listInbox(drizzled, ['00000000-0000-4000-8000-0000000dead0']);
+    expect(hidden.questions).toEqual([]);
+    expect(hidden.approvals).toEqual([]);
+    expect(await listInbox(drizzled, [])).toEqual({
+      questions: [],
+      approvals: [],
+      ci_held: [],
+      escalated: [],
+    });
   });
 
   it('pages a project’s tasks by a keyset, through two rows with the same created_at', async () => {
@@ -2176,7 +2207,7 @@ describe('the list projections', () => {
       [orgId, projectId],
     );
 
-    const summaries = await listProjectSummaries(drizzled, at);
+    const summaries = await listProjectSummaries(drizzled, at, null);
     const project = summaries.items.find((entry) => entry.id === projectId);
     // Three tasks, one of them `done` — `merged` and `retro` would still count, `done` does not.
     expect(project?.open_tasks).toBe(2);
@@ -2186,6 +2217,14 @@ describe('the list projections', () => {
     expect(project?.spent_usd_30d).toBe(1.75);
     expect(project?.key).toBe('api');
     expect(project?.readiness_level).toBe(0);
+
+    // BD-035 (S-30.2): only the caller's projects, in the statement.
+    const seen = await listProjectSummaries(drizzled, at, [projectId]);
+    expect(seen.items.map((entry) => entry.id)).toEqual([projectId]);
+    expect(
+      (await listProjectSummaries(drizzled, at, ['00000000-0000-4000-8000-0000000dead0'])).items,
+    ).toEqual([]);
+    expect((await listProjectSummaries(drizzled, at, [])).items).toEqual([]);
   });
 
   /**
@@ -2321,7 +2360,7 @@ describe('the list projections', () => {
     );
 
     const rows = await listIntegrationRows(drizzled);
-    const summaries = await integrationSummaries(drizzled, rows, null, new Date());
+    const summaries = await integrationSummaries(drizzled, rows, null, new Date(), null);
     const gitlab = summaries.find((summary) => summary.provider === 'gitlab');
     const other = summaries.find((summary) => summary.provider === 'unshipped-forge');
 
@@ -2717,7 +2756,7 @@ describe('the run commands a run screen reads (WP-85)', () => {
       };
     });
     await registerRunRoutes(app, {
-      queries: databaseRunQueries(drizzled, createProjectSettingsPort(pool)),
+      queries: databaseRunQueries(drizzled, createProjectSettingsPort(pool), everyProjectVisible),
     });
     await app.ready();
     try {

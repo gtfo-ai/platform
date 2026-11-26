@@ -50,6 +50,7 @@ import {
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { type CommandQueries, registerCommandRoutes } from './commands.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
@@ -166,6 +167,7 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
     queries: {
       taskProjectId: async (taskId) => (taskId === TASK ? PROJECT : null),
       runProjectId: async (runId) => (runId === RUN ? PROJECT : null),
+      visibleProjects: everyProjectVisible,
       projectRole: async () => null,
       taskPosition: async (taskId) =>
         taskId === TASK ? { state: 'active', currentStage: 'refinement' } : null,
@@ -1232,6 +1234,7 @@ describe('raising a task’s cap (WP-131)', () => {
     let maintains = OTHER;
     await world.app.close();
     world = await build({
+      visibleProjects: everyProjectVisible,
       projectRole: async (projectId) => (projectId === maintains ? 'maintainer' : null),
     });
     world.role = 'member';
@@ -1772,6 +1775,7 @@ describe('the routes’ own answers', () => {
       queries: {
         taskProjectId: async () => PROJECT,
         runProjectId: async () => PROJECT,
+        visibleProjects: everyProjectVisible,
         projectRole: async () => null,
         taskPosition: async () => ({ state: 'active', currentStage: 'refinement' }),
         runPosition: async () => ({ status: 'completed', taskId: TASK, taskState: 'active' }),

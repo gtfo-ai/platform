@@ -16,6 +16,7 @@ import { redaction } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import {
   DEFAULT_FAILED_JOBS_PAGE,
@@ -82,6 +83,7 @@ const build = async (composed = true): Promise<void> => {
           return { items: world.rows.slice(0, query.limit), total: world.total };
         }
       : null,
+    visibleProjects: everyProjectVisible,
     projectRole: async () => null,
     redactor: redaction.patternRedactor(),
   });

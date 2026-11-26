@@ -20,6 +20,7 @@ import { stageAgentDefaults } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { RunPrompt, RunSettings } from '../queries/pipeline-queries.js';
 import { type RunQueries, registerRunRoutes, retryDefaultsReader } from './runs.js';
@@ -124,6 +125,7 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
   };
   const queries: RunQueries = {
     runProjectId: async () => PROJECT,
+    visibleProjects: everyProjectVisible,
     projectRole: async () => world.role,
     run: async (runId) => {
       world.reads.push(`run ${runId}`);

@@ -15,6 +15,7 @@ import type { JsonObject, UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import type { ShadowCommands } from '../shadow.js';
@@ -130,6 +131,7 @@ const build = async (): Promise<void> => {
     shadow: world.commands,
     gate: async () => world.gate as NonNullable<World['gate']>,
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async (projectId, userId) => {
         roleCalls.push({ projectId, userId });
         return world.role;
@@ -410,6 +412,7 @@ describe('a process that composed no pipeline', () => {
       shadow: null,
       gate: null,
       queries: {
+        visibleProjects: everyProjectVisible,
         projectRole: async () => 'maintainer',
         projectExists: async () => true,
         ...memoryAttemptRecords(new Map()),

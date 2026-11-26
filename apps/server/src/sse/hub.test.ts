@@ -1271,3 +1271,200 @@ describe('SseHub', () => {
     expect(kinds).toEqual(['control', 'live']);
   });
 });
+
+describe('what a person does not see never reaches their stream (BD-035, S-30.3)', () => {
+  const A = '0199aa11-2b3c-7d4e-8f90-0000000000a1';
+  const B = '0199aa11-2b3c-7d4e-8f90-0000000000b1';
+  const narrowedTo = (...ids: string[]) => ({ all: false as const, ids: new Set(ids) });
+
+  /** An `org` domain-event frame; `project_id` only when the event carried one. */
+  const orgEvent = (seq: number): SseFrame =>
+    ({
+      frame: 'domain_event',
+      topic: ORG_TOPIC,
+      seq,
+      type: 'task.created',
+      data: {
+        id: `0199aa11-2b3c-7d4e-8f90-${String(seq).padStart(12, '0')}`,
+        type: 'task.created',
+        stream_type: 'task',
+        stream_id: TASK,
+        occurred_at: '2026-11-26T10:00:00.000Z',
+      },
+    }) as SseFrame;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('filters the org topic per connection, live: a narrowed person gets only their projects, and nothing unresolved', async () => {
+    const hub = hubWith();
+    const narrowed = recorder();
+    const everyone = recorder();
+    hub.open({
+      id: 'n',
+      userId: 'u1',
+      topics: [ORG_TOPIC],
+      transport: narrowed,
+      visible: narrowedTo(A),
+    });
+    hub.open({ id: 'e', userId: 'u2', topics: [ORG_TOPIC], transport: everyone });
+    hub.publish(orgEvent(1), { projectId: A });
+    hub.publish(orgEvent(2), { projectId: B });
+    hub.publish(orgEvent(3), { projectId: null });
+    await settle(narrowed, everyone);
+
+    expect(narrowed.trace()).toEqual(['ping@-', 'task.created@org:1']);
+    expect(everyone.trace()).toEqual([
+      'ping@-',
+      'task.created@org:1',
+      'task.created@org:2',
+      'task.created@org:3',
+    ]);
+  });
+
+  it('filters a replay exactly as it filters live frames', async () => {
+    const hub = hubWith({ bufferSize: 8 });
+    hub.publish(orgEvent(1), { projectId: A });
+    hub.publish(orgEvent(2), { projectId: B });
+    hub.publish(orgEvent(3), { projectId: null });
+    hub.publish(orgEvent(4), { projectId: A });
+    const narrowed = recorder();
+    const everyone = recorder();
+    const cursors = new Map([[ORG_TOPIC as string, 1]]);
+    hub.open({
+      id: 'n',
+      userId: 'u1',
+      topics: [ORG_TOPIC],
+      cursors,
+      transport: narrowed,
+      visible: narrowedTo(A),
+    });
+    hub.open({ id: 'e', userId: 'u2', topics: [ORG_TOPIC], cursors, transport: everyone });
+    await settle(narrowed, everyone);
+
+    expect(narrowed.trace()).toEqual(['task.created@org:4']);
+    // The reconnect interval still reaches the narrowed client, on its first frame actually sent.
+    expect(narrowed.sent[0]?.retry).toBe(1_000);
+    expect(everyone.trace()).toEqual([
+      'task.created@org:2',
+      'task.created@org:3',
+      'task.created@org:4',
+    ]);
+  });
+
+  it('stops a scoped topic whose project becomes hidden at a subscription change, and starts it again', async () => {
+    const hub = hubWith();
+    const client = recorder();
+    hub.open({
+      id: 'c',
+      userId: 'u1',
+      topics: [RUN_TOPIC],
+      transport: client,
+      visible: narrowedTo(A),
+      topicProjects: new Map([[RUN_TOPIC as string, A]]),
+    });
+    hub.publish(transcript(RUN_TOPIC, 1));
+    await settle(client);
+    hub.updateSubscriptions('c', 'u1', {}, { visible: narrowedTo(B), topicProjects: new Map() });
+    hub.publish(transcript(RUN_TOPIC, 2));
+    await settle(client);
+    hub.updateSubscriptions('c', 'u1', {}, { visible: narrowedTo(A, B), topicProjects: new Map() });
+    hub.publish(transcript(RUN_TOPIC, 3));
+    await settle(client);
+
+    expect(client.trace()).toEqual(['ping@-', `steer@${RUN_TOPIC}:1`, `steer@${RUN_TOPIC}:3`]);
+  });
+
+  it('re-reads the set at most a minute apart: narrowing stops a project’s frames, widening starts them', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const hub = hubWith();
+    let current = narrowedTo(A);
+    let reads = 0;
+    const client = recorder();
+    hub.open({
+      id: 'c',
+      userId: 'u1',
+      topics: [ORG_TOPIC],
+      transport: client,
+      visible: current,
+      readVisible: async () => {
+        reads += 1;
+        return current;
+      },
+    });
+    hub.publish(orgEvent(1), { projectId: B });
+    await settle(client);
+    expect(client.trace()).toEqual(['ping@-']);
+
+    // Widened: B's frames start within the bound.
+    current = narrowedTo(A, B);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(reads).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle(client);
+    expect(reads).toBe(1);
+    hub.publish(orgEvent(2), { projectId: B });
+    await settle(client);
+    expect(client.trace()).toEqual(['ping@-', 'task.created@org:2']);
+
+    // Narrowed: A's frames stop within the bound.
+    current = narrowedTo(B);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle(client);
+    hub.publish(orgEvent(3), { projectId: A });
+    hub.publish(orgEvent(4), { projectId: B });
+    await settle(client);
+    expect(client.trace()).toEqual(['ping@-', 'task.created@org:2', 'task.created@org:4']);
+  });
+
+  it('sends nothing after a re-read that failed, until one succeeds — fail closed', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const hub = hubWith();
+    let fail = true;
+    const client = recorder();
+    hub.open({
+      id: 'c',
+      userId: 'u1',
+      topics: [ORG_TOPIC],
+      transport: client,
+      // Every project at the open: the failed read is what takes it away.
+      readVisible: async () => {
+        if (fail) throw new Error('the database is away');
+        return narrowedTo(A);
+      },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle(client);
+    hub.publish(orgEvent(1), { projectId: A });
+    await settle(client);
+    expect(client.trace()).toEqual(['ping@-']);
+    fail = false;
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle(client);
+    hub.publish(orgEvent(2), { projectId: A });
+    await settle(client);
+    expect(client.trace()).toEqual(['ping@-', 'task.created@org:2']);
+  });
+
+  it('stops re-reading once the stream closes', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const hub = hubWith();
+    let reads = 0;
+    const handle = hub.open({
+      id: 'c',
+      userId: 'u1',
+      topics: [ORG_TOPIC],
+      transport: recorder(),
+      readVisible: async () => {
+        reads += 1;
+        return narrowedTo(A);
+      },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads).toBe(1);
+    handle.close();
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(reads).toBe(1);
+  });
+});

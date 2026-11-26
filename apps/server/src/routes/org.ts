@@ -52,6 +52,7 @@ import type { RunImageDigests } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { requirePermission } from '../auth/rbac.js';
+import { type VisibleProjectsReader, visibleIdsFor } from '../auth/visibility.js';
 import { BadRequestError, HttpError } from '../errors.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole, listAuditEntries, listUsers } from '../queries/identity-queries.js';
@@ -134,6 +135,8 @@ export interface IdentityQueries {
 
 export interface OrgRoutesOptions {
   readonly database: Database;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly identities: IdentityQueries;
   /**
    * The organisation's model list now (WP-159): bound by the composition root to
@@ -203,6 +206,7 @@ export const registerOrgRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       findProjectRole(options.database, projectId, userId),
+    visibleProjects: options.visibleProjects,
   };
 
   /** Who is writing. Unreachable through `requirePermission`, which refuses an anonymous caller. */
@@ -243,6 +247,8 @@ export const registerOrgRoutes = async (
     async (request) => {
       const query = request.query;
       const page = await listAuditEntries(options.database, {
+        // BD-035: a hidden project's rows are left out; the organisation's are kept.
+        visible: await visibleIdsFor(request, options.visibleProjects),
         limit: query.limit ?? DEFAULT_PAGE_SIZE,
         ...(query.cursor === undefined ? {} : { cursor: parseAuditCursor(query.cursor) }),
         ...(query.entity_type === undefined ? {} : { entityType: query.entity_type }),
@@ -266,8 +272,10 @@ export const registerOrgRoutes = async (
         response: { 200: agentsResponseSchema },
       },
     },
-    async () =>
-      listRunningAgents(options.database, { coreDigests: options.coreDigests?.() ?? null }),
+    async (request) =>
+      listRunningAgents(options.database, await visibleIdsFor(request, options.visibleProjects), {
+        coreDigests: options.coreDigests?.() ?? null,
+      }),
   );
 
   typed.get(
@@ -299,7 +307,8 @@ export const registerOrgRoutes = async (
         response: { 200: inboxResponseSchema },
       },
     },
-    async () => listInbox(options.database),
+    async (request) =>
+      listInbox(options.database, await visibleIdsFor(request, options.visibleProjects)),
   );
 
   /**

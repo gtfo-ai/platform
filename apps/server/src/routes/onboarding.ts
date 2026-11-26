@@ -102,6 +102,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { organisationSettingsForRequest } from '../config-layers.js';
 import { HttpError, NotFoundError, projectStreamContention } from '../errors.js';
 import type { OnboardingCommands } from '../onboarding.js';
@@ -142,6 +143,8 @@ import {
 
 export interface OnboardingRoutesOptions {
   readonly database: Database;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** `APP_SECRET_KEY`; the envelope an integration's credential is sealed under. */
   readonly secretKey: string;
   /**
@@ -288,6 +291,7 @@ export const registerOnboardingRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       findProjectRole(options.database, projectId, userId),
+    visibleProjects: options.visibleProjects,
   };
   /**
    * The project id, or `undefined` when the path segment is not one.

@@ -30,11 +30,14 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { NotFoundError } from '../errors.js';
 import type { OwnerCandidate } from '../queries/owner-candidate-queries.js';
 
 export interface OwnerCandidateQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** `findOwnerCandidates`: the project's candidates in order, or `null` for no such project. */
   readonly candidates: (projectId: string) => Promise<readonly OwnerCandidate[] | null>;
   /**
@@ -55,7 +58,10 @@ export const registerOwnerCandidateRoutes = async (
   options: { readonly queries: OwnerCandidateQueries },
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
 
   typed.get(
     '/api/projects/:project_id/owner-candidates',

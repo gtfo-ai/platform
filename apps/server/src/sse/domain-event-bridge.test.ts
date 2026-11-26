@@ -10,6 +10,7 @@ import type { Broadcast, BroadcastListener, BroadcastMessage, Logger } from '@pl
 import { LIVE_EVENTS_APPENDED_TOPIC } from '@platform/application';
 import { type SseFrame, type SseTopic, sseFrameSchema } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { VisibleProjects } from '../auth/visibility.js';
 import {
   type DomainEventBridge,
   type LiveEventReadRequest,
@@ -125,7 +126,11 @@ interface Harness {
   hint(from: number, to: number): Promise<void>;
   deliver(message: BroadcastMessage): void;
   settle(): Promise<void>;
-  watch(topics: readonly string[], id?: string): { sent: Sent[]; close: () => void };
+  watch(
+    topics: readonly string[],
+    id?: string,
+    visible?: VisibleProjects,
+  ): { sent: Sent[]; close: () => void };
 }
 
 const harnesses: Harness[] = [];
@@ -200,7 +205,7 @@ const start = async (
       deliver({ topic: LIVE_EVENTS_APPENDED_TOPIC, payload: { from, to } });
       await settle();
     },
-    watch: (topics, id) => {
+    watch: (topics, id, visible) => {
       const sent: Sent[] = [];
       const transport: SseTransport = {
         send: async (message) => {
@@ -216,6 +221,7 @@ const start = async (
         userId: USER,
         topics: topics as SseTopic[],
         transport,
+        ...(visible === undefined ? {} : { visible }),
       });
       return { sent, close: handle.close };
     },
@@ -542,5 +548,38 @@ describe('scopeOf', () => {
     const atBound = Array.from({ length: MAX_SCOPED_IDS }, (_, n) => at(n));
     expect(scopeOf(atBound)?.kind).toBe('ids');
     expect(scopeOf([...atBound, at(MAX_SCOPED_IDS)])).toEqual({ kind: 'all' });
+  });
+});
+
+describe('the org topic, per person (BD-035, S-30.3)', () => {
+  /** A stage entry whose payload names no project: the read resolved it, or it did not. */
+  const unnamed = (position: number, task: string, projectId: string | null): LiveEventRow => {
+    const row = stageEntered(position, { task });
+    const { project_id: _dropped, ...payload } = row.payload as Record<string, unknown>;
+    return { ...row, payload, projectId };
+  };
+
+  it('publishes each frame with its project, so a narrowed stream gets its own and nothing unresolved', async () => {
+    const harness = await start({
+      rows: [
+        stageEntered(1, { project: PROJECT }),
+        stageEntered(2, { project: OTHER_PROJECT, task: OTHER_TASK }),
+        // No project in the payload: the read resolved it through the task.
+        unnamed(3, TASK, PROJECT),
+        // Nothing resolved one: dropped for a narrowed person, delivered to everyone else.
+        unnamed(4, OTHER_TASK, null),
+      ],
+    });
+    const narrowed = harness.watch(['org'], 'narrowed', { all: false, ids: new Set([PROJECT]) });
+    const everyone = harness.watch(['org'], 'everyone');
+
+    await harness.hint(1, 4);
+
+    expect(frames(narrowed.sent).map((frame) => frame.seq)).toEqual([1, 3]);
+    expect(frames(everyone.sent).map((frame) => frame.seq)).toEqual([1, 2, 3, 4]);
+    // The resolved project rides beside the frame, never on the wire.
+    expect(frames(everyone.sent).find((frame) => frame.seq === 3)?.data).not.toHaveProperty(
+      'project_id',
+    );
   });
 });

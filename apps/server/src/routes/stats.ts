@@ -30,10 +30,11 @@
 import { rollupDay } from '@platform/application';
 import type { IsoDateTime, UserRole } from '@platform/contracts';
 import { apiErrorSchema, orgStatsQuerySchema, orgStatsResponseSchema } from '@platform/contracts';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { requirePermission } from '../auth/rbac.js';
-import { HttpError } from '../errors.js';
+import { type VisibleProjectsReader, visibleIdsFor } from '../auth/visibility.js';
+import { HttpError, NotFoundError } from '../errors.js';
 import type { ResolvedRange, StatsSources } from '../queries/stats-metrics.js';
 import {
   DEFAULT_BUCKET,
@@ -56,6 +57,8 @@ import { StatsRangeTooLargeError } from '../queries/stats-queries.js';
  */
 export interface StatsQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly timezone: () => Promise<{ readonly timezone: string; readonly substituted: boolean }>;
   readonly sources: (
     range: ResolvedRange,
@@ -64,6 +67,8 @@ export interface StatsQueries {
       readonly projectId: string | null;
       /** The instant the answer is computed at — the same clock `generated_at` publishes. */
       readonly asOf: IsoDateTime;
+      /** BD-035: the caller's visible projects, every statement filtered to them; `null` all. */
+      readonly visible: readonly string[] | null;
     },
   ) => Promise<StatsSources>;
 }
@@ -86,7 +91,10 @@ export const registerStatsRoutes = async (
   options: StatsRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
   const now = options.now ?? (() => new Date().toISOString() as IsoDateTime);
 
   /**
@@ -96,7 +104,13 @@ export const registerStatsRoutes = async (
    * falls in, the day each row is cut on in SQL, and the zone the response names (Q12, standing
    * rule 9).
    */
-  const load = async (query: StatsQuery) => {
+  const load = async (query: StatsQuery, request: FastifyRequest) => {
+    // BD-035: the caller's projects bound the whole answer, totals included, and a project they do
+    // not see is answered as one that does not exist.
+    const visible = await visibleIdsFor(request, options.queries.visibleProjects);
+    if (query.project_id !== undefined && visible !== null && !visible.includes(query.project_id)) {
+      throw new NotFoundError(`project ${query.project_id}`);
+    }
     const zone = await options.queries.timezone();
     const range = resolveRange(
       query.range ?? DEFAULT_RANGE,
@@ -111,6 +125,7 @@ export const registerStatsRoutes = async (
         timezone: zone.timezone,
         projectId,
         asOf,
+        visible,
       });
       return foldStats({
         range,
@@ -135,13 +150,13 @@ export const registerStatsRoutes = async (
       schema: {
         summary: 'Delivery statistics for the organisation',
         description:
-          'product/16 and product/19 §10, over a range of civil days in the organisation timezone. Every metric carries its own definition (product/10:63) and a metric this build cannot compute carries `absent` with the reason and the owner rather than a zero. Minutes and dollars are two fields and are never added: no hourly rate exists (Q73).',
+          'product/16 and product/19 §10, over a range of civil days in the organisation timezone, and over the projects the caller sees (BD-035) — totals included; `?project_id=` of a project they do not see is `404`, as a missing one is. Every metric carries its own definition (product/10:63) and a metric this build cannot compute carries `absent` with the reason and the owner rather than a zero. Minutes and dollars are two fields and are never added: no hourly rate exists (Q73).',
         tags: ['org'],
         querystring: orgStatsQuerySchema,
         response: { 200: orgStatsResponseSchema, 409: apiErrorSchema },
       },
     },
-    async (request) => load(request.query),
+    async (request) => load(request.query, request),
   );
 
   typed.get(
@@ -161,7 +176,7 @@ export const registerStatsRoutes = async (
       },
     },
     async (request, reply) => {
-      const document = await load(request.query);
+      const document = await load(request.query, request);
       return reply
         .header('content-type', 'text/csv; charset=utf-8')
         .header(

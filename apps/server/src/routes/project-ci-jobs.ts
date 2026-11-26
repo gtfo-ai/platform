@@ -25,11 +25,14 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { effectiveRole, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ManualJobsSeenAnswer } from '../manual-jobs-seen.js';
 
 export interface ProjectCiJobsRoutesOptions {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly projectExists: (projectId: string) => Promise<boolean>;
   /** The read, or `null` on a process that composed no integration stack. */
   readonly manualJobsSeen: ((projectId: Id) => Promise<ManualJobsSeenAnswer>) | null;
@@ -44,7 +47,10 @@ export const registerProjectCiJobsRoutes = async (
   options: ProjectCiJobsRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.projectRole };
+  const guard = {
+    projectRole: options.projectRole,
+    visibleProjects: options.visibleProjects,
+  };
   const projectOf = (request: FastifyRequest): string | undefined => {
     const value = (request.params as { project_id?: unknown }).project_id;
     return typeof value === 'string' && UUID.test(value) ? value : undefined;

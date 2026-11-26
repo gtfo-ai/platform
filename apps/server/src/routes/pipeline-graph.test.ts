@@ -14,6 +14,7 @@ import { can } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { ProjectGraphsResult, TaskGraphResult } from '../queries/pipeline-graph-queries.js';
 import { registerPipelineGraphRoutes } from './pipeline-graph.js';
@@ -95,6 +96,7 @@ beforeEach(async () => {
   });
   await registerPipelineGraphRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async (projectId) => {
         world.guardedFor.push(projectId);
         return null;

@@ -60,6 +60,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ExecutionWrite } from '../queries/execution-queries.js';
 import type { UnassignedTakerExclusion } from '../queries/offer-waiting.js';
@@ -76,6 +77,8 @@ export const SET_EXECUTION_ACTION = 'project.execution.write';
 
 export interface ProjectExecutionQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly projectExists: (projectId: string) => Promise<boolean>;
   /** The stored settings, or `null` (the defaults). */
   readonly execution: (projectId: string) => Promise<ExecutionSettings | null>;
@@ -261,7 +264,10 @@ export const registerProjectExecutionRoutes = async (
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { queries } = options;
-  const guard = { projectRole: queries.projectRole };
+  const guard = {
+    projectRole: queries.projectRole,
+    visibleProjects: queries.visibleProjects,
+  };
   /** The guards run before validation (`routes/settings.ts`): a non-uuid is organisation-scoped. */
   const projectOf = (request: FastifyRequest): string | undefined => {
     const value = (request.params as { project_id?: unknown }).project_id;

@@ -73,6 +73,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError, projectStreamContention } from '../errors.js';
 import type { KnowledgeCommands } from '../knowledge.js';
 import type { Database } from '../queries/identity-queries.js';
@@ -81,6 +82,8 @@ import { findKbDoc, findKbHealth, findKbTree } from '../queries/knowledge-querie
 
 export interface KbRoutesOptions {
   readonly database: Database;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /**
    * The Librarian's commands, or `null` on a process that composed no pipeline.
    *
@@ -177,6 +180,7 @@ export const registerKbRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       findProjectRole(options.database, projectId, userId),
+    visibleProjects: options.visibleProjects,
   };
   /**
    * The project id, or `undefined` when the path segment is not one.

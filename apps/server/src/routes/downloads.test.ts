@@ -18,6 +18,7 @@ import type { TranscriptEvent, UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import {
   type DownloadQueries,
@@ -80,6 +81,7 @@ const build = async (exportDir: string | null): Promise<{ app: FastifyInstance; 
       runId === RUN || runId === OTHER_RUN ? PROJECT : runId === FOREIGN_RUN ? OTHER_PROJECT : null,
     // Keyed by project (review round 1): the caller holds a role in `PROJECT` and none in
     // `OTHER_PROJECT`, so a guard scoped to anything but the run's own project is caught.
+    visibleProjects: everyProjectVisible,
     projectRole: async (projectId) => (projectId === PROJECT ? world.role : null),
     transcriptPage: async (_runId, after, limit) => {
       world.pageCalls.push({ after, limit });

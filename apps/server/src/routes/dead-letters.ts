@@ -59,6 +59,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type * as z from 'zod';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { BadRequestError, HttpError, NotFoundError } from '../errors.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
 import {
@@ -81,6 +82,8 @@ export interface DeadLetterRoutesOptions {
   };
   /** Unused by an org-scoped guard, and required by its type: no project is named here. */
   readonly projectRole: PermissionGuardDependencies['projectRole'];
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** TD-012's pattern rules — an HTTP request carries no run-scoped credential (Q55). */
   readonly redactor: SecretRedactor;
 }
@@ -137,7 +140,10 @@ export const registerDeadLetterRoutes = async (
   options: DeadLetterRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.projectRole };
+  const guard = {
+    projectRole: options.projectRole,
+    visibleProjects: options.visibleProjects,
+  };
 
   const commands = (): DeadLetterCommands => {
     if (options.commands === null) {

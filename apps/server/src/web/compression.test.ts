@@ -39,6 +39,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import type { Auth } from '../auth/better-auth.js';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { loadServerConfig } from '../config.js';
 import { createLogger } from '../logging.js';
 import { createMetrics } from '../metrics.js';
@@ -444,6 +445,7 @@ describe('the event stream is excluded, and arrives frame by frame', () => {
       }),
       metrics: createMetrics({ defaultMetrics: false }),
       access: {
+        visibleProjects: everyProjectVisible,
         projectRole: async () => null,
         projectExists: async () => true,
         taskProjectId: async () => null,

@@ -123,3 +123,20 @@ through `can()` and `effectiveRole` (`apps/server/src/auth/rbac.ts:51`). Visibil
 8. **Holding it.** A route census in `apps/server/src/routes/visibility-census.test.ts` reads every route the
    server registers through Fastify's `onRoute`. It holds each route to exactly one class from items 2–6, and checks
    both directions, as `client-census.test.ts` does. A new route is unclassified until somebody decides its class.
+
+**As built (S-30.1–3, 2026-11-26).** Where the build reads the items above more narrowly, or the code
+answered a question they leave open:
+
+- Item 1: an owned task only **adds** to a set something else narrowed. A person whose only source is an
+  owned task has nothing that narrows them (rule 2 of BD-035), so they see every project.
+- Item 2: the guard reads no existence. For a person who sees every project, a missing project's 404 is
+  still the handler's or the scope hook's, after the role; for a narrowed person a missing project is not
+  in their set either, so it is the guard's 404, before the role. The census adds a `stream` class for
+  item 7's two routes.
+- Item 3: `inbox` records no binding, so a refused delivery is attributed to every binding of its account:
+  an account bound only to hidden projects answers nothing, one bound to a visible project (or to none)
+  answers every row (BACKLOG 1668). `config_audit` has no writer yet (BACKLOG 1667).
+- Item 6: `GET /api/workers/:id/claim-scope` answers 404 to everybody but the worker's own user, an
+  administrator included (S-30.1 acceptance 3), rather than the `PUT`'s 403 for an administrator. Its
+  execution setting is `mode` and the `notice` the execution read says.
+- Item 7: the refresh that fails leaves the connection seeing nothing until the next one succeeds.

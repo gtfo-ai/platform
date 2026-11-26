@@ -92,6 +92,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import type { Actor } from '../auth/rbac.js';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { WorkerIdleReader } from '../queries/worker-idle.js';
 import {
@@ -105,6 +106,8 @@ export interface WorkerRoutesOptions {
   readonly store: WorkerStore;
   /** Unused by an org-scoped guard, and required by its type. */
   readonly projectRole: PermissionGuardDependencies['projectRole'];
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly now?: () => Date;
   /**
    * The core's current run and egress digests (`release()`'s `platform_runtime`/`platform_egress`),
@@ -286,7 +289,10 @@ export const registerWorkerRoutes = async (
   options: WorkerRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.projectRole };
+  const guard = {
+    projectRole: options.projectRole,
+    visibleProjects: options.visibleProjects,
+  };
   const now = options.now ?? (() => new Date());
 
   const actorOf = (request: FastifyRequest): Actor => {

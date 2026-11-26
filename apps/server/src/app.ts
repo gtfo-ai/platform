@@ -77,6 +77,8 @@ import {
 import type { AskComposition } from './asks.js';
 import type { Auth } from './auth/better-auth.js';
 import { authPlugin } from './auth/plugin.js';
+import { VISIBILITY_GUARD } from './auth/rbac.js';
+import { createVisibleProjects, type VisibleProjectsReader } from './auth/visibility.js';
 import type { HistoryBootstrapCommands, HistoryBootstrapGateResult } from './bootstrap.js';
 import type { BreakdownComposition } from './breakdown.js';
 import type { TaskCommands } from './commands.js';
@@ -160,6 +162,7 @@ import {
   findProjectTicketLifecycle,
   listProjectAudit,
 } from './queries/project-queries.js';
+import { readVisibilitySources } from './queries/project-visibility-queries.js';
 import {
   findShadowBatch,
   findShadowBatchProjectId,
@@ -242,6 +245,14 @@ const UNAVAILABLE_ESTIMATE = {
   stopsAtCap: false,
   days: 0,
 } as const;
+
+/** One registered route as the visibility census reads it (BD-035, TD-022's amendment item 8). */
+export interface RegisteredRoute {
+  readonly methods: readonly string[];
+  readonly url: string;
+  /** A hook of it is a project-scoped permission guard, which asks visibility first. */
+  readonly visibilityGuarded: boolean;
+}
 
 export interface BuildAppOptions {
   readonly config: ServerConfig;
@@ -483,6 +494,12 @@ export interface BuildAppOptions {
    * (standing rule 35: making a collaborator required proves it is supplied, not that it is used).
    */
   readonly webRoot?: string | null;
+  /**
+   * Which projects a person sees (BD-035). Absent: `visibleProjects` over this process's database
+   * (`queries/project-visibility-queries.ts`). A test that builds an app with no database passes
+   * its own.
+   */
+  readonly visibleProjects?: VisibleProjectsReader;
 }
 
 /** Event-loop delay above which the process reports itself degraded rather than healthy. */
@@ -551,10 +568,27 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
    * collected here rather than read back.
    */
   const routeUrls: string[] = [];
+  /**
+   * The same table with each route's methods and whether a hook of it asks visibility (BD-035):
+   * what `routes/visibility-census.test.ts` classifies, read off the router rather than a list.
+   */
+  const routeTable: RegisteredRoute[] = [];
   app.addHook('onRoute', (route) => {
     routeUrls.push(route.url);
+    routeTable.push({
+      methods: [route.method].flat().map(String),
+      url: route.url,
+      visibilityGuarded: [route.onRequest, route.preValidation, route.preHandler]
+        .flat()
+        .some(
+          (hook) =>
+            typeof hook === 'function' &&
+            (hook as unknown as Record<symbol, unknown>)[VISIBILITY_GUARD] === true,
+        ),
+    });
   });
   app.decorate('registeredRouteUrls', routeUrls as readonly string[]);
+  app.decorate('registeredRoutes', routeTable as readonly RegisteredRoute[]);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -684,6 +718,11 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   if (capabilities.api) {
+    // BD-035 (TD-022's visibility amendment item 1): which projects each person sees — one reader,
+    // memoised per request by the guards, handed to every project-scoped guard and list below.
+    const visibleProjects =
+      options.visibleProjects ??
+      createVisibleProjects(async (userId) => readVisibilitySources(options.database, userId));
     await app.register(fastifySse, { heartbeatInterval: 0 });
     await app.register(authPlugin, {
       auth: options.auth,
@@ -728,6 +767,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
             recorder: options.wipRaised,
           };
     await registerOrgRoutes(app, {
+      visibleProjects,
       coreDigests: coreRunDigests,
       database: options.database,
       // The identity pair's four functions, bound to this process's database here so the route
@@ -753,6 +793,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       }),
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
+      visibleProjects,
       baseUrl: config.baseUrl,
       newId: () => crypto.randomUUID(),
     });
@@ -762,6 +803,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         organisationLimits: async () =>
           organisationOwnerLimitsOf(
             organisationSettingsForRequest(
@@ -781,6 +823,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         listMine: async (userId) => listMyIdentities(options.database, userId),
         unlinkMine: async (input) => unlinkMyIdentity(options.database, input),
         threadOf: async (projectId, target) => findLinkThread(options.database, projectId, target),
@@ -799,6 +842,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
+      visibleProjects,
       // TD-012 step 2, the platform's patterns: a handler's error may quote a credential.
       redactor: redactionAdapters.patternRedactor(),
     });
@@ -832,6 +876,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       store: workerStore,
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
+      visibleProjects,
       coreDigests: coreRunDigests,
       idle: workerIdle,
       claimScope:
@@ -911,9 +956,11 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       read: options.failedJobs ?? null,
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
+      visibleProjects,
       redactor: redactionAdapters.patternRedactor(),
     });
     await registerIntegrationRoutes(app, {
+      visibleProjects,
       database: options.database,
       baseUrl: config.baseUrl,
       organisationCredentials: options.organisationCredentials,
@@ -922,6 +969,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       await registerWebhookRoutes(app, { ingress: options.webhooks });
     }
     await registerProjectRoutes(app, {
+      visibleProjects,
       database: options.database,
       coreDigests: coreRunDigests,
       wipLimits,
@@ -935,6 +983,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         readiness: async (projectId) => findProjectReadiness(options.database, projectId),
         ticketLifecycle: async (projectId) =>
           findProjectTicketLifecycle(options.database, projectId),
@@ -947,6 +996,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         candidates: async (projectId) => findOwnerCandidates(options.database, projectId),
         // S-26.3: each candidate's `writes_back`, over the write-back duty's own predicate.
         writeBack: async (input, userIds) =>
@@ -959,6 +1009,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         exportableProject: async (projectId) => findExportableProject(options.database, projectId),
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
@@ -976,6 +1027,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
         execution: async (projectId) => findProjectExecution(options.database, projectId),
@@ -1003,6 +1055,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectRepository: async (projectId) => findProjectRepository(options.database, projectId),
         project: async (projectId) => findProjectById(options.database, projectId),
         writeDefaultBranch: async (projectId, branch) =>
@@ -1046,6 +1099,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
         // BACKLOG 1610: each Jira and GitLab binding says whether its webhook can be verified and
@@ -1094,11 +1148,13 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     await registerProjectCiJobsRoutes(app, {
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
+      visibleProjects,
       projectExists: async (projectId) =>
         (await findProjectById(options.database, projectId)) !== null,
       manualJobsSeen: manualJobsSeen === null ? null : manualJobsSeen.read,
     });
     await registerOnboardingRoutes(app, {
+      visibleProjects,
       database: options.database,
       wipRaise,
       secretKey: config.secretKey,
@@ -1115,6 +1171,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
@@ -1139,6 +1196,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
@@ -1179,6 +1237,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
@@ -1194,6 +1253,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectAutonomy: async (projectId) => findProjectAutonomy(options.database, projectId),
         writeAutonomy: async (projectId, input) =>
           writeProjectAutonomy(options.database, projectId, input),
@@ -1224,12 +1284,14 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         timezone: async () => findOrganisationTimezone(options.database),
         sources: async (range, statsOptions) =>
           readStatsSources(options.database, range, statsOptions),
       },
     });
     await registerKbRoutes(app, {
+      visibleProjects,
       database: options.database,
       knowledge: options.knowledge,
     });
@@ -1239,6 +1301,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       queries: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
@@ -1253,6 +1316,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         artifactBody: async (artifactId) => findArtifactBody(options.database, artifactId),
         artifactProjectId: async (artifactId) =>
           findArtifactProjectId(options.database, artifactId),
@@ -1272,6 +1336,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         ...databasePipelineGraphReaders(options.database, options.projectSettings),
       },
     });
@@ -1280,6 +1345,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
@@ -1292,6 +1358,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
@@ -1307,6 +1374,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         runProjectId: async (runId) => findRunProjectId(options.database, runId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         taskPosition: async (taskId) => findTaskPosition(options.database, taskId),
         runPosition: async (runId) => findRunPosition(options.database, runId),
         taskTicketKey: async (taskId) => findTaskTicketKey(options.database, taskId),
@@ -1317,7 +1385,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       commands: options.commands,
     });
     await registerRunRoutes(app, {
-      queries: databaseRunQueries(options.database, options.projectSettings),
+      queries: databaseRunQueries(options.database, options.projectSettings, visibleProjects),
     });
     // WP-44: the transcript file and the take-over tarball, the two things product/19 §19 hands a
     // person besides the branch. Reads of what exists — `run_messages` and the shared export
@@ -1327,6 +1395,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         runProjectId: async (runId) => findRunProjectId(options.database, runId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         transcriptPage: async (runId, after, limit) =>
           listRunMessages(options.database, runId, {
             limit,
@@ -1342,6 +1411,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       access: {
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
+        visibleProjects,
         projectExists: async (projectId) => projectExists(options.database, projectId),
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         runProjectId: async (runId) => findRunProjectId(options.database, runId),
@@ -1390,5 +1460,7 @@ declare module 'fastify' {
   interface FastifyInstance {
     /** Every route URL this instance registered, in registration order (WP-15j). */
     registeredRouteUrls: readonly string[];
+    /** Every route with its methods and whether it asks visibility (BD-035), in the same order. */
+    registeredRoutes: readonly RegisteredRoute[];
   }
 }

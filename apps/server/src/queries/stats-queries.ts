@@ -107,6 +107,11 @@ interface RangeBounds {
   readonly timezone: string;
   readonly projectId: string | null;
   /**
+   * The projects every statement is filtered to (BD-035): `[projectId]` when one is asked for,
+   * otherwise the caller's visible projects — `null` every project, `[]` none.
+   */
+  readonly projects: readonly string[] | null;
+  /**
    * The instant the answer is computed at — the route's clock, injected so a test can pin it. Only
    * the lint fold reads it: a lint whose 48 h have not yet run out is in neither side (see there).
    */
@@ -118,12 +123,14 @@ const boundsOf = (
   timezone: string,
   projectId: string | null,
   asOf: string,
+  visible: readonly string[] | null = null,
 ): RangeBounds => {
   const [year, month, day] = range.to.split('-').map(Number);
   const until = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 1, (day ?? 1) + 1))
     .toISOString()
     .slice(0, 10);
-  return { from: range.from, until, timezone, projectId, asOf };
+  const projects = projectId !== null ? [projectId] : visible === null ? null : [...visible];
+  return { from: range.from, until, timezone, projectId, projects, asOf };
 };
 
 /**
@@ -157,7 +164,7 @@ const eventInstantWindow = (column: string, bounds: RangeBounds) => sql`
 const dayFilter = (column: string, bounds: RangeBounds, projectColumn = 'project_id') => sql`
   (${sql.raw(column)} at time zone ${bounds.timezone})::date >= ${bounds.from}::date
   and (${sql.raw(column)} at time zone ${bounds.timezone})::date < ${bounds.until}::date
-  ${bounds.projectId === null ? sql`` : sql`and ${sql.raw(projectColumn)} = ${bounds.projectId}::uuid`}
+  ${bounds.projects === null ? sql`` : sql`and ${sql.raw(projectColumn)} = any(${sql.param([...bounds.projects])}::uuid[])`}
 `;
 
 const civilDay = (column: string, bounds: RangeBounds) =>
@@ -281,7 +288,7 @@ const counters = async (
     select to_char(day, 'YYYY-MM-DD') as day, metric, sum(count) as count, sum(total) as total
       from stats_event_daily
      where day >= ${bounds.from}::date and day < ${bounds.until}::date
-       ${bounds.projectId === null ? sql`` : sql`and project_id = ${bounds.projectId}::uuid`}
+       ${bounds.projects === null ? sql`` : sql`and project_id = any(${sql.param([...bounds.projects])}::uuid[])`}
      group by day, metric
   `);
   return rows.map((row) => ({
@@ -311,7 +318,7 @@ const costByDay = async (
            sum(cache_read) as cache_read
       from cost_rollup_daily
      where day >= ${bounds.from}::date and day < ${bounds.until}::date
-       ${bounds.projectId === null ? sql`` : sql`and project_id = ${bounds.projectId}::uuid`}
+       ${bounds.projects === null ? sql`` : sql`and project_id = any(${sql.param([...bounds.projects])}::uuid[])`}
      group by day
   `);
   return rows.map((row) => ({
@@ -468,7 +475,7 @@ const overlaps = async (
          -- warning of the pair — the full lookback, which no lower bound may cut. Nothing after
          -- the range can make a key's first warning earlier, so the upper bound is exact.
          and e.occurred_at < ((${bounds.until}::date + 1)::timestamp at time zone 'UTC')
-         ${bounds.projectId === null ? sql`` : sql`and e.payload ->> 'project_id' = ${bounds.projectId}`}
+         ${bounds.projects === null ? sql`` : sql`and e.payload ->> 'project_id' = any(${sql.param([...bounds.projects])}::text[])`}
     ),
     comparisons as (
       select lo, hi, max(head_lo) as head_lo, max(head_hi) as head_hi, min(occurred_at) as at
@@ -601,8 +608,16 @@ const lintEditsSql = (bounds: RangeBounds) => {
  */
 export const lintEditsQuery = (
   range: ResolvedRange,
-  options: { readonly timezone: string; readonly projectId: string | null; readonly asOf: string },
-) => lintEditsSql(boundsOf(range, options.timezone, options.projectId, options.asOf));
+  options: {
+    readonly timezone: string;
+    readonly projectId: string | null;
+    readonly asOf: string;
+    readonly visible?: readonly string[] | null;
+  },
+) =>
+  lintEditsSql(
+    boundsOf(range, options.timezone, options.projectId, options.asOf, options.visible ?? null),
+  );
 
 const lintEdits = async (
   database: Database,
@@ -836,9 +851,21 @@ export const readStatsSources = async (
     readonly projectId: string | null;
     /** The instant the answer is computed at (the lint fold's closed-window rule). */
     readonly asOf: string;
+    /**
+     * BD-035: the caller's visible projects — `null` every project. Every statement is filtered to
+     * them, totals included; `projectId`, when asked, is one of them (the route refuses a hidden
+     * one with 404 before it reads).
+     */
+    readonly visible: readonly string[] | null;
   },
 ): Promise<StatsSources> => {
-  const bounds = boundsOf(range, options.timezone, options.projectId, options.asOf);
+  const bounds = boundsOf(
+    range,
+    options.timezone,
+    options.projectId,
+    options.asOf,
+    options.visible,
+  );
   const [
     started,
     delivered,

@@ -10,6 +10,7 @@ import type { JsonObject, UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { OnboardingCommands } from '../onboarding.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
@@ -75,6 +76,7 @@ const build = async (): Promise<void> => {
   });
   await registerRediscoveryRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.role,
       projectExists: async () => world.projectExists,
       ...memoryAttemptRecords(attempts),

@@ -187,6 +187,7 @@ import type { Logger } from '@platform/application';
 import { silentLogger } from '@platform/application';
 import type { SseFrame, SseTopic } from '@platform/contracts';
 import { sseTopicSchema } from '@platform/contracts';
+import { EVERY_PROJECT, isProjectVisible, type VisibleProjects } from '../auth/visibility.js';
 
 /** What the hub needs from a transport. `sse/routes.ts` binds it to `@fastify/sse`. */
 export interface SseTransport {
@@ -215,7 +216,35 @@ export interface OpenConnectionRequest {
   /** `?partials=0` drops coalesced `stream_block` frames (technical/08). @default true */
   readonly partials?: boolean;
   readonly transport: SseTransport;
+  /**
+   * The person's visible projects (BD-035, TD-022's visibility amendment item 7), as the route read
+   * them. Absent: every project — nothing is filtered.
+   */
+  readonly visible?: VisibleProjects;
+  /** The project each `project:`, `task:` and `run:` topic belongs to, as `authoriseTopics` resolved it. */
+  readonly topicProjects?: ReadonlyMap<string, string>;
+  /**
+   * Reads the set again, at most {@link SseHubOptions.visibilityRefreshMs} apart, so a project that
+   * becomes hidden stops sending and one that becomes visible starts. A read that fails leaves the
+   * connection seeing **nothing** until the next one succeeds (fail closed). Absent: never re-read.
+   */
+  readonly readVisible?: () => Promise<VisibleProjects>;
 }
+
+/** What `updateSubscriptions` re-reads with a change (BD-035): the set, and the new topics' projects. */
+export interface SubscriptionVisibility {
+  readonly visible: VisibleProjects;
+  readonly topicProjects: ReadonlyMap<string, string>;
+}
+
+/** Nothing visible: what a connection holds after a refresh that failed. */
+const NOTHING_VISIBLE: VisibleProjects = Object.freeze({
+  all: false as const,
+  ids: new Set<string>(),
+});
+
+/** How often a stream's visible set is read again (TD-022's amendment item 7: never older than 60 s). */
+export const VISIBILITY_REFRESH_MS = 60_000;
 
 export interface SseHubOptions {
   /** Frames retained per topic for replay. Ring-buffer depth, and nothing else. */
@@ -274,6 +303,16 @@ export interface SseHubOptions {
   readonly logger?: Logger;
   /** Called for each frame written, so the route can count them without knowing the hub. */
   readonly onFrameSent?: (kind: 'live' | 'replay' | 'control') => void;
+  /** How often a stream re-reads its visible set (BD-035). @default {@link VISIBILITY_REFRESH_MS} */
+  readonly visibilityRefreshMs?: number;
+}
+
+/**
+ * What a publisher says about a frame beside it (BD-035): the project it is about, or `null` when
+ * nothing resolved one. Kept in the ring buffer with the frame, never on the wire.
+ */
+export interface PublishMeta {
+  readonly projectId: string | null;
 }
 
 export class TooManyConnectionsError extends Error {
@@ -317,6 +356,8 @@ export class TooManyTopicsError extends Error {
 interface BufferedFrame {
   readonly seq: number;
   readonly frame: SseFrame;
+  /** The project the publisher resolved for it (BD-035); `null` when none. */
+  readonly projectId: string | null;
 }
 
 /** Splits `<topic>:<seq>` on the **last** colon: a topic is itself `task:<uuid>`. */
@@ -378,6 +419,11 @@ class Connection {
   readonly userId: string;
   readonly topics: Set<string>;
   readonly partials: boolean;
+  /** BD-035: what this person sees now, and each scoped topic's project. */
+  #visible: VisibleProjects;
+  readonly #topicProjects = new Map<string, string>();
+  readonly #readVisible: (() => Promise<VisibleProjects>) | undefined;
+  #visibilityTimer: ReturnType<typeof setInterval> | undefined;
   readonly #transport: SseTransport;
   readonly #logger: Logger;
   readonly #maxQueuedFrames: number;
@@ -448,6 +494,11 @@ class Connection {
     this.userId = request.userId;
     this.topics = new Set(request.topics);
     this.partials = request.partials ?? true;
+    this.#visible = request.visible ?? EVERY_PROJECT;
+    for (const [topic, projectId] of request.topicProjects ?? []) {
+      this.#topicProjects.set(topic, projectId);
+    }
+    this.#readVisible = request.readVisible;
     this.#transport = request.transport;
     this.#logger = options.logger;
     this.#maxQueuedFrames = options.maxQueuedFrames;
@@ -456,6 +507,62 @@ class Connection {
 
   set onDropped(callback: () => void) {
     this.#onDropped = callback;
+  }
+
+  /** The set and the scoped topics' projects a subscription change re-read (BD-035). */
+  applyVisibility(visibility: SubscriptionVisibility): void {
+    this.#visible = visibility.visible;
+    for (const [topic, projectId] of visibility.topicProjects) {
+      this.#topicProjects.set(topic, projectId);
+    }
+  }
+
+  /** Forgets a removed topic's project. */
+  forgetTopic(topic: string): void {
+    this.#topicProjects.delete(topic);
+  }
+
+  /**
+   * Re-reads the set every `intervalMs` (BD-035): never older than that, so a project that became
+   * hidden stops sending within it. A failed read **fails closed** — nothing until the next
+   * success — because a stale "every project" is the permissive answer.
+   */
+  startVisibilityRefresh(intervalMs: number): void {
+    const read = this.#readVisible;
+    if (read === undefined) {
+      return;
+    }
+    this.#visibilityTimer = setInterval(() => {
+      if (this.#closed) {
+        return;
+      }
+      read().then(
+        (visible) => {
+          this.#visible = visible;
+        },
+        (error: unknown) => {
+          this.#visible = NOTHING_VISIBLE;
+          this.#logger.warn(
+            { connection_id: this.id, error: String(error) },
+            'could not re-read the visible projects of an event stream; it sends nothing until the next read',
+          );
+        },
+      );
+    }, intervalMs);
+    this.#visibilityTimer.unref?.();
+  }
+
+  /**
+   * Whether a frame may reach this person (BD-035). A scoped topic's frame is about the topic's own
+   * project; an `org` frame is about the project its publisher resolved, and one with none is
+   * dropped for a narrowed person — it cannot be shown to be about a project they see.
+   */
+  #mayReceive(frame: SseFrame, projectId: string | null): boolean {
+    if (frame.frame === 'control' || this.#visible.all) {
+      return true;
+    }
+    const project = this.#topicProjects.get(frame.topic) ?? projectId;
+    return project !== null && isProjectVisible(this.#visible, project);
   }
 
   get closed(): boolean {
@@ -518,11 +625,20 @@ class Connection {
    * frame, or the synthetic `ping` when there is nothing to replay) and the flag is their arbiter,
    * so the flag has to move on the write actually happening rather than on it being attempted.
    */
-  write(frame: SseFrame, kind: 'live' | 'replay' | 'control', retryMs?: number): boolean {
+  write(
+    frame: SseFrame,
+    kind: 'live' | 'replay' | 'control',
+    retryMs?: number,
+    projectId: string | null = null,
+  ): boolean {
     if (this.#closed) {
       return false;
     }
     if (!this.partials && frame.frame === 'transcript' && frame.data.kind === 'stream_block') {
+      return false;
+    }
+    // BD-035: a frame about a project this person does not see is never queued — live or replayed.
+    if (!this.#mayReceive(frame, projectId)) {
       return false;
     }
     // The slow-consumer guard, and the three ways it has been got wrong.
@@ -731,6 +847,10 @@ class Connection {
     }
     this.#closed = true;
     this.stopPing();
+    if (this.#visibilityTimer !== undefined) {
+      clearInterval(this.#visibilityTimer);
+      this.#visibilityTimer = undefined;
+    }
     this.#transport.close();
     this.#onDropped?.();
   }
@@ -877,6 +997,7 @@ export class SseHub {
           buffered.frame,
           'replay',
           first ? this.#options.retryMs : undefined,
+          buffered.projectId,
         );
         first = first && !queued;
       }
@@ -891,6 +1012,7 @@ export class SseHub {
     connection.sealOpeningBacklog();
 
     connection.startPing(this.#options.pingIntervalMs);
+    connection.startVisibilityRefresh(this.#options.visibilityRefreshMs ?? VISIBILITY_REFRESH_MS);
 
     this.#logger.info(
       { connection_id: connection.id, user_id: connection.userId, topics: [...connection.topics] },
@@ -900,8 +1022,12 @@ export class SseHub {
     return { close: () => this.close(connection.id) };
   }
 
-  /** Appends to the topic's ring buffer and writes to every subscriber. */
-  publish(frame: SseFrame): void {
+  /**
+   * Appends to the topic's ring buffer and writes to every subscriber. `meta.projectId` is the
+   * project the frame is about, for the visibility filter (BD-035); it is kept beside the frame and
+   * never written.
+   */
+  publish(frame: SseFrame, meta: PublishMeta = { projectId: null }): void {
     if (frame.frame === 'control') {
       throw new TypeError(
         'control frames are produced by the hub (reset, shutdown, ping), never published through it',
@@ -909,7 +1035,7 @@ export class SseHub {
     }
     const topic = frame.topic;
     const buffer = this.#buffers.get(topic) ?? [];
-    buffer.push({ seq: frame.seq, frame });
+    buffer.push({ seq: frame.seq, frame, projectId: meta.projectId });
     if (buffer.length > this.#options.bufferSize) {
       buffer.splice(0, buffer.length - this.#options.bufferSize);
     }
@@ -926,7 +1052,7 @@ export class SseHub {
       return;
     }
     for (const connection of this.#byTopic.get(topic) ?? []) {
-      connection.write(frame, 'live');
+      connection.write(frame, 'live', undefined, meta.projectId);
     }
   }
 
@@ -941,6 +1067,8 @@ export class SseHub {
     connectionId: string,
     userId: string,
     changes: { readonly add?: readonly SseTopic[]; readonly remove?: readonly SseTopic[] },
+    /** BD-035: the set re-read with this change, and the added topics' projects. */
+    visibility?: SubscriptionVisibility,
   ): { topics: string[] } {
     const connection = this.#connections.get(connectionId);
     // A connection id belonging to somebody else is reported as unknown, not as forbidden: telling
@@ -961,8 +1089,12 @@ export class SseHub {
       throw new TooManyTopicsError(next.size, this.#options.maxTopicsPerConnection);
     }
 
+    if (visibility !== undefined) {
+      connection.applyVisibility(visibility);
+    }
     for (const topic of changes.remove ?? []) {
       connection.topics.delete(topic);
+      connection.forgetTopic(topic);
       const subscribers = this.#byTopic.get(topic);
       subscribers?.delete(connection);
       // An emptied set is removed rather than left behind: `#byTopic` would otherwise accumulate

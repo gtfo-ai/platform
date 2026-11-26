@@ -144,7 +144,7 @@ export const registerSseRoutes = async (
       // `Broadcast` port carries no such topic. It carries one for the transcript since WP-15h
       // (`run.transcript.appended`), which is the shape a revocation hint would take and is not
       // one, so the gap is unchanged and now has a worked example beside it.
-      await authoriseTopics(access, actor, topics);
+      const authorised = await authoriseTopics(access, actor, topics);
       const cursors = parseCursors(
         request.query.last_event_id ?? (request.headers['last-event-id'] as string | undefined),
       );
@@ -159,6 +159,11 @@ export const registerSseRoutes = async (
           cursors,
           partials: request.query.partials !== '0',
           transport: sseTransportFor(reply),
+          // BD-035: the `org` topic is filtered by this set, scoped topics by their own project, and
+          // the set is read again at most a minute apart (`hub.ts`).
+          visible: authorised.visible,
+          topicProjects: authorised.topicProjects,
+          readVisible: async () => access.visibleProjects(actor),
         });
       } catch (error) {
         if (error instanceof TooManyConnectionsError || error instanceof ShuttingDownError) {
@@ -204,12 +209,18 @@ export const registerSseRoutes = async (
       const actor = await requireSession(request);
       // Adding a topic through this endpoint is the same subscription decision as naming it on
       // `GET /events`, so it goes through the same check. Removing one needs no permission.
-      await authoriseTopics(access, actor, request.body.add ?? []);
+      // BD-035: the change re-reads the set, so the whole stream is filtered by a fresh one.
+      const authorised = await authoriseTopics(access, actor, request.body.add ?? []);
       try {
-        const result = options.hub.updateSubscriptions(request.body.connection_id, actor.userId, {
-          ...(request.body.add === undefined ? {} : { add: request.body.add }),
-          ...(request.body.remove === undefined ? {} : { remove: request.body.remove }),
-        });
+        const result = options.hub.updateSubscriptions(
+          request.body.connection_id,
+          actor.userId,
+          {
+            ...(request.body.add === undefined ? {} : { add: request.body.add }),
+            ...(request.body.remove === undefined ? {} : { remove: request.body.remove }),
+          },
+          authorised,
+        );
         return { connection_id: request.body.connection_id, topics: result.topics as SseTopic[] };
       } catch (error) {
         if (error instanceof UnknownConnectionError) {

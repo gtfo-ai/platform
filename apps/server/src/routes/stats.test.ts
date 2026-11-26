@@ -18,6 +18,7 @@ import { orgStatsResponseSchema } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { describe, expect, it } from 'vitest';
+import { everyProjectVisible, onlyProjectsVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { ResolvedRange, StatsSources } from '../queries/stats-metrics.js';
 import { StatsRangeTooLargeError } from '../queries/stats-queries.js';
@@ -70,6 +71,7 @@ interface World {
     projectId: string | null;
     timezone: string;
     asOf: string;
+    visible: readonly string[] | null;
   }[];
   role: UserRole;
   signedIn: boolean;
@@ -101,6 +103,7 @@ const build = async (overrides: Partial<StatsQueries> = {}): Promise<World> => {
   await registerStatsRoutes(app, {
     now: () => NOW,
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => null,
       timezone: async () => ({ timezone: 'UTC', substituted: false }),
       sources: async (range, options) => {
@@ -109,6 +112,7 @@ const build = async (overrides: Partial<StatsQueries> = {}): Promise<World> => {
           projectId: options.projectId,
           timezone: options.timezone,
           asOf: options.asOf,
+          visible: options.visible,
         });
         return SOURCES;
       },
@@ -249,5 +253,44 @@ describe('GET /api/org/stats.csv', () => {
     // An absent metric has exactly one row — its total, carrying the reason — and no bucket rows,
     // so nothing in a spreadsheet can sum a cell the platform never measured.
     expect(lines.filter((line) => line.startsWith('queue_wait_minutes,'))).toHaveLength(1);
+  });
+});
+
+describe('statistics over the projects the caller sees (BD-035, S-30.2)', () => {
+  const SEEN = '00000000-0000-4000-8000-0000003002a1';
+  const HIDDEN = '00000000-0000-4000-8000-0000003002b1';
+
+  it('bounds every statement by the caller’s projects, the CSV too', async () => {
+    const world = await build({ visibleProjects: onlyProjectsVisible(SEEN) });
+    for (const url of ['/api/org/stats', '/api/org/stats.csv']) {
+      const response = await world.app.inject({ method: 'GET', url });
+      expect(response.statusCode, url).toBe(200);
+    }
+    expect(world.asked.map((entry) => entry.visible)).toEqual([[SEEN], [SEEN]]);
+    // An unnarrowed caller is asked for every project, as before.
+    const every = await build();
+    await every.app.inject({ method: 'GET', url: '/api/org/stats' });
+    expect(every.asked.map((entry) => entry.visible)).toEqual([null]);
+  });
+
+  it('answers ?project_id= of a hidden project as a missing one, and reads nothing', async () => {
+    const world = await build({ visibleProjects: onlyProjectsVisible(SEEN) });
+    for (const url of [
+      `/api/org/stats?project_id=${HIDDEN}`,
+      `/api/org/stats.csv?project_id=${HIDDEN}`,
+    ]) {
+      const response = await world.app.inject({ method: 'GET', url });
+      expect(response.statusCode, url).toBe(404);
+      expect(response.json()).toEqual({
+        error: { code: 'not_found', message: `project ${HIDDEN} does not exist` },
+      });
+    }
+    expect(world.asked).toEqual([]);
+    const seen = await world.app.inject({
+      method: 'GET',
+      url: `/api/org/stats?project_id=${SEEN}`,
+    });
+    expect(seen.statusCode).toBe(200);
+    expect(world.asked.map((entry) => entry.projectId)).toEqual([SEEN]);
   });
 });

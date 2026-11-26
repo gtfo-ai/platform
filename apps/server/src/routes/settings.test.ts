@@ -20,6 +20,7 @@ import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { OrgCapProject } from '../org-caps.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
@@ -126,6 +127,7 @@ const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> =
     // and a test that injected an identity function would certify nothing (standing rule 31).
     redactor: redactionAdapters.patternRedactor(),
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => null,
       projectAutonomy: async (projectId) =>
         projectId === PROJECT && world.projectFound

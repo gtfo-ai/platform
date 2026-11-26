@@ -36,6 +36,7 @@ import { createFakeTaskManagement } from '@platform/integrations';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { checkProposedLifecycles, readProposedAccountIdentities } from '../lifecycle-check.js';
 import {
@@ -187,6 +188,7 @@ const build = async (): Promise<void> => {
     createTicketStatusReader({ integrations: integrationsPort(), logger: silentLogger });
   await registerProjectBindingRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.role,
       projectExists: async (projectId) => projectId === PROJECT,
       skippedTickets: async () => [

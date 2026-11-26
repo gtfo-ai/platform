@@ -16,6 +16,7 @@ import { MAX_BOOTSTRAP_MERGE_REQUESTS } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import type { HistoryBootstrapCommands } from '../bootstrap.js';
 import { toApiError } from '../errors.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
@@ -103,6 +104,7 @@ const build = async (): Promise<void> => {
   await registerBootstrapRoutes(app, {
     bootstrap: world.commands,
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.role,
       projectExists: async () => world.projectExists,
       ...memoryAttemptRecords(attempts),
@@ -305,6 +307,7 @@ describe('POST /api/projects/:project_id/history-bootstraps', () => {
     await registerBootstrapRoutes(bare, {
       bootstrap: null,
       queries: {
+        visibleProjects: everyProjectVisible,
         projectRole: async () => 'maintainer',
         projectExists: async () => true,
         ...memoryAttemptRecords(new Map()),

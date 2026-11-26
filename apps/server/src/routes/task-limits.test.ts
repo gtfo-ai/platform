@@ -10,6 +10,7 @@ import type { UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { SetTaskLimitResult } from '../queries/task-limits.js';
 import { registerTaskLimitRoutes } from './task-limits.js';
@@ -50,6 +51,7 @@ const build = async (role: UserRole, answer: SetTaskLimitResult) => {
   });
   await registerTaskLimitRoutes(instance, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => null,
       organisationLimits: async () => ({ default: 3, maximum: 5, organisationStates: true }),
       personLoad: async () => ({ personal: null, inFlight: 3, queued: 1, holders: [] }),

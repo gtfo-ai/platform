@@ -47,6 +47,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ProposedBindingItem } from '../lifecycle-check.js';
 import type { BindingAccountIdentity, HumanActionInput } from '../queries/onboarding-queries.js';
@@ -54,6 +55,8 @@ import type { TicketStatusesAnswer } from '../ticket-statuses.js';
 
 export interface ProjectBindingQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly projectExists: (projectId: string) => Promise<boolean>;
   readonly listBindings: (projectId: string) => Promise<readonly ProjectBindingSummary[]>;
   /**
@@ -100,7 +103,10 @@ export const registerProjectBindingRoutes = async (
   options: ProjectBindingRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
   /** A uuid project id or `undefined`: the guards run before validation (`onboarding.ts` says why). */
   const projectOf = (request: FastifyRequest): string | undefined => {
     const value = (request.params as { project_id?: unknown }).project_id;

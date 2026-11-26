@@ -19,6 +19,7 @@ import { type Id, MAX_TICKET_SEARCH_QUERY_CHARS, type UserRole } from '@platform
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import {
   manualStartAuditParams,
@@ -130,6 +131,7 @@ const build = async (): Promise<void> => {
   await registerTaskStartRoutes(app, {
     commands,
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.role,
       projectExists: async () => world.projectExists,
       ...memoryAttemptRecords(attempts),
@@ -306,6 +308,7 @@ describe('POST /api/projects/:project_id/tasks (WP-122)', () => {
     await registerTaskStartRoutes(bare, {
       commands: null,
       queries: {
+        visibleProjects: everyProjectVisible,
         projectRole: async () => 'member',
         projectExists: async () => true,
         ...memoryAttemptRecords(new Map()),
@@ -383,6 +386,7 @@ describe('GET /api/projects/:project_id/ticket-search (the Start a ticket typeah
     await registerTaskStartRoutes(bare, {
       commands: null,
       queries: {
+        visibleProjects: everyProjectVisible,
         projectRole: async () => 'member',
         projectExists: async () => true,
         ...memoryAttemptRecords(new Map()),

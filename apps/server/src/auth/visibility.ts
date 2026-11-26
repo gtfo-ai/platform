@@ -26,6 +26,7 @@
 import type { UserRole } from '@platform/contracts';
 import { can } from '@platform/domain';
 import type { FastifyRequest } from 'fastify';
+import { UnauthorizedError } from '../errors.js';
 import type { Actor } from './rbac.js';
 
 /** Every project, or exactly these. */
@@ -74,8 +75,11 @@ export const visibleProjectsOf = (role: UserRole, sources: VisibilitySources): V
   return { all: false, ids };
 };
 
+/** Who the set is read for: the person and their organisation role. */
+export type VisibilityActor = Pick<Actor, 'userId' | 'role'>;
+
 /** `visibleProjects(actor)`: the one function every surface asks (TD-022's amendment, item 1). */
-export type VisibleProjectsReader = (actor: Actor) => Promise<VisibleProjects>;
+export type VisibleProjectsReader = (actor: VisibilityActor) => Promise<VisibleProjects>;
 
 /** Composes {@link VisibleProjectsReader} over the statement that reads the sources. */
 export const createVisibleProjects =
@@ -112,6 +116,22 @@ export const visibilityFor = (
   const answer = read(actor);
   request.visibleProjects = answer;
   return answer;
+};
+
+/**
+ * A list route's filter (TD-022's amendment item 3): the request's set as `visibleIdsOf` gives it,
+ * read through the same memo the guard used. Unreachable without a session behind a guard; refused
+ * rather than defaulted if it ever is, because an absent caller must not read as every project.
+ */
+export const visibleIdsFor = async (
+  request: FastifyRequest,
+  read: VisibleProjectsReader,
+): Promise<readonly string[] | null> => {
+  const actor = request.actor;
+  if (actor === undefined) {
+    throw new UnauthorizedError('this endpoint needs an authenticated session');
+  }
+  return visibleIdsOf(await visibilityFor(request, actor, read));
 };
 
 declare module 'fastify' {

@@ -298,8 +298,10 @@ export const integrationSummaries = async (
   rows: readonly IntegrationRow[],
   credentials: OrganisationCredentialStates,
   now: Date,
+  /** BD-035: `used_by` names only these projects; `null` every project. */
+  visible: readonly string[] | null,
 ): Promise<IntegrationSummary[]> => {
-  const facts = await readIntegrationFacts(database, rows, now);
+  const facts = await readIntegrationFacts(database, rows, now, visible);
   return rows.map((row) =>
     toIntegrationSummary(
       row,
@@ -316,8 +318,10 @@ export const integrationSummaryOf = async (
   row: IntegrationRow,
   credentials: OrganisationCredentialStates,
   now: Date,
+  /** BD-035: `used_by` names only these projects; `null` every project (an administrator's write). */
+  visible: readonly string[] | null = null,
 ): Promise<IntegrationSummary> => {
-  const facts = await readIntegrationFacts(database, [row], now);
+  const facts = await readIntegrationFacts(database, [row], now, visible);
   return toIntegrationSummary(
     row,
     findShippedProvider(row.provider),
@@ -604,8 +608,10 @@ export const readIntegrationTraffic = async (
 export const readIntegrationUsers = async (
   database: Database,
   rows: readonly IntegrationRow[],
+  /** BD-035: only these projects' bindings; `null` every project. */
+  visible: readonly string[] | null,
 ): Promise<ReadonlyMap<string, IntegrationUser[]>> => {
-  if (rows.length === 0) {
+  if (rows.length === 0 || (visible !== null && visible.length === 0)) {
     return new Map();
   }
   const byId = new Map(rows.map((row) => [row.id, row]));
@@ -619,7 +625,12 @@ export const readIntegrationUsers = async (
     })
     .from(bindings)
     .innerJoin(projects, eq(projects.id, bindings.projectId))
-    .where(inArray(bindings.integrationId, [...byId.keys()]))
+    .where(
+      and(
+        inArray(bindings.integrationId, [...byId.keys()]),
+        visible === null ? undefined : inArray(projects.id, [...visible]),
+      ),
+    )
     .orderBy(asc(projects.key));
   const users = new Map<string, IntegrationUser[]>();
   for (const binding of bound) {
@@ -650,6 +661,7 @@ export const readIntegrationFacts = async (
   database: Database,
   rows: readonly IntegrationRow[],
   now: Date,
+  visible: readonly string[] | null,
 ): Promise<ReadonlyMap<string, IntegrationFacts>> => {
   const [traffic, users] = await Promise.all([
     readIntegrationTraffic(
@@ -657,7 +669,7 @@ export const readIntegrationFacts = async (
       rows.map((row) => row.id),
       now,
     ),
-    readIntegrationUsers(database, rows),
+    readIntegrationUsers(database, rows, visible),
   ]);
   return new Map(
     rows.map(
@@ -714,7 +726,21 @@ export const refusedDeliveryFilter = () =>
 export const listRefusedDeliveries = async (
   database: Database,
   integrationId: string,
+  /**
+   * BD-035: the caller's visible projects; `null` every project. `inbox` records no binding, so a
+   * delivery is attributed to the account's bindings: an account bound **only** to hidden projects
+   * answers nothing, and one bound to a visible project — or to none, whose deliveries belong to
+   * the account — answers every row.
+   */
+  visible: readonly string[] | null,
 ): Promise<RefusedDelivery[]> => {
+  const scoped =
+    visible === null
+      ? undefined
+      : sql`(not exists (select 1 from bindings b where b.integration_id = ${integrationId})
+             or exists (select 1 from bindings b
+                         where b.integration_id = ${integrationId}
+                           and b.project_id = any(${sql.param([...visible])}::uuid[])))`;
   const rows = await database
     .select({
       deliveryId: inbox.deliveryId,
@@ -725,7 +751,12 @@ export const listRefusedDeliveries = async (
     })
     .from(inbox)
     .where(
-      and(eq(inbox.integrationId, integrationId), isNotNull(inbox.error), refusedDeliveryFilter()),
+      and(
+        eq(inbox.integrationId, integrationId),
+        isNotNull(inbox.error),
+        refusedDeliveryFilter(),
+        scoped,
+      ),
     )
     .orderBy(desc(inbox.receivedAt))
     .limit(MAX_REFUSED_DELIVERIES);

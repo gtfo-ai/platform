@@ -28,6 +28,7 @@ import { db, eventing, pipeline, redaction } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../../../apps/server/src/auth/visibility.test-fixture.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js';
 import { databaseRunQueries, registerRunRoutes } from '../../../apps/server/src/routes/runs.js';
@@ -257,6 +258,7 @@ const getRun = async (runId: Id) => {
     queries: databaseRunQueries(
       drizzle(pool, { schema: db.schema }),
       createProjectSettingsPort(pool),
+      everyProjectVisible,
     ),
   });
   await app.ready();

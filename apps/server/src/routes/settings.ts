@@ -74,6 +74,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { organisationSettingsForRequest } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import { cappedProjectsOf, type OrgCapProject, raisedWipProjectsOf } from '../org-caps.js';
@@ -97,6 +98,8 @@ import {
  */
 export interface SettingsQueries {
   projectRole(projectId: string, userId: string): Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  visibleProjects: VisibleProjectsReader;
   /** `null` for a project that does not exist — the 404 the dial's routes answer first. */
   projectAutonomy(projectId: string): Promise<AutonomyResponse | null>;
   writeAutonomy(
@@ -253,7 +256,10 @@ export const registerSettingsRoutes = async (
   options: SettingsRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
 
   /**
    * The project id, or `undefined` when the segment is not a uuid.

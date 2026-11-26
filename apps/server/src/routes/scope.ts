@@ -60,10 +60,13 @@ export const scopeToProject =
       return;
     }
     const projectId = await options.projectOf(id);
+    const label = `${options.what} ${id}`;
     if (projectId === null) {
-      throw new NotFoundError(`${options.what} ${id}`);
+      throw new NotFoundError(label);
     }
     request.scopedProjectId = projectId;
+    // BD-035: the guard's 404 for a hidden project names the resource exactly as this one does.
+    request.scopeLabel = label;
   };
 
 /** Reads what {@link scopeToProject} left behind, for `requirePermission`'s `project` hook. */

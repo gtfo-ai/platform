@@ -56,6 +56,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole, findRunProjectId } from '../queries/identity-queries.js';
@@ -79,6 +80,8 @@ import { scopedProject, scopeToProject } from './scope.js';
 export interface RunQueries {
   readonly runProjectId: (runId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** The run's record and, since WP-283 (5), who executed it (`seat`, the agents list's own). */
   readonly run: (runId: string) => Promise<(RunRecord & { readonly seat?: RunSeat | null }) | null>;
   readonly messages: (runId: string, query: RunMessagesQuery) => Promise<RunMessagePage>;
@@ -98,9 +101,11 @@ export interface RunRoutesOptions {
 export const databaseRunQueries = (
   database: Database,
   projectSettings: ProjectSettingsPort,
+  visibleProjects: VisibleProjectsReader,
 ): RunQueries => ({
   runProjectId: async (runId) => findRunProjectId(database, runId),
   projectRole: async (projectId, userId) => findProjectRole(database, projectId, userId),
+  visibleProjects,
   run: async (runId) => {
     const run = await findRun(database, runId);
     if (run === null) return null;
@@ -137,7 +142,10 @@ export const registerRunRoutes = async (
   const queries = options.queries;
   // The run's project has already been read by the preHandler; this is the caller's membership in
   // it, which is the question `effectiveRole` asks.
-  const guard = { projectRole: queries.projectRole };
+  const guard = {
+    projectRole: queries.projectRole,
+    visibleProjects: queries.visibleProjects,
+  };
   const scope = scopeToProject({
     param: 'run_id',
     what: 'run',

@@ -191,6 +191,7 @@ describe('the statistics reads (PostgreSQL)', () => {
       timezone: ZONE,
       projectId: project,
       asOf: AS_OF,
+      visible: null,
     });
 
   /**
@@ -806,6 +807,7 @@ describe('the statistics reads (PostgreSQL)', () => {
       timezone: ZONE,
       projectId: project,
       asOf: AS_OF,
+      visible: null,
     });
     expect(sources.kbUsage).toEqual([{ day: '2026-03-10', eligible: 2, cited: 1 }]);
     // The project filter holds: another project's read sees none of these runs.
@@ -813,8 +815,31 @@ describe('the statistics reads (PostgreSQL)', () => {
       timezone: ZONE,
       projectId: otherProjectId,
       asOf: AS_OF,
+      visible: null,
     });
     expect(other.kbUsage).toEqual([]);
+    // BD-035 (S-30.2): with no project asked, the caller's projects bound every statement.
+    const seen = await readStatsSources(db, resolveRange('7d', 'day', '2026-03-12'), {
+      timezone: ZONE,
+      projectId: null,
+      asOf: AS_OF,
+      visible: [project],
+    });
+    expect(seen.kbUsage).toEqual(sources.kbUsage);
+    const hidden = await readStatsSources(db, resolveRange('7d', 'day', '2026-03-12'), {
+      timezone: ZONE,
+      projectId: null,
+      asOf: AS_OF,
+      visible: [otherProjectId],
+    });
+    expect(hidden.kbUsage).toEqual([]);
+    const none = await readStatsSources(db, resolveRange('7d', 'day', '2026-03-12'), {
+      timezone: ZONE,
+      projectId: null,
+      asOf: AS_OF,
+      visible: [],
+    });
+    expect(none.kbUsage).toEqual([]);
   });
 
   it('folds what it read into a document the contract accepts', async () => {

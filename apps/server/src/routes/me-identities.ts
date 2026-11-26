@@ -65,6 +65,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { effectiveRole, requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError } from '../errors.js';
 import type { MyIdentityRow } from '../queries/identity-link-queries.js';
 import {
@@ -100,6 +101,8 @@ export interface IdentityLinkCommands {
 /** Everything these routes read or write outside the application ring, as plain functions. */
 export interface MeIdentityQueries extends IdempotencyRecords {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly listMine: (userId: string) => Promise<readonly MyIdentityRow[]>;
   readonly unlinkMine: (input: {
     readonly userId: string;
@@ -217,7 +220,10 @@ export const registerMeIdentityRoutes = async (
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { queries } = options;
-  const guard = { projectRole: queries.projectRole };
+  const guard = {
+    projectRole: queries.projectRole,
+    visibleProjects: queries.visibleProjects,
+  };
   const now = options.now ?? (() => new Date());
 
   const actorOf = (request: FastifyRequest) => {

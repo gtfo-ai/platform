@@ -12,6 +12,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { hashInviteToken } from '../auth/invite-token.js';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { classifyCreateUserFailure } from '../invites.js';
 import type { InviteRecord } from '../queries/invite-queries.js';
@@ -82,6 +83,7 @@ const build = async (): Promise<World> => {
   const pending = (row: Row) =>
     row.acceptedAt === null && row.revokedAt === null && row.expiresAt > NOW;
   await registerInviteRoutes(app, {
+    visibleProjects: everyProjectVisible,
     projectRole: async () => null,
     baseUrl: 'https://agentic.example.test/',
     newId: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, '0')}`,

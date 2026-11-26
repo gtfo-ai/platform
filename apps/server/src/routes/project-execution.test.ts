@@ -11,6 +11,7 @@ import type { ExecutionSettings } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { UnassignedTakerExclusion } from '../queries/offer-waiting.js';
 import type { ProjectWorkerRow } from '../queries/worker-queries.js';
@@ -129,6 +130,7 @@ const build = async (): Promise<void> => {
   });
   await registerProjectExecutionRoutes(app, {
     queries: {
+      visibleProjects: everyProjectVisible,
       projectRole: async () => world.role,
       projectExists: async () => world.exists,
       execution: async () => world.stored,

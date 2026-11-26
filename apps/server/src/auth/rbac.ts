@@ -29,13 +29,25 @@
  * here, the caller is still refused if they may not read, and the `400` arrives from the validator a
  * moment later. Either way the membership lookup cannot be handed a fragment of SQL — Drizzle
  * parameterises it, and a non-uuid never reaches it.
+ *
+ * ## Visibility, before the role (BD-035, TD-022's visibility amendment item 2)
+ *
+ * A project-scoped guard first asks whether the project is one the caller sees
+ * (`auth/visibility.ts`). A hidden project is refused **404**, with the body a missing one gets —
+ * `project <id> does not exist`, or the label `routes/scope.ts` left for a task, run, artifact or
+ * shadow batch — so the answer does not confirm that it exists. The order is therefore 401, then
+ * 404 for a hidden project (and for a missing one, for a narrowed caller — it is not in their set
+ * either), then 403. The guard reads **no** existence: for a caller who sees every project, a
+ * missing project's 404 is still the handler's (or the scope hook's), after the role, as before.
+ * A guard built with a `project` hook and no `visibleProjects` is refused at registration.
  */
 
 import type { UserRole } from '@platform/contracts';
 import type { PermissionAction, PermissionSubject } from '@platform/domain';
 import { can, ROLE_LEVELS } from '@platform/domain';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { ForbiddenError, UnauthorizedError } from '../errors.js';
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '../errors.js';
+import { isProjectVisible, type VisibleProjectsReader, visibilityFor } from './visibility.js';
 
 /** Who is making the request, once the session cookie has been resolved to a row. */
 export interface Actor {
@@ -70,7 +82,15 @@ export interface PermissionGuardDependencies {
    * `can()` for every role" test needs no schema to run.
    */
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /**
+   * The caller's visible projects (BD-035). Required, so a composition cannot forget it; a guard
+   * with a `project` hook refuses to be built without one.
+   */
+  readonly visibleProjects: VisibleProjectsReader;
 }
+
+/** Marks a guard that asks visibility, for the route census (`visibility-census.test.ts`). */
+export const VISIBILITY_GUARD = Symbol.for('agentic.visibility-guard');
 
 /**
  * Builds a Fastify hook that refuses the request unless `can()` allows it.
@@ -84,19 +104,31 @@ export interface PermissionGuardDependencies {
  * again), an authenticated caller without the role is 403 (authenticating differently will not
  * help). Both carry the machine-readable `code` of `apiErrorSchema`.
  */
-export const requirePermission =
-  (
-    dependencies: PermissionGuardDependencies,
-    action: PermissionAction,
-    options: PermissionGuardOptions = {},
-  ) =>
-  async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+export const requirePermission = (
+  dependencies: PermissionGuardDependencies,
+  action: PermissionAction,
+  options: PermissionGuardOptions = {},
+): ((request: FastifyRequest, reply: FastifyReply) => Promise<void>) => {
+  // Probed from JavaScript too: a caller that bypasses the type must not get a guard that skips it.
+  if (options.project !== undefined && typeof dependencies.visibleProjects !== 'function') {
+    throw new TypeError(
+      `a project-scoped guard for ${action} needs visibleProjects (BD-035, TD-022's visibility amendment)`,
+    );
+  }
+  const guard = async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     const actor = request.actor;
     if (actor === undefined) {
       throw new UnauthorizedError('this endpoint needs an authenticated session');
     }
 
     const projectId = options.project?.(request);
+    if (projectId !== undefined) {
+      const visible = await visibilityFor(request, actor, dependencies.visibleProjects);
+      if (!isProjectVisible(visible, projectId)) {
+        // The body a missing id gets: the scope hook's label when it resolved one, else the project.
+        throw new NotFoundError(request.scopeLabel ?? `project ${projectId}`);
+      }
+    }
     const role =
       projectId === undefined
         ? actor.role
@@ -108,6 +140,11 @@ export const requirePermission =
 
     request.effectiveRole = role;
   };
+  if (options.project !== undefined) {
+    Object.defineProperty(guard, VISIBILITY_GUARD, { value: true });
+  }
+  return guard;
+};
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -115,5 +152,10 @@ declare module 'fastify' {
     actor?: Actor;
     /** The role the permission guard actually applied, org or project. Logged and audited. */
     effectiveRole?: UserRole;
+    /**
+     * What a scope hook resolved, as its 404 names it (`task <id>`), so the guard's 404 for a hidden
+     * project is the body a missing id gets (`routes/scope.ts`).
+     */
+    scopeLabel?: string;
   }
 }

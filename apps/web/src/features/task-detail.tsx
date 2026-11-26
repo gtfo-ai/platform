@@ -22,6 +22,7 @@
 import type { TaskDetailResponse } from '@platform/contracts';
 import { Link, useSearch } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
+import { ApiError } from '../api/http.js';
 import {
   useProjectConfig,
   useProjects,
@@ -32,8 +33,9 @@ import {
 } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
+import { buttonClassName } from '../ui/button.js';
 import { Flash } from '../ui/flash.js';
-import { ErrorNotice, Loading } from '../ui/kit.js';
+import { EmptyState, ErrorNotice, Loading } from '../ui/kit.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { chosenManualJobsOf } from './ci-manual-started.js';
 import { ConversationSeenNotice } from './conversation-seen.js';
@@ -171,6 +173,21 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     return <Loading label="Loading task…" />;
   }
   if (detail.isError) {
+    // BD-035: the server answers a task of a project this person does not see as one that does
+    // not exist, so a 404 is the not-found screen — never a failure to retry.
+    if (detail.error instanceof ApiError && detail.error.status === 404) {
+      return (
+        <EmptyState
+          title="No such task"
+          hint="There is no task with this link that you can open. It may have been removed, or it belongs to a project you do not work in. Pick a project to see its board."
+          action={
+            <Link to="/projects" className={buttonClassName('default')}>
+              All projects
+            </Link>
+          }
+        />
+      );
+    }
     return <ErrorNotice title="Task could not be loaded." error={detail.error} />;
   }
 

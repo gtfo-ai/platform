@@ -2988,13 +2988,23 @@ export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = [
  */
 export const listRunningAgents = async (
   database: Database,
+  /** BD-035: the caller's visible projects — `null` every project, otherwise only these. */
+  visible: readonly string[] | null,
   options: WaitingReadOptions = {},
 ): Promise<AgentsResponse> => {
+  if (visible !== null && visible.length === 0) {
+    return { items: [] };
+  }
   const rows = await database
     .select(runColumns)
     .from(runs)
     .leftJoin(taskStages, eq(taskStages.id, runs.taskStageId))
-    .where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]))
+    .where(
+      and(
+        notInArray(runs.status, [...TERMINAL_RUN_STATUSES]),
+        visible === null ? undefined : inArray(runs.projectId, [...visible]),
+      ),
+    )
     .orderBy(desc(runs.createdAt));
   const ids = rows.map((row) => row.id);
   const [usage, progress, stops, seats, activity, waiting] = await Promise.all([
@@ -3052,20 +3062,47 @@ export const listRunningAgents = async (
  * two different texts. The residual is the rows written **before** that migration — they are still
  * served as they were stored, because `questions` is append-only and nothing may rewrite them.
  */
-export const listInbox = async (database: Database): Promise<InboxResponse> => {
+export const listInbox = async (
+  database: Database,
+  /**
+   * BD-035: the caller's visible projects — `null` every project, otherwise only these. Every one
+   * of the four lists is filtered in its own statement, never after the read.
+   */
+  visible: readonly string[] | null,
+): Promise<InboxResponse> => {
+  if (visible !== null && visible.length === 0) {
+    return { questions: [], approvals: [], ci_held: [], escalated: [] };
+  }
+  const visibleTasks =
+    visible === null
+      ? null
+      : database
+          .select({ id: tasks.id })
+          .from(tasks)
+          .where(inArray(tasks.projectId, [...visible]));
   const [questionRows, approvalRows, ciHeld, escalated] = await Promise.all([
     database
       .select()
       .from(questions)
-      .where(eq(questions.status, 'open'))
+      .where(
+        and(
+          eq(questions.status, 'open'),
+          visibleTasks === null ? undefined : inArray(questions.taskId, visibleTasks),
+        ),
+      )
       .orderBy(asc(questions.askedAt)),
     database
       .select()
       .from(approvals)
-      .where(eq(approvals.status, 'pending'))
+      .where(
+        and(
+          eq(approvals.status, 'pending'),
+          visibleTasks === null ? undefined : inArray(approvals.taskId, visibleTasks),
+        ),
+      )
       .orderBy(asc(approvals.requestedAt)),
-    listCiHeld(database),
-    listEscalatedTasks(database),
+    listCiHeld(database, visible),
+    listEscalatedTasks(database, MAX_INBOX_ESCALATED, visible),
   ]);
   return {
     questions: questionRows.map(toQuestionRecord),
@@ -3090,7 +3127,14 @@ export const listInbox = async (database: Database): Promise<InboxResponse> => {
 export const listEscalatedTasks = async (
   database: Database,
   limit: number = MAX_INBOX_ESCALATED,
+  /** BD-035: only these projects' tasks; `null` every project. */
+  visible: readonly string[] | null = null,
 ): Promise<InboxResponse['escalated']> => {
+  if (visible !== null && visible.length === 0) {
+    return [];
+  }
+  const scoped =
+    visible === null ? sql`` : sql`and t.project_id = any(${sql.param([...visible])}::uuid[])`;
   const { rows } = await database.execute<{
     id: string;
     project_id: string;
@@ -3120,6 +3164,7 @@ export const listEscalatedTasks = async (
          limit 1
       ) e on true
      where t.state = 'needs_human'
+       ${scoped}
      order by coalesce(e.occurred_at, t.updated_at), t.id
      limit ${limit}`);
   return rows.map((row) => {
@@ -3151,7 +3196,10 @@ export const listEscalatedTasks = async (
  * {@link gateWaitOf} per task (the task read's own projection, so a paused task is never here) and
  * only a wait whose status is `manual`. Oldest wait first, as the inbox is a queue.
  */
-const listCiHeld = async (database: Database): Promise<NonNullable<InboxResponse['ci_held']>> => {
+const listCiHeld = async (
+  database: Database,
+  visible: readonly string[] | null,
+): Promise<NonNullable<InboxResponse['ci_held']>> => {
   const rows = await database
     .select({
       id: tasks.id,
@@ -3177,6 +3225,7 @@ const listCiHeld = async (database: Database): Promise<NonNullable<InboxResponse
         eq(tasks.state, 'active'),
         eq(tasks.currentStage, CI_GATE_STAGE),
         eq(taskStages.stage, CI_GATE_STAGE),
+        visible === null ? undefined : inArray(tasks.projectId, [...visible]),
       ),
     )
     .orderBy(asc(tasks.id), asc(taskStages.attempt));

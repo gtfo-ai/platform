@@ -44,6 +44,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ProjectConfigCommands } from '../project-config.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
@@ -70,6 +71,8 @@ export interface ExportableProject {
  */
 export interface ProjectConfigQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<string | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly exportableProject: (projectId: string) => Promise<ExportableProject | null>;
   readonly claimAttempt: IdempotencyRecords['claimAttempt'];
   readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
@@ -180,6 +183,7 @@ export const registerProjectConfigRoutes = async (
   const guard = {
     projectRole: async (projectId: string, userId: string) =>
       (await options.queries.projectRole(projectId, userId)) as never,
+    visibleProjects: options.queries.visibleProjects,
   };
   const projectOf = (request: FastifyRequest): string | undefined => {
     const value = (request.params as { project_id?: unknown }).project_id;

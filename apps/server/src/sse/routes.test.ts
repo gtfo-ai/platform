@@ -3,6 +3,7 @@ import type { UserRole } from '@platform/contracts';
 import { fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { describe, expect, it, vi } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { BadRequestError, toApiError } from '../errors.js';
 import { createMetrics } from '../metrics.js';
 import { SseHub } from './hub.js';
@@ -45,6 +46,7 @@ describe('authorisation wiring', () => {
   const PROJECT_ID = '0199aa11-2b3c-7d4e-8f90-000000000001';
 
   const access: TopicAccessDependencies = {
+    visibleProjects: everyProjectVisible,
     projectRole: async () => null,
     projectExists: async () => true,
     taskProjectId: async () => PROJECT_ID,

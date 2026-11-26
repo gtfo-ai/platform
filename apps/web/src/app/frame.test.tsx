@@ -736,6 +736,18 @@ describe('the project layout route', () => {
     expect(frame?.querySelector('h1')).toBeNull();
   });
 
+  it('shows a task the server answers 404 for as not found, never as a failure (BD-035)', async () => {
+    // The fake server answers every task read 404, which is how a hidden project's task reads.
+    start({ projects: [project(1)] }, '/tasks/00000000-0000-4000-8000-0000000003a1');
+    expect(await screen.findByText('No such task')).toBeTruthy();
+    expect(screen.queryByText('Task could not be loaded.')).toBeNull();
+    expect(
+      screen
+        .getAllByRole('link', { name: 'All projects' })
+        .some((link) => link.getAttribute('href') === '/projects'),
+    ).toBe(true);
+  });
+
   it('says an unknown key once and renders no page below it', async () => {
     start({ projects: [project(1)] }, '/projects/nope/knowledge');
     expect(await screen.findByText('No such project')).toBeTruthy();

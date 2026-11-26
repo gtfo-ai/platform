@@ -52,6 +52,7 @@ import { redaction } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { ArtifactBody, TaskEventRow } from '../queries/pipeline-queries.js';
 import { registerTaskRoutes, TASK_CALLER_FACT_ACTIONS, type TaskQueries } from './tasks.js';
@@ -143,6 +144,7 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
       world.taskScopedFor.push(taskId);
       return PROJECT;
     },
+    visibleProjects: everyProjectVisible,
     projectRole: async (projectId, userId) => {
       world.guardedFor.push({ projectId, userId });
       return world.role;

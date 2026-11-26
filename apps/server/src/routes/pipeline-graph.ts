@@ -26,6 +26,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { GraphRefusal } from '../queries/pipeline-graph.js';
 import type { PipelineGraphReaders } from '../queries/pipeline-graph-queries.js';
@@ -33,6 +34,8 @@ import { scopedProject, scopeToProject } from './scope.js';
 
 export interface PipelineGraphQueries extends PipelineGraphReaders {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
 }
 
@@ -57,7 +60,10 @@ export const registerPipelineGraphRoutes = async (
   options: { readonly queries: PipelineGraphQueries },
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
   const scope = scopeToProject({
     param: 'task_id',
     what: 'task',

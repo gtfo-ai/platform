@@ -47,6 +47,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
 import { HttpError } from '../errors.js';
 import { resolveBundleFile, resolveBundleRoot } from '../web/bundle.js';
 import { scopedProject, scopeToProject } from './scope.js';
@@ -68,6 +69,8 @@ export const exportFileName = (runId: string): string => `${runId}.tar`;
 export interface DownloadQueries {
   readonly runProjectId: (runId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  /** The caller's visible projects (BD-035, `auth/visibility.ts`). */
+  readonly visibleProjects: VisibleProjectsReader;
   /** One page of the run's transcript, **without** partial `stream_block` entries. */
   readonly transcriptPage: (
     runId: string,
@@ -93,7 +96,10 @@ export const registerDownloadRoutes = async (
   options: DownloadRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = { projectRole: options.queries.projectRole };
+  const guard = {
+    projectRole: options.queries.projectRole,
+    visibleProjects: options.queries.visibleProjects,
+  };
   const scope = scopeToProject({
     param: 'run_id',
     what: 'run',

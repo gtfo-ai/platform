@@ -2,6 +2,7 @@ import type { IdentityCandidate, JsonObject, UserRole } from '@platform/contract
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
 import { BadRequestError, toApiError } from '../errors.js';
 import {
   type IdentityMappingRecord,
@@ -142,6 +143,7 @@ describe('the identity routes (WP-31 round 2)', () => {
     });
 
     await registerOrgRoutes(app, {
+      visibleProjects: everyProjectVisible,
       // Unused by this pair: the guard is organisation-scoped, so nothing reaches a query here. A
       // route that touched the database would fail with a TypeError rather than pass quietly.
       database: {} as never,
