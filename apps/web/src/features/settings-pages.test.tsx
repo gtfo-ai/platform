@@ -119,7 +119,13 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
   if (path === '/api/org/identities' || path === '/api/org/identities/candidates') {
     return json({ items: [] });
   }
-  if (path === '/api/org/users' || path === '/api/integrations') return json({ items: [] });
+  if (
+    path === '/api/org/users' ||
+    path === '/api/org/users/invites' ||
+    path === '/api/integrations'
+  ) {
+    return json({ items: [] });
+  }
   // S-26.8a: Your accounts' two reads — nothing linked, no code asked for.
   if (path === '/api/me/identities') return json({ items: [] });
   if (path === '/api/me/identity-links') return json({ code: null, matches: [] });

@@ -69,6 +69,7 @@ const fetchFailing = (failing: string, status: number, message: string): typeof 
     if (path === '/api/org/failed-jobs') return json({ items: [], total: 0, next_cursor: null });
     if (
       path === '/api/org/users' ||
+      path === '/api/org/users/invites' ||
       path === '/api/org/budgets' ||
       path === '/api/org/identities' ||
       path === '/api/org/identities/candidates' ||
