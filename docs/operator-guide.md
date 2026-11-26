@@ -1069,6 +1069,9 @@ that key. A binding with a webhook secret waits the same way and
 up to the same timeout (since 2026-11-26: five checks 30 seconds apart parked every task whose
 pipeline took longer than about two and a half minutes); the pipeline's own event settles the gate the
 moment it arrives, and the gate's re-checks are the safety net for a webhook that was lost. A resume after a pause keeps the gate's clock; a hand-back at `ci_gate` restarts it.
+A task the wait parked is **resumed by its pipeline** when the pipeline's result arrives later on a
+binding with a webhook (BD-034's follow-ups): the gate is entered again and judges it — green moves on,
+red goes to the CI-fix loop. A poll-only binding hears no late result, so that task waits for a person.
 **What the platform retries before it asks a person** (BD-034). Every other gate that has no answer
 yet waits by time, backing off from 30 seconds to 5 minutes: 60 minutes for the provider to compute
 mergeability, 24 hours for a custom gate's declared event. A provider that does not answer a gate is
@@ -1076,6 +1079,14 @@ asked again for 24 hours. A run that could not start is retried 8 times over abo
 that ended before the model took a single turn is re-planned 6 times over about 47 minutes. A run whose
 `runner` was stopped is handed back 5 times, a usage limit is re-planned 3 times, and a lost worker's
 run is re-planned 3 times. Only past those bounds is the task parked, and the brief says what was tried.
+Since BD-034's follow-ups: a provider call a person waits on (marking a merge request ready, starting
+its pipeline, posting a review or a lint, the dependency check, a resume's head check, the review-comment
+window) is retried for about five hours, backing off to every 15 minutes — but a provider that
+**refuses** it (a credential, a permission) parks the task after three tries, as before. A re-plan lost
+to a process that stopped is re-planned by the recovery pass; a stage job that keeps failing because a
+provider or the database does not answer is re-enqueued for about four hours; and a write that loses a
+race with another writer is retried six times, backing off, before anyone is asked. The queue options
+of an existing installation are moved by `migrate` (a *queue migration*, logged as `queue_migrations`).
 
 ## 5. Upgrade
 
@@ -1795,7 +1806,8 @@ ends its own failures or relies on the retries, what a failed job of it drops, a
 its **shape** (TD-004's M7 amendment), which is what the card's last sentence reads:
 
 - **a recovery row** finds what the job left and tries once more, then makes it visible — a lost
-  stage is re-enqueued once and then escalated, a lost reminder is sent, an approved knowledge change
+  stage is re-enqueued once and then escalated (a stage whose job keeps failing because a provider or
+  the database does not answer is re-enqueued up to eight times over about four hours, BD-034), a lost reminder is sent, an approved knowledge change
   whose apply failed is re-applied once and then reads **apply failed** on the project's proposal
   queue (a maintainer approves it again to retry), and a discovery run whose findings were never
   recorded is recorded once more and then its task is escalated;

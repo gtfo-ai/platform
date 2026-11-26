@@ -548,7 +548,7 @@ running** at the timeout is waited for past it, one read every five minutes up t
 entry (BD-034, since 2026-11-26), and its failure then goes to CI fix like any other. At the timeout,
 a `manual` pipeline or no pipeline at all parks the task *Needs human* with a brief naming the
 pipeline, its status and the key — or saying *no pipeline has started for the head commit*, and for
-a `manual` pipeline that it waits for someone to start its manual job. When the pipeline has finished, **Hand back** at `ci_gate` from the
+a `manual` pipeline that it waits for someone to start its manual job. On a binding with a webhook, the pipeline's own result arriving later **resumes the gate by itself** (BD-034's follow-ups): a new entry judges it, green moves on and red goes to CI fix. On a poll-only binding, when the pipeline has finished, **Hand back** at `ci_gate` from the
 task page: that is a new entry with a fresh timeout. A **pause and resume** keeps the clock: a task resumed after its timeout is read once more and then parks; only a hand-back restarts it. (A binding with a webhook secret waits the same way since 2026-11-26 — its old five checks 30 seconds apart parked fontai's GO-705 at 2 minutes while its pipeline ran nine more — and the pipeline's own event settles the gate the moment it arrives.) A
 project with no CI at all passes the gate's pipeline half — but **only when the default branch has
 no CI file** (WP-138): a head with no pipeline on a project that has one is a pipeline that has not
