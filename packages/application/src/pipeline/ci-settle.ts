@@ -41,6 +41,7 @@ import { compilePipeline, stageOf } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { resumeOnLateCiResult } from './ci-late-result.js';
 import { failingJobs } from './ci-log.js';
 import { asksForNamedJobs } from './ci-manual-jobs.js';
 import { enqueueCiPlays } from './ci-play.js';
@@ -85,6 +86,11 @@ export const runCiSettle = async (
   const stored = await options.unitOfWork.transaction(async (scope) =>
     options.store.tasks.load(scope.tx, taskId),
   );
+  // BD-034 (BACKLOG 1658): a result for a task the CI gate's own wait parked resumes the gate.
+  if (stored !== null && stored.task.state === 'needs_human') {
+    await resumeOnLateCiResult(options, data, stored);
+    return;
+  }
   if (stored === null || stored.mr === null || stored.task.state !== 'active') {
     return;
   }

@@ -88,6 +88,10 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 1,
     how: "the loaded row's `stored.pipelineDial`",
   },
+  'packages/application/src/pipeline/ci-late-result.ts': {
+    sites: 2,
+    how: "BD-034 (BACKLOG 1658): the loaded row's `stored.pipelineDial` when it asks whether the CI wait parked the task, and the re-loaded `current.pipelineDial` inside the resuming transaction",
+  },
   'packages/application/src/pipeline/epic-split.ts': {
     sites: 1,
     how: "the loaded row's `stored.pipelineDial`",
@@ -264,9 +268,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2323 ms (median 1927 ms); 2× it, 15 s floor.
-  it('counts forty-five — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5, forty before S-28.15, forty-two before S-28.18 and S-28.20, forty-four before PR #196 — and states how each resolves the dial', () => {
+  it('counts forty-seven — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5, forty before S-28.15, forty-two before S-28.18 and S-28.20, forty-four before PR #196, forty-five before BD-034’s follow-ups — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(45);
+    expect(total).toBe(47);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

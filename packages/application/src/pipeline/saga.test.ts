@@ -43,6 +43,7 @@ import {
   type PipelineHarness,
   shownPlanOf,
 } from '../testing/pipeline-harness.js';
+import { LATE_CI_RESULT_REASON } from './ci-late-result.js';
 import { CI_WAIT_CEILING_MINUTES, CI_WAIT_OVERTIME_RECHECK_MS } from './ci-wait.js';
 import {
   answerTaskQuestion,
@@ -3986,7 +3987,7 @@ describe('the CI gate waits for a pipeline up to its CI timeout (WP-136)', () =>
   const MINUTE = 60_000;
   const POLL_ONLY = { interval_seconds: 60, receives_webhooks: false } as const;
   const WEBHOOK = { interval_seconds: 60, receives_webhooks: true } as const;
-  const pipeline = (status: 'running' | 'pending' | 'manual' | 'success') => ({
+  const pipeline = (status: 'running' | 'pending' | 'manual' | 'success' | 'failed') => ({
     id: 'pipeline-9',
     head_sha: 'b'.repeat(40),
     status,
@@ -4111,6 +4112,132 @@ describe('the CI gate waits for a pipeline up to its CI timeout (WP-136)', () =>
     expect(escalation?.payload.reason).toContain('timed out');
     expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
     expect(stageJobs(harness)).toEqual([]);
+  });
+
+  /**
+   * BD-034 (BACKLOG 1658): a pipeline result that arrives after the CI gate's own wait parked the
+   * task resumes the gate — by the pipeline, at a new attempt — and the gate's settlement judges it:
+   * green moves on, red returns to ci_fix. Anything else parked at the gate stays with its person.
+   */
+  describe('a pipeline that finishes after the wait parked its task (BD-034, BACKLOG 1658)', () => {
+    const finished = (
+      harness: PipelineHarness,
+      status: 'success' | 'failed',
+      headSha = 'b'.repeat(40),
+    ) =>
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: taskOf(harness).task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: headSha,
+        status,
+        failed_jobs: status === 'failed' ? [{ name: 'ecs', log_ref: null }] : [],
+        coverage_pct: null,
+      });
+    /** A task parked at the 60-minute timeout on a manual pipeline that later finishes as `later`. */
+    const parked = async (
+      later: 'success' | 'failed',
+      mergeRequestState: 'opened' | 'closed' = 'opened',
+    ) => {
+      const world = { status: 'manual' as 'manual' | 'success' | 'failed' };
+      const harness = harnessWith({
+        git: {
+          pollPlan: () => WEBHOOK,
+          getPipelineStatus: async () => pipeline(world.status),
+          getMergeRequest: async () => ({
+            ...mergeRequest(false),
+            state: world.status === 'manual' ? 'opened' : mergeRequestState,
+          }),
+        },
+      });
+      await harness.publish([ticketMatched()]);
+      while (taskOf(harness).task.state === 'active') {
+        await nextCheck(harness);
+      }
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
+      world.status = later;
+      return harness;
+    };
+    const resumed = (harness: PipelineHarness) =>
+      harness
+        .events()
+        .filter((entry) => entry.type === 'task.resumed')
+        .map((entry) => (entry as Extract<DomainEvent, { type: 'task.resumed' }>).payload.reason);
+
+    it('resumes the gate on a green result and moves the task on, as the pipeline', async () => {
+      const harness = await parked('success');
+      await harness.publish([finished(harness, 'success')]);
+      expect(resumed(harness)).toEqual([LATE_CI_RESULT_REASON]);
+      const entry = harness
+        .events()
+        .filter((each) => each.type === 'task.resumed')
+        .at(-1);
+      expect(entry?.actor).toMatchObject({ kind: 'system' });
+      // The second attempt judged the finished pipeline and passed it.
+      expect(ciRows(harness)).toEqual([
+        [1, 'failed', 'undecided'],
+        [2, 'completed', 'protected_paths_clean'],
+      ]);
+      expect(taskOf(harness).task.currentStage).not.toBe('ci_gate');
+      expect(taskOf(harness).task.state).not.toBe('needs_human');
+      // No human round was spent: the person did not send it back.
+      expect(taskOf(harness).task.iterationCounters.human_rounds ?? 0).toBe(0);
+    });
+
+    it('resumes the gate on a red result and returns the task to ci_fix', async () => {
+      const harness = await parked('failed');
+      await harness.publish([finished(harness, 'failed')]);
+      expect(resumed(harness)).toEqual([LATE_CI_RESULT_REASON]);
+      // The resumed attempt failed the gate and sent the task back to the CI-fix loop (whose
+      // fake agent fixes nothing here, so the loop runs on to its own bound).
+      const returns = harness
+        .events()
+        .filter((each) => each.type === 'task.stage.returned')
+        .map((each) => (each as Extract<DomainEvent, { type: 'task.stage.returned' }>).payload);
+      expect(returns[0]).toMatchObject({ from_stage: 'ci_gate', to_stage: 'implementation' });
+      expect(taskOf(harness).task.iterationCounters.ci_fix).toBeGreaterThanOrEqual(1);
+      expect(ciRows(harness)[1]?.slice(0, 1)).toEqual([2]);
+    });
+
+    it('leaves the task with its person for a result on another head, a closed merge request or a held pipeline', async () => {
+      const other = await parked('success');
+      await other.publish([finished(other, 'success', 'c'.repeat(40))]);
+      expect(taskOf(other).task.state).toBe('needs_human');
+      expect(resumed(other)).toEqual([]);
+
+      const closed = await parked('success', 'closed');
+      await closed.publish([finished(closed, 'success')]);
+      expect(taskOf(closed).task.state).toBe('needs_human');
+
+      const held = await parked('success');
+      await held.publish([
+        event('ci.pipeline.held', {
+          project_id: PROJECT,
+          task_id: taskOf(held).task.id,
+          mr: mergeRequest(false).ref,
+          head_sha: 'b'.repeat(40),
+          pipeline_id: 'pipeline-9',
+        }),
+      ]);
+      expect(taskOf(held).task.state).toBe('needs_human');
+      expect(resumed(held)).toEqual([]);
+    });
+
+    it('leaves a task parked at the gate for any other reason (the wait did not end it)', async () => {
+      const harness = await parked('success');
+      // What a convergence escalation, a conflict or a dead letter leaves: the attempt closed with
+      // no CI-wait ending.
+      const tasks = harness.store.tasks;
+      const read = tasks.stageAttemptEntry.bind(tasks);
+      (tasks as { stageAttemptEntry: typeof read }).stageAttemptEntry = async (...args) => {
+        const entry = await read(...args);
+        return entry === null ? null : { ...entry, ciEnding: null };
+      };
+      await harness.publish([finished(harness, 'success')]);
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      expect(resumed(harness)).toEqual([]);
+    });
   });
 
   /**

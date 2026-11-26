@@ -95,6 +95,8 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-60 review round 2's `ci_settle` duty: one resolution for the merge request's live head, so
   // the CI gate is settled only for a pipeline that ran on it.
   'ci-settle.ts': 1,
+  // BD-034 (BACKLOG 1658): a late pipeline result reads the live head before it resumes the gate.
+  'ci-late-result.ts': 1,
   // S-28.7: the `ci_play_manual` duty — one resolution per start of a manual job, outside a run.
   'ci-play.ts': 1,
   // WP-26's conflict warning: one resolution for the whole duty, and every peer's diff is read
