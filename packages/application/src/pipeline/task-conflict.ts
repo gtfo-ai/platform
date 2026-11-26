@@ -32,7 +32,11 @@
 import type { Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { escalateTask, IllegalTransitionError } from '@platform/domain';
-import { isConcurrencyConflict, MAX_CONCURRENCY_CONFLICT_ATTEMPTS } from '../events/concurrency.js';
+import {
+  conflictBackoffMs,
+  isConcurrencyConflict,
+  MAX_CONCURRENCY_CONFLICT_ATTEMPTS,
+} from '../events/concurrency.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
@@ -78,10 +82,21 @@ export interface TaskConflictRetryOptions {
   /** @default MAX_TASK_CONFLICT_ATTEMPTS */
   readonly attempts?: number;
   readonly logger?: Logger;
+  /**
+   * The wait between two attempts (BD-034, BACKLOG 1659: {@link conflictBackoffMs}); injected by a
+   * test that must not sleep. @default a timer
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
+const sleepFor = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 /**
- * Runs `unit` until it stops losing, at most `attempts` times.
+ * Runs `unit` until it stops losing, at most `attempts` times, backing off between attempts
+ * (BD-034, BACKLOG 1659).
  *
  * `unit` is called again from the top, so whatever it reads it reads again — this function
  * deliberately has no access to the aggregate and therefore cannot re-apply a stale one.
@@ -107,6 +122,10 @@ export const retryOnTaskConflict = async <T>(
         { task_id: options.taskId, what: options.what, attempt, attempts, err: error },
         'a task write lost a race with another writer; re-reading and deciding again',
       );
+      if (attempt < attempts) {
+        // Between transactions: the losing one has rolled back, the next has not begun.
+        await (options.sleep ?? sleepFor)(conflictBackoffMs(attempt));
+      }
     }
   }
   throw new TaskConflictExhaustedError(options.taskId, attempts, options.what, { cause: last });
