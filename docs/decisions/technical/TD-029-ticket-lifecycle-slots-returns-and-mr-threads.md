@@ -612,16 +612,20 @@ distinct (`packages/contracts/src/config.ts`, the `superRefine` of `ticketLifecy
 2. **The pass** (decision 9, Amendment F.1): when `qa_pass` is set, `isPass` additionally requires the current status to
    be in it; every other conjunct is unchanged (`leftQa || wasAtQa`, not a return status, not in `platformStatuses`). So,
    at `qa`: CR ACCEPTED and TESTING — and any status the list does not name — **wait** (`none`); IN PROGRESS, TODO,
-   WAITING FOR REVIEW **return** as before; RELESABLE after CR ACCEPTED → TESTING passes through `leftQa = TESTING`.
-   A re-entry into `qa` (a default-branch move through `rebase_gate`) writes CR ACCEPTED again, so QA is asked again;
-   should that write fail, RELESABLE is the entry and neither `leftQa` nor `wasAtQa` holds, so it waits — fail-safe.
+   WAITING FOR REVIEW **return** as before; RELESABLE passes because the entry was CR ACCEPTED (`wasAtQa`). Any
+   **re-entry** into `qa` writes the `qa` slot again (`ENTRY_SLOTS`, `packages/domain/src/lifecycle/moments.ts:47-51`),
+   so QA is asked again; should that write fail with the ticket still at RELESABLE, the entry is RELESABLE, `wasAtQa`
+   holds only if the window sees CR ACCEPTED since, and otherwise the task waits (and the page shows Amendment C's
+   *out of sync*) — never a pass the tester did not give. A person's rebase at Ready stays at Ready (TD-038 C).
 3. **Same name as `done` is allowed** (here it is required). At `qa`, `done` stays *forward* (rule 7): only words
    written after the move to RELESABLE return the task — the tester's acceptance outranks older threads, unchanged.
    `merged_gate` then writes `done` = RELESABLE, a no-op at the provider (`jira-cloud/index.ts:896`, *transition only
    if not already there*): **the platform never moves this ticket to Done**; a person does, and `closed` then ends it.
 4. **The merge asks again — "nothing else".** TD-038 decision 3's fresh check gains one item: for a task whose frozen
    `tasks.qa_stage` is true and whose binding sets `qa_pass`, the ticket's fresh status must be in `qa_pass`, else the
-   new reason **`ticket_not_qa_passed`** (a wait on the page, never an attempt). A ticket at a `qa_pass` status reads
+   new reason **`ticket_not_qa_passed`** (a wait on the page, never an attempt). The `ready_for_merge` slot's status is
+   admitted too: the platform writes it itself at Ready, after QA's pass (Amendment C (4)), so a binding mapping both
+   would otherwise wait for ever on its own write. A ticket at a `qa_pass` status reads
    `open` there even when it is no slot (today RELESABLE reads `open` only because it is the `done` slot,
    `status-disposition.ts:70-79`; an unlisted name would be judged by its Jira category and could read hands-off).
    This also covers a person moving the ticket back to TESTING **after** the pass, which no return rule hears.
