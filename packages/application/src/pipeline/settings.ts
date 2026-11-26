@@ -54,6 +54,14 @@ import type { CiConfigLocation } from '../ports/integrations/git-provider.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { BindingLifecycle } from './binding-lifecycle.js';
 
+/** The kinds of the task-management binding's lifecycle reading ({@link ProjectSettings.ticketLifecycleReading}). */
+export type TicketLifecycleReadingKind =
+  | 'lifecycle'
+  | 'none'
+  | 'no_binding'
+  | 'ambiguous'
+  | 'invalid';
+
 export interface ProjectSettings {
   readonly projectId: Id;
   /**
@@ -111,6 +119,15 @@ export interface ProjectSettings {
    * exactly as before M10: no claim, no intake skip, `status_mapping` applied.
    */
   readonly ticketLifecycle: BindingLifecycle | null;
+  /**
+   * **How {@link ticketLifecycle} was read** (TD-031's 2026-11-27 amendment item 3, BACKLOG 1672):
+   * `lifecycle` (a parsed block), `none` (one binding, no block), `no_binding`, `ambiguous` (two
+   * task-management bindings) or `invalid` (a block that fails its schema). `ticketLifecycle` is
+   * `null` for the last four alike, so a reader that must tell *no block* from *unreadable* asks
+   * this — `assignsOwner` reads the last three as **off**, as the task DTO's `owner_writes_back`
+   * does. Absent — a harness that predates it — reads as `ticketLifecycle` alone.
+   */
+  readonly ticketLifecycleReading?: TicketLifecycleReadingKind;
   /**
    * **Which ticket statuses start work and which mean a person finished it** (M28 ruling 1,
    * S-28.4): the task-management binding's status policy (`bindingStatusPolicyOf`), which — unlike

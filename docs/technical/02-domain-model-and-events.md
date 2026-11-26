@@ -307,6 +307,16 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > a provider that assigns others, not shadow), the claim keeps the ticket as `held_by:
 > 'platform_owner'` **whoever holds it, nobody and the binding's own account included**, and writes no
 > assign. An owner a worker's automatic claim set gets the binding's account in the tracker as before.
+> *As amended by TD-031's 2026-11-27 amendment (BACKLOG 1672–1674):* a project whose task-management
+> binding is ambiguous (two bindings), missing, or whose lifecycle block fails its schema writes **no**
+> owner back (`assignsOwner` reads `ProjectSettings.ticketLifecycleReading`, the task DTO's rule); a
+> `via: pick` with no `task.owner` take-audit row of the same person and owner (an automatic claim
+> recorded before the 2026-11-26 amendment) is read as `claim` by the write-back-owed reading
+> (`lastOwnerChangeViaSql`); and a write-back the tracker **refuses for good** while the ticket names
+> nobody, on a binding that claims, assigns the binding's own account instead (`assignToSelf`, keyed
+> `ticket_owner_assign_fallback:<task>:<event>`), records it as a claim's assign and drops a live
+> claim's `held_by: 'platform_owner'`, so the release unassigns it. A ticket a person holds is never
+> touched.
 > *As built at S-26.5 (TD-031's 2026-11-06 amendment item 8):* a run waiting for a claimant is a
 > **read**, never a state: no event and no column. The task read, the board and the Agents rows
 > derive `waiting` from the open offer and the claim's own predicates (technical/08, *Why a run

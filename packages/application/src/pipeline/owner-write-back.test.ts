@@ -28,6 +28,8 @@ import {
   setTaskOwnerCommand,
   type TaskOwnerCommandDependencies,
 } from './owner-sync.js';
+import { assignsOwner } from './owner-write-back.js';
+import type { TicketLifecycleReadingKind } from './settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const ALICE = '00000000-0000-4000-8000-00000000a11c' as Id;
@@ -70,6 +72,8 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
     refuse: null,
   };
   const calls: AssignCall[] = [];
+  /** Every `assignToSelf` — the binding's own account (BACKLOG 1674's fallback). */
+  const selfAssigns: AssignCall[] = [];
   let reads = 0;
   let peekStored: () => TicketAssignee | null = () => null;
   const port: Partial<TaskManagementPort> = {
@@ -104,11 +108,19 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
       state.assignee = assignee.external_id.replace(/^acct-/, '');
       return { changed, assignee };
     },
+    selfIdentity: async () => identity('bot'),
+    assignToSelf: async () => {
+      selfAssigns.push({ account: 'acct-bot', storedAtCall: peekStored() });
+      const changed = state.assignee !== 'bot';
+      state.assignee = 'bot';
+      return { changed, assignee: identity('bot') };
+    },
   };
   return {
     state,
     port,
     calls,
+    selfAssigns,
     reads: () => reads,
     watch: (peek: () => TicketAssignee | null) => {
       peekStored = peek;
@@ -145,6 +157,8 @@ const harnessFor = (
     readonly logger?: Logger;
     /** A lifecycle block of the test's own, in place of {@link lifecycle}'s. */
     readonly slots?: TicketLifecycle;
+    /** How the settings port read the binding (BACKLOG 1672); absent, as a harness before it. */
+    readonly reading?: TicketLifecycleReadingKind;
   } = {},
 ): PipelineHarness => {
   const harness = createPipelineHarness({
@@ -159,6 +173,7 @@ const harnessFor = (
           : options.assignOwner === undefined
             ? null
             : { pickUpFrom: null, slots: lifecycle(options.assignOwner) },
+      ...(options.reading === undefined ? {} : { ticketLifecycleReading: options.reading }),
     },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
@@ -312,6 +327,39 @@ describe('with the switch absent, a person’s act is written back by default (T
   });
 });
 
+// ── BACKLOG 1672: an unreadable binding writes nothing back (TD-031's 2026-11-27 item 3) ──
+
+describe('an ambiguous or schema-failing binding writes nothing back, as the task DTO says (BACKLOG 1672)', () => {
+  it('reads the switch off for every reading but a block or no block', () => {
+    const on = { ticketLifecycle: null };
+    expect(assignsOwner(on)).toBe(true);
+    expect(assignsOwner({ ...on, ticketLifecycleReading: 'none' })).toBe(true);
+    expect(assignsOwner({ ...on, ticketLifecycleReading: 'ambiguous' })).toBe(false);
+    expect(assignsOwner({ ...on, ticketLifecycleReading: 'invalid' })).toBe(false);
+    expect(assignsOwner({ ...on, ticketLifecycleReading: 'no_binding' })).toBe(false);
+    const block = (assignOwner: boolean | undefined) => ({
+      ticketLifecycle: { slots: lifecycle(assignOwner) },
+      ticketLifecycleReading: 'lifecycle' as const,
+    });
+    expect(assignsOwner(block(undefined))).toBe(true);
+    expect(assignsOwner(block(false))).toBe(false);
+  });
+
+  it.each([
+    ['two task-management bindings', 'ambiguous'],
+    ['a lifecycle block that fails its schema', 'invalid'],
+  ] as const)('%s: no duty, no call', async (_label, reading) => {
+    const ticket = tracker('alice');
+    const harness = harnessFor(ticket, { reading });
+    await harness.publish([ticketMatched()]);
+    await assign(harness, BOB);
+
+    expect(harness.store.ownershipOf(taskIdOf(harness)).ownerUserId).toBe(BOB);
+    expect(writeBackJobs(harness)).toEqual([]);
+    expect(ticket.calls).toEqual([]);
+  });
+});
+
 // ── Criterion 2: one call, preset before it, the next sync changes nothing ─
 
 describe('with the switch on, one assignTo through the executor (criterion 2)', () => {
@@ -443,6 +491,96 @@ describe('with the switch on, one assignTo through the executor (criterion 2)', 
     await outbound?.({ id: 'retry', queue: JOB_QUEUES.pipelineOutbound, data: job?.data } as never);
     expect(ticket.state.assignee).toBe('bob');
     expect(harness.store.ownershipOf(taskId).ticketAssignee).toEqual(bobsAccount);
+  });
+});
+
+// ── BACKLOG 1674: a refused write-back leaves the platform's account, not nobody ──
+
+describe('a refused write-back over nobody assigns the binding’s account, as a claim would (BACKLOG 1674)', () => {
+  const forbidden = () =>
+    new IntegrationError(
+      'forbidden',
+      'fake-jira',
+      'the binding’s account needs the Assign Issues permission',
+      { action: 'assign_to' },
+    );
+  /** A claim the claim kept for the owner's write-back: nothing assigned. */
+  const keptClaim = {
+    account_id: 'acct-bot',
+    claimed_at: '2026-06-01T09:00:30.000Z',
+    status: 'confirmed',
+    in_progress_written: false,
+    stale: false,
+    released_at: null,
+    release_cause: null,
+    stale_cause: null,
+    held_by: 'platform_owner',
+  } as const;
+
+  it('assigns the binding’s account once, records it, and drops the claim’s platform_owner mark', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    await harness.memory.transaction(async (scope) =>
+      harness.store.tasks.saveTicketClaim(scope.tx, taskId, keptClaim as never),
+    );
+    ticket.state.refuse = forbidden();
+
+    await assign(harness, BOB);
+
+    expect(ticket.calls.map((call) => call.account)).toEqual(['acct-bob']);
+    expect(ticket.selfAssigns).toHaveLength(1);
+    expect(ticket.state.assignee).toBe('bot');
+    expect(harness.audit.entriesFor('assign_to_self').map((entry) => entry.status)).toEqual(['ok']);
+    // The platform's owner stands; the stored assignee is the binding's own account.
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+      ticketAssignee: { external_id: 'acct-bot', platform: true },
+    });
+    // The release now unassigns what the platform put there.
+    const claim = await harness.memory.transaction(async (scope) =>
+      harness.store.tasks.ticketClaim(scope.tx, taskId),
+    );
+    expect(claim?.held_by).toBeUndefined();
+  });
+
+  it('never touches a ticket a person holds', async () => {
+    const ticket = tracker('alice');
+    const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
+    await harness.publish([ticketMatched()]);
+    ticket.state.refuse = forbidden();
+
+    await assign(harness, BOB);
+
+    expect(ticket.calls.map((call) => call.account)).toEqual(['acct-bob']);
+    expect(ticket.selfAssigns).toEqual([]);
+    expect(ticket.state.assignee).toBe('alice');
+  });
+
+  it('assigns nothing on a binding that does not claim', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([ticketMatched()]);
+    ticket.state.refuse = forbidden();
+
+    await assign(harness, BOB);
+
+    expect(ticket.calls.map((call) => call.account)).toEqual(['acct-bob']);
+    expect(ticket.selfAssigns).toEqual([]);
+    expect(ticket.state.assignee).toBeNull();
+  });
+
+  it('assigns nothing when the write-back landed', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
+    await harness.publish([ticketMatched()]);
+
+    await assign(harness, BOB);
+
+    expect(ticket.state.assignee).toBe('bob');
+    expect(ticket.selfAssigns).toEqual([]);
   });
 });
 

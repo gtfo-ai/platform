@@ -43,6 +43,12 @@
  *      (still only while the column holds the preset). Otherwise the stale preset would make the
  *      next sync read the tracker's real assignee as a change and drop the platform's owner. A read
  *      that fails leaves the preset and logs it (the backlog 1420 case, closed here).
+ *   7. **after a terminal refusal over nobody** (TD-031's 2026-11-27 amendment item 5, BACKLOG 1674)
+ *      — on a binding whose lifecycle claims, while the ticket still names nobody and the owner is
+ *      still the event's — assigns the **binding's own account** as an ordinary claim would
+ *      (`assignBindingAccountOverNobody`), so the agent never works a ticket that shows nobody. A
+ *      ticket a person holds is never touched. An **expired** last try does not reach it (BACKLOG
+ *      1675).
  *
  * **Residuals, stated.** Jira has no conditional assign: a person who changes the tracker between
  * the preset and the `PUT` is overwritten by it, and the next tracker read then follows the ticket
@@ -56,6 +62,7 @@ import {
   assignOwnerOn,
   intendedTicketAssignee,
   isTerminalTaskState,
+  lifecycleClaims,
   type OwnershipDecision,
   ownerChangeWritesBack,
   ownerWriteBackBlocker,
@@ -76,12 +83,15 @@ import {
   integrationsForProject,
   namesAProviderTicket,
   noRunScopedSecrets,
+  type PipelineIntegrations,
+  ticketReads,
   ticketWrites,
 } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData, type TaskTransactionOptions } from './jobs.js';
-import { TaskOwnerConflictError } from './owner-sync.js';
+import { recordClaimAssign, TaskOwnerConflictError } from './owner-sync.js';
 import type { PipelineSagaOptions } from './saga.js';
-import type { PipelineStore } from './store.js';
+import type { TicketLifecycleReadingKind } from './settings.js';
+import type { PipelineStore, StoredTask } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
 import { readTicketForTask } from './ticket-snapshot.js';
 
@@ -90,13 +100,24 @@ export const OWNER_WRITE_BACK_HANDLER = 'pipeline.ticket.owner_assign';
 
 /**
  * Whether the binding writes the owner back — on unless its lifecycle block says
- * `assign_owner: false` (`assignOwnerOn`, TD-031's second 2026-11-26 amendment item 1). A project
- * with no lifecycle reading (no block, no binding) is on; a missing binding is the duty's
- * `no_binding` skip.
+ * `assign_owner: false` (`assignOwnerOn`, TD-031's second 2026-11-26 amendment item 1). A binding
+ * with no block is on. **No binding, two task-management bindings, or a block that fails its
+ * schema is off** (TD-031's 2026-11-27 amendment item 3, BACKLOG 1672): the loader refuses that
+ * project's or binding's every call, so a write-back would only fail and retry — the one rule the
+ * task DTO's `owner_writes_back` reads too (`projectsAssigningOwners` in
+ * `apps/server/src/queries/pipeline-queries.ts` asks this function). A settings reader that does
+ * not say how it read the lifecycle (`ticketLifecycleReading` absent) is read off the block alone.
  */
 export const assignsOwner = (settings: {
   readonly ticketLifecycle: { readonly slots: { readonly assign_owner?: boolean } } | null;
-}): boolean => assignOwnerOn(settings.ticketLifecycle?.slots);
+  readonly ticketLifecycleReading?: TicketLifecycleReadingKind;
+}): boolean => {
+  const reading = settings.ticketLifecycleReading;
+  if (reading !== undefined && reading !== 'lifecycle' && reading !== 'none') {
+    return false;
+  }
+  return assignOwnerOn(settings.ticketLifecycle?.slots);
+};
 
 /** The write's idempotency key: the task and the owner change it writes back — platform ids only. */
 export const ownerWriteBackKeyFor = (taskId: Id, causeEventId: Id): string =>
@@ -187,7 +208,15 @@ export type OwnerWriteBackOutcome =
         | 'no_binding'
         | 'provider_cannot_assign';
     }
-  | { readonly kind: 'refused'; readonly code: IntegrationError['code'] };
+  | {
+      readonly kind: 'refused';
+      readonly code: IntegrationError['code'];
+      /**
+       * TD-031's 2026-11-27 amendment item 5 (BACKLOG 1674): the refusal left the ticket with
+       * nobody, so the binding's own account was assigned as an ordinary claim would.
+       */
+      readonly bindingAccountAssigned: boolean;
+    };
 
 const SKIP_WORDS: Readonly<Record<string, string>> = {
   task_gone: 'the task no longer exists',
@@ -441,6 +470,147 @@ export const runTicketOwnerAssign = async (
       { task_id: taskId, owner_user_id: ownerUserId, code, err: error },
       'ticket_owner_assign: the tracker refused to assign the ticket to its owner; the platform’s owner stands, and the stored assignee is put back',
     );
-    return { kind: 'refused', code };
+    const bindingAccountAssigned = shadow
+      ? false
+      : await assignBindingAccountOverNobody(options, {
+          stored,
+          integrations,
+          event,
+          causeEventId: data.cause_event_id as Id,
+          logger,
+        });
+    return { kind: 'refused', code, bindingAccountAssigned };
+  }
+};
+
+/** The idempotency key of the fallback assign: the task and the owner change it stands in for. */
+export const ownerWriteBackFallbackKeyFor = (taskId: Id, causeEventId: Id): string =>
+  `ticket_owner_assign_fallback:${taskId}:${causeEventId}`;
+
+/**
+ * **A refused write-back leaves the ticket with the platform's account, not with nobody** (TD-031's
+ * 2026-11-27 amendment item 5, BACKLOG 1674). While a person's write-back is owed the claim keeps the
+ * ticket `held_by: 'platform_owner'` and assigns nothing, even over nobody; when the write-back is
+ * then refused for good, the ticket would show nobody while the agent works. So, after the refusal:
+ *
+ *  1. only on a binding whose lifecycle **claims** (an ordinary claim would have assigned its
+ *     account; a binding that does not claim never shows it);
+ *  2. **re-reads the ticket** and goes on only while it names **nobody** — a ticket a person holds,
+ *     or one the binding already holds, is never touched; a read that fails or answers no ticket
+ *     writes nothing;
+ *  3. re-validates the task in a transaction (live, and the owner still the event's — a later owner
+ *     change writes itself back);
+ *  4. calls `assignToSelf` outside any transaction, through `IntegrationActionExecutor`, keyed by
+ *     the task and the owner change ({@link ownerWriteBackFallbackKeyFor}), so a redelivered job
+ *     replays it;
+ *  5. records it as the claim does: `ticket_assignee` names the binding's account
+ *     (`recordClaimAssign`), and a live claim kept `held_by: 'platform_owner'` loses that mark, so
+ *     the release unassigns the account the platform put there.
+ *
+ * Every failure is logged and swallowed: the refusal already ended the job, and this is a mark on
+ * the tracker, not the owner (the platform's owner stands either way). Jira has no conditional
+ * assign, so a person who takes the ticket between the read and the `PUT` is overwritten by it —
+ * the same residual the write-back states (backlog 1421).
+ */
+const assignBindingAccountOverNobody = async (
+  options: TaskTransactionOptions,
+  input: {
+    readonly stored: StoredTask;
+    readonly integrations: PipelineIntegrations;
+    readonly event: { readonly ownerUserId: Id; readonly ownerChangedAt: IsoDateTime };
+    readonly causeEventId: Id;
+    readonly logger: Logger;
+  },
+): Promise<boolean> => {
+  const { stored, integrations, logger } = input;
+  const task = stored.task;
+  const fields = { task_id: task.id, owner_user_id: input.event.ownerUserId };
+  try {
+    const settings = await options.settings.forProject(task.projectId);
+    if (settings.ticketLifecycle === null || !lifecycleClaims(settings.ticketLifecycle.slots)) {
+      return false;
+    }
+    const context = { projectId: task.projectId, taskId: task.id };
+    const read = await ticketReads(integrations).ticket(task.ticket, context);
+    if (read === null || read.assignee !== null) {
+      return false;
+    }
+    const due = await options.unitOfWork.transaction(async (scope) => {
+      const current = await options.store.tasks.load(scope.tx, task.id);
+      return (
+        current !== null &&
+        !isTerminalTaskState(current.task.state) &&
+        ownerWriteBackStillDue(
+          await options.store.tasks.ownership(scope.tx, task.id),
+          input.event,
+        ) === null
+      );
+    });
+    if (!due) {
+      return false;
+    }
+    const self = await ticketReads(integrations).selfIdentity(context);
+    if (self === null) {
+      return false;
+    }
+    const assigned = await ticketWrites(integrations).assignToSelf(task.ticket, {
+      ...context,
+      mode: task.mode,
+      causeEventId: input.causeEventId,
+      idempotencyKey: ownerWriteBackFallbackKeyFor(task.id, input.causeEventId),
+      self,
+    });
+    if (assigned === null) {
+      return false;
+    }
+    const redactor = integrations.taskManagement?.redactor;
+    const name = self.display_name ?? null;
+    const selfDisplayName =
+      name === null || name.length === 0 || redactor === undefined
+        ? null
+        : redactor.redactText(name).value;
+    await retryOnTaskConflict(
+      {
+        taskId: task.id,
+        what: 'recording the binding’s assign after a refused write-back',
+        logger,
+      },
+      async () =>
+        options.unitOfWork.transaction(async (scope) => {
+          await recordClaimAssign(options, scope.tx, {
+            projectId: task.projectId,
+            taskId: task.id,
+            self,
+            selfDisplayName,
+          });
+          const claim = await options.store.tasks.ticketClaim(scope.tx, task.id);
+          if (
+            claim !== null &&
+            !claim.stale &&
+            claim.released_at === null &&
+            claim.held_by === 'platform_owner'
+          ) {
+            const { held_by: _kept, ...assignedClaim } = claim;
+            await options.store.tasks.saveTicketClaim(scope.tx, task.id, {
+              ...assignedClaim,
+              account_id: self.external_id.slice(0, 255),
+            });
+          }
+        }),
+    );
+    logger.info(
+      fields,
+      'ticket_owner_assign: the refused write-back left the ticket with nobody, so the binding’s own account holds it, as an ordinary claim would',
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof TransactionOpenError) {
+      throw error;
+    }
+    logger.warn(
+      { ...fields, err: error },
+      'ticket_owner_assign: after a refused write-back the binding’s own account could not be assigned; the ticket may show nobody until a person or the next claim assigns it',
+    );
+    return false;
   }
 };

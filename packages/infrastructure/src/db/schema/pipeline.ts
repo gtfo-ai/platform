@@ -678,6 +678,11 @@ export const runOffers = pgTable('run_offers', {
   serverFrom: timestamp('server_from', { withTimezone: true }),
   workersFrom: timestamp('workers_from', { withTimezone: true }),
   excludedWorkerIds: uuid('excluded_worker_ids').array().notNull().default(sql`'{}'`),
+  // BACKLOG 1670 (migration 0124): when the offer excluded each machine, keyed by worker id.
+  excludedWorkerSince: jsonb('excluded_worker_since')
+    .$type<Record<string, string>>()
+    .notNull()
+    .default({}),
   imageDigests: jsonb('image_digests').$type<JsonObject>(),
   runTokenHash: text('run_token_hash'),
   runTokenEpoch: integer('run_token_epoch'),

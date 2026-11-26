@@ -15,6 +15,7 @@ import type {
   DomainEvent,
   Id,
   IsoDateTime,
+  Slug,
   RunPackage as WorkerRunPackage,
 } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
@@ -1292,6 +1293,97 @@ describe('a started or automatically claimed task has an owner (TD-031 2026-11-2
     // Bob's machine still does not: the task is Alice's.
     expect(await claimAs(w, W2)).toEqual({ kind: 'none' });
     expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId: w.runId });
+  });
+
+  /**
+   * BACKLOG 1670 (TD-031's 2026-11-27 amendment item 1): the backoff is per machine — another
+   * machine's later release on the same offer does not restart the owner's machine's clock.
+   */
+  it('another machine’s release does not restart the owner’s machine’s backoff', async () => {
+    const w = await world({ before: membersOf });
+    const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
+    policy(w, W1, 'mine_and_unassigned');
+    policy(w, W2, 'everything');
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId: w.runId });
+    expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBe(ALICE);
+    expect(
+      await w.remote.release({
+        runId: w.runId,
+        workerId: W1,
+        epoch: 1,
+        reason: 'provision_failed',
+        now: w.harness.clock.now(),
+      }),
+    ).toBe('released');
+    // Five minutes on, Bob's `everything` machine takes Alice's task and its start fails too.
+    w.harness.clock.advance(OWNER_EXCLUSION_BACKOFF_MS / 2);
+    expect(await claimAs(w, W2)).toMatchObject({ kind: 'claimed', runId: w.runId });
+    expect(
+      await w.remote.release({
+        runId: w.runId,
+        workerId: W2,
+        epoch: 2,
+        reason: 'provision_failed',
+        now: w.harness.clock.now(),
+      }),
+    ).toBe('released');
+    // Ten minutes after Alice's machine was excluded — five after Bob's — hers takes it again.
+    w.harness.clock.advance(OWNER_EXCLUSION_BACKOFF_MS / 2 - 1_000);
+    expect(await claimAs(w, W1)).toEqual({ kind: 'none' });
+    w.harness.clock.advance(1_000);
+    expect(await claimAs(w, W2)).toEqual({ kind: 'none' });
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId: w.runId });
+  });
+
+  /**
+   * BACKLOG 1670: a re-planned entry does not carry the owner's machine once its backoff lapsed,
+   * and carries every other machine with its own instant (the SQL's half is
+   * `claim-policy.integration.test.ts`'s).
+   */
+  it('a re-plan drops the owner’s lapsed machine and carries the rest with their own instants', async () => {
+    const w = await world({ before: membersOf });
+    const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
+    policy(w, W1, 'mine_and_unassigned');
+    policy(w, W2, 'everything');
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId: w.runId });
+    const aliceExcludedAt = w.harness.clock.now();
+    await w.remote.release({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      reason: 'provision_failed',
+      now: aliceExcludedAt,
+    });
+    w.harness.clock.advance(60_000);
+    expect(await claimAs(w, W2)).toMatchObject({ kind: 'claimed', runId: w.runId });
+    const bobExcludedAt = w.harness.clock.now();
+    await w.remote.release({
+      runId: w.runId,
+      workerId: W2,
+      epoch: 2,
+      reason: 'provision_failed',
+      now: bobExcludedAt,
+    });
+    const offer = w.harness.store.offerRows().find((row) => row.runId === w.runId);
+    const carried = (now: IsoDateTime) =>
+      w.harness.memory.transaction(async (scope) =>
+        w.harness.store.offers.carriedExclusions(scope.tx, {
+          taskId,
+          stage: offer?.stage as Slug,
+          attempt: offer?.attempt ?? 1,
+          now,
+        }),
+      );
+    const after = (ms: number) =>
+      new Date(Date.parse(aliceExcludedAt) + ms).toISOString() as IsoDateTime;
+    expect(await carried(after(OWNER_EXCLUSION_BACKOFF_MS - 1_000))).toEqual([
+      { workerId: W1, since: aliceExcludedAt },
+      { workerId: W2, since: bobExcludedAt },
+    ]);
+    // Alice owns the task: her machine's backoff lapsed, so it is not carried. Bob's always is.
+    expect(await carried(after(OWNER_EXCLUSION_BACKOFF_MS))).toEqual([
+      { workerId: W2, since: bobExcludedAt },
+    ]);
   });
 
   it('assigns nothing when the worker’s person may not own in the project', async () => {

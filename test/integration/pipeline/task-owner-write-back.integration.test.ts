@@ -12,7 +12,9 @@
  *     owner a worker's automatic claim set (`via: claim`), and a project whose binding says
  *     `false`.
  *  3. **How the owner was last set** (`TaskOwnerDirectory.lastOwnerChangeVia`): the newest
- *     `task.owner.changed`'s `via` off the task's own log, `null` for none.
+ *     `task.owner.changed`'s `via` off the task's own log, `null` for none — and a `pick` with no
+ *     take-audit row of the same person and owner (an automatic claim recorded before TD-031's
+ *     second 2026-11-26 amendment) reads `claim` (BACKLOG 1673).
  *
  * The duty itself is `packages/application/src/pipeline/owner-write-back.test.ts`'s.
  */
@@ -243,6 +245,30 @@ const ownerChangedOnLog = async (
   );
 };
 
+/**
+ * The `human_actions` row a person's *take this one* writes beside its owner change
+ * (`createPostgresWorkerTakeAudit`), under the worker's person.
+ */
+const pickAudited = async (taskId: Id, owner: Id): Promise<void> => {
+  const workerId = nextId();
+  await query(
+    `insert into human_actions (task_id, user_id, action, params)
+     values ($1, $2, 'task.owner', $3::jsonb)`,
+    [
+      taskId,
+      owner,
+      JSON.stringify({
+        user_id: owner,
+        via: 'pick',
+        worker_id: workerId,
+        run_id: nextId(),
+        changed: true,
+        owner_user_id: owner,
+      }),
+    ],
+  );
+};
+
 describe('how the owner was last set (TaskOwnerDirectory.lastOwnerChangeVia, TD-031 2026-11-26)', () => {
   it('answers the newest owner change’s via, and null for a task whose owner never changed', async () => {
     const ask = (taskId: Id) => within((tx) => store.owners.lastOwnerChangeVia(tx, taskId));
@@ -254,6 +280,24 @@ describe('how the owner was last set (TaskOwnerDirectory.lastOwnerChangeVia, TD-
     // A person's take after the automatic claim: the newest change decides.
     await ownerChangedOnLog(claimed, 2, 'command', users.bob);
     expect(await ask(claimed)).toBe('command');
+  });
+
+  it('reads a pick with no take audit as a claim, and a pick with one as a pick (BACKLOG 1673)', async () => {
+    const ask = (taskId: Id) => within((tx) => store.owners.lastOwnerChangeVia(tx, taskId));
+    // An automatic claim recorded `via: pick` before TD-031's second 2026-11-26 amendment.
+    const legacy = await ownedTask(optedIn, users.bob);
+    await ownerChangedOnLog(legacy, 1, 'pick', users.bob);
+    expect(await ask(legacy)).toBe('claim');
+    // A person's take: the audit row names the same owner, written by the same person.
+    const taken = await ownedTask(optedIn, users.bob);
+    await ownerChangedOnLog(taken, 1, 'pick', users.bob);
+    await pickAudited(taken, users.bob);
+    expect(await ask(taken)).toBe('pick');
+    // Another owner's audit row on the task does not make Bob's pick a person's act.
+    const otherAudit = await ownedTask(optedIn, users.bob);
+    await ownerChangedOnLog(otherAudit, 1, 'pick', users.bob);
+    await pickAudited(otherAudit, users.dora);
+    expect(await ask(otherAudit)).toBe('claim');
   });
 });
 
@@ -286,6 +330,10 @@ describe('the task DTO’s owner_writes_back (criterion 4)', () => {
     await ownerChangedOnLog(autoClaimed, 1, 'claim', users.bob);
     const picked = await ownedTask(optedIn, users.bob);
     await ownerChangedOnLog(picked, 1, 'pick', users.bob);
+    await pickAudited(picked, users.bob);
+    // BACKLOG 1673: a pick with no take audit — an automatic claim before the amendment.
+    const legacyPick = await ownedTask(optedIn, users.bob);
+    await ownerChangedOnLog(legacyPick, 1, 'pick', users.bob);
 
     const writesBack = async (projectId: Id): Promise<Record<string, boolean | undefined>> =>
       Object.fromEntries(
@@ -303,6 +351,7 @@ describe('the task DTO’s owner_writes_back (criterion 4)', () => {
       platformTicket: inProject[platformTicket],
       autoClaimed: inProject[autoClaimed],
       picked: inProject[picked],
+      legacyPick: inProject[legacyPick],
     }).toEqual({
       bobs: true,
       doras: false,
@@ -311,6 +360,7 @@ describe('the task DTO’s owner_writes_back (criterion 4)', () => {
       platformTicket: false,
       autoClaimed: false,
       picked: true,
+      legacyPick: false,
     });
     expect((await writesBack(optedOut))[elsewhere]).toBe(false);
     // The switch's default is on: a block that does not name it, and no block at all.

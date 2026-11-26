@@ -81,9 +81,30 @@ export const RUN_OFFERS_TOPIC = 'run_offers';
  * {@link RUN_START_RETRY_MAX_MS} (ten minutes), because an excluded machine is one whose start did
  * not hold. With the default offer timeout (24 h) a machine of the owner's that keeps failing is
  * re-tried at most 144 times before the offer expires and escalates; a usage-limited one waits
- * for its pause as well (`workers.paused_until`), whichever is later.
+ * for its pause as well (`workers.paused_until`), whichever is later. It is the **ceiling**: an
+ * offer whose timeout is shorter than twice this waits half its timeout instead
+ * ({@link ownerExclusionBackoffMs}, BACKLOG 1671).
  */
 export const OWNER_EXCLUSION_BACKOFF_MS = RUN_START_RETRY_MAX_MS;
+
+/**
+ * **How long this offer's exclusion keeps the owner's machine off** (TD-031's 2026-11-27
+ * amendment item 2, BACKLOG 1671): {@link OWNER_EXCLUSION_BACKOFF_MS}, or half the offer's own
+ * timeout (`expires_at − offered_at`, which `routeOffer` writes from `offer_timeout_seconds`) when
+ * that is shorter — so an owned re-offer's owner machine may always take it before the offer
+ * expires and escalates. An offer with no `expires_at` (written before WP-278) never expires and
+ * gets the whole backoff. `ownerExclusionBackoffSql` in `postgres-run-offers.ts` spells the same.
+ */
+export const ownerExclusionBackoffMs = (offer: {
+  readonly offeredAt: IsoDateTime;
+  readonly expiresAt: IsoDateTime | null;
+}): number =>
+  offer.expiresAt === null
+    ? OWNER_EXCLUSION_BACKOFF_MS
+    : Math.min(
+        OWNER_EXCLUSION_BACKOFF_MS,
+        Math.max(0, Date.parse(offer.expiresAt) - Date.parse(offer.offeredAt)) / 2,
+      );
 
 /**
  * **Whether an offer's exclusion still refuses a worker** — the rule `workerEligibleSql` and the
@@ -92,34 +113,42 @@ export const OWNER_EXCLUSION_BACKOFF_MS = RUN_START_RETRY_MAX_MS;
  * - a worker the offer does not exclude is never refused by this;
  * - an excluded worker whose user is **not** the person the offer is "mine" of (the task's owner,
  *   an ask's asker — `offerIsMineSql`'s rule) stays excluded for the offer's life (TD-031 §12);
- * - an excluded worker of **that** person's is refused only until {@link OWNER_EXCLUSION_BACKOFF_MS}
- *   after `excludedSince` — {@link exclusionClock}'s instant.
+ * - an excluded worker of **that** person's is refused only until `backoffMs`
+ *   ({@link ownerExclusionBackoffMs}, BACKLOG 1671) after `excludedSince` — that machine's own
+ *   instant, {@link exclusionClock}'s answer (BACKLOG 1670).
  */
 export const exclusionRefuses = (input: {
   readonly excluded: boolean;
   readonly offerIsMine: boolean;
   readonly excludedSince: IsoDateTime;
+  readonly backoffMs: number;
   readonly now: IsoDateTime;
 }): boolean =>
   input.excluded &&
   !(
-    input.offerIsMine &&
-    Date.parse(input.now) >= Date.parse(input.excludedSince) + OWNER_EXCLUSION_BACKOFF_MS
+    input.offerIsMine && Date.parse(input.now) >= Date.parse(input.excludedSince) + input.backoffMs
   );
 
 /**
- * **When an offer's exclusions were made**: `excluded_worker_ids` carries no instant of its own, so
- * the later of the offer's `offered_at` (a re-planned entry's carried exclusions are written then)
- * and its `released_at` (a release appends its worker then). One clock for the whole list: a later
- * release by another machine restarts the owner's machine's wait too, which only waits longer.
+ * **When an offer excluded one machine** (TD-031's 2026-11-27 amendment item 1, BACKLOG 1670): the
+ * instant recorded for that machine (`excluded_worker_since`, migration 0124 — the release that
+ * excluded it, or the instant a re-planned entry carried with it), so another machine's release
+ * never restarts its clock. A machine with no recorded instant — an offer written before 0124, or
+ * a release by a process that predates it — falls back to the later of the offer's `offered_at`
+ * and `released_at`, the one clock the whole list read before.
  */
 export const exclusionClock = (offer: {
   readonly offeredAt: IsoDateTime;
   readonly releasedAt: IsoDateTime | null;
-}): IsoDateTime =>
-  offer.releasedAt !== null && Date.parse(offer.releasedAt) > Date.parse(offer.offeredAt)
+  readonly since?: IsoDateTime | undefined;
+}): IsoDateTime => {
+  if (offer.since !== undefined) {
+    return offer.since;
+  }
+  return offer.releasedAt !== null && Date.parse(offer.releasedAt) > Date.parse(offer.offeredAt)
     ? offer.releasedAt
     : offer.offeredAt;
+};
 
 /**
  * **The one claim** (TD-031 §2). Every claimant calls this and nothing else touches an offer's
@@ -151,6 +180,11 @@ export interface OfferRunInput {
    * WP-286, TD-031 §12; `RunOfferRepository.carriedExclusions`). Absent is none.
    */
   readonly excludedWorkerIds?: readonly Id[];
+  /**
+   * When each of {@link excludedWorkerIds} was excluded (BACKLOG 1670): a carried machine keeps
+   * its own instant rather than restarting at this offer's. An id with none is excluded at `now`.
+   */
+  readonly excludedSince?: Readonly<Record<string, IsoDateTime>>;
 }
 
 /**
@@ -219,7 +253,10 @@ export const offerRun = async (
     routing,
     ...(input.excludedWorkerIds === undefined || input.excludedWorkerIds.length === 0
       ? {}
-      : { excludedWorkerIds: input.excludedWorkerIds }),
+      : {
+          excludedWorkerIds: input.excludedWorkerIds,
+          ...(input.excludedSince === undefined ? {} : { excludedSince: input.excludedSince }),
+        }),
   });
   await scope.broadcast.publish({
     topic: RUN_OFFERS_TOPIC,

@@ -1211,6 +1211,21 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        * for one until its `expires_at` (WP-278's `offer_timeout`), when the offer-timeout recovery
        * row withdraws it and escalates the task (`../recovery/offer-timeout.ts`).
        */
+      const offeredAt = context.clock.now();
+      /**
+       * WP-286 (TD-031 §12): a re-planned entry carries its previous offer's exclusions, plus
+       * the worker that lost the run — so the second run goes to another claimant. A usage
+       * limit excludes nobody: the limited worker's own pause keeps it off until its reset
+       * (TD-031's 2026-11-05 amendment). An entry's first offer carries nothing. Each carried
+       * machine keeps its own instant, and an owner's machine whose backoff lapsed is not carried
+       * (TD-031's 2026-11-27 amendment item 1, BACKLOG 1670).
+       */
+      const carried = await store.offers.carriedExclusions(scope.tx, {
+        taskId: job.taskId,
+        stage: job.stage,
+        attempt: job.attempt,
+        now: offeredAt,
+      });
       const offered = await offerRun(
         store,
         scope,
@@ -1218,22 +1233,15 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           run: created.aggregate,
           kind: 'stage',
           offerId: context.ids.next(),
-          now: context.clock.now(),
+          now: offeredAt,
           // S-26.1 (closes backlog 730, TD-031's 2026-11-06 amendment item 6): the task's owner
           // plays the assignee, read in this transaction — the head start goes to their machine
           // while it is online, its scope takes the project and it is not pick-only.
           assigneeUserId: (await store.tasks.ownership(scope.tx, task.id)).ownerUserId,
-          /**
-           * WP-286 (TD-031 §12): a re-planned entry carries its previous offer's exclusions, plus
-           * the worker that lost the run — so the second run goes to another claimant. A usage
-           * limit excludes nobody: the limited worker's own pause keeps it off until its reset
-           * (TD-031's 2026-11-05 amendment). An entry's first offer carries nothing.
-           */
-          excludedWorkerIds: await store.offers.carriedExclusions(scope.tx, {
-            taskId: job.taskId,
-            stage: job.stage,
-            attempt: job.attempt,
-          }),
+          excludedWorkerIds: carried.map((exclusion) => exclusion.workerId),
+          excludedSince: Object.fromEntries(
+            carried.map((exclusion) => [exclusion.workerId, exclusion.since]),
+          ),
         },
         context,
       );

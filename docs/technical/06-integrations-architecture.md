@@ -162,8 +162,11 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 > `ticketWrites.assignTo` (`assign_to` on the audit row, the account id in its payload, never a display
 > name), from the `ticket_owner_assign` duty (`pipeline/owner-write-back.ts`), for a person's own act
 > (a manual Start, *Take it*, *Assign…*, a pick — never a worker's automatic claim), unless the binding
-> sets `lifecycle.assign_owner: false` (default `true` since TD-031's second 2026-11-26 amendment); the
-> duty's re-validation and its preset and restore of `tasks.ticket_assignee` are technical/02's.
+> sets `lifecycle.assign_owner: false` (default `true` since TD-031's second 2026-11-26 amendment), or
+> its binding is ambiguous or fails its schema (off since the 2026-11-27 amendment); the
+> duty's re-validation and its preset and restore of `tasks.ticket_assignee` are technical/02's. A
+> terminal refusal over an **unassigned** ticket on a claiming binding is followed by one
+> `assignToSelf` (`assign_to_self` on the audit row, the 2026-11-27 amendment item 5).
 
 ### GitProvider
 ```

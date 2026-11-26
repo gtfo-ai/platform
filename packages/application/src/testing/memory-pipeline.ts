@@ -23,11 +23,11 @@
  * | 12 | `tasks.ticketStatusChangesSinceEntry` (WP-178) reads the **committed** log through {@link MemoryPipelineStoreOptions.committedLog}, ordered by `position`; PostgreSQL's query also sees the calling transaction's own staged appends. Unwired, it answers `[]`. | **same, when wired** | Its one caller, the human-return window, asks in a job's own transaction about events earlier transactions committed (the task's entry into `qa`, a webhook's status change); the predicate — the newest entry, the project stream, the ticket by id or key — is the SQL's, and the contract suite drives it against both stores. |
  * | 14 | The **owner directory** (S-26.1, `owners`) answers from {@link MemoryPipelineStore.seedIdentity}, {@link MemoryPipelineStore.seedProjectMember} and {@link MemoryPipelineStore.seedBindingAccount} where PostgreSQL joins `user_identities`, `users`, `project_members` and `bindings.account_identity`. Unseeded, every assignee is a `person` and nobody may own a task. `personIdentity` (S-26.3) answers the first seeded link, where the SQL orders by `created_at`. | **same** on the predicate, **stricter** unseeded | The SQL's order — a linked member first, then a machine, then a binding's account — is the one {@link classify} applies; that the effective role is the higher of the organisation role and a membership, and that a disabled user (`users.status`) may own nothing, is the SQL's alone, asserted by `test/integration/pipeline/task-owner.integration.test.ts`. |
  * | 13 | A **remote worker's claim** (WP-281) asks {@link MemoryPipelineStoreOptions.remoteWorkers} and {@link MemoryPipelineStoreOptions.runCredentialSource} where the SQL claim joins `workers`, `users`, `project_members`, `bindings` and `integrations` in its one statement; the same callback fences `finish`, `renewLease` and the spawn marker of a run a worker holds (backlog 714's `runHolderUsableSql`). Unwired, no worker is eligible and a worker-held run's fence never holds. | **same** on the predicates, **stricter** unwired | That the predicates are asked **in the committing statement** — a revoke that commits between a request's authentication and its write is seen — is PostgreSQL's isolation, asserted by `test/integration/pipeline/remote-claim.integration.test.ts`; divergence 4 is why it cannot be shown here. |
- * | 15 | A worker's **claim policy** (S-26.4) is the domain's `claimPolicyTakes` over this store's ownership map and directory, as the SQL's `workerPolicyTakesSql`; an **ask's** "mine" is read off the offer's assignee — the asker, which the ask executor always writes there — where the SQL reads `task_asks.asked_by_user_id`, and the offers list, the pick refusal and `expiredOpen`'s `owner` (BACKLOG 1661) name an owner with an empty `name` (no `users` here). An excluded machine of the offer's owner is eligible again after `OWNER_EXCLUSION_BACKOFF_MS` by the same `exclusionRefuses` the SQL's `exclusionAdmitsSql` spells. | **same** on the predicate, **kinder** on an ask whose offer named no assignee | The policy × task matrix, the ask's asker and the owner's name are asserted against PostgreSQL in `test/integration/pipeline/claim-policy.integration.test.ts`. |
+ * | 15 | A worker's **claim policy** (S-26.4) is the domain's `claimPolicyTakes` over this store's ownership map and directory, as the SQL's `workerPolicyTakesSql`; an **ask's** "mine" is read off the offer's assignee — the asker, which the ask executor always writes there — where the SQL reads `task_asks.asked_by_user_id`, and the offers list, the pick refusal and `expiredOpen`'s `owner` (BACKLOG 1661) name an owner with an empty `name` (no `users` here). An excluded machine of the offer's owner is eligible again after `ownerExclusionBackoffMs` (BACKLOG 1671) from its own instant (`excluded_worker_since`, BACKLOG 1670) by the same `exclusionRefuses` the SQL's `exclusionAdmitsSql` spells, and `carriedExclusions` drops one whose backoff lapsed by the same rule. | **same** on the predicate, **kinder** on an ask whose offer named no assignee | The policy × task matrix, the ask's asker and the owner's name are asserted against PostgreSQL in `test/integration/pipeline/claim-policy.integration.test.ts`. |
  * | 17 | `tasks.platformTicketTransitionsSinceEntry` (S-28.17) reads the executor's audit through {@link MemoryPipelineStoreOptions.integrationActions} and the stage row's `enteredAtMs`; PostgreSQL reads `integration_actions` against `task_stages.entered_at`. Unwired, it answers `[]`. | **same, when wired** | The predicate — the task, `transition_ticket`, `ok` only, landed no earlier than the entry, created no earlier than `since`, newest first, bounded — is the SQL's; the contract suite drives it against both stores. |
  * | 16 | `tasks.ownerBackfillDue` (BACKLOG 1510) orders the most recently **created** first, then by id; the SQL orders by `updated_at` descending, which this store does not keep. The predicate (live, `normal`, no stored assignee, unsettled, under the attempt cap, no retry time after `now`, created before `olderThan`) and the `limit` are the SQL's, and `claimOwnerBackfillAttempt` and `settleOwnerBackfill` are the same conditional writes (BACKLOG 1511). | **different (order only)** | No column of `StoredTask` is an update time, and adding one to every writer for one query's order would be a second clock to keep honest. The shared suite asserts the predicate, the mark and the bound, and orders only tasks created and touched in the same order, so it holds both stores. |
  * | 18 | `execution.assigneeOnline` answers a seeded **user** (`setAssigneeOnline`) and ignores `excludedWorkerIds`; the SQL asks per worker and leaves out the offer's excluded machines (TD-031's 2026-11-26 amendment). | **stricter** (a head start the SQL would not give) | The exclusion is asserted against PostgreSQL in `test/integration/pipeline/claim-policy.integration.test.ts`. |
- * | 19 | `owners.lastOwnerChangeVia` (TD-031's second 2026-11-26 amendment) reads the **committed** task log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's `lastOwnerChangeViaSql` also sees the calling transaction's own staged appends. Unwired, it answers `null` — a platform owner whose write-back the claim cannot tell is owed, so the claim assigns the binding's account as it did before. | **same, when wired; kinder unwired** | Its one caller, the claim's pre-read, asks in a transaction of its own after the owner change committed (intake's, a command's, a pick's); the SQL is asserted in `test/integration/pipeline/task-owner-write-back.integration.test.ts`. |
+ * | 19 | `owners.lastOwnerChangeVia` (TD-031's second 2026-11-26 amendment) reads the **committed** task log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's `lastOwnerChangeViaSql` also sees the calling transaction's own staged appends. Unwired, it answers `null` — a platform owner whose write-back the claim cannot tell is owed, so the claim assigns the binding's account as it did before. It reads `via` as written: the SQL also reads a `pick` with no `worker.take_offer`/`task.owner` audit row as a `claim` (BACKLOG 1673), a row only a build before TD-031's second 2026-11-26 amendment wrote and which no path of this store can produce. | **same, when wired; kinder unwired** | Its one caller, the claim's pre-read, asks in a transaction of its own after the owner change committed (intake's, a command's, a pick's); the SQL is asserted in `test/integration/pipeline/task-owner-write-back.integration.test.ts`. |
  */
 import type {
   AgentRole,
@@ -90,7 +90,7 @@ import {
 import { holdOf } from '../cost/pending.js';
 import { withCiManualStartedEntry } from '../pipeline/ci-manual-started.js';
 import { type CiPendingRead, ciPendingReadSchema } from '../pipeline/ci-pending-read.js';
-import { exclusionClock, exclusionRefuses } from '../pipeline/offers.js';
+import { exclusionClock, exclusionRefuses, ownerExclusionBackoffMs } from '../pipeline/offers.js';
 import { decideRelease } from '../pipeline/release.js';
 import type {
   ApprovalRepository,
@@ -605,6 +605,8 @@ export const createMemoryPipelineStore = (
       tokenEpoch: number | null;
       images: { run: string; egress: string } | null;
       excluded: Id[];
+      /** `excluded_worker_since` (migration 0124, BACKLOG 1670): each excluded machine's instant. */
+      excludedSince: Record<string, IsoDateTime>;
       releasedAt: IsoDateTime | null;
       releaseReason: string | null;
     }
@@ -621,6 +623,7 @@ export const createMemoryPipelineStore = (
       tokenEpoch: null,
       images: null,
       excluded: [],
+      excludedSince: {},
       releasedAt: null,
       releaseReason: null,
     };
@@ -2448,7 +2451,8 @@ export const createMemoryPipelineStore = (
     if (coolDown !== null && Date.parse(coolDown) > Date.parse(claim.now)) return false;
     if (!known.memberOf(candidate.projectId)) return false;
     const remote = remoteOf(candidate.runId);
-    // BACKLOG 1661: the owner's excluded machine is eligible again after the exclusion's backoff.
+    // BACKLOG 1661: the owner's excluded machine is eligible again after the exclusion's backoff —
+    // from that machine's own instant (1670), and never longer than half the offer's timeout (1671).
     if (
       exclusionRefuses({
         excluded: remote.excluded.includes(worker.workerId),
@@ -2456,6 +2460,11 @@ export const createMemoryPipelineStore = (
         excludedSince: exclusionClock({
           offeredAt: candidate.offeredAt,
           releasedAt: remote.releasedAt,
+          since: remote.excludedSince[worker.workerId],
+        }),
+        backoffMs: ownerExclusionBackoffMs({
+          offeredAt: candidate.offeredAt,
+          expiresAt: candidate.routing.expiresAt,
         }),
         now: claim.now,
       })
@@ -2608,11 +2617,16 @@ export const createMemoryPipelineStore = (
           `task ${offer.taskId} already has an open or claimed stage offer (run_offers_one_live_stage_per_task)`,
         );
       }
-      const { excludedWorkerIds, ...stored } = offer;
+      const { excludedWorkerIds, excludedSince, ...stored } = offer;
       if (excludedWorkerIds !== undefined && excludedWorkerIds.length > 0) {
+        const excluded = [...new Set(excludedWorkerIds)];
         offerRemote.set(offer.runId, {
           ...remoteOf(offer.runId),
-          excluded: [...new Set(excludedWorkerIds)],
+          excluded,
+          // BACKLOG 1670: a carried machine keeps its instant; any other is excluded at `offeredAt`.
+          excludedSince: Object.fromEntries(
+            excluded.map((id) => [id, excludedSince?.[id] ?? offer.offeredAt]),
+          ),
         });
       }
       offers.set(offer.runId, {
@@ -2739,6 +2753,12 @@ export const createMemoryPipelineStore = (
           input.excludeWorkerId === null || remote.excluded.includes(input.excludeWorkerId)
             ? remote.excluded
             : [...remote.excluded, input.excludeWorkerId],
+        // BACKLOG 1670: the released machine's own clock, restarted even when it was excluded
+        // already (it failed again); nobody else's moves.
+        excludedSince:
+          input.excludeWorkerId === null
+            ? remote.excludedSince
+            : { ...remote.excludedSince, [input.excludeWorkerId]: input.now },
       });
       runs.set(input.runId, { ...run, status: 'created' });
       leases.delete(input.runId);
@@ -2763,8 +2783,34 @@ export const createMemoryPipelineStore = (
       if (previous === undefined) return [];
       const remote = remoteOf(previous.runId);
       const reason = runs.get(previous.runId)?.terminalReason ?? null;
-      const lost = remote.workerId !== null && reason === 'lease_expired' ? [remote.workerId] : [];
-      return [...new Set([...remote.excluded, ...lost])];
+      const lost = remote.workerId !== null && reason === 'lease_expired' ? remote.workerId : null;
+      const backoffMs = ownerExclusionBackoffMs({
+        offeredAt: previous.offeredAt,
+        expiresAt: previous.routing.expiresAt,
+      });
+      const carried: { workerId: Id; since: IsoDateTime }[] = [];
+      for (const workerId of remote.excluded) {
+        if (workerId === lost) {
+          carried.push({ workerId, since: entry.now });
+          continue;
+        }
+        const since = exclusionClock({
+          offeredAt: previous.offeredAt,
+          releasedAt: remote.releasedAt,
+          since: remote.excludedSince[workerId],
+        });
+        // BACKLOG 1670: the owner's machine whose backoff lapsed is not carried.
+        const userId = options.remoteWorkers?.(workerId)?.userId;
+        const lapsed =
+          userId !== undefined &&
+          (ownerships.get(previous.taskId) ?? UNOWNED).ownerUserId === userId &&
+          Date.parse(entry.now) >= Date.parse(since) + backoffMs;
+        if (!lapsed) carried.push({ workerId, since });
+      }
+      if (lost !== null && !remote.excluded.includes(lost)) {
+        carried.push({ workerId: lost, since: entry.now });
+      }
+      return carried;
     },
     runTokenHolder: async (_tx, runId) => {
       const offer = offers.get(runId);

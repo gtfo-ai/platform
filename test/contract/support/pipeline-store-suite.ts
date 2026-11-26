@@ -4928,7 +4928,12 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           const first = await liveRun();
           const run = await store.runs.load(tx, first);
           const taskId = run?.taskId as Id;
-          const entry = { taskId, stage: 'refinement' as Slug, attempt: 1 };
+          const entry = {
+            taskId,
+            stage: 'refinement' as Slug,
+            attempt: 1,
+            now: '2026-06-01T10:00:00.000Z' as IsoDateTime,
+          };
           expect(await store.offers.carriedExclusions(tx, entry)).toEqual([]);
           const [a, b] = [nextId(), nextId()];
           await store.offers.insert(tx, {
@@ -4949,7 +4954,13 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             status: 'failed',
             terminalReason: 'lease_expired',
           });
-          expect(await store.offers.carriedExclusions(tx, entry)).toEqual([a, b]);
+          // Each with its own instant (BACKLOG 1670): the insert wrote them at `offered_at`. Neither
+          // is a machine of the task's owner, so neither lapses.
+          const offeredAt = '2026-06-01T09:00:01.000Z' as IsoDateTime;
+          expect(await store.offers.carriedExclusions(tx, entry)).toEqual([
+            { workerId: a, since: offeredAt },
+            { workerId: b, since: offeredAt },
+          ]);
           // Another attempt of the stage is another entry.
           expect(await store.offers.carriedExclusions(tx, { ...entry, attempt: 2 })).toEqual([]);
         });

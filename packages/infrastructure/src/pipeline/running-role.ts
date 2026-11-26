@@ -116,9 +116,31 @@ export const trackerAssigneeUserSql = (task: string): string => `(
  * write-back fires only for a person's act (`command`, `pick`), never for a worker's automatic
  * `claim`; the ownership columns do not say which, so the log does. `taskId` is an SQL expression
  * naming the task's id (an alias's column, or a placeholder).
+ *
+ * **A `pick` with no take audit is a `claim`** (TD-031's 2026-11-27 amendment item 4, BACKLOG
+ * 1673): before the second 2026-11-26 amendment a worker's automatic claim recorded `via: pick`
+ * (PR #199). A person's *take this one* writes, in the claim's own transaction, the `human_actions`
+ * row `task.owner` `{via: 'pick', worker_id, run_id, owner_user_id}` under the worker's person
+ * (`createPostgresWorkerTakeAudit`); an automatic claim never did. So a `pick` whose task has no
+ * such row naming the same owner, by the same person the event's actor names — the worker's — reads
+ * `claim`. The event carries neither the worker nor the run, so the person and the owner are the
+ * link; the residual, stated: a task that person once really picked and that a pre-amendment
+ * automatic claim of theirs later re-owned reads `pick` (the owner must have been cleared between).
  */
 export const lastOwnerChangeViaSql = (taskId: string): string => `(
-       select oc.payload ->> 'via' from events oc
+       select case
+                when oc.payload ->> 'via' = 'pick'
+                 and not exists (
+                       select 1 from human_actions ha
+                        where ha.task_id = oc.stream_id
+                          and ha.action = 'task.owner'
+                          and ha.params ->> 'via' = 'pick'
+                          and ha.params ->> 'owner_user_id' = oc.payload ->> 'owner_user_id'
+                          and ha.user_id::text = oc.actor ->> 'user_id')
+                then 'claim'
+                else oc.payload ->> 'via'
+              end
+         from events oc
         where oc.stream_type = 'task'
           and oc.stream_id = ${taskId}
           and oc.type = 'task.owner.changed'

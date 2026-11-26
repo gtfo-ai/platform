@@ -24,6 +24,7 @@
  * the run's `finish`). `tasks.save` is optimistic and last everywhere.
  */
 import type {
+  CarriedExclusion,
   ClaimableRunOffer,
   ClaimedRunOffer,
   RunOfferRelease,
@@ -115,19 +116,41 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
 const OWNER_EXCLUSION_BACKOFF_SECONDS = Math.ceil(OWNER_EXCLUSION_BACKOFF_MS / 1000);
 
 /**
+ * **Offer `o`'s owner-exclusion backoff** (TD-031's 2026-11-27 amendment item 2, BACKLOG 1671) —
+ * `ownerExclusionBackoffMs` in `@platform/application`: {@link OWNER_EXCLUSION_BACKOFF_MS}, or half
+ * the offer's own timeout (`expires_at − offered_at`) when that is shorter; the whole backoff for an
+ * offer with no `expires_at`. `o` is an SQL alias exposing `offered_at` and `expires_at`.
+ */
+const ownerExclusionBackoffSql = (o: string): string =>
+  `least(make_interval(secs => ${OWNER_EXCLUSION_BACKOFF_SECONDS}),
+         coalesce((${o}.expires_at - ${o}.offered_at) / 2,
+                  make_interval(secs => ${OWNER_EXCLUSION_BACKOFF_SECONDS})))`;
+
+/**
+ * **When offer `o` excluded the machine `worker`** (TD-031's 2026-11-27 amendment item 1, BACKLOG
+ * 1670) — `exclusionClock` in `@platform/application`: its own entry in `excluded_worker_since`
+ * (migration 0124), else the later of `offered_at` and `released_at` (an offer or a release written
+ * before 0124). `o` exposes `excluded_worker_since`, `offered_at` and `released_at`.
+ */
+const exclusionSinceSql = (o: string, worker: string): string =>
+  `coalesce((${o}.excluded_worker_since ->> ${worker}::text)::timestamptz,
+            greatest(${o}.offered_at, coalesce(${o}.released_at, ${o}.offered_at)))`;
+
+/**
  * **Offer `o`'s exclusions admit the `workers` row `w` at `now`** (BACKLOG 1661, TD-031's
  * 2026-11-26 amendment item 5) — `exclusionRefuses` in `@platform/application`, negated: `w` is
  * not in `excluded_worker_ids`, or its user is the person the offer is "mine" of
- * ({@link offerIsMineSql}: the task's owner, an ask's asker) and {@link OWNER_EXCLUSION_BACKOFF_MS}
- * has passed since the later of `offered_at` and `released_at` (`exclusionClock`). Another
- * person's excluded machine stays excluded for the offer's life (TD-031 §12). Asked inside
- * {@link workerEligibleSql}'s own `workers w`, where `w.user_id` is in scope.
+ * ({@link offerIsMineSql}: the task's owner, an ask's asker) and the offer's backoff
+ * ({@link ownerExclusionBackoffSql}, BACKLOG 1671) has passed since **that machine's** exclusion
+ * ({@link exclusionSinceSql}, BACKLOG 1670). Another person's excluded machine stays excluded for
+ * the offer's life (TD-031 §12). Asked inside {@link workerEligibleSql}'s own `workers w`, where
+ * `w.user_id` is in scope.
  */
 const exclusionAdmitsSql = (now: string): string => `(
                 not (w.id = any(o.excluded_worker_ids))
                 or (${offerIsMineSql('w.user_id')}
-                    and ${now}::timestamptz >= greatest(o.offered_at, coalesce(o.released_at, o.offered_at))
-                                               + make_interval(secs => ${OWNER_EXCLUSION_BACKOFF_SECONDS})))`;
+                    and ${now}::timestamptz >= ${exclusionSinceSql('o', 'w.id')}
+                                               + ${ownerExclusionBackoffSql('o')}))`;
 
 /**
  * **A remote worker's eligibility for offer `o`** (WP-281, TD-031 decision 8), checked inside the one
@@ -439,10 +462,16 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
     await sqlOf(tx).query(
       `insert into run_offers (id, run_id, task_id, project_id, stage, attempt, kind, offered_at,
                                assignee_user_id, assignee_until, server_from, workers_from,
-                               expires_at, excluded_worker_ids)
+                               expires_at, excluded_worker_ids, excluded_worker_since)
        values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10::timestamptz,
                $11::timestamptz, $12::timestamptz, $13::timestamptz,
-               array(select distinct unnest($14::uuid[])))`,
+               array(select distinct unnest($14::uuid[])),
+               -- BACKLOG 1670: each excluded machine's instant — the one carried for it, else now.
+               (select coalesce(jsonb_object_agg(e.id::text,
+                                                 coalesce(($15::jsonb ->> e.id::text)::timestamptz,
+                                                          $8::timestamptz)),
+                                '{}'::jsonb)
+                  from (select distinct unnest($14::uuid[]) as id) e))`,
       [
         offer.id,
         offer.runId,
@@ -458,34 +487,51 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
         offer.routing.workersFrom,
         offer.routing.expiresAt,
         [...(offer.excludedWorkerIds ?? [])],
+        JSON.stringify(offer.excludedSince ?? {}),
       ],
     );
   },
-  carriedExclusions: async (tx, entry): Promise<readonly Id[]> => {
+  carriedExclusions: async (tx, entry): Promise<readonly CarriedExclusion[]> => {
     // TD-031 §12: the entry's newest stage offer — its exclusions, plus the worker it lost to the
     // sweep (never one a usage limit stopped: its own pause keeps it off, TD-031's 2026-11-05
-    // amendment). `ordinality` keeps the order they were excluded in.
-    const { rows } = await sqlOf(tx).query<{ worker_id: string }>(
+    // amendment). `ordinality` keeps the order they were excluded in. Each keeps its own instant,
+    // the lost one `now` (lost again); a machine of the task's owner whose backoff lapsed by `now`
+    // is not carried (TD-031's 2026-11-27 amendment item 1, BACKLOG 1670).
+    const { rows } = await sqlOf(tx).query<{ worker_id: string; since: Date }>(
       `with previous as (
-         select o.excluded_worker_ids,
+         select o.excluded_worker_ids, o.excluded_worker_since, o.offered_at, o.released_at,
+                o.expires_at, t.owner_user_id,
                 case when r.terminal_reason = 'lease_expired' then o.worker_id end as lost_worker_id
            from run_offers o
            join runs r on r.id = o.run_id
+           join tasks t on t.id = o.task_id
           where o.kind = 'stage' and o.task_id = $1 and o.stage = $2 and o.attempt = $3
           order by o.offered_at desc, o.id desc
           limit 1)
-       select worker_id from (
-         select w.worker_id, min(w.position) as position
+       select worker_id, since from (
+         select e.worker_id, e.position,
+                case when e.worker_id = p.lost_worker_id then $4::timestamptz
+                     else ${exclusionSinceSql('p', 'e.worker_id')} end as since
            from previous p,
-                lateral (select e.worker_id, e.position
-                           from unnest(p.excluded_worker_ids) with ordinality as e(worker_id, position)
-                         union all
-                         select p.lost_worker_id, 2147483647 where p.lost_worker_id is not null) w
-          group by w.worker_id) ordered
+                unnest(p.excluded_worker_ids) with ordinality as e(worker_id, position)
+          where e.worker_id is not distinct from p.lost_worker_id
+             or not (p.owner_user_id is not null
+                     and exists (select 1 from workers w
+                                  where w.id = e.worker_id and w.user_id = p.owner_user_id)
+                     and $4::timestamptz >= ${exclusionSinceSql('p', 'e.worker_id')}
+                                            + ${ownerExclusionBackoffSql('p')})
+         union all
+         select p.lost_worker_id, 2147483647, $4::timestamptz
+           from previous p
+          where p.lost_worker_id is not null
+            and not (p.lost_worker_id = any(p.excluded_worker_ids))) carried
         order by position`,
-      [entry.taskId, entry.stage, entry.attempt],
+      [entry.taskId, entry.stage, entry.attempt, entry.now],
     );
-    return rows.map((row) => row.worker_id as Id);
+    return rows.map((row) => ({
+      workerId: row.worker_id as Id,
+      since: iso(row.since) as IsoDateTime,
+    }));
   },
   claim: async (tx, claim): Promise<ClaimedRunOffer | null> => {
     const worker = claim.worker;
@@ -705,7 +751,13 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
           set state = 'open', release_reason = $2, released_at = $3::timestamptz,
               excluded_worker_ids = case
                 when $4::uuid is null or $4::uuid = any(excluded_worker_ids) then excluded_worker_ids
-                else array_append(excluded_worker_ids, $4::uuid) end
+                else array_append(excluded_worker_ids, $4::uuid) end,
+              -- BACKLOG 1670: the released machine's own clock, restarted even when it was
+              -- excluded already (it failed again); nobody else's moves.
+              excluded_worker_since = case
+                when $4::uuid is null then excluded_worker_since
+                else excluded_worker_since
+                     || jsonb_build_object($4::uuid::text, $3::timestamptz) end
         where run_id = $1`,
       [input.runId, input.reason, input.now, input.excludeWorkerId],
     );

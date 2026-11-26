@@ -1078,6 +1078,97 @@ describe('the owner keeps the task: an owner’s excluded machine is eligible ag
     expect(await automatic(ownersMachine, runId, false, reset)).toBe(runId);
   });
 
+  /**
+   * BACKLOG 1670 (TD-031's 2026-11-27 amendment item 1): each excluded machine counts from its own
+   * instant (`excluded_worker_since`, migration 0124) — another machine's release on the same offer
+   * moves `released_at`, and before 0124 restarted the owner's machine's wait with it.
+   */
+  it('another machine’s release does not restart the owner’s machine’s backoff', async () => {
+    const projectId = await project('om');
+    const owner = await user([projectId]);
+    const third = await user([projectId]);
+    const ownersMachine = await worker(owner, { policy: 'mine' });
+    const everyMachine = await worker(third, { policy: 'everything' });
+    const taskId = await task(projectId);
+    await own(taskId, owner);
+    // The re-planned entry's offer, excluding the owner's lost machine from NOW.
+    const runId = await offered(projectId, taskId, { excluded: [ownersMachine] });
+    const claimedAt = addMs(NOW, BACKOFF / 2);
+    expect(await automatic(everyMachine, runId, true, claimedAt)).toBe(runId);
+    const released = await inTx(async (tx) =>
+      store.offers.release(tx, {
+        runId,
+        epoch: 1,
+        owner: `worker:${everyMachine}`,
+        reason: 'provision_failed',
+        excludeWorkerId: everyMachine,
+        now: claimedAt,
+      }),
+    );
+    expect(released.kind).toBe('released');
+    const [row] = await sql<{ released_at: Date; since: Record<string, string> }>(
+      'select released_at, excluded_worker_since as since from run_offers where run_id = $1',
+      [runId],
+    );
+    expect(Object.keys(row?.since ?? {}).sort()).toEqual([ownersMachine, everyMachine].sort());
+    // Counted from the owner's machine's own instant (NOW), not from the later release.
+    expect(await automatic(ownersMachine, runId, false, addMs(NOW, BACKOFF - 1_000))).toBeNull();
+    expect(await automatic(ownersMachine, runId, false, addMs(NOW, BACKOFF))).toBe(runId);
+    // The released machine is not the owner's: it stays excluded.
+    expect(await automatic(everyMachine, runId, false, addMs(NOW, BACKOFF * 10))).toBeNull();
+  });
+
+  /**
+   * BACKLOG 1671 (TD-031's 2026-11-27 amendment item 2): the backoff is at most half the offer's own
+   * timeout, so the owner's machine may take the offer before it expires.
+   */
+  it('a short offer timeout halves the backoff: the owner’s machine takes it before the offer expires', async () => {
+    const projectId = await project('os');
+    const owner = await user([projectId]);
+    const ownersMachine = await worker(owner, { policy: 'mine' });
+    const taskId = await task(projectId);
+    await own(taskId, owner);
+    const runId = await offered(projectId, taskId, {
+      excluded: [ownersMachine],
+      routing: workersRouting({ expiresAt: addMs(NOW, 60_000) }),
+    });
+    expect(await automatic(ownersMachine, runId, false, addMs(NOW, 29_000))).toBeNull();
+    expect(await automatic(ownersMachine, runId, false, addMs(NOW, 30_000))).toBe(runId);
+  });
+
+  /**
+   * BACKLOG 1670: a re-planned entry carries each machine with its own instant, and drops a machine
+   * of the task's owner whose backoff lapsed — the memory store's half is `remote-runs.test.ts`'s.
+   */
+  it('a re-plan drops the owner’s lapsed machine and carries the rest with their own instants', async () => {
+    const projectId = await project('oc');
+    const owner = await user([projectId]);
+    const other = await user([projectId]);
+    const ownersMachine = await worker(owner, { policy: 'mine' });
+    const othersMachine = await worker(other, { policy: 'everything' });
+    const taskId = await task(projectId);
+    await own(taskId, owner);
+    await offered(projectId, taskId, { excluded: [ownersMachine, othersMachine] });
+    const carried = async (now: IsoDateTime) =>
+      (
+        await inTx((tx) =>
+          store.offers.carriedExclusions(tx, {
+            taskId,
+            stage: 'implementation' as Slug,
+            attempt: 1,
+            now,
+          }),
+        )
+      ).map((exclusion) => ({ workerId: exclusion.workerId, since: Date.parse(exclusion.since) }));
+    expect(await carried(addMs(NOW, BACKOFF - 1_000))).toEqual([
+      { workerId: ownersMachine, since: Date.parse(NOW) },
+      { workerId: othersMachine, since: Date.parse(NOW) },
+    ]);
+    expect(await carried(addMs(NOW, BACKOFF))).toEqual([
+      { workerId: othersMachine, since: Date.parse(NOW) },
+    ]);
+  });
+
   it('the offer-timeout read names a stage offer’s owner — only when workers could take it', async () => {
     const projectId = await project('ot');
     const owner = await user([projectId], 'Vojtěch');

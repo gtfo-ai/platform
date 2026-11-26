@@ -67,6 +67,7 @@ import type {
   RunScopedSecrets,
   SecretRedactor,
   TaskRepository,
+  TicketLifecycleReadingKind,
   Transaction,
   UnitOfWork,
   WebhookIngress,
@@ -781,15 +782,15 @@ export const createProjectSettingsPort = (
     );
     const layered = projectConfigWithRepository(projectRead.values, snapshot);
     const wip = resolveWipLimits(layered.values.pipeline?.wip, organisation.pipeline?.wip);
-    const { ticketLifecycle, ticketStatusPolicy } = await readTicketLifecycle(
-      executor,
-      projectId,
-      logger,
-    );
+    const { ticketLifecycle, ticketLifecycleReading, ticketStatusPolicy } =
+      await readTicketLifecycle(executor, projectId, logger);
     return defaultProjectSettings(projectId, {
       // WP-177 (TD-029 decision 1): the task-management binding's `lifecycle` block, read on the
       // caller's connection like the rest — the handlers that decide a lifecycle moment ask here.
       ticketLifecycle,
+      // BACKLOG 1672 (TD-031's 2026-11-27 amendment item 3): how it was read, so an ambiguous or
+      // invalid binding writes no owner back (`assignsOwner`), as the task DTO says.
+      ticketLifecycleReading,
       // S-28.4 (M28 ruling 1): which statuses start work and which mean a person finished the
       // ticket — defaults included for a binding with no block, read off the same rows; with the
       // legacy `status_mapping`'s targets counted as the platform's own when no slot is mapped.
@@ -861,6 +862,7 @@ const readTicketLifecycle = async (
   logger: Logger,
 ): Promise<{
   readonly ticketLifecycle: BindingLifecycle | null;
+  readonly ticketLifecycleReading: TicketLifecycleReadingKind;
   readonly ticketStatusPolicy: TicketStatusPolicy | null;
 }> => {
   // WP-181: the statement and the classification are `ticket-lifecycle.ts`'s, shared with the
@@ -884,6 +886,7 @@ const readTicketLifecycle = async (
   }
   return {
     ticketLifecycle: appliedTicketLifecycle(reading),
+    ticketLifecycleReading: reading.kind,
     ticketStatusPolicy: ticketStatusPolicyOfRows(rows),
   };
 };

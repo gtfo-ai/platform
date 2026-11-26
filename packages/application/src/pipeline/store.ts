@@ -2237,10 +2237,25 @@ export interface NewRunOffer {
    * The workers this offer is **not** for (`excluded_worker_ids`, TD-031 §12): the stage entry's
    * previous offer's exclusions, plus the worker that lost it —
    * {@link RunOfferRepository.carriedExclusions}, read by `stage.execute` when it re-plans an entry.
-   * Absent is none. A machine of the offer's owner is kept off only for `OWNER_EXCLUSION_BACKOFF_MS`
-   * (`./offers.ts`, BACKLOG 1661); anybody else's for the offer's life.
+   * Absent is none. A machine of the offer's owner is kept off only for `ownerExclusionBackoffMs`
+   * (`./offers.ts`, BACKLOG 1661, 1671) from its own instant; anybody else's for the offer's life.
    */
   readonly excludedWorkerIds?: readonly Id[];
+  /**
+   * When each excluded machine was excluded (`excluded_worker_since`, migration 0124, BACKLOG
+   * 1670) — a carried machine's own instant. An id it does not name is written at `offeredAt`.
+   */
+  readonly excludedSince?: Readonly<Record<string, IsoDateTime>>;
+}
+
+/**
+ * One machine a re-planned stage entry's offer carries (TD-031 §12, BACKLOG 1670): which worker,
+ * and since when it is excluded — its previous offer's instant for it, or the carry's `now` for
+ * the machine that was just lost.
+ */
+export interface CarriedExclusion {
+  readonly workerId: Id;
+  readonly since: IsoDateTime;
 }
 
 /** An offer's routing read back: `expiresAt` is `null` for an offer written before WP-278. */
@@ -2526,8 +2541,10 @@ export interface RunOfferRepository {
    * **A release** (WP-281, TD-031 decision 6 and its 2026-11-04 amendment §4): undoes the claim at
    * `epoch` held by `owner`, only while the run is `starting` with no CLI spawn marker — the offer
    * `claimed → open` with its epoch **kept** (so the releasing claimant's fence is stale), the release
-   * recorded, `excludeWorkerId` appended to `excluded_worker_ids` when given (an owner's machine
-   * only until `OWNER_EXCLUSION_BACKOFF_MS` after `released_at`, BACKLOG 1661), and the run's
+   * recorded, `excludeWorkerId` appended to `excluded_worker_ids` when given and its own exclusion
+   * instant set to `now` — **overwritten** when it was already excluded, because it failed again
+   * (an owner's machine stays off only `ownerExclusionBackoffMs` after it, BACKLOG 1661, 1670) —
+   * and the run's
    * `lease_owner`, `lease_expires_at` and `worker_id` cleared, `starting → created`. Locks the offer,
    * then the run (the one lock order). The caller appends `run.offer.released` and revokes the
    * minted credential after the commit.
@@ -2552,14 +2569,23 @@ export interface RunOfferRepository {
    * a worker a usage limit stopped (`rate_limited`): its own pause refuses it at the claim until the
    * reset, and excluding it would leave a single-worker core with nobody to claim (TD-031's
    * 2026-11-05 amendment). `[]` for an entry with no offer yet, and for one whose newest offer a
-   * server claimant held. Each id once, in the order they were excluded. A carried machine of the
-   * task's owner is kept off the new offer only for `OWNER_EXCLUSION_BACKOFF_MS` from its
-   * `offered_at` (BACKLOG 1661, TD-031's 2026-11-26 amendment item 5): the owner keeps the task.
+   * server claimant held. Each id once, in the order they were excluded, with the instant it was
+   * excluded at: its own on the previous offer, `now` for the lost worker (lost again).
+   *
+   * **A machine of the task's owner whose backoff has lapsed at `now` is not carried** (TD-031's
+   * 2026-11-27 amendment item 1, BACKLOG 1670) — the previous offer's `ownerExclusionBackoffMs`
+   * from that machine's own instant — unless it is the machine just lost. The owner keeps the
+   * task (BACKLOG 1661), so a re-plan does not make their machine wait again.
    */
   carriedExclusions(
     tx: Transaction,
-    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
-  ): Promise<readonly Id[]>;
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly now: IsoDateTime;
+    },
+  ): Promise<readonly CarriedExclusion[]>;
   /**
    * Open offers whose run has **no** stored plan (TD-031's 2026-11-04 amendment §2) — the claimant
    * withdraws each through its kind's executor before it claims. Reachable only for a run offered by a

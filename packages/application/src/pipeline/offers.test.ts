@@ -14,6 +14,7 @@ import {
   exclusionRefuses,
   OWNER_EXCLUSION_BACKOFF_MS,
   offerRun,
+  ownerExclusionBackoffMs,
   RUN_OFFERS_TOPIC,
   recordClaim,
   serverLeaseOwner,
@@ -260,7 +261,13 @@ describe('the owner keeps the task: an exclusion’s backoff (BACKLOG 1661)', ()
 
   it('refuses the owner’s excluded machine until the backoff, and admits it from the backoff on', () => {
     const owners = (now: IsoDateTime) =>
-      exclusionRefuses({ excluded: true, offerIsMine: true, excludedSince: since, now });
+      exclusionRefuses({
+        excluded: true,
+        offerIsMine: true,
+        excludedSince: since,
+        backoffMs: OWNER_EXCLUSION_BACKOFF_MS,
+        now,
+      });
     expect(owners(since)).toBe(true);
     expect(owners(at(OWNER_EXCLUSION_BACKOFF_MS - 1))).toBe(true);
     expect(owners(at(OWNER_EXCLUSION_BACKOFF_MS))).toBe(false);
@@ -269,14 +276,33 @@ describe('the owner keeps the task: an exclusion’s backoff (BACKLOG 1661)', ()
 
   it('refuses anybody else’s excluded machine for ever, and never a machine the offer does not exclude', () => {
     const later = at(OWNER_EXCLUSION_BACKOFF_MS + 86_400_000);
+    const backoffMs = OWNER_EXCLUSION_BACKOFF_MS;
     expect(
-      exclusionRefuses({ excluded: true, offerIsMine: false, excludedSince: since, now: later }),
+      exclusionRefuses({
+        excluded: true,
+        offerIsMine: false,
+        excludedSince: since,
+        backoffMs,
+        now: later,
+      }),
     ).toBe(true);
     expect(
-      exclusionRefuses({ excluded: false, offerIsMine: false, excludedSince: since, now: since }),
+      exclusionRefuses({
+        excluded: false,
+        offerIsMine: false,
+        excludedSince: since,
+        backoffMs,
+        now: since,
+      }),
     ).toBe(false);
     expect(
-      exclusionRefuses({ excluded: false, offerIsMine: true, excludedSince: since, now: since }),
+      exclusionRefuses({
+        excluded: false,
+        offerIsMine: true,
+        excludedSince: since,
+        backoffMs,
+        now: since,
+      }),
     ).toBe(false);
   });
 
@@ -285,5 +311,31 @@ describe('the owner keeps the task: an exclusion’s backoff (BACKLOG 1661)', ()
     expect(exclusionClock({ offeredAt: since, releasedAt: at(60_000) })).toBe(at(60_000));
     // A release recorded before a re-offer (another offer's column) never moves the clock back.
     expect(exclusionClock({ offeredAt: at(60_000), releasedAt: since })).toBe(at(60_000));
+  });
+
+  it('reads a machine’s own instant when the offer recorded one, so another release never restarts it (BACKLOG 1670)', () => {
+    // The owner's machine was excluded at `since`; another machine's release later moved
+    // `released_at`. The owner's machine still counts from its own instant.
+    expect(exclusionClock({ offeredAt: since, releasedAt: at(300_000), since })).toBe(since);
+    // An id with no instant (an offer written before migration 0124) reads the old shared clock.
+    expect(exclusionClock({ offeredAt: since, releasedAt: at(300_000), since: undefined })).toBe(
+      at(300_000),
+    );
+  });
+
+  it('is half the offer’s timeout when that is shorter than ten minutes, the whole backoff otherwise (BACKLOG 1671)', () => {
+    expect(ownerExclusionBackoffMs({ offeredAt: since, expiresAt: at(86_400_000) })).toBe(
+      OWNER_EXCLUSION_BACKOFF_MS,
+    );
+    expect(ownerExclusionBackoffMs({ offeredAt: since, expiresAt: at(1_200_000) })).toBe(
+      OWNER_EXCLUSION_BACKOFF_MS,
+    );
+    // The minimum offer timeout, 60 s: the owner's machine is back after 30 s, before it expires.
+    expect(ownerExclusionBackoffMs({ offeredAt: since, expiresAt: at(60_000) })).toBe(30_000);
+    expect(ownerExclusionBackoffMs({ offeredAt: since, expiresAt: at(600_000) })).toBe(300_000);
+    // An offer written before WP-278 never expires.
+    expect(ownerExclusionBackoffMs({ offeredAt: since, expiresAt: null })).toBe(
+      OWNER_EXCLUSION_BACKOFF_MS,
+    );
   });
 });

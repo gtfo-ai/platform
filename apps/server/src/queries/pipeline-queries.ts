@@ -50,6 +50,7 @@
  */
 
 import {
+  assignsOwner,
   CI_GATE_STAGE,
   ciPendingReadSchema,
   NOTIFICATION_DETAIL_MAX,
@@ -127,7 +128,6 @@ import {
 } from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES,
-  assignOwnerOn,
   type CompiledPipeline,
   compilePipeline,
   DEFAULT_TASK_BUDGET_USD,
@@ -1587,7 +1587,9 @@ export const ownerCandidateWriteBack = async (
  * Which of `projectIds` write a person's owner back: one task-management binding whose lifecycle
  * does not set `assign_owner: false` (`assignOwnerOn`, TD-031's second 2026-11-26 amendment item 1)
  * — a binding with no block included. No binding, two of them, or a block that fails its schema
- * write nothing back: the loader refuses that project's every call.
+ * write nothing back: the loader refuses that project's every call. The rule is the pipeline's own
+ * `assignsOwner` over the same reading (TD-031's 2026-11-27 amendment item 3, BACKLOG 1672), so the
+ * page never promises a write-back the pipeline would not enqueue, nor the reverse.
  */
 const projectsAssigningOwners = async (
   database: Database,
@@ -1600,8 +1602,10 @@ const projectsAssigningOwners = async (
     );
     const reading = ticketLifecycleOfRows(rows);
     if (
-      reading.kind === 'none' ||
-      (reading.kind === 'lifecycle' && assignOwnerOn(appliedTicketLifecycle(reading)?.slots))
+      assignsOwner({
+        ticketLifecycle: appliedTicketLifecycle(reading),
+        ticketLifecycleReading: reading.kind,
+      })
     ) {
       assigning.add(projectId);
     }

@@ -644,8 +644,9 @@ describe('a lost worker re-plans its stage entry (WP-286; three times since BD-0
        returning id`,
       [taskId, stage.rows[0]?.id, projectId],
     );
-    const entry = { taskId: taskId as Id, stage: 'implementation' as never, attempt: 1 };
-    const excluded = await withTx(async (tx) => pipeline.offers.carriedExclusions(tx, entry));
+    const entry = { taskId: taskId as Id, stage: 'implementation' as never, attempt: 1, now: NOW };
+    const carried = await withTx(async (tx) => pipeline.offers.carriedExclusions(tx, entry));
+    const excluded = carried.map((exclusion) => exclusion.workerId);
     await withTx(async (tx) =>
       pipeline.offers.insert(tx, {
         id: crypto.randomUUID() as Id,
@@ -663,7 +664,10 @@ describe('a lost worker re-plans its stage entry (WP-286; three times since BD-0
           workersFrom: NOW,
           expiresAt: at(24 * 60),
         },
-        excludedWorkerIds: excluded as Id[],
+        excludedWorkerIds: excluded,
+        excludedSince: Object.fromEntries(
+          carried.map((exclusion) => [exclusion.workerId, exclusion.since]),
+        ),
       }),
     );
     return { excluded };

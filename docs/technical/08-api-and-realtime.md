@@ -474,8 +474,9 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
   or an **ask** offer (WP-283, backlog 741: `finish` of a run that serves an ask settles through the
   ask's own ending, `AskExecutor.settle`, composed on the worker routes — an ask's offer names the asker
   as its assignee, so the asker's online worker has its head start), not excluded (a machine of the
-  task's owner — an ask's asker — only for `OWNER_EXCLUSION_BACKOFF_MS`, 10 minutes after the
-  exclusion: the owner keeps the task, BACKLOG 1661), the offer's images
+  task's owner — an ask's asker — only for `ownerExclusionBackoffMs`, 10 minutes or half the
+  offer's timeout if shorter, after **that machine's** exclusion: the owner keeps the task, BACKLOG
+  1661, 1670, 1671), the offer's images
   held, the worker not revoked, its user may act (backlog 714), not paused, an effective project role
   (the higher of the organisation role and a membership, backlog 886) at `member`+, `workers_from` reached or the assignee's head start, and the project's run credential
   `minted` — or `static`/`deploy_key` behind the git integration's `remote_run_credential: allow`
