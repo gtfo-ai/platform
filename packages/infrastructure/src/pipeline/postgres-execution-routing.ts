@@ -76,8 +76,15 @@ export const createPostgresExecutionRoutingRepository = (): ExecutionRoutingRepo
             and ${effectiveClaimPolicySql('w')} <> 'pick_only'
             and w.last_seen_at > now() - make_interval(secs => $4::float8)
             and ${userMayOwnInProjectSql('w.user_id', '$1::uuid')}
+            and w.id <> all($5::uuid[])
        ) as online`,
-      [input.projectId, input.userId, input.now, ASSIGNEE_ONLINE_SECONDS],
+      [
+        input.projectId,
+        input.userId,
+        input.now,
+        ASSIGNEE_ONLINE_SECONDS,
+        [...(input.excludedWorkerIds ?? [])],
+      ],
     );
     return rows[0]?.online === true;
   },

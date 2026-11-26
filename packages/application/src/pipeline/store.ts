@@ -2597,11 +2597,18 @@ export interface ExecutionRoutingRepository {
    * Whether `userId` has a worker **online** for this project at `now` (TD-031 §8): a worker of
    * theirs that is not revoked, not paused, seen in the last 60 s, and their effective project role
    * (the higher of the organisation role and a membership, backlog 886) is `member` or above. `workers.last_seen_at` is written by every authenticated worker
-   * protocol call (WP-281), the heartbeat's every 20 s among them.
+   * protocol call (WP-281), the heartbeat's every 20 s among them. A worker in `excludedWorkerIds`
+   * (the offer's own exclusions — a re-planned entry's lost or limited machines) does not count:
+   * its head start could be used by nobody (TD-031's 2026-11-26 amendment).
    */
   assigneeOnline(
     tx: Transaction,
-    input: { readonly projectId: Id; readonly userId: Id; readonly now: IsoDateTime },
+    input: {
+      readonly projectId: Id;
+      readonly userId: Id;
+      readonly now: IsoDateTime;
+      readonly excludedWorkerIds?: readonly Id[];
+    },
   ): Promise<boolean>;
   /** Whether any process holds a fresh `server_claimants` row — on the database's clock. */
   serverClaimantRunning(tx: Transaction): Promise<boolean>;

@@ -583,9 +583,10 @@ describe('a ticket started by hand has its starter as owner, and the pick-up lab
     await failing.drain();
     expect(stateOf(failing, 'ACME-7')?.state).toBe('active');
     expect(failing.store.ownershipOf(stateOf(failing, 'ACME-7')?.id as Id).ownerUserId).toBe(USER);
-    expect(failing.audit.entriesFor('add_pickup_label').map((entry) => entry.status)).not.toEqual(
-      [],
-    );
+    // A terminal refusal: audited once as failed, never retried, the start not undone.
+    expect(failing.audit.entriesFor('add_pickup_label').map((entry) => entry.status)).toEqual([
+      'failed',
+    ]);
   });
 
   it('a binding with no pick-up label makes no call', async () => {

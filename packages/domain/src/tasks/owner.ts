@@ -553,8 +553,8 @@ export const decideClaimOwner = (
 /**
  * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendment item 1), decided at
  * intake over the ownership the tracker sync just wrote ({@link syncOwnerFromTracker}), in the
- * transaction that creates the task — before its first offer exists, because an open offer names
- * the owner it was written with.
+ * transaction that creates the task — before any worker can claim it (a claim's policy reads the
+ * owner live, and the first offer's head start goes to the owner it is written with).
  *
  * - **A ticket the tracker assigns to a linked `member`-or-above person keeps that person** (the
  *   2026-11-06 amendment's item 5: a member keeps their ticket) — the sync already made them the

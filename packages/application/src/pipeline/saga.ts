@@ -691,8 +691,8 @@ export const runIntakeCheck = async (
       causeEventId,
       /**
        * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendment item 1),
-       * here — before the first offer is written below, because an open offer names the owner it
-       * was written with — unless the tracker assigns the ticket to another linked member, who
+       * here — before any worker can claim the task (the claim reads the owner live, and the first
+       * offer's head start goes to the owner it is written with) — unless the tracker assigns the ticket to another linked member, who
        * keeps it. The owner's WIP limit below is then the starter's.
        */
       starterUserId,

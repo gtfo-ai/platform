@@ -465,6 +465,12 @@ export interface PipelineOutboundData {
   readonly owner_user_id?: string;
   readonly owner_changed_at?: string;
   /**
+   * `intake_check` only (TD-031's 2026-11-26 amendment item 1): the person whose manual Start this
+   * is — set from a `ticket.matched` with `rule: 'manual'` and a `user` actor, absent for a rule
+   * match. Intake makes them the task's owner and adds the pick-up label once the task exists.
+   */
+  readonly starter_user_id?: string | null;
+  /**
    * `owner_sync` only (BACKLOG 1510): the recovery pass's **owner-backfill** read of a live task
    * with no stored assignee (`recovery/owner-backfill.ts`) — read whatever the snapshot's freshness,
    * and only while the task still has no stored assignee when the duty fires. Absent is the

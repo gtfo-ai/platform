@@ -86,8 +86,9 @@ export interface OfferRunInput {
    * Who plays the assignee (TD-031 §8, §13): for an ask, the **asking** user; for a stage, the
    * task's **owner** (`tasks.owner_user_id`, S-26.1 — TD-031's 2026-11-06 amendment item 6). `null`
    * when there is none. The head start goes to this user only while a worker of theirs is online
-   * and takes the project automatically (`assigneeOnline`); it is fixed here, so a reassignment
-   * does not re-route an open offer — the next stage's offer names the new owner.
+   * and takes the project automatically (`assigneeOnline`); the head start is fixed here, so a
+   * reassignment does not move an open offer's window — the next stage's offer names the new owner —
+   * while a worker's claim policy reads the owner live (`tasks.owner_user_id`) at every claim.
    */
   readonly assigneeUserId: Id | null;
   /**
@@ -104,7 +105,17 @@ export interface OfferRunInput {
 export const routeNewOffer = async (
   execution: ExecutionRoutingRepository,
   tx: Transaction,
-  input: { readonly projectId: Id; readonly assigneeUserId: Id | null; readonly now: IsoDateTime },
+  input: {
+    readonly projectId: Id;
+    readonly assigneeUserId: Id | null;
+    readonly now: IsoDateTime;
+    /**
+     * The workers this offer is not for (a re-planned entry's exclusions): none of them makes the
+     * assignee online, so an owner whose only machine was lost gets no head start that nobody can
+     * use (TD-031's 2026-11-26 amendment; the lost-worker re-offer).
+     */
+    readonly excludedWorkerIds?: readonly Id[];
+  },
 ): Promise<OfferRouting> => {
   const settings = (await execution.settings(tx, input.projectId)) ?? DEFAULT_EXECUTION_SETTINGS;
   const online =
@@ -114,6 +125,7 @@ export const routeNewOffer = async (
       projectId: input.projectId,
       userId: input.assigneeUserId,
       now: input.now,
+      excludedWorkerIds: input.excludedWorkerIds ?? [],
     }));
   return routeOffer({
     settings,
@@ -138,6 +150,7 @@ export const offerRun = async (
     projectId: input.run.projectId,
     assigneeUserId: input.assigneeUserId,
     now: input.now,
+    excludedWorkerIds: input.excludedWorkerIds ?? [],
   });
   await store.offers.insert(scope.tx, {
     id: input.offerId,

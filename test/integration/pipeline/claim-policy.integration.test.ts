@@ -587,14 +587,29 @@ describe('legacy rows keep their meaning (S-26.4, criterion 2)', () => {
 });
 
 describe('routing: the owner’s head start and the policy (S-26.4, criterion 3)', () => {
-  const routeFor = async (projectId: Id, assignee: Id) =>
+  const routeFor = async (projectId: Id, assignee: Id, excludedWorkerIds: readonly Id[] = []) =>
     inTx(async (tx) =>
       routeNewOffer(pipeline.createPostgresExecutionRoutingRepository(), tx, {
         projectId,
         assigneeUserId: assignee,
         now: new Date().toISOString() as IsoDateTime,
+        excludedWorkerIds,
       }),
     );
+
+  it('gives no head start for an owner whose only online machine the offer excludes (a lost worker’s re-offer)', async () => {
+    const projectId = await project('rx');
+    const owner = await user([projectId]);
+    const lost = await worker(owner, { policy: 'everything' });
+    // The control: the same machine, not excluded, holds the window.
+    expect((await routeFor(projectId, owner)).assigneeUntil).not.toBeNull();
+    const rerouted = await routeFor(projectId, owner, [lost]);
+    expect(rerouted).toMatchObject({ assigneeUserId: null, assigneeUntil: null });
+    expect(rerouted.workersFrom).not.toBeNull();
+    // A second machine of the same person, not excluded, keeps the head start for them.
+    await worker(owner, { policy: 'everything' });
+    expect((await routeFor(projectId, owner, [lost])).assigneeUntil).not.toBeNull();
+  });
 
   it('holds a head start for the owner only when their machine’s policy is not pick_only and its scope takes the project', async () => {
     const projectId = await project('r');

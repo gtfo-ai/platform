@@ -1677,8 +1677,8 @@ ticket makes its person the owner.*
 **Decision.**
 
 1. **A manual Start makes its starter the owner** (`source: platform`, `via: command`), written by intake in the
-   transaction that creates the task — before its first offer exists, because an open offer is not re-routed by a later
-   owner change (decision 2's offer names the owner it was written with). The starter is read from the
+   transaction that creates the task — before any worker can claim it: the claim reads the owner live
+   (`tasks.owner_user_id`), and the offer's head start goes to the owner it was written with. The starter is read from the
    `ticket.matched` event's `user` actor with `rule: 'manual'`. Conditions: the starter may own in the project (item 1's
    `member`+); otherwise the task is created as before, with the tracker's assignee synced. **Precedence:** a ticket the
    tracker already assigns to a *different* linked `member`+ person keeps that person as owner (item 5's rule, a
@@ -1697,4 +1697,8 @@ ticket makes its person the owner.*
 **Consequences.** On a binding with `lifecycle.assign_owner: true` a started or worker-claimed ticket is assigned in
 the tracker to its person rather than to the binding's account (item 5's `held_by: 'platform_owner'` after the
 write-back, `member` on a re-claim). With the switch off, the platform owner is set and the tracker keeps the binding's
-account until a person changes it — unchanged from item 4.
+account until a person changes it — unchanged from item 4. Because a worker's claim now makes its
+person the owner, a re-planned entry's offer (a lost or usage-limited machine, decision 12, BD-034)
+names that owner; **a machine the offer excludes does not make its assignee online** (§8's
+`assigneeOnline`), so an owner whose only machine was lost gets no head start nobody can use, and an
+`everything` machine of another person takes the re-offer at once.

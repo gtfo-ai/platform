@@ -221,6 +221,11 @@ describe('the manual start (WP-122)', () => {
       );
       return rows.length === 1;
     });
+    const labelled = await pipeline.query<{ status: string }>(
+      "select status from integration_actions where action = 'add_pickup_label' and task_id = $1",
+      [task?.id],
+    );
+    expect(labelled.map((row) => row.status)).toEqual(['ok']);
 
     // A replay of the same intent performs nothing twice: no second match, no second row.
     const replayed = await memberApi.startTask(
