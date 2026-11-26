@@ -22,6 +22,7 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import { IMMEDIATE_UNDELIVERED_AFTER_MS } from '../notify/undelivered.js';
 import type { CommentRef, TicketRefInput } from '../ports/integrations/task-management.js';
 import { type EnqueueRequest, JOB_QUEUES, type JobData, type JobHandler } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -1257,6 +1258,15 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
       }),
     );
   };
+  /**
+   * Past the re-post bound: the planted row is the outbound retry window old. It was 16:50, 48
+   * minutes after the row; BD-034's follow-ups moved the window to the long provider retry's, so the
+   * instant moves with the constant rather than with a remembered number.
+   */
+  const REPOST_AT = new Date(
+    Date.parse('2026-06-05T16:50:00.000Z') - 48 * 60_000 + IMMEDIATE_UNDELIVERED_AFTER_MS,
+  ).toISOString();
+  const REPOST_AGAIN_AT = new Date(Date.parse(REPOST_AT) + 60 * 60_000).toISOString();
   const QUESTION_CAUSE = '00000000-0000-4000-9000-0000000084a1';
   const REMINDER_CAUSE = '00000000-0000-4000-9000-0000000084a2';
   const plantedMessages = (harness: PipelineHarness) =>
@@ -1272,7 +1282,7 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
       questionId: question.id,
     });
     const before = plantedMessages(harness).length;
-    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    moveTo(harness, REPOST_AT);
     const marked = await repostPass(harness);
     expect(marked.has(QUESTION_CAUSE)).toBe(true);
     expect(plantedMessages(harness).length).toBe(before + 1);
@@ -1298,7 +1308,7 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
     });
     await harness.drain();
     const before = plantedMessages(harness).length;
-    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    moveTo(harness, REPOST_AT);
     const marked = await repostPass(harness);
     // The pass tried once (the mark); the duty re-checked the question and posted nothing.
     expect(marked.has(QUESTION_CAUSE)).toBe(true);
@@ -1326,7 +1336,7 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
     });
     await harness.drain();
     const before = plantedMessages(harness).length;
-    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    moveTo(harness, REPOST_AT);
     const marked = await repostPass(harness);
     expect(marked.has(REMINDER_CAUSE)).toBe(true);
     expect(plantedMessages(harness).length).toBe(before);
@@ -1439,9 +1449,9 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
       channel: 'ticket',
     });
     await harness.drain();
-    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    moveTo(harness, REPOST_AT);
     expect((await repostPass(harness)).has(QUESTION_CAUSE)).toBe(true);
-    moveTo(harness, '2026-06-05T17:50:00.000Z');
+    moveTo(harness, REPOST_AGAIN_AT);
     // A fresh pass — a new mark set — finds nothing: the withheld row is terminal.
     expect((await repostPass(harness)).size).toBe(0);
   });

@@ -122,6 +122,7 @@ const dependencies = (
   installJobs: MigrateDependencies['installJobs'] = async (_url, _schema, queues) => ({
     schemaVersion: 40,
     queuesDeclared: queues.map((queue) => queue.name),
+    queueMigrationsApplied: [],
   }),
 ): MigrateDependencies => ({
   connect: async () => client,
@@ -378,7 +379,7 @@ describe('runMigrations', () => {
       },
       dependencies(fake.client, async (connectionString, schema) => {
         installs.push([connectionString, schema]);
-        return { schemaVersion: 41, queuesDeclared: [] };
+        return { schemaVersion: 41, queuesDeclared: [], queueMigrationsApplied: [] };
       }),
     );
 
@@ -405,15 +406,22 @@ describe('runMigrations', () => {
       },
       dependencies(fake.client, async (_url, _schema, queues) => {
         handed.push(queues.map((queue) => queue.name));
-        return { schemaVersion: 40, queuesDeclared: queues.map((queue) => queue.name) };
+        return {
+          schemaVersion: 40,
+          queuesDeclared: queues.map((queue) => queue.name),
+          queueMigrationsApplied: ['0001_pipeline_outbound_retry_hours'],
+        };
       }),
     );
 
     const table = JOB_QUEUE_DEFINITIONS.map((definition) => definition.name);
     expect(handed).toEqual([table]);
     expect(report.queuesDeclared).toEqual(table);
+    // BD-034: the queue migrations the install applied are reported and logged after the queues.
+    expect(report.queueMigrationsApplied).toEqual(['0001_pipeline_outbound_retry_hours']);
     const kinds = events.map((event) => event.kind);
     expect(kinds.indexOf('queues')).toBe(kinds.indexOf('pgboss') + 1);
+    expect(kinds.indexOf('queue_migrations')).toBe(kinds.indexOf('queues') + 1);
   });
 
   it('still releases the lock when the very first statement fails', async () => {

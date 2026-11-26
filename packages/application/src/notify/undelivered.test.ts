@@ -4,7 +4,7 @@
  */
 import type { IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { retryWindowMs } from '../pipeline/jobs.js';
+import { retryDelaysMs, retryWindowMs } from '../pipeline/jobs.js';
 import { DIGEST_RETRY, PIPELINE_OUTBOUND_RETRY } from '../ports/job-queues.js';
 import {
   DIGEST_UNDELIVERED_AFTER_MS,
@@ -14,8 +14,20 @@ import {
 
 describe('the retry window of a queue', () => {
   it('is every attempt’s expiry plus every backoff delay at its worst case', () => {
-    // pipeline.outbound: 2 retries, 30 s backoff → at most 60 s + 120 s, and 3 attempts × 900 s.
-    expect(retryWindowMs(PIPELINE_OUTBOUND_RETRY)).toBe((60 + 120 + 3 * 900) * 1000);
+    // pipeline.outbound since BD-034: 24 retries, 30 s backoff capped at 900 s → at most 60, 120,
+    // 240, 480 s and then the 900 s cap twenty times, and 25 attempts × 900 s of expiry.
+    expect(retryWindowMs(PIPELINE_OUTBOUND_RETRY)).toBe(
+      (60 + 120 + 240 + 480 + 20 * 900 + 25 * 900) * 1000,
+    );
+    // The cap binds only where the doubling passes it: uncapped, the same four retries double on.
+    expect(
+      retryWindowMs({
+        retryLimit: 4,
+        retryDelaySeconds: 30,
+        retryBackoff: true,
+        expireInSeconds: 0,
+      }),
+    ).toBe((60 + 120 + 240 + 480) * 1000);
     // Without backoff each retry waits the plain delay.
     expect(
       retryWindowMs({
@@ -25,6 +37,19 @@ describe('the retry window of a queue', () => {
         expireInSeconds: 60,
       }),
     ).toBe((30 + 2 * 60) * 1000);
+  });
+});
+
+describe('the retry delays of a queue (BD-034)', () => {
+  it('sums the bottom of each band for the shortest wait and caps both ends at the delay maximum', () => {
+    // 30, 60, 120, 240, 480 s, then the 900 s cap nineteen times: about five hours at the least.
+    expect(retryDelaysMs(PIPELINE_OUTBOUND_RETRY, 'shortest')).toBe(
+      (30 + 60 + 120 + 240 + 480 + 19 * 900) * 1000,
+    );
+    expect(retryDelaysMs(PIPELINE_OUTBOUND_RETRY, 'longest')).toBe(
+      (60 + 120 + 240 + 480 + 20 * 900) * 1000,
+    );
+    expect(retryDelaysMs(PIPELINE_OUTBOUND_RETRY, 'shortest')).toBeGreaterThan(5 * 60 * 60 * 1000);
   });
 });
 

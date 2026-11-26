@@ -106,6 +106,7 @@ export const main = async (argv: readonly string[] = process.argv.slice(2)): Pro
       already_applied: report.skipped.length,
       pgboss_schema_version: report.pgBossSchemaVersion,
       queues_declared: report.queuesDeclared.length,
+      queue_migrations_applied: report.queueMigrationsApplied,
       partitions_created: report.partitionsCreated,
       grants_applied_to: report.grantsAppliedTo,
       transcript_retention_days: report.transcriptRetentionDays,

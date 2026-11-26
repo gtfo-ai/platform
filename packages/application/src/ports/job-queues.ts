@@ -33,15 +33,73 @@
 import { JOB_QUEUES, type JobQueueDefinition, type Jobs } from './jobs.js';
 
 /**
- * `pipeline.outbound`'s retry policy, named so that the one number derived from it cannot drift
- * from it (WP-65): `retryWindowMs` is what the `notifications_undelivered` gauge waits before it
- * counts an immediate notification nobody was told about.
+ * The retry policy of a queue whose jobs call a provider and whose last try a person would be told
+ * about (BD-034, BACKLOG 1656): **twenty-four retries, backing off from 30 s and doubling up to
+ * 15 minutes** — 30–60 s, 1–2, 2–4, 4–8, 8–15 minutes, then every 15 minutes, **about five hours** of
+ * a provider that is down or throttling before anybody is asked (`retryDelaysMs` sums it). Until
+ * 2026-11-26 it was two retries, 30 s then 60 s, so an outage longer than about a minute and a half
+ * parked every task waiting on one of these jobs.
+ *
+ * A failure **another try does not fix** keeps the short bound: a provider's own refusal
+ * (`IntegrationError.retryable` false — a credential, a permission, a request the provider calls
+ * wrong) escalates at its third try as before (`job-escalation.ts`, {@link PERMANENT_FAILURE_TRIES}),
+ * and the job then ends instead of trying for five hours.
+ *
+ * Stored on the queue's row, never on the job: `create_queue` never updates an existing row, so a
+ * database declared before this policy is moved onto it by the queue migrations
+ * `0001_pipeline_outbound_retry_hours` and `0002_mr_comment_debounce_retry_hours` ({@link JOB_QUEUE_MIGRATIONS}); a job enqueued before it keeps the
+ * three tries pg-boss copied onto its row at insert.
  */
-export const PIPELINE_OUTBOUND_RETRY = {
-  retryLimit: 2,
+export const PROVIDER_JOB_RETRY = {
+  retryLimit: 24,
   retryDelaySeconds: 30,
   retryBackoff: true,
+  retryDelayMaxSeconds: 15 * 60,
 } as const;
+
+/**
+ * How many tries a provider's **permanent** refusal gets before its job escalates and ends (BD-034,
+ * BACKLOG 1656): three — the whole bound every such job had before the long policy above, so a
+ * credential or a permission still reaches a person in about a minute and a half.
+ */
+export const PERMANENT_FAILURE_TRIES = 3;
+
+/**
+ * `pipeline.outbound`'s retry policy, named so that the one number derived from it cannot drift
+ * from it (WP-65): `retryWindowMs` is what the `notifications_undelivered` gauge waits before it
+ * counts an immediate notification nobody was told about — so since BD-034 an immediate notification
+ * is counted (and re-posted once) only after its five hours of retries are spent, which is the
+ * point: until then a retry is still delivering it.
+ */
+export const PIPELINE_OUTBOUND_RETRY = PROVIDER_JOB_RETRY;
+
+/**
+ * The sum of a policy's retry **delays** alone, in milliseconds — `'longest'` takes the top of each
+ * jittered band (`retry_delay × 2^(n+1)`), `'shortest'` its bottom (`retry_delay × 2^n`), each capped
+ * at `retryDelayMaxSeconds` as pg-boss's `LEAST(retry_delay_max, …)` caps it (BD-034). The shortest
+ * sum is what a brief may say the platform *at least* waited.
+ */
+export const retryDelaysMs = (
+  policy: {
+    readonly retryLimit: number;
+    readonly retryDelaySeconds: number;
+    readonly retryBackoff: boolean;
+    readonly retryDelayMaxSeconds?: number;
+  },
+  end: 'longest' | 'shortest',
+): number => {
+  const cap = policy.retryDelayMaxSeconds ?? Number.POSITIVE_INFINITY;
+  let delays = 0;
+  for (let retry = 0; retry < policy.retryLimit; retry += 1) {
+    delays += policy.retryBackoff
+      ? Math.min(
+          cap,
+          Math.max(policy.retryDelaySeconds, 1) * 2 ** (end === 'longest' ? retry + 1 : retry),
+        )
+      : policy.retryDelaySeconds;
+  }
+  return delays * 1000;
+};
 
 /**
  * How often a `pipeline.outbound` worker looks for its next job — **its own interval, shorter than
@@ -110,8 +168,10 @@ export const JOB_QUEUE_DEFINITIONS: readonly JobQueueDefinition[] = [
   {
     name: JOB_QUEUES.mrCommentDebounce,
     policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
+    // BD-034 (BACKLOG 1659): a provider that cannot be read is retried for about five hours, not
+    // three tries. `stately` keeps one queued job per key while it waits, and a later comment's
+    // wake-up folds onto it — the retry re-reads every thread when it fires, so nothing is lost.
+    ...PROVIDER_JOB_RETRY,
     // Bound and escalate (WP-156 (b), TD-004's M7 amendment): stated, not inherited. One window is
     // one task read, one provider read of the merge request's threads and one transaction, so its
     // provider calls are bounded by PROVIDER_CALL_BOUND_SECONDS (≈ 92 s at the shipped timeouts),
@@ -270,6 +330,45 @@ export const JOB_QUEUE_DEFINITIONS: readonly JobQueueDefinition[] = [
     // Creating a year of partitions on a large instance is slow; the default 15 minutes is plenty
     // but the retention drop is the part that must never be interrupted half-way.
     expireInSeconds: 900,
+  },
+];
+
+/**
+ * **A queue migration** (TD-004's 2026-11-26 amendment, BD-034): a change to the options of a queue
+ * that already exists in a database. `create_queue` is create-if-absent, so editing a row of
+ * {@link JOB_QUEUE_DEFINITIONS} changes a fresh database only; an existing one is moved by a row
+ * here, which `migrate` applies **once**, in order, under the migration advisory lock, through
+ * pg-boss's own `updateQueue`, and records in `job_queue_migrations` (migration 0123).
+ *
+ * Forward-only, like the SQL migrations: a row is never edited or removed once released — a later
+ * change is a new row — and `migrate` refuses a recorded name whose options differ from this build's
+ * (`job-queue-migrations.ts` in the infrastructure ring). A build that does not know a recorded
+ * name ignores it, so an older build runs against a newer database unchanged (TD-032: the options
+ * are data, never schema). The options name only what changes; `job-queues.test.ts` holds each
+ * row's options equal to its queue's row in the table, so a fresh database and a migrated one carry
+ * the same policy.
+ */
+export interface JobQueueMigration {
+  /** `<nnnn>_<words>`, ordered; the record's primary key. */
+  readonly name: string;
+  readonly queue: string;
+  readonly options: Pick<
+    JobQueueDefinition,
+    'retryLimit' | 'retryDelaySeconds' | 'retryBackoff' | 'retryDelayMaxSeconds' | 'expireInSeconds'
+  >;
+}
+
+export const JOB_QUEUE_MIGRATIONS: readonly JobQueueMigration[] = [
+  // BD-034 (BACKLOG 1656, 1659): the provider-calling jobs a person waits on retry for hours.
+  {
+    name: '0001_pipeline_outbound_retry_hours',
+    queue: JOB_QUEUES.pipelineOutbound,
+    options: PROVIDER_JOB_RETRY,
+  },
+  {
+    name: '0002_mr_comment_debounce_retry_hours',
+    queue: JOB_QUEUES.mrCommentDebounce,
+    options: PROVIDER_JOB_RETRY,
   },
 ];
 

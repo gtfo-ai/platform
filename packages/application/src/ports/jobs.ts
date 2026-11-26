@@ -55,6 +55,11 @@ export interface JobQueueDefinition {
   readonly retryDelaySeconds?: number;
   /** Exponential backoff from `retryDelaySeconds` instead of a fixed delay. @default false */
   readonly retryBackoff?: boolean;
+  /**
+   * The longest one backed-off retry waits (pg-boss's `retryDelayMax`): the backoff doubles up to
+   * it and stays there. Absent, it doubles without a cap (BD-034, BACKLOG 1656).
+   */
+  readonly retryDelayMaxSeconds?: number;
   /** How long a job may stay active before it is considered lost. @default 900 */
   readonly expireInSeconds?: number;
   /** How long a completed job is kept, for the audit trail. */
