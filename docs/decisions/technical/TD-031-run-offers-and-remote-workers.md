@@ -1660,3 +1660,6 @@ open:
   bind 7357 (in any state). A plain first install then takes the first free port too and writes it
   into `.env`. When 7357 is free, it probes nothing but Docker's bindings and writes nothing, so a
   single worker's install is exactly what it was before S-29.2.
+
+## Amendment 2026-11-26 — [BD-034](../business/BD-034-recover-before-escalating.md)
+The bounds this record states are raised. A lost run is re-planned three times (not once), each re-plan excluding the machines that lost it. A usage limit is re-planned three times (not once). A transport failure to start gets eight attempts, backing off from 30 s to 10 min (not three attempts 30 s apart). A shutdown hand-back is allowed five times (not two). A run that ended before the model took a turn is re-planned six times, 1 to 16 minutes apart, instead of escalating at once. BD-034 has the table and the reasons.
