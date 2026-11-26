@@ -133,7 +133,7 @@ describe('Invite people', () => {
   it('warns about an administrator link and sends the role and hours chosen', async () => {
     const user = await open();
     expect(screen.queryByText(/becomes an administrator/)).toBeNull();
-    await user.selectOptions(screen.getByLabelText(INVITE_WORDS.role), 'admin');
+    await user.selectOptions(screen.getByLabelText(INVITE_WORDS.roleField), 'admin');
     expect(screen.getByText(/becomes an administrator/)).toBeTruthy();
     await user.selectOptions(screen.getByLabelText(INVITE_WORDS.validFor), '168');
     await user.click(screen.getByRole('button', { name: INVITE_WORDS.create }));

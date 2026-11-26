@@ -365,6 +365,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // with their task.
       row('ticket_status_stops', 'read_write', null),
       row('ticket_status_sweeps', 'read_write', null),
+      // TD-022's 2026-11-26 amendment (migration 0122): a link is claimed, released, accepted and
+      // revoked in place.
+      row('user_invites', 'read_write', null),
       row('users', 'read_write', null),
       row('verifications', 'read_write', null),
       // WP-280 (migration 0096): a code is polled, decided and consumed in place; a worker is

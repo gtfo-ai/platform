@@ -1127,21 +1127,11 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(response.json()).toEqual({ first_sign_in_pending: true });
   }, 15_000);
 
+  // No sweep of the web sources here, unlike its neighbours: another synchronous read of every client
+  // file put the event loop over `@fastify/under-pressure`'s bound and every probe after it answered
+  // 500 (measured on CI, #191). That the client calls the four paths is held by the two-way
+  // equality above and by the public list below, which names the two public paths exactly.
   it('serves the invite links: the admin three refuse an anonymous caller by their own method, the public pair does not (TD-022 2026-11-26)', async () => {
-    const paths = clientPaths(
-      coreClientFiles().map((path) => ({
-        path,
-        source: readSource(path),
-      })),
-    );
-    for (const path of [
-      '/api/org/users/invites',
-      '/api/org/users/invites/{}/revoke',
-      '/api/invites/inspect',
-      '/api/invites/accept',
-    ]) {
-      expect(paths, path).toContain(path);
-    }
     // With no body at all: the two admin writes are guarded in `preValidation`, so a guard that
     // slipped to `preHandler` would answer the route's shape (400) instead of 401.
     for (const [method, url] of [

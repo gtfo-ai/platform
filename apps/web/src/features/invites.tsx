@@ -48,7 +48,7 @@ export const INVITE_WORDS = {
   title: 'Invite people',
   intro:
     'Make a one-time link and send it however you like. Whoever opens it chooses their own email, name and password, and joins with the role you pick here.',
-  role: 'Role',
+  roleField: 'Role',
   validFor: 'Valid for',
   adminWarning:
     'Whoever opens this link becomes an administrator: they can change every setting, every integration and every person’s role.',
@@ -114,9 +114,9 @@ export const InviteLinks = (): ReactElement => {
         <form aria-label={INVITE_WORDS.create} className="flex flex-col gap-3" onSubmit={submit}>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-sm font-medium">
-              {INVITE_WORDS.role}
+              {INVITE_WORDS.roleField}
               <Select
-                aria-label={INVITE_WORDS.role}
+                aria-label={INVITE_WORDS.roleField}
                 value={role}
                 onChange={(event) => setRole(event.target.value as UserRole)}
               >
