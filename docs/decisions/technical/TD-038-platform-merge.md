@@ -239,3 +239,6 @@ and judged again on the next wake-up.
 
 Decision 3's fresh check gains one item, decided in **TD-029 amendment G** (decision 4): for a task with a frozen
 `qa_stage` whose binding sets `qa_pass`, the ticket's fresh status must be in `qa_pass`, else `ticket_not_qa_passed`.
+It fails closed (review of #206): a task with a frozen `qa_stage` whose project has no single valid tracker lifecycle
+(a block that fails its schema, two tracker bindings, none) waits `ticket_lifecycle_unknown`, since `qa_pass` cannot be
+read; a task without a `qa` stage is judged as before.

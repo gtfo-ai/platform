@@ -116,6 +116,11 @@ describe('platformMergeWait (TD-038 decision 3)', () => {
     ['the ticket taken by a person', { ticket: 'hands_off' }, 'ticket_hands_off'],
     ['the ticket not at a QA-passed status', { qaPassed: false }, 'ticket_not_qa_passed'],
     [
+      'a qa-stage task whose tracker lifecycle cannot be judged (review of #206)',
+      { ticket: null, lifecycleUnknown: true },
+      'ticket_lifecycle_unknown',
+    ],
+    [
       'the ticket at a person’s status QA has not passed',
       { ticket: 'hands_off', qaPassed: false },
       'ticket_not_qa_passed',

@@ -363,22 +363,35 @@ export const lifecycleDraftOf = (
 };
 
 /** The statuses another moment names, which `qa_pass` may not (compared as the server compares). */
-const qaPassTaken = (draft: LifecycleDraft): ReadonlySet<string> =>
-  new Set(
+const qaPassTaken = (
+  draft: LifecycleDraft,
+  statuses: readonly TicketStatus[],
+): ReadonlySet<string> => {
+  // Review of #206: the start and finished lists as the form shows them (stored, or the tracker's
+  // categories), and Pick up from — a ticket in any of them cannot also mean QA passed.
+  const ticked = tickedPolicy(draft, statuses);
+  return new Set(
     [
+      draft.names.pick_up_from,
       draft.names.qa,
       draft.names.in_progress,
       draft.names.in_review,
       draft.names.approved,
       ...draft.returned,
+      ...ticked.startFrom,
+      ...ticked.closed,
     ]
       .filter((name) => name !== '')
       .map(lifecycleStatusKey),
   );
+};
 
 /** The ticked `qa_pass` names another moment has not taken since they were ticked. */
-export const tickedQaPass = (draft: LifecycleDraft): readonly string[] => {
-  const taken = qaPassTaken(draft);
+export const tickedQaPass = (
+  draft: LifecycleDraft,
+  statuses: readonly TicketStatus[],
+): readonly string[] => {
+  const taken = qaPassTaken(draft, statuses);
   return draft.qaPass.filter((name) => !taken.has(lifecycleStatusKey(name)));
 };
 
@@ -437,7 +450,7 @@ export const lifecycleOverlayOf = (
     lifecycle.closed = [...draft.closed];
   }
   // S-28.24: only beside a mapped QA moment (the schema refuses it without one); none is absent.
-  const qaPass = tickedQaPass(draft);
+  const qaPass = tickedQaPass(draft, statuses);
   if (draft.names.qa !== '' && qaPass.length > 0) {
     lifecycle.qa_pass = [...qaPass];
   }
@@ -671,14 +684,14 @@ const PolicyRow = ({
 
 /**
  * The statuses *QA passes only on* offers (S-28.24): every loaded status but the ones another
- * moment already names — `qa`, `in_progress`, `in_review`, `approved` and `returned` — which the
- * schema refuses. `done` and `ready_for_merge` stay offered: they may be the accepting status.
+ * moment or list already names — `qa`, `in_progress`, `in_review`, `approved`, `returned`, *Pick
+ * up from* and the ticked start and finished lists — which the schema refuses. `done` and `ready_for_merge` stay offered: they may be the accepting status.
  */
 export const qaPassOptions = (
   draft: LifecycleDraft,
   statuses: readonly TicketStatus[],
 ): readonly TicketStatus[] => {
-  const taken = qaPassTaken(draft);
+  const taken = qaPassTaken(draft, statuses);
   return statuses.filter((status) => !taken.has(lifecycleStatusKey(status.name)));
 };
 
@@ -948,7 +961,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
         {draft.names.qa === '' ? null : (
           <QaPassRow
             statuses={qaPassOptions(draft, items)}
-            value={tickedQaPass(draft)}
+            value={tickedQaPass(draft, items)}
             refusal={refused.get('qa_pass')}
             onChange={(names) => setDraft({ ...draft, qaPass: names })}
           />

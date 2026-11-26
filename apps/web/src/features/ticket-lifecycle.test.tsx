@@ -895,10 +895,14 @@ describe('QA passes only on (S-28.24, TD-029 amendment G)', () => {
     expect(group.textContent).toContain(
       'the platform merges only while the ticket is in one of them',
     );
-    // The QA status itself is not offered: it cannot also pass QA.
-    expect(
-      (within(group).getAllByRole('checkbox') as HTMLInputElement[]).map((box) => box.value),
-    ).toEqual(['Doing', 'Waiting for review', 'Sent back', 'Finished']);
+    // Not offered (review of #206): the QA status itself, and the statuses the start and finished
+    // lists tick — here the tracker's To Do (Sent back) and Done (Finished) categories.
+    const offered = () =>
+      (within(group).getAllByRole('checkbox') as HTMLInputElement[]).map((box) => box.value);
+    expect(offered()).toEqual(['Doing', 'Waiting for review']);
+    // Pick up from is never offered either.
+    await user.selectOptions(slotSelect(card, 'Pick up from'), 'Doing');
+    expect(offered()).toEqual(['Waiting for review']);
     await user.selectOptions(slotSelect(card, 'QA'), '');
     expect(qaPassGroup(card)).toBeNull();
   });
@@ -906,7 +910,8 @@ describe('QA passes only on (S-28.24, TD-029 amendment G)', () => {
   it('round-trips the ticked list: a stored list is ticked, and saving writes it back', async () => {
     const state = world({
       bindings: bindingsWith({
-        lifecycle: { qa: 'Testing', done: 'Finished', qa_pass: ['finished'] },
+        // An explicit empty finished list, so Finished (Done category) may pass QA.
+        lifecycle: { qa: 'Testing', done: 'Finished', closed: [], qa_pass: ['finished'] },
       }),
     });
     renderSettings(state);
@@ -929,7 +934,7 @@ describe('QA passes only on (S-28.24, TD-029 amendment G)', () => {
 
   it('saves nothing for it while QA is unmapped or nothing is ticked, so the old rule stays', () => {
     const { draft } = lifecycleDraftOf(
-      { lifecycle: { qa: 'Testing', qa_pass: ['Finished'] } },
+      { lifecycle: { qa: 'Testing', closed: [], qa_pass: ['Finished'] } },
       STATUSES,
     );
     expect(draft.qaPass).toEqual(['Finished']);
@@ -942,6 +947,15 @@ describe('QA passes only on (S-28.24, TD-029 amendment G)', () => {
     expect(
       lifecycleOf({ ...draft, names: { ...draft.names, in_progress: 'finished' } }).qa_pass,
     ).toBeUndefined();
+    // So is one a start or finished list, or Pick up from, now holds (review of #206).
+    for (const taken of [
+      { ...draft, closed: null },
+      { ...draft, closed: ['Finished'] },
+      { ...draft, startFrom: ['finished'] },
+      { ...draft, names: { ...draft.names, pick_up_from: 'Finished' } },
+    ]) {
+      expect(lifecycleOf(taken).qa_pass).toBeUndefined();
+    }
     // A stored name the tracker no longer lists is named, and left out.
     expect(
       lifecycleDraftOf({ lifecycle: { qa: 'Testing', qa_pass: ['Gone'] } }, STATUSES).dropped,

@@ -94,6 +94,8 @@ interface World {
   readonly windowOpen?: boolean;
   readonly personNoteAt?: string;
   readonly ticket?: { readonly status: string; readonly category?: 'done' | 'in_progress' };
+  /** The tracker refuses the fresh read (a transport failure): the ticket is unread. */
+  readonly ticketUnreadable?: boolean;
   /** The binding's lifecycle block, read live (S-28.24's `qa_pass`); none by default. */
   readonly lifecycle?: TicketLifecycle;
   readonly capabilities?: { readonly merge?: boolean; readonly rebase?: boolean };
@@ -420,22 +422,27 @@ const setup = async (world: World = {}) => {
       : ({
           port: {
             capabilities: () => ({}),
-            readTicket: async () => ({
-              ref: {
-                provider: 'fake-jira',
-                key: 'ACME-1',
-                url: 'https://jira.example.test/ACME-1',
-              },
-              title: 'Fix',
-              description: '',
-              status: ticketStatus.status,
-              status_category: ticketStatus.category ?? null,
-              comments: [],
-              comment_total: 0,
-              labels: [],
-              assignee: null,
-              reporter: null,
-            }),
+            readTicket: async () => {
+              if (world.ticketUnreadable === true) {
+                throw new IntegrationError('unavailable', 'fake-jira', 'gateway timeout');
+              }
+              return {
+                ref: {
+                  provider: 'fake-jira',
+                  key: 'ACME-1',
+                  url: 'https://jira.example.test/ACME-1',
+                },
+                title: 'Fix',
+                description: '',
+                status: ticketStatus.status,
+                status_category: ticketStatus.category ?? null,
+                comments: [],
+                comment_total: 0,
+                labels: [],
+                assignee: null,
+                reporter: null,
+              };
+            },
           },
           ref: {
             integrationId: '00000000-0000-4000-8000-00000000a002',
@@ -860,12 +867,13 @@ describe('the merge asks QA again: qa_pass (TD-029 amendment G)', () => {
     closed: ['Done'],
     qa_pass: ['Releasable', 'Accepted by QA'],
   };
-  const at = (status: string, category?: 'done' | 'in_progress', qa = true) =>
+  const at = (status: string, category?: 'done' | 'in_progress', qa = true, unreadable = false) =>
     setup({
       setting: 'platform',
       qa,
       lifecycle: LIFECYCLE,
       ticket: category === undefined ? { status } : { status, category },
+      ticketUnreadable: unreadable,
     });
 
   it.each<[string, 'done' | 'in_progress' | undefined]>([
@@ -891,6 +899,27 @@ describe('the merge asks QA again: qa_pass (TD-029 amendment G)', () => {
     const w = await at(status, category);
     expect(await w.run()).toBe('merged');
     expect(w.merges).toEqual([{ expected: HEAD, squash: true, remove: false }]);
+  });
+
+  it('an unreadable ticket under qa_pass waits ticket_unread, and makes no merge call', async () => {
+    const w = await at('Releasable', 'done', true, true);
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('ticket_unread');
+    expect(w.merges).toEqual([]);
+  });
+
+  /**
+   * Review of #206, fail closed: no single valid tracker lifecycle (a block that fails its schema,
+   * two tracker bindings) leaves no ticket policy, so `qa_pass` cannot be asked. A task that had a
+   * `qa` stage waits; one that had none merges as before.
+   */
+  it('a task with a qa stage and no judgeable tracker waits ticket_lifecycle_unknown; one without merges', async () => {
+    const qa = await setup({ setting: 'platform', qa: true });
+    expect(await qa.run()).toBe('waiting');
+    expect(await qa.waitedFor()).toBe('ticket_lifecycle_unknown');
+    expect(qa.merges).toEqual([]);
+    const plain = await setup({ setting: 'platform' });
+    expect(await plain.run()).toBe('merged');
   });
 
   it('a task with no qa stage is judged as before: Testing is a person’s, Releasable merges', async () => {
@@ -1331,6 +1360,12 @@ void _duty;
  * "the branch moved". The wait has its own code now, and the merge check records the head the gates
  * judged before QA once — so AUT-6640 and its like merge without a person.
  */
+/**
+ * A task with a `qa` stage needs a judged tracker since the review of #206 (fail closed): the
+ * fresh ticket, at a status nothing stops.
+ */
+const TRACKED = { status: 'Accepted' } as const;
+
 describe('a task that passed QA with no reviewed head recorded (S-28.18)', () => {
   const claimedLongAgo = async (w: Awaited<ReturnType<typeof setup>>) =>
     w.memory.transaction(async (scope) =>
@@ -1360,7 +1395,7 @@ describe('a task that passed QA with no reviewed head recorded (S-28.18)', () =>
   });
 
   it('is found by the recovery pass, gets the head CI passed recorded once, and is merged at that head', async () => {
-    const w = await setup({ setting: 'platform', readyHead: null, qa: true });
+    const w = await setup({ setting: 'platform', readyHead: null, qa: true, ticket: TRACKED });
     await claimedLongAgo(w);
     expect(await dueNow(w)).toEqual([TASK]);
     expect(await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options)).toBe(
@@ -1376,6 +1411,7 @@ describe('a task that passed QA with no reviewed head recorded (S-28.18)', () =>
       setting: 'platform',
       readyHead: null,
       qa: true,
+      ticket: TRACKED,
       live: { head: 'e'.repeat(40), files: [] },
     });
     await runReadyMergeCheck(w.options as never, { task_id: TASK }, w.options);
@@ -1396,6 +1432,7 @@ describe('a task that passed QA with no reviewed head recorded (S-28.18)', () =>
       setting: 'platform',
       readyHead: null,
       qa: true,
+      ticket: TRACKED,
       excused: ['.gitlab-ci.yml'],
     });
     await claimedLongAgo(w);
@@ -1411,7 +1448,7 @@ describe('a task that passed QA with no reviewed head recorded (S-28.18)', () =>
   it('records nothing for a task without qa, or one CI never passed, and the recovery does not find it', async () => {
     for (const world of [
       { setting: 'platform', readyHead: null },
-      { setting: 'platform', readyHead: null, qa: true, ciHead: null },
+      { setting: 'platform', readyHead: null, qa: true, ticket: TRACKED, ciHead: null },
     ] as const) {
       const w = await setup(world);
       await claimedLongAgo(w);

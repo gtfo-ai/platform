@@ -24,6 +24,9 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
   review_not_approved: 'the latest review did not approve the change',
   plan_not_decided: 'the plan approval is not decided',
   ticket_closed: 'the ticket was closed, so the merge is left to a person',
+  // Review of #206: fail closed when the QA check cannot be asked.
+  ticket_lifecycle_unknown:
+    'this task had a QA stage, and the project’s tracker connection cannot be read (two ticket trackers, or lifecycle settings the platform refuses), so the platform cannot tell whether QA passed; fix the tracker connection in the project settings, or merge it yourself',
   // S-28.24 (TD-029 amendment G): the binding names the statuses that pass QA, and this is not one.
   ticket_not_qa_passed:
     'the ticket is not at a status that passes QA in this project’s lifecycle settings, so the platform waits for the tester; it merges once a person moves the ticket to one of them',

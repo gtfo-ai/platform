@@ -306,7 +306,9 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 > waits), and the platform's merge of a task whose frozen `qa_stage` is true merges only while the
 > ticket's fresh status is in the list or is the `ready_for_merge` slot's — otherwise the merge waits
 > `ticket_not_qa_passed` (`freshTicketAtMerge`, `packages/domain/src/policies/merge.ts`); a listed
-> status reads `open` there even when it is no slot. The block is read live per firing, so a saved
+> status reads `open` there even when it is no slot. A `qa_stage` task whose project has no single valid
+> tracker lifecycle (a block failing its schema, two tracker bindings, none) waits
+> `ticket_lifecycle_unknown` instead of merging unasked. The block is read live per firing, so a saved
 > list reaches tasks already in flight. The schema refuses an empty list, a name twice, a list without
 > `qa`, and a name `qa`, `in_progress`, `in_review`, `approved`, `returned`, `start_from` or `closed`
 > already holds; equal to `done` or `ready_for_merge` is allowed. The Jira binding refuses one equal to

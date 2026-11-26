@@ -95,6 +95,10 @@ export const mergeByPersonReasons = (input: MergeByInput): readonly MergeByPerso
  *    plan still waiting or rejected never reaches Ready, so this is a defect said, not a merge);
  *  - `ticket_closed` / `ticket_hands_off` — the ticket's fresh status (TD-029 B/E); `ticket_unread`
  *    when a bound ticket could not be read (fail closed);
+ *  - `ticket_lifecycle_unknown` — fail closed (review of #206): a task with a `qa` stage whose
+ *    project's ticket statuses cannot be judged at all — the tracker binding's lifecycle block fails
+ *    its schema, the project has two tracker bindings, or none — so whether QA passed (`qa_pass`)
+ *    cannot be known. A task without a `qa` stage is judged as before (nothing stops it);
  *  - `ticket_not_qa_passed` — between the two (TD-029 amendment G, TD-038 amendment D, S-28.24): a
  *    task with a `qa` stage whose binding sets `qa_pass`, and whose ticket's fresh status is neither
  *    in that list nor the `ready_for_merge` slot's ({@link freshTicketAtMerge}). It precedes
@@ -122,6 +126,7 @@ export type PlatformMergeWait =
   | 'review_not_approved'
   | 'plan_not_decided'
   | 'ticket_closed'
+  | 'ticket_lifecycle_unknown'
   | 'ticket_not_qa_passed'
   | 'ticket_hands_off'
   | 'ticket_unread'
@@ -147,6 +152,11 @@ export interface PlatformMergeFacts {
    * apply — no `qa` stage, no `qa_pass`, or no status read. Absent is `null`.
    */
   readonly qaPassed?: boolean | null;
+  /**
+   * The project's ticket statuses cannot be judged for a task with a `qa` stage (no single, valid
+   * tracker lifecycle), so the QA item cannot be asked (review of #206). Absent is `false`.
+   */
+  readonly lifecycleUnknown?: boolean;
   readonly mergeRequest: {
     readonly state: 'opened' | 'merged' | 'closed' | 'locked';
     readonly draft: boolean;
@@ -170,6 +180,7 @@ export const PLATFORM_MERGE_WAITS = [
   'person_words',
   'review_not_approved',
   'plan_not_decided',
+  'ticket_lifecycle_unknown',
   'ticket_closed',
   'ticket_not_qa_passed',
   'ticket_hands_off',
@@ -238,6 +249,9 @@ export const platformMergeWait = (facts: PlatformMergeFacts): PlatformMergeWait 
   }
   if (facts.plan === null) {
     return 'plan_not_decided';
+  }
+  if (facts.lifecycleUnknown === true) {
+    return 'ticket_lifecycle_unknown';
   }
   if (facts.ticket === 'closed') {
     return 'ticket_closed';

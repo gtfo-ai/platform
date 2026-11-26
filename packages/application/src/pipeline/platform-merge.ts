@@ -463,7 +463,7 @@ export const runPlatformMerge = async (
   const windowOpen = await ports.reviewWindowOpen(mr.iid);
   const discussions = windowOpen ? [] : await reads.discussions(mr, context);
   const personWordsPending = windowOpen || personWroteSince(discussions, now - windowMs);
-  const { ticket, qaPassed } = await freshTicket(options, stored, settings);
+  const { ticket, qaPassed, lifecycleUnknown } = await freshTicket(options, stored, settings);
   const wait = platformMergeWait({
     atReady: true,
     paused: false,
@@ -472,6 +472,7 @@ export const runPlatformMerge = async (
     plan: read.plan.plan,
     ticket,
     qaPassed,
+    lifecycleUnknown,
     mergeRequest: {
       state: live.state,
       draft: live.draft,
@@ -1195,10 +1196,14 @@ const freshTicket = async (
 ): Promise<{
   readonly ticket: 'open' | 'closed' | 'hands_off' | 'unread' | null;
   readonly qaPassed: boolean | null;
+  readonly lifecycleUnknown: boolean;
 }> => {
   const base = settings.ticketStatusPolicy ?? null;
   if (base === null) {
-    return { ticket: null, qaPassed: null };
+    // Review of #206, fail closed: no single valid tracker lifecycle (a block that fails its
+    // schema, two tracker bindings, none) means `qa_pass` cannot be read, so a task that had a `qa`
+    // stage waits rather than merging unasked. A task without one is judged as before.
+    return { ticket: null, qaPassed: null, lifecycleUnknown: stored.qaStage };
   }
   const policy = withStatusMappingStatuses(
     base,
@@ -1212,15 +1217,18 @@ const freshTicket = async (
   });
   if (read === null) {
     // Fail closed: a bound ticket the platform cannot read is not known to be open.
-    return { ticket: 'unread', qaPassed: null };
+    return { ticket: 'unread', qaPassed: null, lifecycleUnknown: false };
   }
-  return freshTicketAtMerge({
-    status: read.status,
-    category: read.statusCategory,
-    policy,
-    lifecycle: settings.ticketLifecycle?.slots,
-    qaStage: stored.qaStage,
-  });
+  return {
+    ...freshTicketAtMerge({
+      status: read.status,
+      category: read.statusCategory,
+      policy,
+      lifecycle: settings.ticketLifecycle?.slots,
+      qaStage: stored.qaStage,
+    }),
+    lifecycleUnknown: false,
+  };
 };
 
 /**
