@@ -67,9 +67,15 @@ interface AssignCall {
 
 /** One ticket's assignee, every `assignTo`, and what the next one answers. */
 const tracker = (initial: string | null, declares = { assignOthers: true }) => {
-  const state: { assignee: string | null; refuse: IntegrationError | null } = {
+  const state: {
+    assignee: string | null;
+    refuse: IntegrationError | null;
+    /** What the next `assignToSelf` throws (BACKLOG 1674's fallback). */
+    refuseSelf: IntegrationError | null;
+  } = {
     assignee: initial,
     refuse: null,
+    refuseSelf: null,
   };
   const calls: AssignCall[] = [];
   /** Every `assignToSelf` — the binding's own account (BACKLOG 1674's fallback). */
@@ -111,6 +117,9 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
     selfIdentity: async () => identity('bot'),
     assignToSelf: async () => {
       selfAssigns.push({ account: 'acct-bot', storedAtCall: peekStored() });
+      if (state.refuseSelf !== null) {
+        throw state.refuseSelf;
+      }
       const changed = state.assignee !== 'bot';
       state.assignee = 'bot';
       return { changed, assignee: identity('bot') };
@@ -544,6 +553,55 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
       harness.store.tasks.ticketClaim(scope.tx, taskId),
     );
     expect(claim?.held_by).toBeUndefined();
+  });
+
+  it('assigns it too when the refusal comes before any claim is held', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    ticket.state.refuse = forbidden();
+
+    await assign(harness, BOB);
+
+    expect(ticket.selfAssigns).toHaveLength(1);
+    expect(ticket.state.assignee).toBe('bot');
+    expect(harness.store.ownershipOf(taskId).ticketAssignee).toMatchObject({
+      external_id: 'acct-bot',
+    });
+    const claim = await harness.memory.transaction(async (scope) =>
+      harness.store.tasks.ticketClaim(scope.tx, taskId),
+    );
+    expect(claim).toBeNull();
+  });
+
+  it('a refused fallback is logged and ends the job like the refusal: no throw, nothing recorded', async () => {
+    const ticket = tracker(null);
+    const { logger, lines } = recordingLogger();
+    const harness = harnessFor(ticket, {
+      slots: { claim: true, assign_owner: true },
+      logger,
+    });
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    ticket.state.refuse = forbidden();
+    ticket.state.refuseSelf = forbidden();
+
+    // `assign` drains the queue: a thrown duty would fail here.
+    await assign(harness, BOB);
+
+    expect(ticket.selfAssigns).toHaveLength(1);
+    expect(ticket.state.assignee).toBeNull();
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ticketAssignee: null,
+    });
+    expect(
+      lines.filter(
+        (line) =>
+          line.level === 'warn' && line.message.includes('binding’s own account could not be'),
+      ),
+    ).toHaveLength(1);
   });
 
   it('never touches a ticket a person holds', async () => {

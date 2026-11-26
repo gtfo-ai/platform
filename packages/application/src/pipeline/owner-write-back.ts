@@ -577,6 +577,9 @@ const assignBindingAccountOverNobody = async (
       },
       async () =>
         options.unitOfWork.transaction(async (scope) => {
+          // The row lock first, as the claim's own record takes it (`bumpVersion`): the claim
+          // record below is read and rewritten whole, so a release must not land between the two.
+          await options.store.tasks.bumpVersion(scope.tx, task.id);
           await recordClaimAssign(options, scope.tx, {
             projectId: task.projectId,
             taskId: task.id,

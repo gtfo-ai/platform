@@ -1159,11 +1159,16 @@ describe('the owner keeps the task: an owner’s excluded machine is eligible ag
             now,
           }),
         )
-      ).map((exclusion) => ({ workerId: exclusion.workerId, since: Date.parse(exclusion.since) }));
-    expect(await carried(addMs(NOW, BACKOFF - 1_000))).toEqual([
-      { workerId: ownersMachine, since: Date.parse(NOW) },
-      { workerId: othersMachine, since: Date.parse(NOW) },
-    ]);
+      )
+        .map((exclusion) => ({ workerId: exclusion.workerId, since: Date.parse(exclusion.since) }))
+        // The insert's `distinct` promises no order; the instants are what this asks.
+        .sort((a, b) => a.workerId.localeCompare(b.workerId));
+    expect(await carried(addMs(NOW, BACKOFF - 1_000))).toEqual(
+      [
+        { workerId: ownersMachine, since: Date.parse(NOW) },
+        { workerId: othersMachine, since: Date.parse(NOW) },
+      ].sort((a, b) => a.workerId.localeCompare(b.workerId)),
+    );
     expect(await carried(addMs(NOW, BACKOFF))).toEqual([
       { workerId: othersMachine, since: Date.parse(NOW) },
     ]);

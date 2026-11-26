@@ -699,7 +699,9 @@ export interface TaskRepository {
    * job's transactions), the release (`releaseTicket`, `ticket-release.ts` — from the
    * `ticket_release` duty, and since WP-178 from the claiming job itself for a *Rework*), a person's
    * *Rework* (marks it stale, in the command's own transaction) and, from WP-178, the human-return
-   * window's return (stale) — each stale mark with its `stale_cause`.
+   * window's return (stale) — each stale mark with its `stale_cause` — and, since TD-031's
+   * 2026-11-27 amendment item 5 (BACKLOG 1674), the `ticket_owner_assign` duty's fallback assign,
+   * which drops a live claim's `held_by: 'platform_owner'` under the task's row lock.
    * No version bump: `save` does not name the column, so no whole-row write can put an older
    * claim back.
    *
