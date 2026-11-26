@@ -74,6 +74,8 @@ interface World {
   }[];
   /** Every claim-scope read, by the machine it was asked for. */
   scopeReads: string[];
+  /** How many times `GET /api/projects` was asked. */
+  projectReads: number;
   /** The claim-scope read answers this status instead (the card falls back, the line unknown). */
   scopeFails: number | null;
   /** `GET /api/projects` and the claim-scope read answer once this settles (names arrive late). */
@@ -88,6 +90,7 @@ const world = (overrides: Partial<World> = {}): World => ({
   refuse: null,
   puts: [],
   scopeReads: [],
+  projectReads: 0,
   scopeFails: null,
   projectsGate: null,
   ...overrides,
@@ -162,6 +165,7 @@ const server = (state: World): typeof fetch =>
       });
     }
     if (url.endsWith('/api/projects')) {
+      state.projectReads += 1;
       if (state.projectsGate !== null) await state.projectsGate;
       return json({
         items: PROJECTS.filter((entry) => !state.hidden.includes(entry.id)),
@@ -504,10 +508,14 @@ describe('choosing is not seeing (BD-035, S-30.1)', () => {
     const fontai = within(card).getByRole('checkbox', { name: 'Fontai' }) as HTMLInputElement;
     expect(fontai.checked).toBe(false);
     await user.click(fontai);
+    const readsBefore = state.projectReads;
     await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.save }));
     await waitFor(() => expect(state.puts).toHaveLength(1));
     expect(state.puts[0]?.body.claim_policy).toBe('mine');
     expect([...(state.puts[0]?.body.claim_project_ids ?? [])].sort()).toEqual([AUTIX, FONTAI]);
+    // What the machine takes is what its person sees: the projects are read again after the save,
+    // so Fontai appears without a reload.
+    await waitFor(() => expect(state.projectReads).toBeGreaterThan(readsBefore));
   });
 });
 

@@ -1887,10 +1887,11 @@ export const useSettingsCommands = (mint?: MintKey) => {
         workerId: string;
         body: Parameters<typeof endpoints.setWorkerClaimPolicy>[1];
       }) => endpoints.setWorkerClaimPolicy(input.workerId, input.body),
-      // The list, and every machine's claim-scope read under it (BD-035): one machine's new setting
-      // changes whether the others' unassigned tasks have a taker.
+      // Every read on screen (BD-035): what a person's machines take is also which projects they
+      // see, so the projects, the inbox, the agents and the boards may change with it — and every
+      // machine's claim-scope read, whose `unassigned_has_taker` counts the others.
       onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers] });
+        await queryClient.invalidateQueries();
       },
     }),
     /**
@@ -1914,8 +1915,9 @@ export const useSettingsCommands = (mint?: MintKey) => {
     /** `DELETE /api/workers/:id` (WP-280): revoke; a repeat answers `performed: false`. */
     revokeWorker: useMutation({
       mutationFn: (workerId: string) => endpoints.revokeWorker(workerId),
+      // Every read on screen: a revoked machine no longer narrows what its person sees (BD-035).
       onSettled: async () => {
-        await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
+        await queryClient.invalidateQueries();
       },
     }),
     setOrgBudget: useMutation({
