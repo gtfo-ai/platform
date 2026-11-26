@@ -2686,6 +2686,117 @@ describe('a take unblocks the claim (TD-031 amendment item 5 as amended for a ta
   });
 });
 
+// ── TD-031's second 2026-11-26 amendment: a manual Start is the starter's, in the tracker too ──
+
+/** The `ticket.matched` a person's *Start* appends (`manual-start.ts`): rule manual, a user actor. */
+const manualStart = (userId: Id): DomainEvent => {
+  const matched = ticketMatched() as Extract<DomainEvent, { type: 'ticket.matched' }>;
+  return domainEventSchemasByType['ticket.matched'].parse({
+    ...matched,
+    actor: { kind: 'user', user_id: userId },
+    payload: { ...matched.payload, rule: 'manual' },
+  }) as DomainEvent;
+};
+
+const isWriteBack = (data: Record<string, unknown>): boolean => data.duty === 'ticket_owner_assign';
+
+describe('a manual Start: the starter wins, in the tracker too, and the claim does not race the write-back (TD-031 2026-11-26)', () => {
+  it('BACKLOG 1662: a ticket an unlinked person holds, on a claiming binding that does not take assigned tickets, is started — the starter owns it, the claim keeps it, the write-back assigns the starter', async () => {
+    const ticket = tracker({ assignee: 'jane', assignsOthers: true });
+    // `assign_owner` absent: on by default.
+    const harness = memberHarnessFor(
+      ticket,
+      lifecycle({ in_progress: 'Doing', take_assigned_tickets: false }),
+    );
+    // The write-back waits, so the claim reads Jane: the order in which it could fight.
+    harness.holdOutbound(isWriteBack);
+    await harness.publish([manualStart(ALICE)]);
+
+    // Canary: before the amendment intake recorded `ticket.intake.skipped` (assigned) here.
+    expect(eventsOf(harness, 'ticket.intake.skipped')).toHaveLength(0);
+    const taskId = taskOf(harness).task.id;
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: ALICE,
+      ownerSource: 'platform',
+    });
+    const owners = eventsOf(harness, 'task.owner.changed');
+    expect(owners.map((entry) => [entry.actor, (entry.payload as { via: string }).via])).toEqual([
+      [{ kind: 'user', user_id: ALICE }, 'command'],
+    ]);
+    // The claim kept the ticket for the platform owner: no refusal, no assign of the bot.
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(0);
+    expect(assigns(ticket)).toBe(0);
+    expect(await claimOf(harness)).toMatchObject({ held_by: 'platform_owner' });
+
+    harness.holdOutbound(null);
+    await harness.drain();
+    expect(ticket.calls.filter((call) => call.startsWith('assignTo:'))).toEqual(['assignTo:alice']);
+    expect(ticket.state.assignee).toBe('alice');
+    expect(assigns(ticket)).toBe(0);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({ ownerUserId: ALICE });
+  });
+
+  it('an unassigned ticket: the claim writes no assign of the bot while the starter’s write-back is owed, and the write-back assigns the starter', async () => {
+    const ticket = tracker({ assignsOthers: true });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    harness.holdOutbound(isWriteBack);
+    await harness.publish([manualStart(ALICE)]);
+
+    // Canary: before the amendment the claim assigned the binding's account over nobody here, and
+    // the write-back then replaced it — the two wrote the ticket against each other.
+    expect(assigns(ticket)).toBe(0);
+    expect(await claimOf(harness)).toMatchObject({ held_by: 'platform_owner', stale: false });
+    expect(ticket.calls).toContain('transition:Doing');
+
+    harness.holdOutbound(null);
+    await harness.drain();
+    expect(ticket.calls.filter((call) => call.startsWith('assignTo:'))).toEqual(['assignTo:alice']);
+    expect(ticket.state.assignee).toBe('alice');
+    expect(assigns(ticket)).toBe(0);
+  });
+
+  it('a ticket a linked member holds goes to the starter, and the write-back moves it to them (BACKLOG 1662’s precedence)', async () => {
+    const ticket = tracker({ assignee: 'bob', assignsOthers: true });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    harness.store.seedIdentity('fake-jira', 'bob', BOB);
+    await harness.publish([manualStart(ALICE)]);
+    const taskId = taskOf(harness).task.id;
+    // One owner change, the starter's: the sync's Bob was replaced in the same transaction.
+    expect(
+      eventsOf(harness, 'task.owner.changed').map(
+        (entry) => (entry.payload as { owner_user_id: string }).owner_user_id,
+      ),
+    ).toEqual([ALICE]);
+    await harness.drain();
+    expect(ticket.calls.filter((call) => call.startsWith('assignTo:'))).toEqual(['assignTo:alice']);
+    expect(ticket.state.assignee).toBe('alice');
+    expect(assigns(ticket)).toBe(0);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({ ownerUserId: ALICE });
+  });
+
+  it('with assign_owner: false the claim assigns the binding’s account as before, and nothing is written back (the control)', async () => {
+    const ticket = tracker({ assignsOthers: true });
+    const harness = memberHarnessFor(
+      ticket,
+      lifecycle({ in_progress: 'Doing', assign_owner: false }),
+    );
+    await harness.publish([manualStart(ALICE)]);
+    expect(harness.store.ownershipOf(taskOf(harness).task.id).ownerUserId).toBe(ALICE);
+    expect(assigns(ticket)).toBe(1);
+    expect(ticket.calls.filter((call) => call.startsWith('assignTo:'))).toEqual([]);
+    expect(ticket.state.assignee).toBe(SELF_ID);
+  });
+
+  it('a rule match of an unassigned ticket has no owner: the claim assigns the binding’s account (the control)', async () => {
+    const ticket = tracker({ assignsOthers: true });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    expect(assigns(ticket)).toBe(1);
+    expect(ticket.calls.filter((call) => call.startsWith('assignTo:'))).toEqual([]);
+    expect(ticket.state.assignee).toBe(SELF_ID);
+  });
+});
+
 // ── BACKLOG 1611: the claim label ───────────────────────────────────────────────────────────────
 
 describe('the claim label (BACKLOG 1611)', () => {

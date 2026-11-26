@@ -651,12 +651,13 @@ describe('Assign the owner in the tracker (S-26.8a, product/06’s M26 amendment
       name: 'Assign the owner in the tracker',
     }) as HTMLInputElement;
 
-  it('is off by default, says what it does, and saving it on writes assign_owner: true', async () => {
+  it('is on by default, says what it does, and saving it off writes assign_owner: false', async () => {
     const state = world();
     renderSettings(state);
     const card = await lifecycleCard();
     const box = assignOwner(card);
-    expect(box.checked).toBe(false);
+    // TD-031's second 2026-11-26 amendment: a person's act is written to the tracker by default.
+    expect(box.checked).toBe(true);
     // Beside the lifecycle's two switches, with its one line of help as the box's description.
     expect(
       within(card).getAllByRole('checkbox', {
@@ -665,8 +666,26 @@ describe('Assign the owner in the tracker (S-26.8a, product/06’s M26 amendment
     ).toHaveLength(3);
     const help = document.getElementById(box.getAttribute('aria-describedby') ?? '');
     expect(help?.textContent).toBe(
-      'When someone takes or is assigned a task here, also assign the ticket to them in Jira. Only people who linked their Jira account are assigned there.',
+      'When someone starts, takes or is assigned a task here, also assign the ticket to them in Jira. Only people who linked their Jira account are assigned there.',
     );
+    const user = userEvent.setup();
+    await user.click(box);
+    expect(box.checked).toBe(false);
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(trackerConfigOf(state.puts[0])).toEqual({
+      lifecycle: { claim: true, take_assigned_tickets: false, assign_owner: false },
+    });
+  });
+
+  it('shows a stored false as off, and saving it on writes assign_owner: true', async () => {
+    const state = world({
+      bindings: bindingsWith({ lifecycle: { claim: true, assign_owner: false } }),
+    });
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const box = assignOwner(card);
+    expect(box.checked).toBe(false);
     const user = userEvent.setup();
     await user.click(box);
     await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
@@ -707,7 +726,7 @@ describe('Assign the owner in the tracker (S-26.8a, product/06’s M26 amendment
     expect(state.puts).toEqual([]);
   });
 
-  it('leaves it out of a save that never touched it, so off stays the reader’s default', async () => {
+  it('leaves it out of a save that never touched it, so on stays the reader’s default', async () => {
     const state = world();
     renderSettings(state);
     const card = await lifecycleCard();
@@ -1016,9 +1035,15 @@ describe('the lifecycle helpers', () => {
     expect(lifecycleOverlayOf(stored, draft, null)).toEqual({
       lifecycle: { claim: false, take_assigned_tickets: false, assign_owner: true },
     });
-    // Not stored, not written: the form never switches the write-back on by itself.
+    // Not stored and left on, not written: absent is the reader's default, on.
+    expect(lifecycleDraftOf({}, STATUSES).draft.assignOwner).toBe(true);
     expect(lifecycleOverlayOf({}, lifecycleDraftOf({}, STATUSES).draft, null)).toEqual({
       lifecycle: { claim: true, take_assigned_tickets: false },
+    });
+    // Switched off with nothing stored: written as `false`, because absent would read as on.
+    const off = { ...lifecycleDraftOf({}, STATUSES).draft, assignOwner: false };
+    expect(lifecycleOverlayOf({}, off, null)).toEqual({
+      lifecycle: { claim: true, take_assigned_tickets: false, assign_owner: false },
     });
   });
 

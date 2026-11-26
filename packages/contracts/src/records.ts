@@ -969,13 +969,17 @@ export type StoredTicketClaim = z.infer<typeof storedTicketClaimSchema>;
 /**
  * **Who made a task's last owner change** — `tasks.owner_source` (S-26.1, migration 0104, TD-031's
  * 2026-11-06 amendment item 1): `tracker`, a sync of the ticket's assignee or a link adopting it;
- * `platform`, a person's command or a pick.
+ * `platform`, a person's command, a pick, a manual Start or a worker's automatic claim.
  */
 export const taskOwnerSourceSchema = z.enum(['tracker', 'platform']);
 export type TaskOwnerSource = z.infer<typeof taskOwnerSourceSchema>;
 
-/** How an owner change came about — `task.owner.changed.via` (TD-031's amendment item 1). */
-export const taskOwnerViaSchema = z.enum(['tracker_sync', 'command', 'pick', 'link']);
+/**
+ * How an owner change came about — `task.owner.changed.via` (TD-031's amendment item 1). `claim` is
+ * a worker's **automatic** claim of a stage offer (TD-031's 2026-11-26 amendments): a platform
+ * change, but not a person's act, so it is never written back to the tracker.
+ */
+export const taskOwnerViaSchema = z.enum(['tracker_sync', 'command', 'pick', 'link', 'claim']);
 export type TaskOwnerVia = z.infer<typeof taskOwnerViaSchema>;
 
 /** The longest stored tracker assignee name: provider text, bounded at the write (BD-022). */

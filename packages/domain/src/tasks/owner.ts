@@ -527,10 +527,12 @@ export const decidePickOwner = (
 
 /**
  * **A worker's automatic claim assigns** (TD-031's 2026-11-26 amendment item 2): the same decision
- * and the same write as a pick ({@link decidePickOwner}, `via: pick`), except that a task another
- * person owns is **not refused** — an `everything` machine claims such a task by its policy, and
- * the claim stands with the owner kept. So: an unassigned task gets the worker's person; a task
- * held elsewhere, one the person already owns, and a person who may not own change nothing.
+ * and the same write as a pick ({@link decidePickOwner}), except that a task another person owns is
+ * **not refused** — an `everything` machine claims such a task by its policy, and the claim stands
+ * with the owner kept — and that the change is recorded **`via: claim`** (the second 2026-11-26
+ * amendment, item 2): an automatic pickup is not a person's act, so it is never written back to the
+ * tracker, which keeps the binding's account. So: an unassigned task gets the worker's person; a
+ * task held elsewhere, one the person already owns, and a person who may not own change nothing.
  */
 export const decideClaimOwner = (
   current: TaskOwnership,
@@ -547,25 +549,34 @@ export const decideClaimOwner = (
     pickerMayOwn: input.workerMayOwn,
     at: input.at,
   });
-  return decision.kind === 'refused' ? { kind: 'unchanged' } : decision;
+  if (decision.kind === 'refused') {
+    return { kind: 'unchanged' };
+  }
+  return decision.kind === 'write' && decision.change !== null
+    ? { ...decision, change: { ...decision.change, via: 'claim' } }
+    : decision;
 };
 
 /**
- * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendment item 1), decided at
- * intake over the ownership the tracker sync just wrote ({@link syncOwnerFromTracker}), in the
- * transaction that creates the task — before any worker can claim it (a claim's policy reads the
- * owner live, and the first offer's head start goes to the owner it is written with).
+ * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendment item 1, as amended
+ * the same day: *the starter always wins*), decided at intake over the ownership the tracker read
+ * would have written ({@link syncOwnerFromTracker}), in the transaction that creates the task —
+ * before any worker can claim it (a claim's policy reads the owner live, and the first offer's head
+ * start goes to the owner it is written with).
  *
- * - **A ticket the tracker assigns to a linked `member`-or-above person keeps that person** (the
- *   2026-11-06 amendment's item 5: a member keeps their ticket) — the sync already made them the
- *   owner, so a task with an owner is never changed here; the starter themselves included.
- * - **Every other ticket gets the starter** — unassigned, the binding's own account or a machine,
- *   an unlinked or non-member assignee — `source: platform`, `via: command`, with
- *   `ticket_assignee` left as the sync stored it (rule 1: the next sync keeps the owner until
- *   somebody changes the tracker). Unlike a pick, an assignee the platform cannot map does not stop
- *   it: the person who pressed *Start* asked for this ticket by name.
+ * - **Whoever holds the ticket in the tracker, the starter becomes the owner** — a linked member,
+ *   an unlinked or non-member person, the binding's own account or a machine, or nobody —
+ *   `source: platform`, `via: command`, with `ticket_assignee` left as the read stored it (rule 1:
+ *   the next sync keeps the owner until somebody changes the tracker). The person who pressed
+ *   *Start* asked for this ticket by name; the write-back (on by default) then assigns it to them in
+ *   the tracker as well.
+ * - **A ticket the read already gives the starter** (their own linked account holds it) changes
+ *   nothing: the tracker shows them, so there is nothing to write back.
  * - **A starter who may not own** (`starterMayOwn`, item 1's `member`+) changes nothing: the task
  *   is created as before, with the tracker's assignee synced.
+ *
+ * `previousOwnerUserId` is the owner of `current`; the caller that folds the sync into one write
+ * (intake) states the owner before the sync instead.
  */
 export const decideStarterOwner = (
   current: TaskOwnership,
@@ -575,7 +586,7 @@ export const decideStarterOwner = (
     readonly at: IsoDateTime;
   },
 ): OwnershipDecision => {
-  if (!input.starterMayOwn || current.ownerUserId !== null) {
+  if (!input.starterMayOwn || current.ownerUserId === input.starterUserId) {
     return { kind: 'unchanged' };
   }
   return {
@@ -588,7 +599,7 @@ export const decideStarterOwner = (
     },
     change: {
       ownerUserId: input.starterUserId,
-      previousOwnerUserId: null,
+      previousOwnerUserId: current.ownerUserId,
       source: 'platform',
       via: 'command',
     },

@@ -293,6 +293,7 @@ describe('claimPreReadDecision (S-26.2)', () => {
     overrides: Partial<{
       holderIsLinkedMember: boolean;
       platformOwner: boolean;
+      platformOwnerWritesBack: boolean;
       first: boolean;
       shadow: boolean;
       takeAssignedTickets: boolean;
@@ -303,6 +304,7 @@ describe('claimPreReadDecision (S-26.2)', () => {
       holder,
       holderIsLinkedMember: false,
       platformOwner: false,
+      platformOwnerWritesBack: false,
       first: true,
       shadow: false,
       takeAssignedTickets: false,
@@ -366,7 +368,54 @@ describe('claimPreReadDecision (S-26.2)', () => {
     }
   });
 
-  it('a platform owner still assigns over nobody and over the binding’s own account', () => {
+  /**
+   * TD-031's second 2026-11-26 amendment: a person's act (a manual Start, a take, a pick) is
+   * written to the tracker by the owner write-back, which runs beside the claim — so the claim
+   * writes the binding's account over nobody and over itself only when no write-back is owed.
+   */
+  it('keeps the ticket for a platform owner whose write-back is owed, whoever holds it', () => {
+    for (const holder of [null, SELF, PERSON]) {
+      for (const first of [true, false]) {
+        for (const shadow of [true, false]) {
+          for (const takeAssignedTickets of [true, false]) {
+            const facts = {
+              platformOwner: true,
+              platformOwnerWritesBack: true,
+              first,
+              shadow,
+              takeAssignedTickets,
+            };
+            expect(ask(holder, facts), JSON.stringify({ holder, ...facts })).toEqual({
+              kind: 'keep',
+              heldBy: 'platform_owner',
+            });
+          }
+        }
+      }
+    }
+    // A linked member still keeps their own ticket as `member`.
+    expect(
+      ask(MEMBER, {
+        holderIsLinkedMember: true,
+        platformOwner: true,
+        platformOwnerWritesBack: true,
+      }),
+    ).toEqual({
+      kind: 'keep',
+      heldBy: 'member',
+    });
+  });
+
+  it('a write-back fact without a platform owner changes nothing (an automatic claim’s owner is not owed)', () => {
+    expect(ask(null, { platformOwnerWritesBack: true })).toEqual({ kind: 'assign' });
+    expect(ask(SELF, { platformOwnerWritesBack: true })).toEqual({ kind: 'assign' });
+    expect(ask(PERSON, { platformOwnerWritesBack: true })).toEqual({
+      kind: 'refuse',
+      assignee: PERSON,
+    });
+  });
+
+  it('a platform owner with no write-back owed still assigns over nobody and over the binding’s own account', () => {
     for (const first of [true, false]) {
       expect(ask(null, { platformOwner: true, first })).toEqual({ kind: 'assign' });
       expect(ask(SELF, { platformOwner: true, first })).toEqual({ kind: 'assign' });

@@ -373,7 +373,9 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
       issue_type: payload.issue_type ?? null,
       priority: payload.priority ?? null,
       // TD-031's 2026-11-26 amendment item 1: a person's manual Start names its starter, who owns
-      // the task intake creates. A rule match (and the reconciler's re-emission) names nobody.
+      // the task intake creates — and so does the reconciler's re-emission of a lost manual Start,
+      // which carries the lost event's user actor (the second amendment's item 4). A rule match
+      // names nobody.
       ...(payload.rule === MANUAL_START_RULE && event.actor.kind === 'user'
         ? { starter_user_id: event.actor.user_id }
         : {}),
@@ -535,14 +537,20 @@ export const runIntakeCheck = async (
    * **A ticket a linked member of the project holds is taken** whatever `take_assigned_tickets`
    * says (S-26.2, BD-031's 2026-11-06 amendment 2): it becomes that member's task, and the claim
    * keeps it with them.
+   *
+   * **A manual Start is never skipped as `assigned`** (TD-031's second 2026-11-26 amendment item 3,
+   * BACKLOG 1662), whatever `take_assigned_tickets` says: the person who pressed *Start* asked for
+   * this ticket by name, becomes its owner below, and the write-back assigns it to them; the claim
+   * keeps the ticket for that platform owner (`held_by: 'platform_owner'`) rather than refusing it.
    */
   if (
-    await skipsAssignedTicket(options, integrations, {
+    starterUserId === null &&
+    (await skipsAssignedTicket(options, integrations, {
       projectId,
       ticket,
       lifecycle: settings.ticketLifecycle?.slots,
       assignee: ticketRead?.assignee ?? null,
-    })
+    }))
   ) {
     await recordIntakeSkip(options, projectId, ticket, causeEventId, { reason: 'assigned' });
     return;
@@ -690,10 +698,10 @@ export const runIntakeCheck = async (
       read: ticketRead,
       causeEventId,
       /**
-       * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendment item 1),
-       * here — before any worker can claim the task (the claim reads the owner live, and the first
-       * offer's head start goes to the owner it is written with) — unless the tracker assigns the ticket to another linked member, who
-       * keeps it. The owner's WIP limit below is then the starter's.
+       * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendments: the
+       * starter always wins), here — before any worker can claim the task (the claim reads the
+       * owner live, and the first offer's head start goes to the owner it is written with) —
+       * whoever the tracker shows. The owner's WIP limit below is then the starter's.
        */
       starterUserId,
     });

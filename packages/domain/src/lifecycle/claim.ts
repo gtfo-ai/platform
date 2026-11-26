@@ -104,6 +104,16 @@ export const intakeSkipsAssignedTicket = (input: {
  *       the claim neither refuses it again nor writes the binding's account over the tracker's
  *       assignee: the tracker keeps showing that assignee until the owner write-back (S-26.3, when
  *       `assign_owner` is on) or a person changes it;
+ *     - `held_by: 'platform_owner'` too — **whoever holds the ticket, nobody and the binding's own
+ *       account included** — when that platform owner's **write-back is owed**
+ *       (`platformOwnerWritesBack`: the owner was set by a person's act, `via` `command` or `pick`,
+ *       the binding's `assign_owner` is not `false`, the owner has a `person` identity for the
+ *       provider and the provider can assign others; TD-031's second 2026-11-26 amendment). The
+ *       `ticket_owner_assign` duty is assigning the owner in the tracker, so the claim writes the
+ *       binding's account over nobody: it would overwrite the owner if the write-back landed
+ *       first, and its own re-read would read the owner as *elsewhere* if the write-back landed
+ *       between its assign and that read. An owner set by a worker's automatic claim (`via: claim`)
+ *       is never written back, so its ticket is assigned to the binding's account as before;
  *  - `refuse` — a **first** claim of a normal task finds somebody else holding the ticket (an
  *    unlinked account, a person below `member`, a machine, another binding's account), the task
  *    has no such platform owner, and the binding does not take assigned tickets:
@@ -133,16 +143,26 @@ export const claimPreReadDecision = (input: {
    * sync, so a tracker change since the take (latest change wins) has already cleared it.
    */
   readonly platformOwner: boolean;
+  /**
+   * That platform owner's write-back is owed — set by a person's act and written to the tracker by
+   * the `ticket_owner_assign` duty (the caller's live answer, from the duty's own predicate). Read
+   * only beside `platformOwner`.
+   */
+  readonly platformOwnerWritesBack: boolean;
   /** {@link ticketClaimIsFirst} of the claim the task holds. */
   readonly first: boolean;
   readonly shadow: boolean;
   readonly takeAssignedTickets: boolean;
 }): ClaimPreReadDecision => {
+  if (input.holder !== null && input.holderIsLinkedMember) {
+    return { kind: 'keep', heldBy: 'member' };
+  }
+  if (input.platformOwner && input.platformOwnerWritesBack) {
+    // The write-back puts the owner on the ticket; the binding's account must not race it.
+    return { kind: 'keep', heldBy: 'platform_owner' };
+  }
   if (input.holder === null) {
     return { kind: 'assign' };
-  }
-  if (input.holderIsLinkedMember) {
-    return { kind: 'keep', heldBy: 'member' };
   }
   if (sameAccount(input.self, input.holder)) {
     return { kind: 'assign' };

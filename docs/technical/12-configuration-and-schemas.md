@@ -245,13 +245,16 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 >   done: "Finished"
 >   claim: true                         # default true when the block exists; a binding with no block never claims
 >   take_assigned_tickets: false        # intake skips a ticket assigned to someone else unless true
->   assign_owner: false                 # S-26.3: write a platform-set owner back to the tracker (opt-in)
+>   assign_owner: true                  # S-26.3: write a person's own act back to the tracker (default true)
 > ```
-> `assign_owner` is the owner write-back of TD-031's 2026-11-06 amendment item 4, default `false`, and
-> only Jira Cloud declares the `assignTo` member it needs (`TaskManagementCapabilities.assignOthers`).
-> It is not a slot, so it does not supersede `status_mapping`; but it is a key of the block, and **a
-> block that exists claims** (`claim` defaults to true) — so a binding that wants the write-back
-> without the claim adds `claim: false` beside it, as the Jira setup guide says.
+> `assign_owner` is the owner write-back of TD-031's 2026-11-06 amendment item 4, **default `true`**
+> since the second 2026-11-26 amendment (a person's own act — a manual Start, *Take it*, *Assign…*, a
+> pick — is written to the tracker; a worker's automatic claim never is), and only Jira Cloud declares
+> the `assignTo` member it needs (`TaskManagementCapabilities.assignOthers`). Only an explicit `false`
+> turns it off. It is not a slot, so it does not supersede `status_mapping`; but it is a key of the
+> block, and **a block that exists claims** (`claim` defaults to true) — so a binding that only wants to
+> turn the write-back off without claiming adds `claim: false` beside `assign_owner: false`, as the Jira
+> setup guide says.
 > **`ready_for_merge` (S-28.10, TD-029's amendment C (4))** is optional and is not a stage moment: the
 > `mr_ready` duty moves the ticket there only after it has read the merge request back **non-draft**,
 > so a tracker never says *ready* about a draft. Unmapped, it moves nothing and gets no readiness note.

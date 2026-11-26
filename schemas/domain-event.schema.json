@@ -2703,7 +2703,8 @@
                 "tracker_sync",
                 "command",
                 "pick",
-                "link"
+                "link",
+                "claim"
               ]
             },
             "owner_changed_at": {

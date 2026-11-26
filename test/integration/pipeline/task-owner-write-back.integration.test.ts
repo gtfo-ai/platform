@@ -5,10 +5,14 @@
  *  1. **Which account the duty assigns** (`TaskOwnerDirectory.personIdentity`): a user's `person`
  *     identity for the provider, the oldest of two, never a `machine`, never another provider's.
  *  2. **The task DTO's `owner_writes_back`** (`listProjectTasks`): `true` exactly when the project's
- *     task-management binding sets `lifecycle.assign_owner` — read through the pipeline's own
- *     lifecycle reading — and the owner has a `person` identity for the ticket's provider; `false`
- *     for an owner with none, an unowned task, a shadow task, and a project whose binding does not
- *     opt in.
+ *     task-management binding does not set `lifecycle.assign_owner: false` — read through the
+ *     pipeline's own lifecycle reading; on by default since TD-031's second 2026-11-26 amendment,
+ *     with no block or a block that does not name it — and the owner has a `person` identity for
+ *     the ticket's provider; `false` for an owner with none, an unowned task, a shadow task, an
+ *     owner a worker's automatic claim set (`via: claim`), and a project whose binding says
+ *     `false`.
+ *  3. **How the owner was last set** (`TaskOwnerDirectory.lastOwnerChangeVia`): the newest
+ *     `task.owner.changed`'s `via` off the task's own log, `null` for none.
  *
  * The duty itself is `packages/application/src/pipeline/owner-write-back.test.ts`'s.
  */
@@ -37,9 +41,14 @@ const NOW = '2026-11-07T09:00:00.000Z' as IsoDateTime;
 let database: MigratedDatabase;
 let pool: pg.Pool;
 let store: PipelineStore;
-/** The project whose binding sets `lifecycle.assign_owner`, and one whose binding does not. */
+/**
+ * The project whose binding sets `lifecycle.assign_owner: true`, one whose binding sets it `false`,
+ * and two that say nothing — a block without the key, and no block — which write back by default.
+ */
 let optedIn: Id;
 let optedOut: Id;
+let byDefault: Id;
+let noBlock: Id;
 const users: Record<'bob' | 'dora', Id> = { bob: '' as Id, dora: '' as Id };
 let counter = 0;
 const nextId = (): Id => {
@@ -71,6 +80,8 @@ beforeAll(async () => {
     ).id as Id;
   optedIn = await project('wbin');
   optedOut = await project('wbout');
+  byDefault = await project('wbdefault');
+  noBlock = await project('wbnoblock');
   const user = async (email: string): Promise<Id> =>
     (
       (
@@ -101,8 +112,10 @@ beforeAll(async () => {
   await query(
     `insert into bindings (project_id, integration_id, config) values
        ($1, $3, '{"lifecycle": {"claim": false, "assign_owner": true}}'::jsonb),
-       ($2, $3, '{"lifecycle": {"claim": false}}'::jsonb)`,
-    [optedIn, optedOut, integration?.id],
+       ($2, $3, '{"lifecycle": {"claim": false, "assign_owner": false}}'::jsonb),
+       ($4, $3, '{"lifecycle": {"claim": false}}'::jsonb),
+       ($5, $3, '{}'::jsonb)`,
+    [optedIn, optedOut, integration?.id, byDefault, noBlock],
   );
 }, 120_000);
 
@@ -204,6 +217,46 @@ const ownedTask = async (
   return taskId;
 };
 
+/** One `task.owner.changed` on the task's log, as the owner decisions append it. */
+const ownerChangedOnLog = async (
+  taskId: Id,
+  streamSeq: number,
+  via: 'command' | 'pick' | 'claim',
+  owner: Id,
+): Promise<void> => {
+  await query(
+    `insert into events (stream_type, stream_id, stream_seq, type, payload, actor)
+     values ('task', $1, $2, 'task.owner.changed', $3::jsonb, $4::jsonb)`,
+    [
+      taskId,
+      streamSeq,
+      JSON.stringify({
+        task_id: taskId,
+        owner_user_id: owner,
+        previous_owner_user_id: null,
+        source: 'platform',
+        via,
+        owner_changed_at: NOW,
+      }),
+      JSON.stringify({ kind: 'user', user_id: owner }),
+    ],
+  );
+};
+
+describe('how the owner was last set (TaskOwnerDirectory.lastOwnerChangeVia, TD-031 2026-11-26)', () => {
+  it('answers the newest owner change’s via, and null for a task whose owner never changed', async () => {
+    const ask = (taskId: Id) => within((tx) => store.owners.lastOwnerChangeVia(tx, taskId));
+    const never = await ownedTask(optedIn, null);
+    expect(await ask(never)).toBeNull();
+    const claimed = await ownedTask(optedIn, users.bob);
+    await ownerChangedOnLog(claimed, 1, 'claim', users.bob);
+    expect(await ask(claimed)).toBe('claim');
+    // A person's take after the automatic claim: the newest change decides.
+    await ownerChangedOnLog(claimed, 2, 'command', users.bob);
+    expect(await ask(claimed)).toBe('command');
+  });
+});
+
 describe('which account the write-back assigns (TaskOwnerDirectory.personIdentity)', () => {
   it('answers the oldest person link of the provider, and nothing for another provider or none', async () => {
     const ask = (userId: Id, provider: string) =>
@@ -217,7 +270,7 @@ describe('which account the write-back assigns (TaskOwnerDirectory.personIdentit
 });
 
 describe('the task DTO’s owner_writes_back (criterion 4)', () => {
-  it('is true exactly when the binding opts in and the owner has an account at the provider', async () => {
+  it('is true exactly when the binding does not opt out and the owner has an account at the provider', async () => {
     const drizzled = drizzle(pool, { schema: db.schema });
     const bobs = await ownedTask(optedIn, users.bob);
     const doras = await ownedTask(optedIn, users.dora);
@@ -226,6 +279,13 @@ describe('the task DTO’s owner_writes_back (criterion 4)', () => {
     // Bob has a GitLab account, but this ticket is a platform-issued reference: nothing to assign.
     const platformTicket = await ownedTask(optedIn, users.bob, { provider: 'platform' });
     const elsewhere = await ownedTask(optedOut, users.bob);
+    const defaulted = await ownedTask(byDefault, users.bob);
+    const unblocked = await ownedTask(noBlock, users.bob);
+    // An owner a worker's automatic claim set is never written back (TD-031 2026-11-26 item 2).
+    const autoClaimed = await ownedTask(optedIn, users.bob);
+    await ownerChangedOnLog(autoClaimed, 1, 'claim', users.bob);
+    const picked = await ownedTask(optedIn, users.bob);
+    await ownerChangedOnLog(picked, 1, 'pick', users.bob);
 
     const writesBack = async (projectId: Id): Promise<Record<string, boolean | undefined>> =>
       Object.fromEntries(
@@ -241,14 +301,21 @@ describe('the task DTO’s owner_writes_back (criterion 4)', () => {
       nobodys: inProject[nobodys],
       shadow: inProject[shadow],
       platformTicket: inProject[platformTicket],
+      autoClaimed: inProject[autoClaimed],
+      picked: inProject[picked],
     }).toEqual({
       bobs: true,
       doras: false,
       nobodys: false,
       shadow: false,
       platformTicket: false,
+      autoClaimed: false,
+      picked: true,
     });
     expect((await writesBack(optedOut))[elsewhere]).toBe(false);
+    // The switch's default is on: a block that does not name it, and no block at all.
+    expect((await writesBack(byDefault))[defaulted]).toBe(true);
+    expect((await writesBack(noBlock))[unblocked]).toBe(true);
   });
 });
 

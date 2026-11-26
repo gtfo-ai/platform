@@ -30,6 +30,18 @@
  * the take has already assigned the owner in the tracker, so the claim reads a linked member and
  * keeps it as `member` — the claim and the write-back never write the ticket against each other.
  *
+ * **Nor before the write-back lands** (TD-031's second 2026-11-26 amendment): a manual Start makes
+ * its starter the owner and enqueues the write-back beside the first stage, so the claim can read
+ * the ticket before the starter is on it — unassigned, or still the binding's account. When the
+ * platform owner's write-back is **owed** (their last change was a person's act, `command` or
+ * `pick`; the switch is not `false`; they have a `person` identity; the provider assigns others;
+ * not a shadow task — `ClaimReadFacts.platformOwnerWritesBack`), the claim keeps the ticket as
+ * `held_by: 'platform_owner'` whoever holds it, and writes no assign: otherwise it would put the
+ * binding's account over the starter, or read the starter as *elsewhere* on its re-read. An owner
+ * set by a worker's automatic claim (`via: claim`) is never written back, so the tracker gets the
+ * binding's account as before. The residual is backlog 1422's: a claim whose pre-read lands
+ * between the write-back's preset and its `PUT` reads the old assignee as a tracker change.
+ *
  * ## The status re-check (S-28.4)
  *
  * The same pre-read judges the ticket's **status** first (M28 ruling 3 (d), `claimStatusDecision`):
@@ -94,6 +106,7 @@ import type {
 } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
+  assignOwnerOn,
   type ClaimReadback,
   claimPreReadDecision,
   claimReadback,
@@ -156,7 +169,11 @@ export interface TicketClaimRequest {
 const PROCEED: TicketClaimOutcome = { kind: 'proceed' };
 
 /** The claim's facts for a pre-read that answered no ticket: no holder, so nothing to keep. */
-const NO_HOLDER: ClaimReadFacts = { holder: null, platformOwner: false };
+const NO_HOLDER: ClaimReadFacts = {
+  holder: null,
+  platformOwner: false,
+  platformOwnerWritesBack: false,
+};
 
 /** The permission the brief names when the provider declares none (`TaskManagementBinding`). */
 const GENERIC_ASSIGN_PERMISSION = 'the permission to assign tickets';
@@ -533,6 +550,15 @@ const claim = async (
                 taskId: task.id,
                 assignee: holder,
                 assigneeDisplayName: redactedName(holder),
+                // TD-031's second 2026-11-26 amendment: whether the owner write-back is putting a
+                // person's owner on this ticket, so the claim does not race it with its own assign.
+                writeBack: {
+                  assignOwner: assignOwnerOn(lifecycle.slots),
+                  provider: task.ticket.provider,
+                  providerCanAssign:
+                    integrations.taskManagement?.port.capabilities().assignOthers === true,
+                  shadow,
+                },
               }),
             ),
         );
@@ -541,6 +567,7 @@ const claim = async (
     holder,
     holderIsLinkedMember: facts.holder?.kind === 'member',
     platformOwner: facts.platformOwner,
+    platformOwnerWritesBack: facts.platformOwnerWritesBack,
     first,
     shadow,
     takeAssignedTickets: lifecycle.slots.take_assigned_tickets === true,

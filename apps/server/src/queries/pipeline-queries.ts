@@ -127,6 +127,7 @@ import {
 } from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES,
+  assignOwnerOn,
   type CompiledPipeline,
   compilePipeline,
   DEFAULT_TASK_BUDGET_USD,
@@ -1482,7 +1483,9 @@ const unmeasuredRunsFor = async (
  * through `user_identities` so a link made since the last tracker read counts here at once.
  *
  * And since S-26.3, **whether a platform assignment writes back** (`owner_writes_back`, item 4):
- * the project's task-management binding sets `lifecycle.assign_owner` — read through the reading
+ * the owner was not set by a worker's automatic claim (the task's newest owner change is not
+ * `via: claim` — TD-031's second 2026-11-26 amendment item 2), the project's task-management binding does not set `lifecycle.assign_owner: false` (on by
+ * default since that amendment) — read through the reading
  * the pipeline itself applies (`ticketLifecycleOfRows`, `ticket-lifecycle.ts`), so the page and the
  * duty cannot disagree about the switch — **and** the task's owner has a `person` identity for the
  * ticket's provider, the account the duty would assign. A task that names no provider ticket, and a
@@ -1499,6 +1502,7 @@ interface OwnerView {
 
 const HELD_ELSEWHERE = sql.raw(pipelineAdapters.taskHeldElsewhereSql('t'));
 const TRACKER_ASSIGNEE_USER = sql.raw(pipelineAdapters.trackerAssigneeUserSql('t'));
+const LAST_OWNER_VIA = sql.raw(pipelineAdapters.lastOwnerChangeViaSql('t.id'));
 
 /**
  * **Whether assigning each of `userIds` to one task would reach the tracker** (S-26.3): the
@@ -1579,7 +1583,12 @@ export const ownerCandidateWriteBack = async (
   );
 };
 
-/** Which of `projectIds` have a task-management binding that sets `lifecycle.assign_owner`. */
+/**
+ * Which of `projectIds` write a person's owner back: one task-management binding whose lifecycle
+ * does not set `assign_owner: false` (`assignOwnerOn`, TD-031's second 2026-11-26 amendment item 1)
+ * — a binding with no block included. No binding, two of them, or a block that fails its schema
+ * write nothing back: the loader refuses that project's every call.
+ */
 const projectsAssigningOwners = async (
   database: Database,
   projectIds: readonly string[],
@@ -1589,7 +1598,11 @@ const projectsAssigningOwners = async (
     const { rows } = await database.execute<TicketLifecycleBindingRow & Record<string, unknown>>(
       ticketLifecycleBindingsQuery(projectId),
     );
-    if (appliedTicketLifecycle(ticketLifecycleOfRows(rows))?.slots.assign_owner === true) {
+    const reading = ticketLifecycleOfRows(rows);
+    if (
+      reading.kind === 'none' ||
+      (reading.kind === 'lifecycle' && assignOwnerOn(appliedTicketLifecycle(reading)?.slots))
+    ) {
       assigning.add(projectId);
     }
   }
@@ -1612,8 +1625,11 @@ const ownerViewsFor = async (
     held_elsewhere: boolean;
     owner_has_identity: boolean;
     assignee_user_id: string | null;
+    owner_source: string | null;
+    owner_via: string | null;
   }>(sql`
     select t.id, t.project_id, t.ticket_provider, t.mode, u.name as owner_name,
+           t.owner_source, ${LAST_OWNER_VIA} as owner_via,
            ${HELD_ELSEWHERE} as held_elsewhere,
            ${TRACKER_ASSIGNEE_USER} as assignee_user_id,
            exists (select 1 from user_identities ui
@@ -1637,13 +1653,17 @@ const ownerViewsFor = async (
         ownerName: row.owner_name,
         heldElsewhere: row.held_elsewhere === true,
         assigneeUserId: row.assignee_user_id ?? null,
-        // The duty's own predicate over the current owner (`ownerWriteBackFor`'s, per row).
-        writesBack: ownerWriteBackReachesTracker({
-          assignOwner: assigning.has(row.project_id),
-          providerTicket: row.ticket_provider !== PLATFORM_TICKET_PROVIDER,
-          hasPersonIdentity: row.owner_has_identity === true,
-          shadow: row.mode === 'shadow',
-        }),
+        // The duty's own predicate over the current owner (`ownerWriteBackFor`'s, per row) — and
+        // never for an owner a worker's automatic claim gave the task (`via: claim`, TD-031's
+        // second 2026-11-26 amendment item 2), which is not written back.
+        writesBack:
+          !(row.owner_source === 'platform' && row.owner_via === 'claim') &&
+          ownerWriteBackReachesTracker({
+            assignOwner: assigning.has(row.project_id),
+            providerTicket: row.ticket_provider !== PLATFORM_TICKET_PROVIDER,
+            hasPersonIdentity: row.owner_has_identity === true,
+            shadow: row.mode === 'shadow',
+          }),
       },
     ]),
   );

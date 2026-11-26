@@ -142,6 +142,51 @@ describe('one reconciliation pass', () => {
     expect(harness.asked[0]?.reconcilerComponent).toBe(INTAKE_RECONCILER_COMPONENT);
   });
 
+  /**
+   * BACKLOG 1660 (TD-031's second 2026-11-26 amendment item 4): a lost manual Start is re-emitted
+   * with the starter as its actor and `rule: 'manual'`, which is what intake reads the starter off
+   * — so the recovered task gets its owner and its pick-up label. Its bound is the cause, which no
+   * original match carries.
+   */
+  it('re-emits a lost manual Start with its starter’s user actor and rule manual (BACKLOG 1660)', async () => {
+    const STARTER = '00000000-0000-4000-8000-0000000000c1' as Id;
+    const harness = harnessFor([
+      {
+        ...unstarted(),
+        payload: { ...matchPayload(), rule: 'manual' },
+        actor: { kind: 'user', user_id: STARTER },
+      },
+    ]);
+
+    await runIntakeReconciliation(optionsFor(harness));
+
+    const event = harness.appended[0] as Extract<DomainEvent, { type: 'ticket.matched' }>;
+    expect(event.actor).toEqual({ kind: 'user', user_id: STARTER });
+    expect(event.payload.rule).toBe('manual');
+    expect(event.cause_event_id).toBe(LOST_EVENT);
+  });
+
+  it('keeps the system actor for a rule match, whatever actor the lost one had (the control)', async () => {
+    const harness = harnessFor([
+      {
+        ...unstarted(),
+        actor: { kind: 'integration', integration_id: PROJECT, provider: 'jira-cloud' },
+      },
+      // A user actor on a non-manual rule is not a Start: nobody is made its owner.
+      {
+        ...unstarted(),
+        actor: { kind: 'user', user_id: '00000000-0000-4000-8000-0000000000c1' as Id },
+      },
+    ]);
+
+    await runIntakeReconciliation(optionsFor(harness));
+
+    expect(harness.appended.map((event) => event.actor)).toEqual([
+      { kind: 'system', component: INTAKE_RECONCILER_COMPONENT },
+      { kind: 'system', component: INTAKE_RECONCILER_COMPONENT },
+    ]);
+  });
+
   it('asks only for matches older than the grace period', async () => {
     const harness = harnessFor();
 

@@ -7,6 +7,7 @@ import type { Id, IsoDateTime, TicketAssignee } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { syncOwnerFromTracker, type TaskOwnership, UNOWNED } from './owner.js';
 import {
+  assignOwnerOn,
   intendedTicketAssignee,
   ownerChangeWritesBack,
   ownerWriteBackBlocker,
@@ -36,11 +37,34 @@ const ownedByBob: TaskOwnership = {
 };
 
 describe('which owner changes ask for the write-back (criteria 1 and 6)', () => {
-  it('is a platform change that names somebody — never a release, never a tracker sync', () => {
-    expect(ownerChangeWritesBack({ ownerUserId: BOB, source: 'platform' })).toBe(true);
-    expect(ownerChangeWritesBack({ ownerUserId: null, source: 'platform' })).toBe(false);
-    expect(ownerChangeWritesBack({ ownerUserId: BOB, source: 'tracker' })).toBe(false);
-    expect(ownerChangeWritesBack({ ownerUserId: null, source: 'tracker' })).toBe(false);
+  it('is a person’s act on the platform that names somebody — never a release, never a tracker sync', () => {
+    for (const via of ['command', 'pick'] as const) {
+      expect(ownerChangeWritesBack({ ownerUserId: BOB, source: 'platform', via })).toBe(true);
+      expect(ownerChangeWritesBack({ ownerUserId: null, source: 'platform', via })).toBe(false);
+    }
+    expect(
+      ownerChangeWritesBack({ ownerUserId: BOB, source: 'tracker', via: 'tracker_sync' }),
+    ).toBe(false);
+    expect(ownerChangeWritesBack({ ownerUserId: BOB, source: 'tracker', via: 'link' })).toBe(false);
+    expect(
+      ownerChangeWritesBack({ ownerUserId: null, source: 'tracker', via: 'tracker_sync' }),
+    ).toBe(false);
+  });
+
+  it('never writes back a worker’s automatic claim (TD-031’s second 2026-11-26 amendment item 2)', () => {
+    expect(ownerChangeWritesBack({ ownerUserId: BOB, source: 'platform', via: 'claim' })).toBe(
+      false,
+    );
+  });
+});
+
+describe('the binding’s switch, assign_owner (TD-031’s second 2026-11-26 amendment item 1)', () => {
+  it('is on when absent — no block, or a block that does not name it — and off only for an explicit false', () => {
+    expect(assignOwnerOn(null)).toBe(true);
+    expect(assignOwnerOn(undefined)).toBe(true);
+    expect(assignOwnerOn({})).toBe(true);
+    expect(assignOwnerOn({ assign_owner: true })).toBe(true);
+    expect(assignOwnerOn({ assign_owner: false })).toBe(false);
   });
 });
 

@@ -1,16 +1,17 @@
 /**
- * **Writing the owner back to the tracker** — opt-in per binding (S-26.3, TD-031's 2026-11-06
- * amendment item 4, BD-031's 2026-11-06 amendment).
+ * **Writing the owner back to the tracker** — on by default per binding (S-26.3, TD-031's 2026-11-06
+ * amendment item 4 as amended on 2026-11-26, BD-031's 2026-11-06 amendment).
  *
  * WP-15d's shape: one handler decides and one `pipeline.outbound` duty calls.
  *
  * - `pipeline.ticket.owner_assign` (TD-005 priority **120**, the integrations band) reads a
- *   `task.owner.changed`. It enqueues the `ticket_owner_assign` duty only for a change the platform
- *   made that names somebody (`ownerChangeWritesBack`: a command or a pick, never a tracker sync and
- *   never a release — the platform never unassigns a person, TD-029 decision 5), on a live task that
- *   names a provider ticket, when the project's task-management binding sets
- *   `lifecycle.assign_owner`. **With the switch off — the default — nothing is enqueued and no
- *   provider is called.** An event with no `owner_changed_at` (one written before S-26.3) **fails
+ *   `task.owner.changed`. It enqueues the `ticket_owner_assign` duty only for a person's own act
+ *   that names somebody (`ownerChangeWritesBack`: `via` `command` — a manual Start, *Take it*,
+ *   *Assign…* — or `pick`; never a worker's automatic `claim`, never a tracker sync and never a
+ *   release — the platform never unassigns a person, TD-029 decision 5), on a live task that names
+ *   a provider ticket, unless the project's task-management binding sets
+ *   `lifecycle.assign_owner: false` (`assignOwnerOn`). **With the switch explicitly off nothing is
+ *   enqueued and no provider is called.** An event with no `owner_changed_at` (one written before S-26.3) **fails
  *   safe**: the instant the duty would re-validate against is unknown, so nothing is enqueued and
  *   the reason is logged — a person's next assignment writes back.
  * - The duty, when it fires:
@@ -52,6 +53,7 @@
  */
 import type { ExternalIdentity, Id, IsoDateTime, TicketAssignee } from '@platform/contracts';
 import {
+  assignOwnerOn,
   intendedTicketAssignee,
   isTerminalTaskState,
   type OwnershipDecision,
@@ -86,10 +88,15 @@ import { readTicketForTask } from './ticket-snapshot.js';
 /** The handler's `handler_executions` key; renaming it re-runs it over the log. */
 export const OWNER_WRITE_BACK_HANDLER = 'pipeline.ticket.owner_assign';
 
-/** Whether the binding's lifecycle block switches the write-back on (default `false`). */
+/**
+ * Whether the binding writes the owner back — on unless its lifecycle block says
+ * `assign_owner: false` (`assignOwnerOn`, TD-031's second 2026-11-26 amendment item 1). A project
+ * with no lifecycle reading (no block, no binding) is on; a missing binding is the duty's
+ * `no_binding` skip.
+ */
 export const assignsOwner = (settings: {
   readonly ticketLifecycle: { readonly slots: { readonly assign_owner?: boolean } } | null;
-}): boolean => settings.ticketLifecycle?.slots.assign_owner === true;
+}): boolean => assignOwnerOn(settings.ticketLifecycle?.slots);
 
 /** The write's idempotency key: the task and the owner change it writes back — platform ids only. */
 export const ownerWriteBackKeyFor = (taskId: Id, causeEventId: Id): string =>
@@ -112,7 +119,10 @@ export const ownerWriteBackHandler = (options: PipelineSagaOptions): EventHandle
     }
     const { payload } = event;
     const ownerUserId = payload.owner_user_id;
-    if (ownerUserId === null || !ownerChangeWritesBack({ ownerUserId, source: payload.source })) {
+    if (
+      ownerUserId === null ||
+      !ownerChangeWritesBack({ ownerUserId, source: payload.source, via: payload.via })
+    ) {
       return;
     }
     const { tx } = context.scope;
@@ -183,7 +193,7 @@ const SKIP_WORDS: Readonly<Record<string, string>> = {
   task_gone: 'the task no longer exists',
   task_finished: 'the task has finished',
   no_provider_ticket: 'the task names no provider ticket',
-  switch_off: 'the binding no longer sets lifecycle.assign_owner',
+  switch_off: 'the binding sets lifecycle.assign_owner: false',
   owner_changed: 'the task’s owner changed since (TD-004: the duty re-validates on fire)',
   owner_changed_again: 'the same owner was set again since, and that change writes itself back',
   owner_not_platform: 'the task’s owner was last set by the tracker, not the platform',

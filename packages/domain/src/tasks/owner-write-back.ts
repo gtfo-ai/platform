@@ -1,14 +1,18 @@
 /**
  * **Writing the owner back to the tracker** — the decisions, pure (S-26.3, TD-031's 2026-11-06
- * amendment item 4).
+ * amendment item 4, as amended on 2026-11-26: a person's own act is written to the tracker on every
+ * project, an automatic pickup is not).
  *
- * When a project's task-management binding sets `lifecycle.assign_owner`, a person the platform
- * makes a task's owner is assigned the ticket in the tracker too. The application ring
+ * Unless a project's task-management binding sets `lifecycle.assign_owner: false`
+ * ({@link assignOwnerOn}), a person who makes themselves — or whom a person makes — a task's owner
+ * is assigned the ticket in the tracker too. The application ring
  * (`packages/application/src/pipeline/owner-write-back.ts`) reads the rows and makes the call; every
  * question about *whether* and every write of the ownership columns is answered here:
  *
- * 1. **Which changes are written back** ({@link ownerChangeWritesBack}): a change the platform made
- *    (`source: platform` — a command or a pick) that names somebody. A tracker sync is the tracker's
+ * 1. **Which changes are written back** ({@link ownerChangeWritesBack}): a person's act on the
+ *    platform (`source: platform`, `via` `command` — a manual Start, *Take it*, *Assign…* — or
+ *    `pick`) that names somebody. A worker's automatic claim (`via: claim`) is not a person's act and
+ *    is never written back: the tracker keeps the binding's account. A tracker sync is the tracker's
  *    own answer, and a release (`null`) writes nothing: the platform never unassigns a person
  *    (TD-029 decision 5).
  * 2. **Whether it is still due when the duty fires** ({@link ownerWriteBackStillDue}): the task's
@@ -24,17 +28,39 @@
  *
  * Nothing here reads a clock or a row.
  */
-import type { Id, IsoDateTime, TaskOwnerSource, TicketAssignee } from '@platform/contracts';
+import type {
+  Id,
+  IsoDateTime,
+  TaskOwnerSource,
+  TaskOwnerVia,
+  TicketAssignee,
+} from '@platform/contracts';
 import { type OwnershipDecision, sameTicketAssignee, type TaskOwnership } from './owner.js';
 
 /**
- * Whether a recorded owner change asks for the write-back: made by the platform and naming a person.
- * The binding's switch is the caller's other question.
+ * **The binding's switch**, `lifecycle.assign_owner`, read the one way every reader reads it: on
+ * unless it is explicitly `false` (TD-031's 2026-11-26 amendment item 1) — a binding with no block,
+ * or a block that does not name the key, writes back. `slots` is the binding's lifecycle block, or
+ * `null`/`undefined` for none.
+ */
+export const assignOwnerOn = (
+  slots: { readonly assign_owner?: boolean } | null | undefined,
+): boolean => slots?.assign_owner !== false;
+
+/** The `via`s that are a person's own act, and so are written back (TD-031's 2026-11-26 item 1). */
+const PERSON_ACT_VIAS: ReadonlySet<TaskOwnerVia> = new Set<TaskOwnerVia>(['command', 'pick']);
+
+/**
+ * Whether a recorded owner change asks for the write-back: made by the platform, by a person's own
+ * act (`via` `command` or `pick` — never a worker's automatic `claim`), and naming a person. The
+ * binding's switch is the caller's other question.
  */
 export const ownerChangeWritesBack = (change: {
   readonly ownerUserId: Id | null;
   readonly source: TaskOwnerSource;
-}): boolean => change.source === 'platform' && change.ownerUserId !== null;
+  readonly via: TaskOwnerVia;
+}): boolean =>
+  change.source === 'platform' && change.ownerUserId !== null && PERSON_ACT_VIAS.has(change.via);
 
 /**
  * Why an owner assignment would **not** be written back to the tracker, or `null` when it would —

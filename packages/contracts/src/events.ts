@@ -682,10 +682,13 @@ export const taskTicketRekeyedEvent = defineEvent('task.ticket.rekeyed', {
  * `previous_owner_user_id` the one it replaced; `source` is who made the change (`tracker` for a
  * sync of the ticket's assignee or a link adopting it, `platform` for a person's command or a pick)
  * and `via` the path: `tracker_sync` (intake, a stage's re-read, the `owner_sync` duty), `command`
- * (`POST /api/tasks/:id/owner`), `pick` (a worker's pick, S-26.4) or `link` (a newly linked identity
+ * (`POST /api/tasks/:id/owner`, and a manual Start's starter at intake), `pick` (a person's pick on
+ * their worker's page, S-26.4), `claim` (a worker's automatic claim of an unowned task, TD-031's
+ * 2026-11-26 amendments — never written back to the tracker) or `link` (a newly linked identity
  * adopting the owner, S-26.6). A tracker read that changes only the stored assignee — an unlinked
  * person replaced by another — changes no owner and records nothing. The actor is the person for a
- * command or a pick and the pipeline otherwise.
+ * command, a pick, a manual Start or an automatic claim (the worker's person), and the pipeline
+ * otherwise.
  *
  * `owner_changed_at` (S-26.3) is the `tasks.owner_changed_at` the same write stored — the identity
  * of this change on the row, which the write-back duty `ticket_owner_assign` compares on fire with

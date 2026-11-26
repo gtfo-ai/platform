@@ -59,6 +59,7 @@ import type {
   TaskCoverage,
   TaskDependencies,
   TaskMode,
+  TaskOwnerVia,
   TaskPipelineDial,
   TaskReviewers,
   TaskReviewThreads,
@@ -3594,6 +3595,14 @@ export interface TaskOwnerDirectory {
     tx: Transaction,
     input: { readonly userId: Id; readonly provider: string },
   ): Promise<{ readonly externalId: string } | null>;
+  /**
+   * The `via` of the task's newest `task.owner.changed` — how its owner was last set — or `null`
+   * when its owner never changed (TD-031's second 2026-11-26 amendment). The claim asks it: a
+   * platform owner set by a person's act (`command`, `pick`) is being written back to the tracker,
+   * one set by a worker's automatic `claim` is not. Read off the task's own log, because the
+   * ownership columns record `platform` for both.
+   */
+  lastOwnerChangeVia(tx: Transaction, taskId: Id): Promise<TaskOwnerVia | null>;
 }
 
 /** Everything the pipeline needs to name a ticket it has not created a task for yet. */

@@ -10,17 +10,18 @@
  * email, never a display name (BD-022, Q10).
  *
  * `personIdentity` (S-26.3) answers the owner write-back's question — which account of the tracker
- * a user is — from the same table, `person` links only.
+ * a user is — from the same table, `person` links only. `lastOwnerChangeVia` (TD-031's second
+ * 2026-11-26 amendment) reads the task's own log: the `via` of its newest `task.owner.changed`.
  *
  * The order is the port's: a `person` linked to a member wins (a person's own token, Q118 (a), is
  * that person's), then a `machine`, then a binding's own account; anything else is a `person` the
  * platform cannot map.
  */
 import type { TaskOwnerDirectory, Transaction } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import { type Id, type TaskOwnerVia, taskOwnerViaSchema } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
-import { userMayOwnInProjectSql } from './running-role.js';
+import { lastOwnerChangeViaSql, userMayOwnInProjectSql } from './running-role.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -69,5 +70,14 @@ export const createPostgresTaskOwnerDirectory = (): TaskOwnerDirectory => ({
     );
     const row = rows[0];
     return row === undefined ? null : { externalId: row.external_id };
+  },
+  lastOwnerChangeVia: async (tx, taskId) => {
+    const { rows } = await sqlOf(tx).query<{ via: string | null }>(
+      `select ${lastOwnerChangeViaSql('$1::uuid')} as via`,
+      [taskId],
+    );
+    const via = rows[0]?.via ?? null;
+    // A value the catalogue does not name is refused rather than read as one it does.
+    return via === null ? null : (taskOwnerViaSchema.parse(via) as TaskOwnerVia);
   },
 });

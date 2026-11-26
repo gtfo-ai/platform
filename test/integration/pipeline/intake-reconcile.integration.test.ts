@@ -53,6 +53,8 @@ const appendMatch = async (options: {
   readonly minutesAgo?: number;
   /** The provider's stable id, as the Jira adapter sends it since WP-134. */
   readonly ticketId?: string;
+  /** `manual` for a person's *Start* (BACKLOG 1660); a rule match otherwise. */
+  readonly rule?: string;
 }): Promise<string> => {
   streamSeq += 1;
   const id = randomUUID();
@@ -72,7 +74,7 @@ const appendMatch = async (options: {
           url: `https://acme.atlassian.net/browse/${options.key}`,
           ...(options.ticketId === undefined ? {} : { id: options.ticketId }),
         },
-        rule: 'label = "agentic"',
+        rule: options.rule ?? 'label = "agentic"',
         priority: null,
         issue_type: 'Story',
         epic: null,
@@ -332,6 +334,55 @@ describe('the bound on re-emission', () => {
       "select count(*)::int as count from events where type = 'ticket.matched'",
     );
     expect(rows[0]?.count).toBe(2);
+  });
+
+  /**
+   * BACKLOG 1660 (TD-031's second 2026-11-26 amendment item 4): a lost manual Start is re-emitted
+   * with its starter's user actor — so the system actor can no longer be the mark — and the bound
+   * still holds: the re-emission's `cause_event_id` is what the next pass reads.
+   */
+  it('re-emits a lost manual Start with its starter, exactly once over two passes', async () => {
+    const starter = randomUUID();
+    await appendMatch({
+      key: 'ACME-1',
+      rule: 'manual',
+      actor: { kind: 'user', user_id: starter as Id },
+    });
+    const found = await find();
+    expect(found[0]?.actor).toEqual({ kind: 'user', user_id: starter });
+    const options = {
+      store: store(),
+      unitOfWork: eventing.unitOfWork,
+      eventStore: eventing.store,
+      ids: { next: () => randomUUID() as Id },
+      clock: { now: () => new Date().toISOString() as IsoDateTime },
+      graceMs: 60_000,
+    };
+
+    expect(await runIntakeReconciliation(options)).toEqual({
+      found: 1,
+      reEmitted: 1,
+      contended: 0,
+    });
+    expect(await runIntakeReconciliation(options)).toEqual({
+      found: 0,
+      reEmitted: 0,
+      contended: 0,
+    });
+    const { rows } = await pool.query<{
+      actor: Actor;
+      rule: string;
+      cause_event_id: string | null;
+    }>(
+      `select actor, payload ->> 'rule' as rule, cause_event_id from events
+        where type = 'ticket.matched' order by position`,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({
+      actor: { kind: 'user', user_id: starter },
+      rule: 'manual',
+      cause_event_id: found[0]?.eventId,
+    });
   });
 
   it('appends the re-emission on the project stream, with the right next sequence', async () => {

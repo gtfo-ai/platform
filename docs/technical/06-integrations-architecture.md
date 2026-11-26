@@ -160,9 +160,10 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 > contract runner holds `assignTo`'s request to it. **GitLab gets no member**: it is a git provider
 > here, not a task-management one, so there is nothing to declare. The pipeline calls it only through
 > `ticketWrites.assignTo` (`assign_to` on the audit row, the account id in its payload, never a display
-> name), from the `ticket_owner_assign` duty (`pipeline/owner-write-back.ts`), and only on a binding
-> whose `lifecycle.assign_owner` is `true` (default `false`); the duty's re-validation and its preset
-> and restore of `tasks.ticket_assignee` are technical/02's.
+> name), from the `ticket_owner_assign` duty (`pipeline/owner-write-back.ts`), for a person's own act
+> (a manual Start, *Take it*, *Assign…*, a pick — never a worker's automatic claim), unless the binding
+> sets `lifecycle.assign_owner: false` (default `true` since TD-031's second 2026-11-26 amendment); the
+> duty's re-validation and its preset and restore of `tasks.ticket_assignee` are technical/02's.
 
 ### GitProvider
 ```

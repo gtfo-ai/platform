@@ -343,7 +343,7 @@ const dispatchOutbound =
         await runOwnerSync(options, data);
         return;
       // S-26.3 (TD-031's 2026-11-06 amendment item 4): the owner the platform set, assigned in the
-      // tracker on a binding with `lifecycle.assign_owner` — re-validated on fire.
+      // tracker unless the binding sets `lifecycle.assign_owner: false` — re-validated on fire.
       case 'ticket_owner_assign':
         await runTicketOwnerAssign(options, data);
         return;

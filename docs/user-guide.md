@@ -293,9 +293,11 @@ claiming, a ticket already assigned to a person is not started at all, unless yo
 tickets already assigned to a person**. On cancel or rework the platform unassigns itself (and moves
 the ticket back to *Pick up from*, if mapped).
 
-A third switch, **Assign the owner in the tracker** (off unless you tick it; since S-26.8a), writes a
-task's owner back to the ticket: *"When someone takes or is assigned a task here, also assign the
-ticket to them in Jira. Only people who linked their Jira account are assigned there."* It is saved
+A third switch, **Assign the owner in the tracker** (on unless you untick it; since S-26.8a, on by
+default since 2026-11-26), writes a task's owner back to the ticket: *"When someone starts, takes or
+is assigned a task here, also assign the ticket to them in Jira. Only people who linked their Jira
+account are assigned there."* A ticket a worker picked up automatically is not written back: Jira
+keeps the platform's own account for it. It is saved
 with the rest of the lifecycle, and like the slots it is a maintainer's (section 4, *Task
 detail*, says what it writes and what it never does).
 
@@ -1013,11 +1015,15 @@ linked member holds is never claimed from them at all (step 1, *The ticket lifec
 account owns nothing. **The latest change wins**: a change of assignee in the tracker replaces an owner set on the platform, and an owner set
 on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
 nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
-nobody. By default nothing is written to the tracker. **A project can opt in to writing the owner
-back** (since S-26.3; the ticket lifecycle's switch **Assign the owner in the tracker**, Jira only): then an owner set on
-the platform — by a maintainer, by a person picking the task on their own machine, by pressing
-**Start** on its ticket, or by a person's worker taking it — is also
-assigned the ticket in Jira, through their linked Jira account. Giving a task back writes nothing (the
+nobody. **A person's own act is written back to the tracker by default** (since S-26.3, on by
+default since 2026-11-26; the ticket lifecycle's switch **Assign the owner in the tracker**, Jira
+only, turns it off): an owner set on the platform by a person — a maintainer's *Take it* or
+*Assign…*, a person picking the task on their own machine, or pressing **Start** on its ticket — is
+also assigned the ticket in Jira, through their linked Jira account. Whoever presses **Start** owns
+the task, whoever holds the ticket in Jira — a member, someone the platform cannot link, or the
+platform's own account — and such a ticket is started even when **Also start tickets already
+assigned to a person** is unticked. A worker that takes a task automatically makes its person the
+owner on the platform only: Jira keeps the platform's own account. Giving a task back writes nothing (the
 platform never unassigns a person), an owner with no linked Jira account gets no write, a change made
 in Jira before the write wins over it once the platform has seen it, and a shadow task's write is only
 recorded. The task's `owner_writes_back` says whether its current owner is written back, and the task

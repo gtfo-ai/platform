@@ -12,7 +12,7 @@
 | Moves a ticket to a status **you** mapped, and only when it is not already there | Invents a status or creates a workflow |
 | Adds and removes the labels your configuration names | Touches a label it was not told about |
 | Links the merge request it opened | Transitions or comments on a ticket in another project |
-| Assigns a ticket to the person you made its owner on the platform — **only if you switch it on** (`lifecycle.assign_owner`, step 6) | Unassigns a person, or assigns anyone the platform cannot map to a linked account |
+| Assigns a ticket to the person who started it, took it or was assigned it on the platform — **on unless you switch it off** (`lifecycle.assign_owner: false`, step 6); a ticket a worker picks up automatically keeps this account | Unassigns a person, or assigns anyone the platform cannot map to a linked account |
 
 In **shadow mode** it does none of the writes: they are recorded as `would_have` and you can read
 them in the audit before you trust the platform with the real thing.
@@ -102,7 +102,7 @@ In the project's **Project settings → People / Permissions**, the account need
 | Permission | Used by |
 |---|---|
 | Browse projects | reading tickets, and searching them — the poll (step 5) and the history bootstrap — and reading the project's statuses (step 6) |
-| Assign issues | the claim: assigning a ticket to this account when work starts, and unassigning it only if this account still holds it; and, with `lifecycle.assign_owner` on, **writing the owner back**: assigning the ticket to the person a maintainer or a pick made its owner on the platform |
+| Assign issues | the claim: assigning a ticket to this account when work starts, and unassigning it only if this account still holds it; and, unless `lifecycle.assign_owner` is `false`, **writing the owner back**: assigning the ticket to the person who pressed *Start*, took it, was assigned it by a maintainer or picked it on their own machine |
 | Add comments | the workpad and questions |
 | Edit issues | labels — including the optional `claim_label`, added when a task claims a ticket and removed when it lets go |
 | Transition issues | status changes; without it Jira lists no transitions at all |
@@ -270,14 +270,20 @@ does. The platform reads the statuses it may name from Jira itself — the union
 statuses in each project of `project_keys` — so **a binding that maps a lifecycle needs
 `project_keys`**: with none, there is no project to read statuses from and the read is refused.
 
-**Writing the owner back (opt-in).** A task has an owner on the platform: the linked person the
-ticket is assigned to, or whoever a maintainer (or a person's pick on their own machine) makes the
-owner. By default that choice stays on the platform. Set `lifecycle.assign_owner: true` and the
-platform also **assigns the Jira ticket** to that person — through their linked Jira account, with
-the binding's *Assign Issues* permission (step 2) — so the board in Jira and the platform agree. It is
-not a status slot, so it changes nothing else in the block; add `claim: false` beside it if you want
-the write-back without the claim. What it does and does not do:
-- it writes only an owner the **platform** set; an owner the platform read from Jira is already there;
+**Writing the owner back (on by default).** A task has an owner on the platform: the linked person
+the ticket is assigned to, whoever pressed **Start** on it, or whoever a maintainer (or a person's
+pick on their own machine) makes the owner. When a **person** makes that choice, the platform also
+**assigns the Jira ticket** to them — through their linked Jira account, with the binding's *Assign
+Issues* permission (step 2) — so the board in Jira and the platform agree. Set
+`lifecycle.assign_owner: false` to keep that choice on the platform only. It is not a status slot, so
+it changes nothing else in the block; a block that exists claims, so add `claim: false` beside
+`assign_owner: false` if you want neither. What it does and does not do:
+- it writes only an owner a **person** set on the platform; an owner the platform read from Jira is
+  already there, and a ticket a **worker picked up automatically** keeps this account as its
+  assignee (the worker's person owns it on the platform only);
+- whoever presses **Start** owns the task and is assigned the ticket, whoever held it in Jira — a
+  member, someone the platform cannot link, or this account — and such a ticket is started even when
+  `take_assigned_tickets` is false;
 - **unassigning on the platform writes nothing** — the platform never unassigns a person in Jira;
 - an owner with **no linked Jira account** gets no write (the reason is logged), and the task page
   says nothing about Jira for that task;

@@ -1222,7 +1222,7 @@ describe('a started or automatically claimed task has an owner (TD-031 2026-11-2
     expect(ownerEvents(w)).toHaveLength(1);
   });
 
-  it('an automatic claim of an unowned stage offer makes the worker’s person the owner — via pick, no take audit', async () => {
+  it('an automatic claim of an unowned stage offer makes the worker’s person the owner — via claim, no take audit', async () => {
     const takes: { workerId: Id; runId: Id; taskId: Id }[] = [];
     const w = await world({ takes, before: membersOf });
     const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
@@ -1240,7 +1240,8 @@ describe('a started or automatically claimed task has an owner (TD-031 2026-11-2
           owner_user_id: BOB,
           previous_owner_user_id: null,
           source: 'platform',
-          via: 'pick',
+          // TD-031's second 2026-11-26 amendment item 2: not a person's act, never written back.
+          via: 'claim',
         }),
       ],
     ]);

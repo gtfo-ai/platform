@@ -378,7 +378,7 @@ export interface PipelineOutboundData {
     | 'owner_sync'
     /**
      * S-26.3 (TD-031's 2026-11-06 amendment item 4): assign the ticket to the owner the platform
-     * set, on a binding with `lifecycle.assign_owner` (`owner-write-back.ts`).
+     * set by a person's act, unless the binding sets `lifecycle.assign_owner: false` (`owner-write-back.ts`).
      */
     | 'ticket_owner_assign'
     /**

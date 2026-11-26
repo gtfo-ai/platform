@@ -123,7 +123,7 @@ export const ASSIGN_OWNER_WORDS = {
   help: (provider: string): string => {
     const name = Object.hasOwn(TRACKER_NAME, provider) ? TRACKER_NAME[provider] : undefined;
     return name === undefined
-      ? 'When someone takes or is assigned a task here, also assign the ticket to them in the tracker. Only people who linked their tracker account are assigned there.'
-      : `When someone takes or is assigned a task here, also assign the ticket to them in ${name}. Only people who linked their ${name} account are assigned there.`;
+      ? 'When someone starts, takes or is assigned a task here, also assign the ticket to them in the tracker. Only people who linked their tracker account are assigned there.'
+      : `When someone starts, takes or is assigned a task here, also assign the ticket to them in ${name}. Only people who linked their ${name} account are assigned there.`;
   },
 } as const;

@@ -22,7 +22,12 @@ import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/t
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
-import { setTaskOwnerCommand, type TaskOwnerCommandDependencies } from './owner-sync.js';
+import {
+  assignOwnerOnClaim,
+  assignOwnerOnPick,
+  setTaskOwnerCommand,
+  type TaskOwnerCommandDependencies,
+} from './owner-sync.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const ALICE = '00000000-0000-4000-8000-00000000a11c' as Id;
@@ -135,7 +140,12 @@ const recordingLogger = () => {
  */
 const harnessFor = (
   ticket: ReturnType<typeof tracker>,
-  options: { readonly assignOwner?: boolean; readonly logger?: Logger } = {},
+  options: {
+    readonly assignOwner?: boolean;
+    readonly logger?: Logger;
+    /** A lifecycle block of the test's own, in place of {@link lifecycle}'s. */
+    readonly slots?: TicketLifecycle;
+  } = {},
 ): PipelineHarness => {
   const harness = createPipelineHarness({
     projectId: PROJECT,
@@ -144,9 +154,11 @@ const harnessFor = (
     taskManagement: ticket.port,
     settings: {
       ticketLifecycle:
-        options.assignOwner === undefined
-          ? null
-          : { pickUpFrom: null, slots: lifecycle(options.assignOwner) },
+        options.slots !== undefined
+          ? { pickUpFrom: null, slots: options.slots }
+          : options.assignOwner === undefined
+            ? null
+            : { pickUpFrom: null, slots: lifecycle(options.assignOwner) },
     },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
@@ -264,15 +276,12 @@ const alicesAccount: TicketAssignee = {
   platform: false,
 };
 
-// ── Criterion 1: off by default ────────────────────────────────────────────
+// ── Criterion 1: on unless the binding says false (TD-031's second 2026-11-26 amendment) ──
 
-describe('with the switch off, a platform assignment makes no provider call (criterion 1)', () => {
-  it.each([
-    ['no lifecycle block at all', undefined],
-    ['a block that says false', false],
-  ])('%s: no duty, no call, no audit row', async (_label, assignOwner) => {
+describe('with the switch explicitly off, a platform assignment makes no provider call (criterion 1)', () => {
+  it('a block that says false: no duty, no call, no audit row', async () => {
     const ticket = tracker('alice');
-    const harness = harnessFor(ticket, assignOwner === undefined ? {} : { assignOwner });
+    const harness = harnessFor(ticket, { assignOwner: false });
     await harness.publish([ticketMatched()]);
     await assign(harness, BOB);
 
@@ -280,6 +289,26 @@ describe('with the switch off, a platform assignment makes no provider call (cri
     expect(writeBackJobs(harness)).toEqual([]);
     expect(ticket.calls).toEqual([]);
     expect(harness.audit.entriesFor('assign_to')).toEqual([]);
+  });
+});
+
+describe('with the switch absent, a person’s act is written back by default (TD-031 2026-11-26 item 1)', () => {
+  it.each([
+    ['no lifecycle block at all', { noBlock: true }],
+    ['a block that does not name it', { noBlock: false }],
+  ])('%s: one duty, one assignTo of the owner’s account', async (_label, { noBlock }) => {
+    const ticket = tracker('alice');
+    const harness = noBlock ? harnessFor(ticket) : harnessFor(ticket, { slots: { claim: false } });
+    await harness.publish([ticketMatched()]);
+    await assign(harness, BOB);
+
+    expect(harness.store.ownershipOf(taskIdOf(harness))).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+    });
+    expect(writeBackJobs(harness)).toHaveLength(1);
+    expect(ticket.calls.map((call) => call.account)).toEqual(['acct-bob']);
+    expect(harness.audit.entriesFor('assign_to').map((entry) => entry.status)).toEqual(['ok']);
   });
 });
 
@@ -681,17 +710,36 @@ describe('a manual Start makes its starter the owner, written back like any plat
     },
   );
 
-  it('a ticket the tracker assigns to another linked member keeps that member; nothing is written back', async () => {
+  it('a ticket the tracker assigns to another linked member goes to the starter, and the write-back moves it (the starter always wins)', async () => {
     const ticket = tracker('bob');
     const harness = harnessFor(ticket, { assignOwner: true });
     await harness.publish([manualStart(ALICE)]);
     expect(harness.store.ownershipOf(taskIdOf(harness))).toMatchObject({
-      ownerUserId: BOB,
-      ownerSource: 'tracker',
+      ownerUserId: ALICE,
+      ownerSource: 'platform',
     });
+    // One change, folded: the sync's Bob never reached the stream.
+    const changes = ownerEvents(harness) as Extract<DomainEvent, { type: 'task.owner.changed' }>[];
+    expect(
+      changes.map((event) => [
+        event.actor,
+        event.payload.via,
+        event.payload.owner_user_id,
+        event.payload.previous_owner_user_id,
+      ]),
+    ).toEqual([[{ kind: 'user', user_id: ALICE }, 'command', ALICE, null]]);
     await harness.drain();
-    expect(writeBackJobs(harness)).toEqual([]);
-    expect(ticket.calls).toEqual([]);
+    expect(writeBackJobs(harness)).toHaveLength(1);
+    expect(ticket.calls.map((call) => call.account)).toEqual(['acct-alice']);
+  });
+
+  it('with the switch absent the starter is written back too: on by default', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket);
+    await harness.publish([manualStart(ALICE)]);
+    await harness.drain();
+    expect(writeBackJobs(harness)).toHaveLength(1);
+    expect(ticket.calls.map((call) => call.account)).toEqual(['acct-alice']);
   });
 
   it('a starter who may not own in the project leaves the task as a rule match would', async () => {
@@ -709,5 +757,52 @@ describe('a manual Start makes its starter the owner, written back like any plat
     await harness.publish([ticketMatched()]);
     expect(harness.store.ownershipOf(taskIdOf(harness)).ownerUserId).toBeNull();
     expect(ownerEvents(harness)).toEqual([]);
+  });
+});
+
+// ── TD-031's second 2026-11-26 amendment item 2: an automatic pickup is not written back ──
+
+describe('a worker’s automatic claim sets the owner and never writes back; a pick does (TD-031 2026-11-26)', () => {
+  const claimOwner = async (
+    harness: PipelineHarness,
+    how: 'claim' | 'pick',
+    userId: Id,
+  ): Promise<void> => {
+    const options = { store: harness.store, ids: harness.ids, clock: harness.clock };
+    await harness.commands.unitOfWork.transaction(async (scope) =>
+      how === 'claim'
+        ? assignOwnerOnClaim(options, scope, { taskId: taskIdOf(harness), workerUserId: userId })
+        : assignOwnerOnPick(options, scope, { taskId: taskIdOf(harness), pickerUserId: userId }),
+    );
+    await harness.drain();
+  };
+
+  it('an automatic claim: owner set via claim, no ticket_owner_assign, no call — with the switch on', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([ticketMatched()]);
+    await claimOwner(harness, 'claim', BOB);
+
+    expect(harness.store.ownershipOf(taskIdOf(harness))).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+    });
+    const changes = ownerEvents(harness) as Extract<DomainEvent, { type: 'task.owner.changed' }>[];
+    expect(changes.map((event) => event.payload.via)).toEqual(['claim']);
+    expect(writeBackJobs(harness)).toEqual([]);
+    expect(ticket.calls).toEqual([]);
+    expect(harness.audit.entriesFor('assign_to')).toEqual([]);
+  });
+
+  it('a pick of the same task is a person’s act: one ticket_owner_assign, one call (the control)', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([ticketMatched()]);
+    await claimOwner(harness, 'pick', BOB);
+
+    const changes = ownerEvents(harness) as Extract<DomainEvent, { type: 'task.owner.changed' }>[];
+    expect(changes.map((event) => event.payload.via)).toEqual(['pick']);
+    expect(writeBackJobs(harness)).toHaveLength(1);
+    expect(ticket.calls.map((call) => call.account)).toEqual(['acct-bob']);
   });
 });

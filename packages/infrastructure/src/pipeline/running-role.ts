@@ -108,3 +108,19 @@ export const trackerAssigneeUserSql = (task: string): string => `(
           and ${userMayOwnInProjectSql('ti.user_id', `${task}.project_id`)}
         order by ti.user_id
         limit 1)`;
+
+/**
+ * **How the task's owner was last set** (TD-031's second 2026-11-26 amendment): a scalar subquery
+ * answering the `via` of the newest `task.owner.changed` on the task's stream — `command`, `pick`,
+ * `claim`, `tracker_sync` or `link` — or `null` for a task whose owner never changed. The owner
+ * write-back fires only for a person's act (`command`, `pick`), never for a worker's automatic
+ * `claim`; the ownership columns do not say which, so the log does. `taskId` is an SQL expression
+ * naming the task's id (an alias's column, or a placeholder).
+ */
+export const lastOwnerChangeViaSql = (taskId: string): string => `(
+       select oc.payload ->> 'via' from events oc
+        where oc.stream_type = 'task'
+          and oc.stream_id = ${taskId}
+          and oc.type = 'task.owner.changed'
+        order by oc.stream_seq desc
+        limit 1)`;

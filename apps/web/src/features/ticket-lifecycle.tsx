@@ -28,9 +28,10 @@
  *   is none: sent absent, or `null` when the integration's own configuration sets one. A label with a
  *   space, or the pick-up label, is the server's `400 invalid_binding_config`.
  * - **`assign_owner` is the third switch** (S-26.3's owner write-back; S-26.8a, product/06's M26
- *   amendment): *Assign the owner in the tracker*, beside the other two and **off** unless the
- *   block stores `true`. It is sent when on, or as `false` when the overlay already stored a value;
- *   otherwise absent, which the reader takes as off. It sits inside the form, so it has the form's
+ *   amendment): *Assign the owner in the tracker*, beside the other two and **on** unless the
+ *   block stores `false` (TD-031's second 2026-11-26 amendment: the switch defaults to true). It is
+ *   sent as `false` when off, or when the overlay already stored a value; otherwise absent, which
+ *   the reader takes as on. It sits inside the form, so it has the form's
  *   role rule: the statuses read the form waits for is a maintainer's (a member is told so instead),
  *   and the bindings write is refused to anybody below regardless.
  * - **Saving writes the block as the form shows it**, through `PUT …/bindings` with the **whole**
@@ -141,7 +142,7 @@ export interface LifecycleDraft {
   readonly returned: readonly string[];
   readonly claim: boolean;
   readonly takeAssignedTickets: boolean;
-  /** *Assign the owner in the tracker* (S-26.3's write-back, S-26.8a's switch): off by default. */
+  /** *Assign the owner in the tracker* (S-26.3's write-back, S-26.8a's switch): on by default. */
   readonly assignOwner: boolean;
   /** `start_from` (S-28.4): the ticked statuses, or `null` for the tracker's To Do category. */
   readonly startFrom: readonly string[] | null;
@@ -352,7 +353,7 @@ export const lifecycleDraftOf = (
       claim: typeof block?.claim === 'boolean' ? block.claim : true,
       takeAssignedTickets:
         typeof block?.take_assigned_tickets === 'boolean' ? block.take_assigned_tickets : false,
-      assignOwner: block?.assign_owner === true,
+      assignOwner: block?.assign_owner !== false,
       startFrom: policyList('start_from'),
       closed: policyList('closed'),
       // S-28.14: a stored choice is kept; absent is the reader's default, `cancel`.
@@ -429,10 +430,11 @@ export const lifecycleOverlayOf = (
   }
   lifecycle.claim = draft.claim;
   lifecycle.take_assigned_tickets = draft.takeAssignedTickets;
-  // S-26.8a: the write-back switch. Written when it is on, or when the overlay already stores a
-  // value (so switching it off writes `false`); otherwise absent, which reads as off.
+  // S-26.8a: the write-back switch. Written when it is off, or when the overlay already stores a
+  // value (so switching it on writes `true`); otherwise absent, which reads as on (TD-031's second
+  // 2026-11-26 amendment).
   const storedBlock = storedLifecycle as Readonly<Record<string, unknown>> | null | undefined;
-  if (draft.assignOwner || typeof storedBlock?.assign_owner === 'boolean') {
+  if (!draft.assignOwner || typeof storedBlock?.assign_owner === 'boolean') {
     lifecycle.assign_owner = draft.assignOwner;
   }
   // S-28.4: a list equal to the category default is saved absent (the default stays dynamic);

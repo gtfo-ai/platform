@@ -46,7 +46,8 @@
  * {@link assignOwnerOnPick} is the fifth writer: a person's *take this one* on their machine's page
  * makes them the owner of an unassigned task, in the run claim's own transaction.
  * {@link assignOwnerOnClaim} is the sixth (TD-031's 2026-11-26 amendment item 2): a worker's
- * automatic claim of a stage offer does the same for its person, and never refuses. Intake's sync
+ * automatic claim of a stage offer does the same for its person, never refuses, and records
+ * `via: claim`, which is never written back to the tracker (the second 2026-11-26 amendment). Intake's sync
  * also writes a manual Start's starter ({@link syncOwnerAtIntake}, item 1).
  *
  * ## The stream
@@ -75,6 +76,8 @@ import {
   type OwnerChange,
   type OwnerCommandRefusal,
   type OwnershipDecision,
+  ownerChangeWritesBack,
+  ownerWriteBackReachesTracker,
   recordPlatformAssign,
   recordPlatformUnassign,
   syncOwnerFromTracker,
@@ -331,13 +334,16 @@ const applyOnTaskStream = async (
  * caller appends the answered event after the creation's own, because the stream's sequence is
  * the aggregate's there — `streamSeqAfter` names the next free one ({@link nextTaskSequence}).
  *
- * **A manual Start's starter** (`starterUserId`, TD-031's 2026-11-26 amendment item 1) is then
- * decided over what the sync wrote (`decideStarterOwner`): a task the sync gave a linked member
- * keeps them, and every other task gets the starter when they may own in the project — in this
- * same transaction, so before the task's first offer exists. The two changes are exclusive (the
- * starter is written only over an owner the sync left `null`, and a sync that records a change has
- * set one), so the answer is at most one event: the sync's, or the starter's with the starter as
- * its actor.
+ * **A manual Start's starter** (`starterUserId`, TD-031's 2026-11-26 amendments: *the starter
+ * always wins*) is decided over what the sync would write (`decideStarterOwner`): whoever the
+ * tracker shows — a linked member, an unlinked person, the binding's account, nobody — the starter
+ * becomes the owner when they may own in the project (`source: platform`, `via: command`), and the
+ * read's assignee is still stored as `ticket_assignee`. The two are **folded into one write and one
+ * event**: the sync's owner, which the starter replaces in the same transaction, was never an
+ * owner anybody saw, so recording it would put a `tracker_sync` change and its reversal on the
+ * stream for nothing. The answer is at most one event: the sync's (the pipeline's actor), or the
+ * starter's (the starter as its actor) — which the write-back (`owner-write-back.ts`) then writes
+ * to the tracker.
  */
 export const syncOwnerAtIntake = async (
   options: OwnerSyncOptions,
@@ -351,32 +357,26 @@ export const syncOwnerAtIntake = async (
     readonly starterUserId?: Id | null;
   },
 ): Promise<((streamSeq: number) => DomainEvent) | null> => {
-  let recorded: { readonly change: OwnerChange; readonly changedAt: IsoDateTime | null } | null =
-    null;
-  if (input.read !== null && input.read.assignee !== null) {
-    // An unassigned ticket, or one intake could not read, has nothing to store or compare.
-    const current = await options.store.tasks.ownership(tx, input.taskId);
-    const decision = await trackerDecision(
-      options,
-      tx,
-      {
-        projectId: input.projectId,
-        assignee: input.read.assignee,
-        assigneeDisplayName: input.read.assigneeDisplayName,
-      },
-      current,
-    );
-    await writeDecision(options.store, tx, input.taskId, current, decision);
-    if (decision.kind === 'write' && decision.change !== null) {
-      recorded = { change: decision.change, changedAt: decision.next.ownerChangedAt };
-    }
-  }
+  const current = await options.store.tasks.ownership(tx, input.taskId);
+  // An unassigned ticket, or one intake could not read, has nothing to store or compare.
+  let decision: OwnershipDecision =
+    input.read !== null && input.read.assignee !== null
+      ? await trackerDecision(
+          options,
+          tx,
+          {
+            projectId: input.projectId,
+            assignee: input.read.assignee,
+            assigneeDisplayName: input.read.assigneeDisplayName,
+          },
+          current,
+        )
+      : { kind: 'unchanged' };
   let actor: DomainEvent['actor'] = PIPELINE_ACTOR;
   const starterUserId = input.starterUserId ?? null;
   if (starterUserId !== null) {
-    // Re-read: the sync above may have written `ticket_assignee`, and `saveOwner` compares it.
-    const synced = await options.store.tasks.ownership(tx, input.taskId);
-    const decision = decideStarterOwner(synced, {
+    const synced = decision.kind === 'write' ? decision.next : current;
+    const starter = decideStarterOwner(synced, {
       starterUserId,
       starterMayOwn: await options.store.owners.mayOwn(tx, {
         projectId: input.projectId,
@@ -384,16 +384,22 @@ export const syncOwnerAtIntake = async (
       }),
       at: options.clock.now() as IsoDateTime,
     });
-    await writeDecision(options.store, tx, input.taskId, synced, decision);
-    if (decision.kind === 'write' && decision.change !== null) {
-      recorded = { change: decision.change, changedAt: decision.next.ownerChangedAt };
+    if (starter.kind === 'write' && starter.change !== null) {
+      // One write from the row as it was: the sync's owner is replaced before anybody saw it.
+      decision = {
+        kind: 'write',
+        next: starter.next,
+        change: { ...starter.change, previousOwnerUserId: current.ownerUserId },
+      };
       actor = { kind: 'user', user_id: starterUserId };
     }
   }
-  if (recorded === null) {
+  await writeDecision(options.store, tx, input.taskId, current, decision);
+  if (decision.kind === 'unchanged' || decision.change === null) {
     return null;
   }
-  const { change, changedAt } = recorded;
+  const change = decision.change;
+  const changedAt = decision.next.ownerChangedAt;
   return (streamSeq) =>
     ownerChangedEvent(options, {
       projectId: input.projectId,
@@ -456,6 +462,26 @@ export interface ClaimReadFacts {
    * cleared the owner, and a demoted or disabled owner keeps nothing.
    */
   readonly platformOwner: boolean;
+  /**
+   * That platform owner is being written back to the tracker (TD-031's second 2026-11-26
+   * amendment): the owner's last change was a person's act (`lastOwnerChangeVia` is `command` or
+   * `pick`, never a worker's automatic `claim`) and the write-back's own predicate
+   * (`ownerWriteBackReachesTracker`) answers yes for them — the binding's switch, a `person`
+   * identity for the provider, not a shadow task — and the provider declares `assignOthers`. The
+   * claim then writes no assign of its own (`claimPreReadDecision`).
+   */
+  readonly platformOwnerWritesBack: boolean;
+}
+
+/** What the claim knows about the write-back that {@link syncOwnerOnClaimRead} cannot read. */
+export interface ClaimWriteBackFacts {
+  /** The binding's `lifecycle.assign_owner`, read through `assignOwnerOn`. */
+  readonly assignOwner: boolean;
+  /** The ticket's provider — the identity the write-back would assign is one of its accounts. */
+  readonly provider: string;
+  /** The provider's port declares `assignOthers`. */
+  readonly providerCanAssign: boolean;
+  readonly shadow: boolean;
 }
 
 /**
@@ -474,6 +500,8 @@ export const syncOwnerOnClaimRead = async (
     readonly assignee: ExternalIdentity | null;
     /** Already through the binding's redactor (BD-022). */
     readonly assigneeDisplayName: string | null;
+    /** Absent: the claim knows nothing of the write-back, and assumes it is not owed. */
+    readonly writeBack?: ClaimWriteBackFacts;
   },
 ): Promise<ClaimReadFacts> => {
   await applyOnTaskStream(options, scope, {
@@ -502,7 +530,45 @@ export const syncOwnerOnClaimRead = async (
       projectId: input.projectId,
       userId: ownership.ownerUserId,
     }));
-  return { holder, platformOwner };
+  const platformOwnerWritesBack =
+    platformOwner &&
+    ownership.ownerUserId !== null &&
+    input.writeBack !== undefined &&
+    (await ownerWriteBackOwed(options, scope.tx, {
+      taskId: input.taskId,
+      ownerUserId: ownership.ownerUserId,
+      writeBack: input.writeBack,
+    }));
+  return { holder, platformOwner, platformOwnerWritesBack };
+};
+
+/** {@link ClaimReadFacts.platformOwnerWritesBack} for a platform owner `ownerUserId`. */
+const ownerWriteBackOwed = async (
+  options: OwnerSyncOptions,
+  tx: Transaction,
+  input: { readonly taskId: Id; readonly ownerUserId: Id; readonly writeBack: ClaimWriteBackFacts },
+): Promise<boolean> => {
+  const { writeBack } = input;
+  if (!writeBack.assignOwner || !writeBack.providerCanAssign || writeBack.shadow) {
+    return false;
+  }
+  const via = await options.store.owners.lastOwnerChangeVia(tx, input.taskId);
+  if (
+    via === null ||
+    !ownerChangeWritesBack({ ownerUserId: input.ownerUserId, source: 'platform', via })
+  ) {
+    return false;
+  }
+  const identity = await options.store.owners.personIdentity(tx, {
+    userId: input.ownerUserId,
+    provider: writeBack.provider,
+  });
+  return ownerWriteBackReachesTracker({
+    assignOwner: writeBack.assignOwner,
+    providerTicket: true,
+    hasPersonIdentity: identity !== null,
+    shadow: writeBack.shadow,
+  });
 };
 
 /**
@@ -978,7 +1044,8 @@ export const assignOwnerOnPick = async (
  * **A worker's automatic claim assigns** (TD-031's 2026-11-26 amendment item 2): the sixth writer,
  * in the run claim's own transaction like {@link assignOwnerOnPick} and by the same decision —
  * except that another person's task is claimed with its owner kept rather than refused
- * (`decideClaimOwner`), because an `everything` machine takes it by its policy. A task held
+ * (`decideClaimOwner`), because an `everything` machine takes it by its policy, and the change is
+ * recorded `via: claim` — not a person's act, so the write-back never fires for it. A task held
  * elsewhere, or a person who may not own, is claimed without assigning. Answers the owner it
  * assigned, or `null`. The event's actor is the worker's person: the claim is their machine's.
  */

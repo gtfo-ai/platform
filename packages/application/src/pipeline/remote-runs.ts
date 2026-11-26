@@ -632,7 +632,8 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
             // never refused. An ask assigns nothing, and the server claimant (no person) never
             // reaches this. **No `takeAudit` row**: that row is a person's act on their machine's
             // page, and an automatic claim is the machine's policy — `task.owner.changed` (actor
-            // the worker's person, `via: pick`) is its record.
+            // the worker's person, `via: claim`) is its record, and it is never written back to
+            // the tracker (TD-031's second 2026-11-26 amendment item 2).
             await assignOwnerOnClaim(ownerOptions, scope, {
               taskId: row.taskId,
               workerUserId: offer.workerUserId as Id,

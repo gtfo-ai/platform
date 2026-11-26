@@ -24,6 +24,7 @@ import {
   type HarnessOptions,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
+import { runIntakeReconciliation, type UnstartedMatch } from './intake-reconcile.js';
 import {
   MANUAL_START_RULE,
   type ManualStartInput,
@@ -587,6 +588,60 @@ describe('a ticket started by hand has its starter as owner, and the pick-up lab
     expect(failing.audit.entriesFor('add_pickup_label').map((entry) => entry.status)).toEqual([
       'failed',
     ]);
+  });
+
+  /**
+   * BACKLOG 1660 (TD-031's second 2026-11-26 amendment item 4): a Start whose intake wake-up was
+   * lost is recovered by `pipeline.intake.reconcile`, whose re-emitted match carries the lost
+   * event's user actor and `rule: 'manual'` — so the recovered task gets its owner and its label as
+   * an un-lost Start does.
+   */
+  it('a lost Start recovered by the intake reconciler keeps its starter as owner and gets the label', async () => {
+    const { harness, calls } = labelled();
+    const lost: UnstartedMatch = {
+      eventId: '00000000-0000-4000-9000-00000000ffff' as Id,
+      projectId: PROJECT,
+      actor: { kind: 'user', user_id: USER },
+      payload: {
+        project_id: PROJECT,
+        ticket: {
+          provider: 'fake-jira',
+          key: 'ACME-7',
+          url: 'https://jira.example.test/browse/ACME-7',
+        },
+        rule: MANUAL_START_RULE,
+        priority: 'High',
+        issue_type: 'Bug',
+        epic: null,
+        links: [],
+      },
+    };
+    const report = await runIntakeReconciliation({
+      store: { findUnstartedMatches: async () => [lost] },
+      unitOfWork: harness.memory,
+      eventStore: harness.memory.store,
+      ids: harness.ids,
+      clock: { now: () => harness.clock.now() as IsoDateTime },
+      graceMs: 0,
+    });
+    expect(report.reEmitted).toBe(1);
+    await harness.drain();
+
+    const task = stateOf(harness, 'ACME-7');
+    expect(task?.state).toBe('active');
+    expect(harness.store.ownershipOf(task?.id as Id)).toMatchObject({
+      ownerUserId: USER,
+      ownerSource: 'platform',
+    });
+    const [change] = harness
+      .events()
+      .filter(
+        (entry): entry is Extract<DomainEvent, { type: 'task.owner.changed' }> =>
+          entry.type === 'task.owner.changed',
+      );
+    expect(change?.actor).toEqual({ kind: 'user', user_id: USER });
+    expect(change?.payload.via).toBe('command');
+    expect(calls).toEqual([{ key: 'ACME-7', add: ['agentic'], remove: [], inTransaction: false }]);
   });
 
   it('a binding with no pick-up label makes no call', async () => {

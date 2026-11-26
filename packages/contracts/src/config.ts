@@ -1165,12 +1165,14 @@ const lifecycleStatusNameSchema = nonEmptyStringSchema
  *
  * `claim` defaults to **true when the block is present** and is read by the claim (WP-177); a
  * binding with no block never claims. `take_assigned_tickets` lets intake take a ticket assigned to
- * somebody else. `assign_owner` (S-26.3, TD-031's 2026-11-06 amendment item 4) is the opt-in
- * **write-back**: when it is `true`, a person the platform makes a task's owner (a command or a
- * pick) is assigned the ticket in the tracker too, through the `ticket_owner_assign` duty; it
- * defaults to **false**, block or no block. It is not a slot, so it does not supersede
- * `status_mapping` — but a block that exists claims (`claim`'s default), so a binding that wants the
- * write-back without the claim sets `claim: false` beside it. `start_from`, `closed` and
+ * somebody else. `assign_owner` (S-26.3, TD-031's 2026-11-06 amendment item 4, as amended on
+ * 2026-11-26) is the **write-back**: a person's own act that makes them a task's owner — a manual
+ * Start, *Take it*, *Assign…*, a pick on their worker's page — assigns the ticket to them in the
+ * tracker too, through the `ticket_owner_assign` duty. It defaults to **true**, block or no block;
+ * only an explicit `false` turns it off. A worker's automatic claim (`via: claim`) is never written
+ * back, whatever it says. It is not a slot, so it does not supersede `status_mapping` — but a block
+ * that exists claims (`claim`'s default), so a binding that only wants to turn the write-back off
+ * without claiming sets `claim: false` beside `assign_owner: false`. `start_from`, `closed` and
  * `on_ticket_closed` (M28 ruling 1, S-28.4) are the **status policy**: which statuses a ticket is
  * started from and which mean a person finished it — read whether or not the block exists (absent,
  * the tracker's To Do and Done categories decide), and a block holding only them does not claim.

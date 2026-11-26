@@ -941,8 +941,10 @@ pick list of the statuses `GET /api/projects/<id>/ticket-statuses` reads from th
 the binding (a maintainer's read, one provider call per load), and the save checks every name
 against the same read — `422 lifecycle_status_unknown` naming the slot, or `503
 lifecycle_statuses_unavailable` when the tracker cannot be read, with nothing written in either case.
-The block's `assign_owner` switch (S-26.3, default off, Jira Cloud only) writes an owner set on the
-platform back to the ticket's assignee; it is the lifecycle form's third switch, **Assign the owner in
+The block's `assign_owner` switch (S-26.3, Jira Cloud only; **on by default** since TD-031's second
+2026-11-26 amendment, off only when saved as `false`) writes an owner a person set on the platform — a
+manual **Start**, *Take it*, *Assign…*, a pick on their worker's page — back to the ticket's assignee;
+a worker's automatic pickup is never written back, so the tracker keeps the binding's account for it; it is the lifecycle form's third switch, **Assign the owner in
 the tracker** (S-26.8a, a maintainer's, saved with the lifecycle), and the binding's account needs
 *Assign Issues* (the Jira setup guide, step 2).
 

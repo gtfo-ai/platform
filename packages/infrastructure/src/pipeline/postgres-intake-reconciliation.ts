@@ -16,7 +16,12 @@
  *     `findByTicket` answers a moved issue; without it a match intake rightly dropped as the moved
  *     issue's would read as a lost one;
  *  2. **not already re-emitted** by this component, which is what bounds the recovery to one
- *     attempt per ticket and stops an event log growing behind a permanently failing intake;
+ *     attempt per ticket and stops an event log growing behind a permanently failing intake. A
+ *     re-emission is a `ticket.matched` of the ticket with a `cause_event_id` — the lost event's,
+ *     which no original match carries (`recordNormalisedDelivery` and the manual Start write
+ *     `null`) — or, written before TD-031's second 2026-11-26 amendment, one with this component's
+ *     system actor. The cause is the mark since that amendment because a lost manual Start is
+ *     re-emitted with its starter's `user` actor (BACKLOG 1660);
  *  3. **one row per ticket**, because a ticket legitimately matches more than once (a poll that
  *     overlapped a webhook) and two rows would enqueue two doomed intakes;
  *  4. **the ticket's latest match was not answered by a skip** (PROGRESS backlog 542). No task row
@@ -33,7 +38,7 @@
  *     again, and a ticket unassigned in between reaches intake through the next webhook or poll.
  */
 import type { IntakeReconciliationStore, UnstartedMatch } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import { type Actor, actorSchema, type Id, type IsoDateTime } from '@platform/contracts';
 import type { SqlExecutor } from '../events/sql.js';
 
 /**
@@ -49,6 +54,7 @@ interface MatchRow extends Record<string, unknown> {
   readonly id: string;
   readonly project_id: string;
   readonly payload: Record<string, unknown>;
+  readonly actor: unknown;
 }
 
 export interface PostgresIntakeReconciliationOptions {
@@ -68,7 +74,7 @@ export const createPostgresIntakeReconciliationStore = (
       readonly reconcilerComponent: string;
     }): Promise<readonly UnstartedMatch[]> => {
       const { rows } = await options.sql.query<MatchRow>(
-        `select latest.id, latest.project_id, latest.payload
+        `select latest.id, latest.project_id, latest.payload, latest.actor
            from (
          select distinct on (e.payload ->> 'project_id',
                              e.payload -> 'ticket' ->> 'provider',
@@ -76,6 +82,7 @@ export const createPostgresIntakeReconciliationStore = (
                 e.id          as id,
                 e.payload ->> 'project_id' as project_id,
                 e.payload     as payload,
+                e.actor       as actor,
                 e.payload -> 'ticket' ->> 'provider' as provider,
                 e.payload -> 'ticket' ->> 'key' as ticket_key
            from events e
@@ -96,8 +103,8 @@ export const createPostgresIntakeReconciliationStore = (
                 from events r
                where r.type = 'ticket.matched'
                  and r.occurred_at > now() - ($2 || ' days')::interval
-                 and r.actor ->> 'kind' = 'system'
-                 and r.actor ->> 'component' = $3
+                 and (r.cause_event_id is not null
+                      or (r.actor ->> 'kind' = 'system' and r.actor ->> 'component' = $3))
                  and r.payload ->> 'project_id' = e.payload ->> 'project_id'
                  and r.payload -> 'ticket' ->> 'key' = e.payload -> 'ticket' ->> 'key'
                  and r.payload -> 'ticket' ->> 'provider' = e.payload -> 'ticket' ->> 'provider'
@@ -119,11 +126,17 @@ export const createPostgresIntakeReconciliationStore = (
         [input.olderThan, String(lookbackDays), input.reconcilerComponent, input.limit],
       );
 
-      return rows.map((row) => ({
-        eventId: row.id as Id,
-        projectId: row.project_id as Id,
-        payload: row.payload,
-      }));
+      return rows.map((row) => {
+        // BACKLOG 1660: the lost event's actor, so a manual Start is re-emitted with its starter.
+        // One that does not parse is left out, and the re-emission takes the system actor.
+        const actor = actorSchema.safeParse(row.actor);
+        return {
+          eventId: row.id as Id,
+          projectId: row.project_id as Id,
+          payload: row.payload,
+          ...(actor.success ? { actor: actor.data as Actor } : {}),
+        };
+      });
     },
   };
 };

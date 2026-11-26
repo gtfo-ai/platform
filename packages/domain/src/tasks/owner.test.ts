@@ -29,6 +29,7 @@ import {
   ticketAssigneeOf,
   UNOWNED,
 } from './owner.js';
+import { ownerChangeWritesBack } from './owner-write-back.js';
 
 const ME = '00000000-0000-4000-8000-0000000000e1' as Id;
 const OTHER = '00000000-0000-4000-8000-0000000000e2' as Id;
@@ -441,12 +442,31 @@ describe('a worker’s automatic claim assigns (TD-031 2026-11-26 amendment item
   const claim = (current: TaskOwnership, heldElsewhere = false, workerMayOwn = true) =>
     decideClaimOwner(current, { workerUserId: ME, heldElsewhere, workerMayOwn, at: AT });
 
-  it('makes the worker’s person the owner of an unassigned task — platform, via pick', () => {
+  it('makes the worker’s person the owner of an unassigned task — platform, via claim (never a pick)', () => {
+    // TD-031's second 2026-11-26 amendment item 2: `via: claim`, which the write-back never fires for.
     expect(claim(UNOWNED)).toEqual({
       kind: 'write',
       next: { ...UNOWNED, ownerUserId: ME, ownerSource: 'platform', ownerChangedAt: AT },
-      change: { ownerUserId: ME, previousOwnerUserId: null, source: 'platform', via: 'pick' },
+      change: { ownerUserId: ME, previousOwnerUserId: null, source: 'platform', via: 'claim' },
     });
+    const decision = claim(UNOWNED);
+    expect(
+      decision.kind === 'write' && decision.change !== null
+        ? ownerChangeWritesBack(decision.change)
+        : null,
+    ).toBe(false);
+    // The pick of the same row is a person's act, and does write back.
+    const picked = decidePickOwner(UNOWNED, {
+      pickerUserId: ME,
+      heldElsewhere: false,
+      pickerMayOwn: true,
+      at: AT,
+    });
+    expect(
+      picked.kind === 'write' && picked.change !== null
+        ? ownerChangeWritesBack(picked.change)
+        : null,
+    ).toBe(true);
   });
 
   it('never refuses: another person’s task is claimed with its owner kept (an everything machine)', () => {
@@ -472,14 +492,19 @@ describe('a worker’s automatic claim assigns (TD-031 2026-11-26 amendment item
   });
 });
 
-describe('a manual Start makes its starter the owner (TD-031 2026-11-26 amendment item 1)', () => {
+describe('a manual Start makes its starter the owner (TD-031 2026-11-26 amendments: the starter always wins)', () => {
   const start = (current: TaskOwnership, starterMayOwn = true) =>
     decideStarterOwner(current, { starterUserId: ME, starterMayOwn, at: AT });
   const expectStarter = (current: TaskOwnership) =>
     expect(start(current)).toEqual({
       kind: 'write',
       next: { ...current, ownerUserId: ME, ownerSource: 'platform', ownerChangedAt: AT },
-      change: { ownerUserId: ME, previousOwnerUserId: null, source: 'platform', via: 'command' },
+      change: {
+        ownerUserId: ME,
+        previousOwnerUserId: current.ownerUserId,
+        source: 'platform',
+        via: 'command',
+      },
     });
 
   it('gives an unassigned ticket to the starter — platform, via command', () => {
@@ -492,15 +517,25 @@ describe('a manual Start makes its starter the owner (TD-031 2026-11-26 amendmen
     expectStarter({ ...UNOWNED, ticketAssignee: person('unlinked') });
   });
 
-  it('keeps a ticket the tracker assigns to a different linked member with that member', () => {
-    // What the sync wrote for a linked member assignee: they own it, sourced from the tracker.
+  it('gives the starter a ticket the tracker assigns to a different linked member (BACKLOG 1662)', () => {
+    // What the sync wrote for a linked member assignee: they own it, sourced from the tracker. The
+    // starter replaces them, and the stored assignee stays the member's until the write-back.
     const synced = {
       ownerUserId: OTHER,
       ownerSource: 'tracker' as const,
       ownerChangedAt: AT,
       ticketAssignee: person('other-member'),
     };
-    expect(start(synced)).toEqual({ kind: 'unchanged' });
+    expectStarter(synced);
+  });
+
+  it('the starter’s change is a person’s act, so the write-back fires for it', () => {
+    const decision = start({ ...UNOWNED, ticketAssignee: person('unlinked') });
+    expect(
+      decision.kind === 'write' && decision.change !== null
+        ? ownerChangeWritesBack(decision.change)
+        : null,
+    ).toBe(true);
   });
 
   it('changes nothing when the tracker already assigns the starter', () => {

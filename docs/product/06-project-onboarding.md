@@ -38,6 +38,11 @@ It also offers a pick-up label instead of a pick-up status, and two switches: *c
 > with that member. A third switch is added, *assign the owner in the tracker* (off). When it is on, assigning a task on
 > the platform also sets the ticket's assignee, from that person's linked account.
 
+> **Amendment 2026-11-26 (TD-031's second 2026-11-26 amendment, the product owner's ruling).** *Assign the owner in the
+> tracker* is **on** by default. A person's own act — pressing *Start*, *Take it*, *Assign…*, picking a task on their
+> worker's page — sets the ticket's assignee; a worker's automatic pickup does not, and the tracker keeps the
+> platform's own account for it.
+
 Every slot may be left empty. The pick lists contain only statuses the tracker returned, and the save is checked against that list again. The pick lists are also on the project settings page, so the step can be skipped and finished later. If the statuses cannot be loaded, the slots cannot be saved, and the step says so rather than accepting names it cannot check. product/04 § "Ticket lifecycle" says what each slot does.
 
 ### Step 2 — Technical discovery (automatic, ~minutes, cheap)

@@ -36,9 +36,18 @@
  * otherwise be re-emitted every interval for ever, and an append-only event log would grow with it.
  * So a ticket that already carries a re-emission from this component is skipped, and the residual
  * is stated rather than implied: recovering a ticket needs **one** crash in the microsecond window
- * between a commit and an enqueue, and a ticket that is not recovered needs **two**. The count is
- * the reason the re-emitted event carries a system actor naming this component — it is the mark the
- * next pass reads.
+ * between a commit and an enqueue, and a ticket that is not recovered needs **two**. The mark the
+ * next pass reads is the re-emission's `cause_event_id` — the lost event's id, which no original
+ * match carries (a webhook's, a poll's and a manual Start's are all `null`) — and, for a re-emission
+ * written before TD-031's second 2026-11-26 amendment, its system actor naming this component.
+ *
+ * ## A recovered Start keeps its starter
+ *
+ * The re-emitted event carries the lost event's **`user` actor** when the lost match was a manual
+ * Start (`rule: 'manual'`, BACKLOG 1660, TD-031's second 2026-11-26 amendment item 4): intake reads
+ * the starter off exactly that pair, so the recovered task gets its owner — and the write-back and
+ * the pick-up label that follow — as an un-lost Start does. Every other match is re-emitted with
+ * this component's system actor, as before. The payload is re-emitted verbatim either way.
  *
  * ## The grace period is the interval, and that is one knob rather than two
  *
@@ -59,6 +68,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { StrandedRecoveryOptions } from '../recovery/stranded.js';
 import { runStrandedRecovery } from '../recovery/stranded.js';
+import { MANUAL_START_RULE } from './manual-start.js';
 import { appendOnProjectWithRetry, PROJECT_STREAM_APPEND_ATTEMPTS } from './project-stream.js';
 
 /** `Actor.component` on a re-emitted `ticket.matched`, and the mark the next pass reads. */
@@ -76,7 +86,21 @@ export interface UnstartedMatch {
   readonly projectId: Id;
   /** Its payload, verbatim — re-emitted unchanged, because it is what intake reads. */
   readonly payload: Record<string, unknown>;
+  /**
+   * The lost event's actor — re-emitted when it is a person's manual Start (BACKLOG 1660), so
+   * intake still names the starter. Absent from a store that does not read it: the system actor.
+   */
+  readonly actor?: Actor;
 }
+
+/**
+ * The actor a re-emission carries: the lost event's person for a manual Start (`rule: 'manual'`
+ * with a `user` actor — what intake reads the starter off), this component otherwise.
+ */
+export const reEmissionActor = (match: Pick<UnstartedMatch, 'actor' | 'payload'>): Actor =>
+  match.payload.rule === MANUAL_START_RULE && match.actor?.kind === 'user'
+    ? match.actor
+    : INTAKE_RECONCILER_ACTOR;
 
 /**
  * The query, as a port: `events` joined against `tasks`, which no existing store method expresses.
@@ -87,7 +111,8 @@ export interface UnstartedMatch {
 export interface IntakeReconciliationStore {
   /**
    * Matched tickets older than `olderThan` with no `mode: 'normal'` task row, excluding any this
-   * component has already re-emitted and any whose latest match intake answered with a
+   * component has already re-emitted (a `ticket.matched` of the ticket with a `cause_event_id`, or
+   * one carrying this component's system actor) and any whose latest match intake answered with a
    * `ticket.intake.skipped` caused by it (WP-177's assigned-elsewhere skip, PROGRESS backlog 542).
    *
    * @param limit bounds one pass, so a backlog cannot turn into one enormous transaction.
@@ -170,7 +195,8 @@ export const runIntakeReconciliation = async (
             // The lost event is what caused this one, which is what makes the pair readable in the log.
             cause_event_id: match.eventId,
             correlation_id: null,
-            actor: INTAKE_RECONCILER_ACTOR,
+            // BACKLOG 1660: a lost manual Start keeps its starter; everything else is this component's.
+            actor: reEmissionActor(match),
             occurred_at: options.clock.now(),
             type: 'ticket.matched',
             payload: match.payload,
