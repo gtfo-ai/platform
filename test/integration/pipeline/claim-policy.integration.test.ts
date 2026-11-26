@@ -840,7 +840,7 @@ describe('picks through RemoteRuns.claim (S-26.4, criterion 4)', () => {
     now: NOW,
   });
 
-  it('an automatic claim of an unowned stage offer makes the worker’s person the owner — via pick, no take audit', async () => {
+  it('an automatic claim of an unowned stage offer makes the worker’s person the owner — via claim, no take audit', async () => {
     const { me, taskId, runId } = await arrange('unowned');
     const w = await worker(me, { policy: 'mine_and_unassigned' });
     expect(await withRemote((remote) => remote.claim(automaticInput(w)))).toEqual({
@@ -849,7 +849,7 @@ describe('picks through RemoteRuns.claim (S-26.4, criterion 4)', () => {
     });
     expect(await ownership(taskId)).toEqual({ owner_user_id: me, owner_source: 'platform' });
     expect((await ownerEvents(taskId)).map((event) => event.payload)).toEqual([
-      expect.objectContaining({ owner_user_id: me, previous_owner_user_id: null, via: 'pick' }),
+      expect.objectContaining({ owner_user_id: me, previous_owner_user_id: null, via: 'claim' }),
     ]);
     // The machine's policy, not a person's act on its page: no human_actions row.
     expect(await actions(taskId)).toEqual([]);
