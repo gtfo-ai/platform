@@ -14,7 +14,6 @@ const commandsWith = (api: Record<string, unknown>) =>
     // Unused by `createUser`: a call that reached the database would fail with a TypeError.
     database: {} as never,
     auth: { api } as unknown as Auth,
-    recordAction: async () => {},
   });
 
 const INPUT = {

@@ -9,7 +9,8 @@
  *    longer works. Reading it never consumes it.
  * 2. The form takes an email, a name and a password twice, and checks the password against
  *    `PASSWORD_MIN_LENGTH`–`PASSWORD_MAX_LENGTH` before it sends, as *Settings → Password* does.
- * 3. `POST /api/invites/accept` makes the account; the page then signs in through Better Auth's own
+ * 3. `POST /api/invites/accept` makes the account; the page replaces its own history entry with
+ *    `/invite` (the token leaves the browser's history), then signs in through Better Auth's own
  *    route and opens Home. If the account was made but the sign-in failed, the page says so and
  *    points to the sign-in page — it never offers to submit again, because the link is now used.
  *
@@ -194,6 +195,9 @@ const Invite = ({ token }: { readonly token: string }): ReactElement => {
     mutationFn: () =>
       auth.acceptInvite({ token, email: email.trim(), name: name.trim(), password }),
     onSuccess: () => {
+      // The link is spent: take its token out of this tab's history entry before anything else,
+      // so Back or the history list never holds it.
+      globalThis.history?.replaceState(null, '', '/invite');
       setCreated(true);
       signIn.mutate();
     },

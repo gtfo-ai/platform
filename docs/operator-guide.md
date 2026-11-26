@@ -322,7 +322,7 @@ curl -fsS localhost:8080/readyz         # {"status":"ok","checks":{...}}
 
 Then open <http://localhost:8080/> and sign in with the bootstrap administrator. The
 [user guide](user-guide.md) starts there. To add the next person, make an invite link under
-**Settings → Users → Invite people** and send it to them; they choose their own email and password
+**Settings → People → Users → Invite people** and send it to them; they choose their own email and password
 (user guide § 11, *Inviting people*). `APP_BASE_URL` must be the address people open, because the
 link is built from it.
 
@@ -1606,8 +1606,8 @@ per-prompt random nonce ([BD-022](decisions/business/BD-022-external-text-is-unt
   before you configure it.
 - `/metrics` is unauthenticated unless you set the two variables in §3.
 - Open registration is off (`APP_ALLOW_SIGNUP=false`) and should stay off on anything reachable from
-  the internet; administrators add people with **one-time invite links** (Settings → Users →
-  *Invite people*, TD-022's 2026-11-26 amendment). A link carries the role its account gets, works
+  the internet; administrators add people with **one-time invite links** (Settings → People →
+  Users → *Invite people*, TD-022's 2026-11-26 amendment). A link carries the role its account gets, works
   once, expires after 1 hour to 30 days (24 hours by default) and can be revoked until it is used.
   It is a bearer credential while it is pending: share it over a channel you would share a password
   on, and prefer the shortest validity that works. The token is in the URL's fragment, so it never

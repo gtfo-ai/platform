@@ -122,6 +122,7 @@ describe('the invite page', () => {
   });
 
   it('accepts, signs in with the same credentials, and opens Home', async () => {
+    const replaced = vi.spyOn(window.history, 'replaceState');
     const user = openInvite();
     await fill(user);
     await user.click(submit());
@@ -141,6 +142,7 @@ describe('the invite page', () => {
     await waitFor(() => {
       expect(window.location.pathname).toBe('/');
     });
+    expect(replaced).toHaveBeenCalledWith(null, '', '/invite');
   });
 
   it('refuses a short password and a mismatch before sending anything', async () => {
@@ -172,6 +174,9 @@ describe('the invite page', () => {
     await fill(user);
     await user.click(submit());
     await screen.findByText(WORDS.createdNotSignedIn);
+    // The spent token left this tab's history entry.
+    expect(window.location.pathname).toBe('/invite');
+    expect(window.location.hash).toBe('');
     expect(screen.queryByRole('button', { name: WORDS.submit })).toBeNull();
     expect(screen.getByRole('link', { name: WORDS.signIn })).toBeTruthy();
   });

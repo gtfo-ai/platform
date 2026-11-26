@@ -49,6 +49,10 @@ const RECORD_WITH_NOW = { ...RECORD, now: dbNow() } as const;
 /** The administrator's list holds at most this many links, newest first. */
 export const MAX_LISTED_INVITES = 200;
 
+/**
+ * Makes a link and records `org.user.invite` (role, hours) as its maker — **one transaction**, so a
+ * link never exists without its audit row, nor the row without its link.
+ */
 export const insertInvite = async (
   database: Database,
   input: {
@@ -58,24 +62,31 @@ export const insertInvite = async (
     readonly createdBy: string;
     readonly validForHours: number;
   },
-): Promise<InviteRecord> => {
-  const rows = await database
-    .insert(userInvites)
-    .values({
-      id: input.id,
-      tokenSha256: input.tokenSha256,
-      role: input.role,
-      createdBy: input.createdBy,
-      createdAt: sql`now()`,
-      expiresAt: sql`now() + make_interval(hours => ${input.validForHours}::int)`,
-    })
-    .returning(RECORD_WITH_NOW);
-  const row = rows[0];
-  if (row === undefined) {
-    throw new Error('the invite insert returned no row');
-  }
-  return row;
-};
+): Promise<InviteRecord> =>
+  database.transaction(async (tx) => {
+    const rows = await tx
+      .insert(userInvites)
+      .values({
+        id: input.id,
+        tokenSha256: input.tokenSha256,
+        role: input.role,
+        createdBy: input.createdBy,
+        createdAt: sql`now()`,
+        expiresAt: sql`now() + make_interval(hours => ${input.validForHours}::int)`,
+      })
+      .returning(RECORD_WITH_NOW);
+    const row = rows[0];
+    if (row === undefined) {
+      throw new Error('the invite insert returned no row');
+    }
+    await tx.insert(humanActions).values({
+      taskId: null,
+      userId: input.createdBy,
+      action: 'org.user.invite',
+      params: { invite_id: row.id, role: row.role, valid_for_hours: input.validForHours },
+    });
+    return row;
+  });
 
 export const listInvites = async (database: Database): Promise<readonly InviteRecord[]> =>
   database
@@ -108,24 +119,40 @@ export const findInviteByTokenHash = async (
   return rows[0] ?? null;
 };
 
-/** Revokes a link that is neither accepted nor revoked; `null` when there was none to revoke. */
+/**
+ * Revokes a link that has made no account and is not revoked yet — **including one an accept holds
+ * the claim of** (`accepted_at` set, `accepted_user_id` null): the revoke stands, and the release
+ * that follows a refused email clears only the claim, so the link stays revoked. Records
+ * `org.user.invite_revoke` in the same transaction. `null` when there was nothing to revoke.
+ */
 export const revokeInvite = async (
   database: Database,
   input: { readonly id: string; readonly revokedBy: string },
-): Promise<InviteRecord | null> => {
-  const rows = await database
-    .update(userInvites)
-    .set({ revokedAt: sql`now()`, revokedBy: input.revokedBy })
-    .where(
-      and(
-        eq(userInvites.id, input.id),
-        isNull(userInvites.acceptedAt),
-        isNull(userInvites.revokedAt),
-      ),
-    )
-    .returning(RECORD_WITH_NOW);
-  return rows[0] ?? null;
-};
+): Promise<InviteRecord | null> =>
+  database.transaction(async (tx) => {
+    const rows = await tx
+      .update(userInvites)
+      .set({ revokedAt: sql`now()`, revokedBy: input.revokedBy })
+      .where(
+        and(
+          eq(userInvites.id, input.id),
+          isNull(userInvites.acceptedUserId),
+          isNull(userInvites.revokedAt),
+        ),
+      )
+      .returning(RECORD_WITH_NOW);
+    const row = rows[0];
+    if (row === undefined) {
+      return null;
+    }
+    await tx.insert(humanActions).values({
+      taskId: null,
+      userId: input.revokedBy,
+      action: 'org.user.invite_revoke',
+      params: { invite_id: row.id, role: row.role },
+    });
+    return row;
+  });
 
 /**
  * **The claim** (the amendment's item 4): one conditional update, so of two concurrent accepts of
@@ -151,7 +178,10 @@ export const claimInvite = async (
   return rows[0] ?? null;
 };
 
-/** Gives a claim back (an email Better Auth refused), so the link stays usable. */
+/**
+ * Gives a claim back (an email Better Auth refused), so the link stays usable — clearing **only**
+ * the claim: a revoke that landed meanwhile is left standing, and the link then reads revoked.
+ */
 export const releaseInviteClaim = async (database: Database, id: string): Promise<void> => {
   await database
     .update(userInvites)

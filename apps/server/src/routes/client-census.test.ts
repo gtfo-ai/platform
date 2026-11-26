@@ -120,7 +120,12 @@ const SERVED_BEFORE_ITS_CALLER: Readonly<Record<string, string>> = {
  * direction is the one this file exists to keep — an endpoint added without `requirePermission`
  * would otherwise be caught by nothing.
  */
-const PUBLIC_PREFIXES: readonly { readonly prefix: string; readonly why: string }[] = [
+const PUBLIC_PREFIXES: readonly {
+  readonly prefix: string;
+  readonly why: string;
+  /** Matched as the whole path rather than as a prefix, so nothing added beside it is exempt. */
+  readonly exact?: boolean;
+}[] = [
   {
     prefix: '/api/auth/',
     why: 'Better Auth owns sign-in, sign-out and the session read; a login endpoint that needed a session could never be used',
@@ -131,8 +136,14 @@ const PUBLIC_PREFIXES: readonly { readonly prefix: string; readonly why: string 
     why: 'WP-291: the sign-in page reads it before a session exists; it discloses one bit, whether anybody has ever signed in (technical/08)',
   },
   {
-    prefix: '/api/invites/',
-    why: 'TD-022’s 2026-11-26 amendment: the invite page inspects and accepts a link before its holder has an account; the 256-bit token in the body is the credential, and inspecting never consumes it',
+    prefix: '/api/invites/inspect',
+    exact: true,
+    why: 'TD-022’s 2026-11-26 amendment: the invite page reads a link before its holder has an account; the 256-bit token in the body is the credential, and inspecting never consumes it',
+  },
+  {
+    prefix: '/api/invites/accept',
+    exact: true,
+    why: 'TD-022’s 2026-11-26 amendment: the invite page makes its holder’s account, which has no session yet; the token in the body is the credential, claimed once',
   },
 ];
 
@@ -1160,7 +1171,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     );
     const probes = (await Promise.all(paths.map(probe))).filter((entry) => entry.served);
     const isPublic = (path: string): boolean =>
-      PUBLIC_PREFIXES.some((entry) => path.startsWith(entry.prefix));
+      PUBLIC_PREFIXES.some((entry) =>
+        entry.exact === true ? path === entry.prefix : path.startsWith(entry.prefix),
+      );
 
     // Every guarded path, per route rather than once — and on the *code*, not only the status, so
     // a 401 produced by something other than the auth guard would still have to be explained.

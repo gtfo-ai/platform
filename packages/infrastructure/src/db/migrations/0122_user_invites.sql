@@ -15,7 +15,10 @@
 -- Better Auth's `createUser`. A refusal of the email releases the claim (`accepted_at` back to null);
 -- a crash between the two leaves `accepted_at` set and `accepted_user_id` null — the link is spent
 -- and no account was made, never two. `accepted_user_id` is written once the account exists.
--- `revoked_at`/`revoked_by` are an administrator's revocation, allowed only while not accepted.
+-- `revoked_at`/`revoked_by` are an administrator's revocation, allowed until an account is named
+-- (`accepted_user_id`) — so a revoke that lands while an accept holds the claim stands: the release
+-- clears only `accepted_at`, and a released revoked link stays revoked. If that in-flight accept's
+-- account is made anyway, the row carries both endings and reads *accepted* (an account exists).
 --
 -- The three references to `users` are nullable with `on delete set null` (TD-032 amendment B): a
 -- deleted administrator or account leaves the link's history, never a refused delete.
@@ -35,7 +38,6 @@ create table user_invites (
   revoked_by uuid references users (id) on delete set null,
   constraint user_invites_token_shape check (token_sha256 ~ '^[0-9a-f]{64}$'),
   constraint user_invites_expiry_after_creation check (expires_at > created_at),
-  constraint user_invites_one_ending check (accepted_at is null or revoked_at is null),
   constraint user_invites_accepted_shape check (accepted_user_id is null or accepted_at is not null),
   constraint user_invites_revoked_shape check (revoked_by is null or revoked_at is not null)
 );

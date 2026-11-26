@@ -19,10 +19,12 @@ import { toApiError } from '../../../apps/server/src/errors.js';
 import { createInviteCommands } from '../../../apps/server/src/invites.js';
 import {
   claimInvite,
+  findInviteById,
   insertInvite,
   listInvites,
+  releaseInviteClaim,
+  revokeInvite,
 } from '../../../apps/server/src/queries/invite-queries.js';
-import { recordHumanAction } from '../../../apps/server/src/queries/onboarding-queries.js';
 import { registerInviteRoutes } from '../../../apps/server/src/routes/invites.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool } from '../support/postgres.js';
@@ -105,7 +107,6 @@ beforeAll(async () => {
     invites: createInviteCommands({
       database: drizzled,
       auth,
-      recordAction: async (input) => recordHumanAction(drizzled, input),
     }),
     projectRole: async () => null,
     baseUrl: 'http://localhost:8080',
@@ -167,6 +168,31 @@ describe('one link, one account', () => {
 });
 
 describe('the reads and the claim', () => {
+  it('keeps a revoke that landed on a claimed link through the release, with its audit row', async () => {
+    const token = 'FAKE-revoked-mid-claim-token-0000000000000';
+    const row = await link(token);
+    expect(await claimInvite(drizzled, hashInviteToken(token))).not.toBeNull();
+    const revoked = await revokeInvite(drizzled, { id: row.id, revokedBy: admin });
+    expect(revoked?.revokedAt).toBeInstanceOf(Date);
+    await releaseInviteClaim(drizzled, row.id);
+    const after = await findInviteById(drizzled, row.id);
+    expect(after?.acceptedAt).toBeNull();
+    expect(after?.revokedAt).toBeInstanceOf(Date);
+    const inspected = await app.inject({
+      method: 'POST',
+      url: '/api/invites/inspect',
+      payload: { token },
+    });
+    expect((inspected.json() as { state: string }).state).toBe('revoked');
+    const refused = await accept(token, 'after.revoke@example.test');
+    expect((refused.json() as { error: { code: string } }).error.code).toBe('invite_revoked');
+    const audit = await pool.query<{ action: string }>(
+      "select action from human_actions where params->>'invite_id' = $1 order by created_at",
+      [row.id],
+    );
+    expect(audit.rows.map((r) => r.action)).toEqual(['org.user.invite', 'org.user.invite_revoke']);
+  });
+
   it('reads every instant as a Date and claims nothing once the expiry passed', async () => {
     const token = 'FAKE-expired-invite-token-0000000000000000';
     const row = await link(token);

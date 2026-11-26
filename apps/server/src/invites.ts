@@ -24,7 +24,7 @@
  * because that insert is the first write. Everything else is thrown, and the claim stays: the link
  * is burned rather than risk a second account (the route's module note, step 5).
  */
-import type { JsonObject, UserRole } from '@platform/contracts';
+import type { UserRole } from '@platform/contracts';
 import type { Auth } from './auth/better-auth.js';
 import type { Database } from './queries/identity-queries.js';
 import {
@@ -93,12 +93,6 @@ const adminApiOf = (auth: Auth): AdminCreateUserApi => {
 export const createInviteCommands = (options: {
   readonly database: Database;
   readonly auth: Auth;
-  readonly recordAction: (input: {
-    readonly userId: string;
-    readonly action: string;
-    readonly params: JsonObject;
-    readonly taskId?: string | null;
-  }) => Promise<void>;
 }): InviteCommands => {
   const { database } = options;
   return {
@@ -135,6 +129,5 @@ export const createInviteCommands = (options: {
       }
     },
     completeAccept: async (input) => completeInviteAccept(database, input),
-    recordAction: options.recordAction,
   };
 };

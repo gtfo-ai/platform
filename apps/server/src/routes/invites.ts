@@ -40,7 +40,15 @@
  *    in one transaction.
  *
  * Every accepted command leaves one `human_actions` row — `org.user.invite` (role, hours),
- * `org.user.invite_revoke`, `org.user.invite_accept` — never the token, never its hash.
+ * `org.user.invite_revoke`, `org.user.invite_accept` — **in the same transaction as its write**
+ * (`queries/invite-queries.ts`), never the token, never its hash.
+ *
+ * ## A revoke during an accept (how this route reads the amendment's "revocable until then")
+ *
+ * "Until then" is read as *until an account exists*: a revoke that lands while an accept holds the
+ * claim succeeds, and a release after a refused email clears only the claim, so the link stays
+ * revoked and the administrator's answer stays true. Should that in-flight accept make its account
+ * anyway, the row carries both endings and reads *accepted* — the account exists.
  *
  * ## Not rate-limited here, stated
  *
@@ -86,6 +94,7 @@ export type CreateInvitedUserOutcome =
 
 /** The links' persistence and the account creation, bound by the composition root. */
 export interface InviteCommands {
+  /** Makes the link and records `org.user.invite` in one transaction. */
   readonly create: (input: {
     readonly id: string;
     readonly tokenSha256: string;
@@ -96,7 +105,10 @@ export interface InviteCommands {
   readonly list: () => Promise<readonly InviteRecord[]>;
   readonly findById: (id: string) => Promise<InviteRecord | null>;
   readonly findByTokenHash: (tokenSha256: string) => Promise<InviteRecord | null>;
-  /** Revokes a link neither accepted nor revoked yet; `null` when there was none such. */
+  /**
+   * Revokes a link that has made no account and is not revoked yet — a claimed one included — and
+   * records `org.user.invite_revoke` in the same transaction; `null` when there was none such.
+   */
   readonly revoke: (input: {
     readonly id: string;
     readonly revokedBy: string;
@@ -120,12 +132,6 @@ export interface InviteCommands {
     readonly userId: string;
     readonly params: JsonObject;
   }) => Promise<void>;
-  readonly recordAction: (input: {
-    readonly userId: string;
-    readonly action: string;
-    readonly params: JsonObject;
-    readonly taskId?: string | null;
-  }) => Promise<void>;
 }
 
 export interface InviteRoutesOptions {
@@ -146,7 +152,12 @@ const isoOrNull = (value: Date | null): IsoDateTime | null => (value === null ? 
 
 const stateOf = (record: InviteRecord): InviteState =>
   inviteStateAt(
-    { acceptedAt: record.acceptedAt, revokedAt: record.revokedAt, expiresAt: record.expiresAt },
+    {
+      acceptedAt: record.acceptedAt,
+      acceptedUserId: record.acceptedUserId,
+      revokedAt: record.revokedAt,
+      expiresAt: record.expiresAt,
+    },
     record.now,
   );
 
@@ -228,12 +239,6 @@ export const registerInviteRoutes = async (
         createdBy: actor,
         validForHours,
       });
-      await invites.recordAction({
-        userId: actor,
-        action: 'org.user.invite',
-        params: { invite_id: record.id, role, valid_for_hours: validForHours },
-        taskId: null,
-      });
       reply.status(201);
       return { invite: toWireInvite(record), url: inviteUrl(options.baseUrl, token) };
     },
@@ -261,7 +266,7 @@ export const registerInviteRoutes = async (
       schema: {
         summary: 'Revoke an invite link',
         description:
-          'Allowed while the link is neither accepted nor revoked (an expired one may still be revoked). `404 invite_not_found`; `409 invite_used` for an accepted link, `409 invite_revoked` for one already revoked. One `human_actions` row `org.user.invite_revoke`.',
+          'Allowed until the link has made an account and while it is not revoked — an expired one, and one an accept holds the claim of, may still be revoked; the revoke then stands even if that accept is refused and releases its claim. `404 invite_not_found`; `409 invite_used` once an account was made, `409 invite_revoked` for one already revoked. One `human_actions` row `org.user.invite_revoke`, in the revoke’s transaction.',
         tags: ['org'],
         params: inviteParamsSchema,
         response: { 200: inviteSummarySchema, 404: apiErrorSchema, 409: apiErrorSchema },
@@ -277,17 +282,11 @@ export const registerInviteRoutes = async (
         if (current === null) {
           throw notFound();
         }
-        if (current.acceptedAt !== null) {
+        if (current.acceptedUserId !== null) {
           throw new HttpError(409, 'invite_used', 'this invite link has already been used');
         }
         throw new HttpError(409, 'invite_revoked', 'this invite link was already revoked');
       }
-      await invites.recordAction({
-        userId: actor,
-        action: 'org.user.invite_revoke',
-        params: { invite_id: id, role: revoked.role },
-        taskId: null,
-      });
       return toWireInvite(revoked);
     },
   );

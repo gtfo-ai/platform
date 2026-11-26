@@ -2277,14 +2277,15 @@ commit may change.
 ### Inviting people
 
 There is no sign-up page: an administrator invites each person with a **one-time link**. Under
-**Settings → Users → Invite people**, choose the **Role** the account gets (*Member* unless you pick
+**Settings → People → Users → Invite people**, choose the **Role** the account gets (*Member* unless you pick
 another; choosing *Administrator* says that whoever opens the link becomes one) and how long it is
 **Valid for** (1 hour, 24 hours — the default —, 3 days, 7 days, 14 days or 30 days), then **Create
 invite link**. The link is shown **once**, with a copy button and who it lets in until when; copy it
 and send it however you like. Nobody can show it again — if you lose it, revoke it and make another.
 
 Below the form, **Invite links** lists every link: *Waiting*, *Used* (and who joined), *Expired* or
-*Revoked*. A waiting link has **Revoke**, which asks first.
+*Revoked*. A waiting link has **Revoke**, which asks first; a revoke stands even if somebody is
+halfway through accepting the link, unless their account was already made.
 
 Whoever opens the link sees which role it is for and until when, and chooses their **email**, their
 **name** and a **password** (at least 12 characters, typed twice). **Create my account** makes the

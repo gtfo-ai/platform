@@ -41,6 +41,8 @@ interface World {
   steps: string[];
   role: UserRole;
   signedIn: boolean;
+  /** Runs while `createUser` is in flight — a revoke landing during an accept. */
+  duringCreateUser?: () => Promise<void>;
   /** What `createUser` answers next: an outcome, or a thrown error. */
   createUser: CreateInvitedUserOutcome | Error;
 }
@@ -97,6 +99,11 @@ const build = async (): Promise<World> => {
           revokedAt: null,
         };
         w.rows.push(row);
+        w.actions.push({
+          userId: input.createdBy,
+          action: 'org.user.invite',
+          params: { invite_id: row.id, role: row.role, valid_for_hours: input.validForHours },
+        });
         return recordOf(row);
       },
       list: async () => w.rows.map(recordOf),
@@ -109,12 +116,18 @@ const build = async (): Promise<World> => {
         const row = w.rows.find((r) => r.tokenSha256 === hash);
         return row === undefined ? null : recordOf(row);
       },
-      revoke: async ({ id }) => {
+      // The SQL's predicate: no account yet (a claimed link included) and not revoked.
+      revoke: async ({ id, revokedBy }) => {
         const row = w.rows.find(
-          (r) => r.id === id && r.acceptedAt === null && r.revokedAt === null,
+          (r) => r.id === id && r.acceptedUserId === null && r.revokedAt === null,
         );
         if (row === undefined) return null;
         row.revokedAt = NOW;
+        w.actions.push({
+          userId: revokedBy,
+          action: 'org.user.invite_revoke',
+          params: { invite_id: row.id, role: row.role },
+        });
         return recordOf(row);
       },
       claim: async (hash) => {
@@ -131,6 +144,7 @@ const build = async (): Promise<World> => {
       },
       createUser: async (input) => {
         w.steps.push(`createUser:${input.role}`);
+        await w.duringCreateUser?.();
         if (w.createUser instanceof Error) throw w.createUser;
         return w.createUser;
       },
@@ -143,9 +157,6 @@ const build = async (): Promise<World> => {
           action: 'org.user.invite_accept',
           params: input.params,
         });
-      },
-      recordAction: async (input) => {
-        w.actions.push({ userId: input.userId, action: input.action, params: input.params });
       },
     },
   });
@@ -334,6 +345,48 @@ describe('accepting', () => {
 
     world.createUser = { kind: 'created', userId: NEW_USER, email: 'new.person@example.test' };
     expect((await accept(token)).statusCode).toBe(201);
+  });
+
+  it('lets a revoke that lands during an accept stand: the release leaves it revoked', async () => {
+    const token = tokenOf((await create()).json().url as string);
+    const id = world.rows[0]?.id ?? '';
+    let revokeStatus = 0;
+    world.duringCreateUser = async () => {
+      const revoked = await world.app.inject({
+        method: 'POST',
+        url: `/api/org/users/invites/${id}/revoke`,
+      });
+      revokeStatus = revoked.statusCode;
+    };
+    world.createUser = { kind: 'email_taken' };
+    expect((await accept(token)).statusCode).toBe(409);
+    // The claim was held when the revoke landed, and the revoke succeeded anyway.
+    expect(revokeStatus).toBe(200);
+    expect(world.steps).toEqual(['claim', 'createUser:member', 'release']);
+    world.duringCreateUser = undefined;
+
+    const inspected = await world.app.inject({
+      method: 'POST',
+      url: '/api/invites/inspect',
+      payload: { token },
+    });
+    expect((inspected.json() as { state: string }).state).toBe('revoked');
+    world.createUser = { kind: 'created', userId: NEW_USER, email: 'new.person@example.test' };
+    const again = await accept(token);
+    expect(again.statusCode).toBe(410);
+    expect((again.json() as { error: { code: string } }).error.code).toBe('invite_revoked');
+  });
+
+  it('answers a revoke 409 invite_used once the link has made an account', async () => {
+    const token = tokenOf((await create()).json().url as string);
+    expect((await accept(token)).statusCode).toBe(201);
+    const id = world.rows[0]?.id ?? '';
+    const refused = await world.app.inject({
+      method: 'POST',
+      url: `/api/org/users/invites/${id}/revoke`,
+    });
+    expect(refused.statusCode).toBe(409);
+    expect((refused.json() as { error: { code: string } }).error.code).toBe('invite_used');
   });
 
   it('keeps the claim — burns the link — when createUser fails any other way', async () => {

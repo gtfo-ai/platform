@@ -736,7 +736,6 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       invites: createInviteCommands({
         database: options.database,
         auth: options.auth,
-        recordAction: async (input) => recordHumanAction(options.database, input),
       }),
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
