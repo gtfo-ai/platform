@@ -11,7 +11,11 @@ The product owner's rule, verbatim: *"If there is ANYTHING recoverable that agen
 The incident that prompted it was fontai's GO-705 (goparking, GitLab MR !784) on 2026-11-26:
 
 - **The CI gate.** The gate parked the task with *"the "ci_gate" gate could not be decided after 5 attempts: pipeline 19204 is running"*. Five checks 30 s apart give up after about 2 min, and the pipeline needed about 12. It then failed on ECS, a code-style fault that the `ci_fix` loop exists to fix. Commit 7f31c64c (WP-136, widened) bounded the CI wait by `ci_timeout_minutes` on every binding. That timeout still escalated a pipeline that was merely slower than it.
-- **Refinement.** `refinement` ended `error_during_execution` with 0 turns four times while the worker was not ready yet. Every one of those runs parked the task, and the fifth attempt succeeded.
+- **Refinement.** `refinement` ended `error_during_execution` with 0 turns four times while the worker was not ready yet. Every one of those runs parked the task, and the fifth attempt succeeded. Two paths in the platform produce that signature:
+  - a start failure (`recordNotStarted`, wall time 0), which retried only three times 30 s apart when transient, and escalated at once otherwise;
+  - a CLI that never reached the model (`recordUnsuccessful`), which escalated at once.
+
+  Both transient cases are covered below. Which of the two GO-705 hit was not read from the production database for this decision.
 
 Before this decision, the following conditions also parked a task, although each one ends by itself:
 
@@ -48,7 +52,7 @@ As built on 2026-11-26:
 ## Rationale
 An escalation costs a person's attention and stops the task for hours, which is far more than another provider read or another offer of a run that never started. The conditions above end by themselves: a pipeline finishes, a provider answers again, a worker reconnects, a usage limit resets. Escalating them makes people watch the platform's infrastructure for it, and it hides the escalations that do need a person among ones that do not.
 
-Money stays bounded. A turnless run, a run that never started and a gate read cost nothing or almost nothing. Every run that is re-run is charged as any run is, so the task's budget (BD-010) still caps the retries that do spend.
+Money stays bounded. A gate read costs nothing, and a run that never started or never reached the model costs what the CLI measured, which is usually nothing. Every run that is re-run is charged as any run is, so the task's budget (BD-010) still caps the retries that do spend. A run nobody measured (a `crash`, or a start that had already asked for its CLI) is held at its reservation against the task cap (rule 16). A long series of those therefore ends in a budget **pause**, not an unbounded spend.
 
 ## Alternatives considered
 - **Raise only the counts and keep the 30 s cadence.** Rejected because a count tuned for one provider's latency is wrong for the next one. A time bound measured from the stage entry survives restarts and replays (TD-004), and backoff keeps a long wait cheap.
@@ -57,7 +61,20 @@ Money stays bounded. A turnless run, a run that never started and a gate read co
 
 ## Consequences
 - BD-008's *"Nothing retries silently"* now reads: nothing retries **unboundedly**, and every retry is visible. Each retried run is a `runs` row and each gate read is logged; only a bound that is truly spent tells a person.
-- **Left as escalations on purpose** (they are human-only, or real exhaustion): template and configuration refusals, `reject` verdicts, the autonomy dial, question and approval outcomes, BD-008's iteration limits, CI convergence on three identical failures, a held `manual` pipeline unchanged on retry, a `manual` pipeline or no pipeline at the CI timeout, non-retryable start failures (`invalid_spec`, a forbidden mint), permission refusals, secret leaks, the offer timeout, and a model-side failure after real turns (`error_max_turns`, `timed_out`, a missing artifact).
+- **Left as escalations on purpose.** Each of these is human-only, a real exhaustion, or a failure that another attempt does not fix:
+  - template and configuration refusals, `reject` verdicts, the autonomy dial, and question and approval outcomes;
+  - BD-008's iteration limits, including `rebase_rechecks` (10);
+  - CI convergence on three identical failures, and review findings that did not change;
+  - a held `manual` pipeline unchanged on retry, and a `manual` pipeline or no pipeline at the CI timeout;
+  - non-retryable start failures (`invalid_spec`, a forbidden mint, a CLI spawn the platform refused), permission refusals and secret leaks;
+  - the offer timeout;
+  - a failure after the agent took turns (`error_max_turns`, `timed_out`, a stall or an API error mid-run, a missing artifact or merge request). The run did real work, so another run would spend again on what may be the same ending. A person reads the transcript.
+- **Left unchanged, because they are already bounded retries of infrastructure** (BACKLOG 1659 has the review of each):
+  - write-conflict exhaustion (`MAX_TASK_CONFLICT_ATTEMPTS`, 3, which is a hot write loop, not a provider);
+  - a `stage.execute` job that keeps throwing (pg-boss's two retries, then one stranded-stage re-enqueue, then an escalation naming the error class);
+  - the event dead-letter sink (10 dispatches with backoff up to 5 min);
+  - the `mr.comment.debounce` and expired-job endings;
+  - the platform merge's lost `mr.merged` signal (3 passes about 10 minutes apart).
 - **Follow-ups**, listed in BACKLOG:
   - `pipeline.outbound` duties still escalate after their queue's three tries. Changing a live queue's retry options needs a queue migration (TD-004); the provider executor's own 429/5xx retries absorb most blips meanwhile.
   - A re-plan that was lost between its commit and its enqueue is escalated by the stranded-stage row rather than re-planned.

@@ -1,8 +1,9 @@
 /**
  * **A run that ended before the model took a single turn is re-planned, not escalated** — BD-034
  * (the product owner's rule of 2026-11-26: anything the platform can recover from by itself must not
- * reach a person). Measured on fontai's GO-705: `refinement` ended four times `error_during_execution`
- * with zero turns while the worker was not ready, and every one of them parked the task.
+ * reach a person). Prompted by fontai's GO-705, whose `refinement` ended `error_during_execution` with
+ * zero turns four times while the worker was not ready, each parking the task (a start failure has
+ * the same signature and has its own, longer bound since BD-034 — `stage-executor.test.ts`).
  *
  * These cases script that outcome and drive the real stage executor, the real `settleRun` and the
  * real `stage.execute` handler through the pipeline harness: the run's row, the task, the

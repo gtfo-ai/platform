@@ -1239,7 +1239,9 @@ const escalateOnRun = async (
 /** The blocker brief a stage that stopped without a result gets when its caller wrote none. */
 const defaultBlockerBrief = (stage: Slug, ticketKey: string, reason: string): string =>
   `The "${stage}" stage of ${ticketKey} stopped without a result: ${reason}. ` +
-  "Nothing is retried automatically. Open the run's transcript, decide what should change, " +
+  // BD-034: a run reaches this brief only after the model took a turn (a turnless run is re-planned),
+  // so re-running it would spend again on the same ending.
+  "It was not retried automatically, because the agent ran and another run would spend again. Open the run's transcript, decide what should change, " +
   'and hand the task back at the stage you want it to resume from.';
 
 export const escalate = (
@@ -1617,8 +1619,11 @@ export const notStartedBrief = (
   return (
     `The "${stage}" stage of ${ticketKey} did not start: ${reason}. ${quote} ` +
     'There is no transcript, because no agent ran; the run page shows the whole reason. ' +
-    'Nothing is retried automatically. Fix what stopped the workspace from starting, then hand the ' +
-    'task back at this stage.'
+    // BD-034: say what was tried — the retries a transport failure got, or why there were none.
+    (notStarted.attempt > 1
+      ? `The platform tried to start it ${String(notStarted.attempt)} times, waiting 30 seconds and then twice as long each time up to 10 minutes, and does not try again. `
+      : 'This failure is not one another attempt fixes, so it was not retried. ') +
+    'Fix what stopped the workspace from starting, then hand the task back at this stage.'
   );
 };
 

@@ -78,7 +78,13 @@ import {
   isUnchangedHeldRetry,
 } from './ci-pending-read.js';
 import { enqueueCiPlays } from './ci-play.js';
-import { ciWaitBrief, ciWaitReason, decideCiWait, isProgressingPipeline } from './ci-wait.js';
+import {
+  ciWaitBrief,
+  ciWaitCeilingMinutes,
+  ciWaitReason,
+  decideCiWait,
+  isProgressingPipeline,
+} from './ci-wait.js';
 import {
   decideGateOutage,
   GATE_OUTAGE_LIMIT_MINUTES,
@@ -1239,7 +1245,14 @@ const recordCiRead = async (
       : {
           ...pipeline,
           checked_at: options.clock.now(),
-          timeout_minutes: wait?.timeoutMinutes ?? null,
+          // BD-034: a pipeline still pending or running is waited for up to the ceiling, so that is
+          // the time the task page says the platform gives it; any other read, the CI timeout.
+          timeout_minutes:
+            wait === undefined
+              ? null
+              : isProgressingPipeline(wait.pipeline)
+                ? ciWaitCeilingMinutes(wait.timeoutMinutes)
+                : wait.timeoutMinutes,
         };
   const entry = { taskId: request.taskId, stage: request.stage, attempt: request.attempt };
   const { written, firstHeldRead, previous } = await options.unitOfWork.transaction(

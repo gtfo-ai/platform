@@ -4504,7 +4504,8 @@ describe('the CI gate waits for a pipeline up to its CI timeout (WP-136)', () =>
           held_job_url: null,
           draft: true,
           checked_at: first?.ciPendingRead?.checked_at,
-          timeout_minutes: timeout,
+          // BD-034: a running pipeline is waited for up to the ceiling, which the page then states.
+          timeout_minutes: CI_WAIT_CEILING_MINUTES,
         });
         expect(Date.parse(first?.ciPendingRead?.checked_at ?? '')).toBe(harness.clock.epochMs);
 

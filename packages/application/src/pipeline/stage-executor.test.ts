@@ -911,6 +911,10 @@ describe('a run whose start failed for a transport reason', () => {
     ]);
     expect(delays).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);
     expect(escalationOf(harness)?.payload.reason).toContain('could not be started');
+    // BD-034: the brief says what was tried.
+    expect(escalationOf(harness)?.payload.blocker_brief).toContain(
+      `The platform tried to start it ${String(MAX_RUN_START_ATTEMPTS)} times, waiting 30 seconds and then twice as long`,
+    );
     // One failed `runs` row per flap — the signal an operator reads, and the reason the bound exists.
     expect(harness.types().filter((type) => type === 'run.failed')).toHaveLength(
       MAX_RUN_START_ATTEMPTS,
@@ -1351,6 +1355,9 @@ describe('a run that never started records the launcher’s reason (backlog 453)
     });
     expect(escalationOf(harness)?.payload.blocker_brief).toContain(
       'The launcher gave no reason of its own',
+    );
+    expect(escalationOf(harness)?.payload.blocker_brief).toContain(
+      'This failure is not one another attempt fixes, so it was not retried.',
     );
     expect(JSON.stringify(harness.events())).not.toContain('FAKE-PLANTED-not-a-workspace');
   });
