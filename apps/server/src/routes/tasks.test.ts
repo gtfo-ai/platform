@@ -51,11 +51,17 @@ import { ownerCapabilities } from '@platform/domain';
 import { redaction } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
+import { everyProjectVisible, onlyProjectsVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { ArtifactBody, TaskEventRow } from '../queries/pipeline-queries.js';
 import { registerTaskRoutes, TASK_CALLER_FACT_ACTIONS, type TaskQueries } from './tasks.js';
+
+/** BD-035: who sees what — every project unless a case narrows it (reset after each). */
+let visibility: VisibleProjectsReader = everyProjectVisible;
+/** BD-035: the scope resolves nothing — the resource does not exist. */
+let unresolved = false;
 
 const ARTIFACT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -142,16 +148,16 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     },
     taskProjectId: async (taskId) => {
       world.taskScopedFor.push(taskId);
-      return PROJECT;
+      return unresolved ? null : PROJECT;
     },
-    visibleProjects: everyProjectVisible,
+    visibleProjects: async (actor) => visibility(actor),
     projectRole: async (projectId, userId) => {
       world.guardedFor.push({ projectId, userId });
       return world.role;
     },
     artifactProjectId: async (artifactId) => {
       world.scopedFor.push(artifactId);
-      return PROJECT;
+      return unresolved ? null : PROJECT;
     },
     artifactBody: async (artifactId) => {
       world.asked.push(artifactId);
@@ -875,5 +881,32 @@ describe('GET /api/tasks/:task_id — the owner control (S-26.1)', () => {
     for (const key of ['can_take', 'can_assign', 'can_unassign', 'take_writes_back']) {
       expect(Object.hasOwn(exported.json() as object, key), key).toBe(false);
     }
+  });
+});
+
+describe('a hidden project’s task and artifact answer as missing ones (BD-035, S-30.2)', () => {
+  afterEach(() => {
+    visibility = everyProjectVisible;
+    unresolved = false;
+  });
+
+  it.each([
+    ['task', `/api/tasks/${TASK}`],
+    ['task export', `/api/tasks/${TASK}/export`],
+    ['artifact', `/api/artifacts/${ARTIFACT}`],
+  ])('the %s: the same 404 body as a missing id, and nothing is read', async (_what, url) => {
+    const hidden = await build();
+    visibility = onlyProjectsVisible('00000000-0000-4000-8000-00000030ff01');
+    const refused = await hidden.app.inject({ method: 'GET', url });
+    expect(refused.statusCode, refused.body).toBe(404);
+    expect(hidden.world.exportReads).toEqual([]);
+    expect(hidden.world.asked).toEqual([]);
+    expect(hidden.world.guardedFor).toEqual([]);
+
+    visibility = everyProjectVisible;
+    unresolved = true;
+    const missing = await (await build()).app.inject({ method: 'GET', url });
+    expect(missing.statusCode).toBe(404);
+    expect(refused.body).toBe(missing.body);
   });
 });

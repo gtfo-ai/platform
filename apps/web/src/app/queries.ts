@@ -323,30 +323,6 @@ export const useWorkerClaimScope = (workerId: string | null) => {
   });
 };
 
-/**
- * The execution read of several projects **for one machine** (`?worker_id=`, #108), asked only
- * while `enabled` — the Workers screen's consequence line (S-26.8a): a row asks its projects once
- * its owner opens *Change*, never on the page's load, and each answer is cached per
- * (project, machine). A refusal is not retried: the line is hidden on any error, so asking again
- * would only repeat it.
- */
-export const useProjectsExecutionFor = (
-  projectIds: readonly string[],
-  workerId: string,
-  enabled: boolean,
-) => {
-  const { endpoints } = useServices();
-  return useQueries({
-    queries: projectIds.map((projectId) => ({
-      queryKey: queryKeys.projectExecutionFor(projectId, workerId),
-      queryFn: () => endpoints.projectExecution(projectId, workerId),
-      enabled,
-      retry: false,
-      ...FOREVER,
-    })),
-  });
-};
-
 export const useProjectBudgets = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -1911,11 +1887,10 @@ export const useSettingsCommands = (mint?: MintKey) => {
         workerId: string;
         body: Parameters<typeof endpoints.setWorkerClaimPolicy>[1];
       }) => endpoints.setWorkerClaimPolicy(input.workerId, input.body),
-      onSuccess: async (_answer, input) => {
-        await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
-        await queryClient.invalidateQueries({
-          queryKey: [...queryKeys.workerClaimScope(input.workerId)],
-        });
+      // The list, and every machine's claim-scope read under it (BD-035): one machine's new setting
+      // changes whether the others' unassigned tasks have a taker.
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers] });
       },
     }),
     /**

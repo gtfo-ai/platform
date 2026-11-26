@@ -341,6 +341,44 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     return { status: 200, body: { ...base, others_take_unassigned: others } };
   };
 
+  /**
+   * `GET /api/workers/:id/claim-scope` (BD-035, S-30.1): what the machine's card may offer — the
+   * one project, with its execution setting, and `unassigned_has_taker` computed as
+   * {@link executionFor} computes `others_take_unassigned` for that machine. Only the signed-in
+   * operator's own machine; anybody else's, and an unknown id, is `404`, as on the server.
+   */
+  const claimScopeFor = (workerId: string): { status: number; body: unknown } => {
+    const listed = workersRead().items.find((item) => item.id === workerId);
+    if (listed === undefined || listed.user.id !== fixtures.IDS.user) {
+      return {
+        status: 404,
+        body: { error: { code: 'not_found', message: `worker ${workerId} does not exist` } },
+      };
+    }
+    const execution = executionFor(workerId).body as {
+      readonly mode: string;
+      readonly notice: string | null;
+      readonly others_take_unassigned: boolean;
+    };
+    return {
+      status: 200,
+      body: {
+        worker_id: workerId,
+        claim_policy: listed.claim_policy ?? 'everything',
+        claim_project_ids: listed.claim_projects?.map((project) => project.id) ?? null,
+        projects: [
+          {
+            id: fixtures.project.id,
+            key: fixtures.project.key,
+            name: fixtures.project.name,
+            execution: { mode: execution.mode, notice: execution.notice },
+          },
+        ],
+        unassigned_has_taker: { [fixtures.IDS.project]: execution.others_take_unassigned },
+      },
+    };
+  };
+
   const writeFrame = (stream: Stream, frame: SseFrame, event: string): void => {
     const lines: string[] = [];
     if (frame.frame !== 'control') {
@@ -915,6 +953,12 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       return;
     }
 
+    const claimScopeMatch = /^\/api\/workers\/([^/]+)\/claim-scope$/.exec(path);
+    if (method === 'GET' && claimScopeMatch !== null) {
+      const answer = claimScopeFor(claimScopeMatch[1] ?? '');
+      json(response, answer.status, answer.body);
+      return;
+    }
     const executionWorker = url.searchParams.get('worker_id');
     if (
       method === 'GET' &&

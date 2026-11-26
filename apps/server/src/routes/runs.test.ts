@@ -19,11 +19,17 @@ import {
 import { stageAgentDefaults } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
+import { everyProjectVisible, onlyProjectsVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { RunPrompt, RunSettings } from '../queries/pipeline-queries.js';
 import { type RunQueries, registerRunRoutes, retryDefaultsReader } from './runs.js';
+
+/** BD-035: who sees what — every project unless a case narrows it (reset after each). */
+let visibility: VisibleProjectsReader = everyProjectVisible;
+/** BD-035: the scope resolves nothing — the run does not exist. */
+let unresolved = false;
 
 const RUN = '00000000-0000-4000-8000-0000000000e1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -124,8 +130,8 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     throw new Error('not read by these cases');
   };
   const queries: RunQueries = {
-    runProjectId: async () => PROJECT,
-    visibleProjects: everyProjectVisible,
+    runProjectId: async () => (unresolved ? null : PROJECT),
+    visibleProjects: async (actor) => visibility(actor),
     projectRole: async () => world.role,
     run: async (runId) => {
       world.reads.push(`run ${runId}`);
@@ -347,4 +353,28 @@ describe('GET /api/runs/:run_id publishes retry_defaults (WP-167)', () => {
     expect(Object.hasOwn(body, 'retry_defaults')).toBe(true);
     expect(body.retry_defaults).toBeNull();
   });
+});
+
+describe('a hidden project’s run answers as a missing one (BD-035, S-30.2)', () => {
+  afterEach(() => {
+    visibility = everyProjectVisible;
+    unresolved = false;
+  });
+
+  it.each([`/api/runs/${RUN}`, `/api/runs/${RUN}/settings`, `/api/runs/${RUN}/prompt`])(
+    '%s: the same 404 body as a missing run, and nothing is read',
+    async (url) => {
+      const hidden = await build();
+      visibility = onlyProjectsVisible('00000000-0000-4000-8000-00000030ff01');
+      const refused = await hidden.app.inject({ method: 'GET', url });
+      expect(refused.statusCode, refused.body).toBe(404);
+      expect(hidden.world.reads).toEqual([]);
+
+      visibility = everyProjectVisible;
+      unresolved = true;
+      const missing = await (await build()).app.inject({ method: 'GET', url });
+      expect(missing.statusCode).toBe(404);
+      expect(refused.body).toBe(missing.body);
+    },
+  );
 });

@@ -4,11 +4,12 @@
  * (*My tasks and unassigned ones*) and `night-owl` (*Everything*), and `POST /__test__/workers-others`
  * adds Vojtěch's `vojta-mbp` (*Only my tasks*) and a project with no server claimant.
  *
- * The consequence line's evidence is the project's execution read **for the machine being changed**
- * (`?worker_id=`, which the fake answers as the server does: any other machine counts, the owner's
- * own included), asked only once *Change* opens. So `night-owl` under *Only my tasks* is told
- * nothing (`jan-mbp` takes unassigned tasks) — and once it is saved so, `jan-mbp` under *Only my
- * tasks* is told the project's unassigned tasks have nowhere to run. Then the save's request in the
+ * The consequence line's evidence is the machine's own claim-scope read (BD-035,
+ * `GET /api/workers/:id/claim-scope`), whose `unassigned_has_taker` the fake answers as the server
+ * does: any other machine counts, the owner's own included; one read per owned machine, asked again
+ * after a save. So `night-owl` under *Only my tasks* is told nothing (`jan-mbp` takes unassigned
+ * tasks) — and once it is saved so, `jan-mbp` under *Only my tasks* is told the project's
+ * unassigned tasks have nowhere to run. Then the save's request in the
  * server's log, *Saved*, the sentence the stored answer gives, and Vojtěch's machine read with
  * nothing to press, his name and the runs its policy leaves for others.
  */
@@ -26,24 +27,22 @@ test.beforeEach(async ({ request }) => {
 
 const PROJECT_NAME = `Demo service ${HOSTILE.image}`;
 
-/** The execution read asked for one machine, once it has answered. */
-const executionAnswered = (page: Page, workerId: string) =>
+/** The claim-scope read of one machine, once it has answered (after a save it is asked again). */
+const scopeAnswered = (page: Page, workerId: string) =>
   page.waitForResponse(
-    (answer) =>
-      new URL(answer.url()).pathname === `/api/projects/${IDS.project}/execution` &&
-      new URL(answer.url()).searchParams.get('worker_id') === workerId,
+    (answer) => new URL(answer.url()).pathname === `/api/workers/${workerId}/claim-scope`,
   );
 
 test('Workers: the owner changes what their machine takes, warned per machine; somebody else’s reads with their name', async ({
   page,
   request,
 }) => {
-  // From before the page's load: no execution is asked until Change opens a card.
-  const executionReads: string[] = [];
+  // From before the page's load: which machines' claim scope the page asks.
+  const scopeReads: string[] = [];
   page.on('request', (sent) => {
-    const url = new URL(sent.url());
-    if (/^\/api\/projects\/[^/]+\/execution$/.test(url.pathname)) {
-      executionReads.push(url.searchParams.get('worker_id') ?? 'none');
+    const read = /^\/api\/workers\/([^/]+)\/claim-scope$/.exec(new URL(sent.url()).pathname);
+    if (read !== null) {
+      scopeReads.push(read[1] ?? '');
     }
   });
   await signIn(page, '/workers');
@@ -54,30 +53,30 @@ test('Workers: the owner changes what their machine takes, warned per machine; s
     'This machine takes your tasks and unassigned ones, in all your projects.',
   );
   await expect(mine.locator('[data-policy-skipped]')).toHaveCount(0);
-  expect(executionReads).toEqual([]);
+  // The owner's two machines asked what their cards may offer; Vojtěch's did not.
+  await expect
+    .poll(() => [...new Set(scopeReads)].sort())
+    .toEqual([IDS.worker, IDS.workerPaused].sort());
 
   // night-owl: jan-mbp, the owner's other machine, takes unassigned tasks — no warning.
   const owl = page.locator(`[data-worker="${IDS.workerPaused}"] [data-worker-policy]`);
-  const owlAnswered = executionAnswered(page, IDS.workerPaused);
   await owl.getByRole('button', { name: 'Change' }).click();
-  await owlAnswered;
   await owl.getByRole('radio', { name: 'Only my tasks' }).check();
   await expect(owl.getByRole('radio', { name: 'Only my tasks' })).toBeChecked();
   await expect(owl.getByText(/nowhere to run/)).toHaveCount(0);
+  const mineReread = scopeAnswered(page, IDS.worker);
   await owl.getByRole('button', { name: 'Save' }).click();
   await expect(owl.getByText('Saved · applies to the next run')).toBeVisible();
 
-  // jan-mbp: now nobody else takes the project's unassigned tasks — the warning, as text.
-  const mineAnswered = executionAnswered(page, IDS.worker);
+  // jan-mbp: now nobody else takes the project's unassigned tasks — the warning, as text. Every
+  // card's read is asked again after a save, so jan-mbp's answer reflects night-owl's.
+  await mineReread;
   await mine.getByRole('button', { name: 'Change' }).click();
-  await mineAnswered;
   await mine.getByRole('radio', { name: 'Only my tasks' }).check();
   await expect(mine.getByText(/have nowhere to run\.$/)).toHaveText(
     `Unassigned tasks in ${PROJECT_NAME} have nowhere to run.`,
   );
   await expect(mine.locator('img')).toHaveCount(0);
-  // Each read was for the machine being changed, and none without one.
-  expect(executionReads).toEqual([IDS.workerPaused, IDS.worker]);
 
   await mine.getByRole('radio', { name: 'Only these:' }).check();
   await mine.getByRole('checkbox', { name: PROJECT_NAME }).check();
@@ -110,5 +109,5 @@ test('Workers: the owner changes what their machine takes, warned per machine; s
     'Skipped 3 runs this machine doesn’t take',
   );
   await expect(theirs.getByText(/nowhere to run/)).toHaveCount(0);
-  expect(executionReads).not.toContain(IDS.workerOthers);
+  expect(scopeReads).not.toContain(IDS.workerOthers);
 });

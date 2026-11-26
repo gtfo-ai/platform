@@ -54,8 +54,9 @@ projects they work in: the projects their workers take (*What this machine takes
 machine set to *every project* means every project), the projects they are a member of, and the
 projects of tasks they own that are not finished. Somebody who has chosen nothing — no worker and no
 project membership — sees every project. A project you do not see is not there for you: it is not on
-**Projects**, Home, the board, the Inbox, **Agents**, **Statistics** or the live updates, and a link to
-it, or to one of its tasks or runs, says *No such project* or *No such task*. This only narrows what you
+**Projects**, Home, the board, the Inbox, **Agents**, **Statistics** or the live updates; a link to it
+says *No such project*, a link to one of its tasks *No such task*, and one of its runs reads as not
+found. This only narrows what you
 see; what you may do in a project you see is still your role. **To see a project again, widen your
 machine**: **Workers → What this machine takes → Change** offers every project you may run in, the ones
 you do not see now included — tick it (or choose every project) and **Save**. A new machine starts at

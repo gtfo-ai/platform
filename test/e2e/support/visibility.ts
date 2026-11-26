@@ -84,9 +84,9 @@ export const visibilityWorld = async (instance: Instance): Promise<VisibilityWor
     const taskA = await task(projectA, 'VISA-1');
     const taskB = await task(projectB, 'VISB-1');
     const worker = await client.query<{ id: string }>(
-      `insert into workers (user_id, name, credential_hash, claim_project_ids)
-       values ($1, 'narrowed-laptop', $2, $3::uuid[]) returning id`,
-      [narrowed.userId, 'e2e'.padEnd(64, '0').replace(/[^0-9a-f]/g, 'e'), [projectA]],
+      `insert into workers (id, user_id, name, credential_hash, claim_project_ids)
+       values (gen_random_uuid(), $1, 'narrowed-laptop', $2, $3::uuid[]) returning id`,
+      [narrowed.userId, 'e2e'.padEnd(64, '0'), [projectA]],
     );
     return {
       admin,

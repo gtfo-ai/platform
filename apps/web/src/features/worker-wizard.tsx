@@ -810,12 +810,17 @@ const stepStates = (
  * not see included, so the card can choose any of them. Before it is known, or when that read
  * fails, the projects the person sees with each one's execution read.
  */
-const useProjectRows = (enabled: boolean, workerId: string | null): ProjectRows | null => {
+const useProjectRows = (
+  enabled: boolean,
+  workerId: string | null,
+  /** The workers read has not answered: which worker this is is not known yet, so nothing is read. */
+  workersPending: boolean,
+): ProjectRows | null => {
   const { endpoints } = useServices();
   const scope = useWorkerClaimScope(enabled ? workerId : null);
   const fromScope = enabled && workerId !== null && !scope.isError;
   const projects = useProjects();
-  const items = enabled && !fromScope ? (projects.data?.items ?? []) : [];
+  const items = enabled && !workersPending && !fromScope ? (projects.data?.items ?? []) : [];
   const executions = useQueries({
     queries: items.map((project) => ({
       queryKey: queryKeys.projectExecution(project.id),
@@ -823,7 +828,7 @@ const useProjectRows = (enabled: boolean, workerId: string | null): ProjectRows 
       staleTime: Number.POSITIVE_INFINITY,
     })),
   });
-  if (!enabled) {
+  if (!enabled || workersPending) {
     return null;
   }
   if (fromScope) {
@@ -880,9 +885,11 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
       : wizardWorkerOf(workers.data.items, user.id, sinceMs);
 
   const onLastStep = place.step === 'projects';
+  const visibleProjects = useProjects();
   const projectRows = useProjectRows(
     onLastStep,
     worker === null || worker === false ? null : worker.id,
+    workers.isPending,
   );
   const rows = projectRows?.rows ?? null;
   const projectTakes =
@@ -924,8 +931,15 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
     );
   }
 
+  // A project the person does not see (BD-035) is no board to end on: the card may list it.
   const boardKey =
-    rows?.find((row) => row.execution !== null && projectTakesWorkers(row.execution))?.key ?? null;
+    rows?.find(
+      (row) =>
+        row.execution !== null &&
+        projectTakesWorkers(row.execution) &&
+        (visibleProjects.data === undefined ||
+          visibleProjects.data.items.some((project) => project.id === row.id)),
+    )?.key ?? null;
   const index = WORKER_WIZARD_STEP_IDS.indexOf(current);
   const body: ReactNode =
     blocking !== null ? (

@@ -49,11 +49,15 @@ import {
 } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
+import { everyProjectVisible, onlyProjectsVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { type CommandQueries, registerCommandRoutes } from './commands.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
+
+/** BD-035: who sees what — every project unless a case narrows it (reset after each). */
+let visibility: VisibleProjectsReader = everyProjectVisible;
 
 const TASK = '00000000-0000-4000-8000-0000000000a1';
 const RUN = '00000000-0000-4000-8000-0000000000a2';
@@ -167,7 +171,7 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
     queries: {
       taskProjectId: async (taskId) => (taskId === TASK ? PROJECT : null),
       runProjectId: async (runId) => (runId === RUN ? PROJECT : null),
-      visibleProjects: everyProjectVisible,
+      visibleProjects: async (actor) => visibility(actor),
       projectRole: async () => null,
       taskPosition: async (taskId) =>
         taskId === TASK ? { state: 'active', currentStage: 'refinement' } : null,
@@ -1234,7 +1238,7 @@ describe('raising a task’s cap (WP-131)', () => {
     let maintains = OTHER;
     await world.app.close();
     world = await build({
-      visibleProjects: everyProjectVisible,
+      visibleProjects: async (actor) => visibility(actor),
       projectRole: async (projectId) => (projectId === maintains ? 'maintainer' : null),
     });
     world.role = 'member';
@@ -1775,7 +1779,7 @@ describe('the routes’ own answers', () => {
       queries: {
         taskProjectId: async () => PROJECT,
         runProjectId: async () => PROJECT,
-        visibleProjects: everyProjectVisible,
+        visibleProjects: async (actor) => visibility(actor),
         projectRole: async () => null,
         taskPosition: async () => ({ state: 'active', currentStage: 'refinement' }),
         runPosition: async () => ({ status: 'completed', taskId: TASK, taskState: 'active' }),
@@ -1943,5 +1947,30 @@ describe('a resume never moves a task past its pending approval (S-27.1, BACKLOG
     );
     expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 approval_pending');
     expect(reply.body.error?.message).toContain('budget approval');
+  });
+});
+
+describe('a command on a hidden project’s task answers as on a missing one (BD-035, S-30.2)', () => {
+  afterEach(() => {
+    visibility = everyProjectVisible;
+  });
+
+  it('answers a question with the missing task’s 404, before its role or body, and performs nothing', async () => {
+    const url = `/api/tasks/${TASK}/questions/${QUESTION}/answer`;
+    const hidden = await build();
+    visibility = onlyProjectsVisible('00000000-0000-4000-8000-00000030ff01');
+    const refused = await hidden.app.inject({ method: 'POST', url, payload: { answer: 'yes' } });
+    expect(refused.statusCode, refused.body).toBe(404);
+    expect(hidden.calls).toEqual([]);
+    expect(hidden.actions).toEqual([]);
+
+    visibility = everyProjectVisible;
+    const missing = await (await build({ taskProjectId: async () => null })).app.inject({
+      method: 'POST',
+      url,
+      payload: { answer: 'yes' },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(refused.body).toBe(missing.body);
   });
 });

@@ -10,8 +10,9 @@ import { WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import type { ExecutionSettings } from '@platform/domain';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
+import { everyProjectVisible, onlyProjectsVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import type { UnassignedTakerExclusion } from '../queries/offer-waiting.js';
 import type { ProjectWorkerRow } from '../queries/worker-queries.js';
@@ -24,6 +25,9 @@ import {
   SET_EXECUTION_ACTION,
   waitingOf,
 } from './project-execution.js';
+
+/** BD-035: who sees what — every project unless a case narrows it (reset after each). */
+let visibility: VisibleProjectsReader = everyProjectVisible;
 
 const PROJECT = '00000000-0000-4000-8000-000000002781';
 const USER = '00000000-0000-4000-8000-000000002783';
@@ -130,7 +134,7 @@ const build = async (): Promise<void> => {
   });
   await registerProjectExecutionRoutes(app, {
     queries: {
-      visibleProjects: everyProjectVisible,
+      visibleProjects: async (actor) => visibility(actor),
       projectRole: async () => world.role,
       projectExists: async () => world.exists,
       execution: async () => world.stored,
@@ -487,5 +491,28 @@ describe('who would run this project, and what waits (S-22.19, N2)', () => {
       'bob-desktop',
     ]);
     expect(world.askedFor).toEqual([USER, null]);
+  });
+});
+
+describe('a hidden project answers as a missing one (BD-035, S-30.2)', () => {
+  afterEach(() => {
+    visibility = everyProjectVisible;
+  });
+
+  it('answers the execution read of a hidden project with the missing project’s 404, reading nothing', async () => {
+    const url = `/api/projects/${PROJECT}/execution`;
+    await build();
+    visibility = onlyProjectsVisible('00000000-0000-4000-8000-00000030ff01');
+    const refused = await app.inject({ method: 'GET', url });
+    expect(refused.statusCode, refused.body).toBe(404);
+    expect(world.askedFor).toEqual([]);
+
+    // A missing project, for somebody who sees every project, is the handler's own 404.
+    await build();
+    visibility = everyProjectVisible;
+    world.exists = false;
+    const missing = await app.inject({ method: 'GET', url });
+    expect(missing.statusCode).toBe(404);
+    expect(refused.body).toBe(missing.body);
   });
 });

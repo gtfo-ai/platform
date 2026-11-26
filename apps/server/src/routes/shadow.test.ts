@@ -14,13 +14,17 @@
 import type { JsonObject, UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { everyProjectVisible } from '../auth/visibility.test-fixture.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { VisibleProjectsReader } from '../auth/visibility.js';
+import { everyProjectVisible, onlyProjectsVisible } from '../auth/visibility.test-fixture.js';
 import { toApiError } from '../errors.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import type { ShadowCommands } from '../shadow.js';
 import { type MemoryAttempt, memoryAttemptRecords } from './idempotency-memory.js';
 import { registerShadowRoutes, SHADOW_START_ACTION } from './shadow.js';
+
+/** BD-035: who sees what — every project unless a case narrows it (reset after each). */
+let visibility: VisibleProjectsReader = everyProjectVisible;
 
 const PROJECT = '00000000-0000-4000-8000-000000000a01';
 /** The project the batch belongs to — deliberately **not** {@link PROJECT}. */
@@ -131,7 +135,7 @@ const build = async (): Promise<void> => {
     shadow: world.commands,
     gate: async () => world.gate as NonNullable<World['gate']>,
     queries: {
-      visibleProjects: everyProjectVisible,
+      visibleProjects: async (actor) => visibility(actor),
       projectRole: async (projectId, userId) => {
         roleCalls.push({ projectId, userId });
         return world.role;
@@ -412,7 +416,7 @@ describe('a process that composed no pipeline', () => {
       shadow: null,
       gate: null,
       queries: {
-        visibleProjects: everyProjectVisible,
+        visibleProjects: async (actor) => visibility(actor),
         projectRole: async () => 'maintainer',
         projectExists: async () => true,
         ...memoryAttemptRecords(new Map()),
@@ -453,5 +457,27 @@ describe('a process that composed no pipeline', () => {
     expect(body.can_start).toBe(false);
     expect(body.blocked_reason).toContain('cannot read the project’s settings');
     await instance.close();
+  });
+});
+
+describe('a hidden project’s shadow batch answers as a missing one (BD-035, S-30.2)', () => {
+  afterEach(() => {
+    visibility = everyProjectVisible;
+  });
+
+  it('answers the same 404 body as a missing batch, and reads nothing', async () => {
+    await build();
+    visibility = onlyProjectsVisible(PROJECT);
+    const refused = await app.inject({ method: 'GET', url: `/api/shadow-batches/${BATCH}` });
+    expect(refused.statusCode, refused.body).toBe(404);
+    expect(batchReads).toEqual([]);
+    expect(roleCalls).toEqual([]);
+
+    await build();
+    visibility = everyProjectVisible;
+    world.batchFound = false;
+    const missing = await app.inject({ method: 'GET', url: `/api/shadow-batches/${BATCH}` });
+    expect(missing.statusCode).toBe(404);
+    expect(refused.body).toBe(missing.body);
   });
 });

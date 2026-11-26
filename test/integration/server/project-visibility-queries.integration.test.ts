@@ -48,8 +48,9 @@ const worker = async (
 ): Promise<void> => {
   counter += 1;
   await pool.query(
-    `insert into workers (user_id, name, credential_hash, claim_project_ids, state, revoked_at)
-     values ($1, 'laptop', $2, $3::uuid[], $4, case when $5 then now() end)`,
+    `insert into workers (id, user_id, name, credential_hash, claim_project_ids, state,
+                          revoked_at)
+     values (gen_random_uuid(), $1, 'laptop', $2, $3::uuid[], $4, case when $5 then now() end)`,
     [userId, String(counter).padStart(64, '0'), scope, revoked ? 'revoked' : 'active', revoked],
   );
 };
@@ -87,7 +88,7 @@ beforeAll(async () => {
       await one<{ id: string }>(
         `insert into projects (org_id, key, name, repo_url)
          values ($1, $2, $2, 'https://git.example.test/acme/' || $2 || '.git') returning id`,
-        [org.id, `VIS${key.toUpperCase()}`],
+        [org.id, `vis_${key}`],
       )
     ).id;
   }

@@ -365,6 +365,9 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
     'No machine is waiting with that code. Check the code your machine shows now and enter it again.',
   claim_policy_owner_only:
     'Only the person whose machine this is can change what it takes. Ask them to change it.',
+  // BD-035: `GET /api/workers/:id/claim-scope` on a process that composed no execution read.
+  claim_scope_unavailable:
+    'The platform could not read which projects this machine may take just now. Try again in a moment; your machine keeps what it takes.',
   // S-28.6: a person's own limit above the organisation's `max_tasks_per_owner`.
   task_limit_above_maximum: (error) => {
     const maximum = detailOf(error, 'max_tasks_in_flight');
