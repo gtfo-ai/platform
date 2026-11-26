@@ -326,7 +326,10 @@ describe('before the project names are known (CI on #109)', () => {
     expect(sentenceIn(await policyOf(THEIRS))).toBe(
       'This machine takes only Vojtěch’s tasks, in Autix.',
     );
-    expect(document.querySelector('[data-worker-policy-loading]')).toBeNull();
+    // The administrator's own machine reads its claim scope behind the same gate: both settle.
+    await waitFor(() => {
+      expect(document.querySelector('[data-worker-policy-loading]')).toBeNull();
+    });
     // The administrator's own machine asked what it may offer; somebody else's asked nothing.
     expect(new Set(state.scopeReads)).toEqual(new Set([MINE]));
   });
