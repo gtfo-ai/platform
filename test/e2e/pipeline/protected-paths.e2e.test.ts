@@ -16,7 +16,8 @@
  *    its old bytes, the declared one holds the new — and on the stored `hook` row that says why.
  *
  * What it does not prove: the Docker helper that produces the listing in production, which is
- * `test/e2e/workspace/docker-workspace.e2e.test.ts`'s (the contract suite's listing case), or a
+ * `test/e2e/workspace/docker-workspace-contract.e2e.test.ts`'s (the contract suite's listing
+ * case), or a
  * model choosing to write a test, which no tier here can show.
  */
 import { execFile } from 'node:child_process';

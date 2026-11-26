@@ -3,7 +3,8 @@
  *
  * Two implementations run it: `FakeWorkspaceProvider` in the contract tier
  * (`test/contract/workspace/fake-workspace-provider.contract.test.ts`) and
- * `DockerWorkspaceProvider` against a real daemon in `test/e2e/workspace/docker-workspace.e2e.test.ts`.
+ * `DockerWorkspaceProvider` against a real daemon in
+ * `test/e2e/workspace/docker-workspace-contract.e2e.test.ts`.
  * A Kubernetes provider (TD-021 § Consequences) joins without a line changing here.
  *
  * ## Why a shared suite and not two test files

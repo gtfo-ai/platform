@@ -352,7 +352,7 @@ developer's daemon. **`.github/workflows/docker-checks.yml` runs them**, from on
 | `credential-path-check` | every pull request and push | one container (2 s by hand); the run credential reaches only the project's repository |
 | `runlet-launcher-check` | every pull request and push | launcher, run container, shim and runner meeting once (13 s by hand) |
 | `deploy-key-check` | every pull request and push | the deploy key reaches the SSH stand-in and no file, environment or log (26 s by hand) |
-| `launcher-control-plane-check` | a change to the run plane or its own scripts; nightly | three containers and minutes of deliberate waiting |
+| `launcher-control-plane-check` | a change to the run plane or its own scripts; nightly | three containers and minutes of deliberate waiting; runs as **two legs**, `runs` and `restarts` (`--leg`), one job each |
 | `worker-compose-check` | a change to the run plane, the worker bundle and its protocol, the claimant, or its own scripts; nightly | a core, a worker bundle, a registry and two git stand-ins; two tasks run to Ready |
 | `worker-update-check` | a change to the images, the compose files, the updater and the worker protocol, or its own script; nightly | four attested builds of every image and three updates of a live worker |
 | `worker-install-check` | a change to the images, the compose files, the worker bundle and its protocol (the served `install.sh` and `install.ps1` are under `apps/server/src/workers/`), the updater, or its own script; nightly | a core serving `install.sh`; `curl … \| sh -s -- --dir <tmp> --no-open` installs a worker from this run's images (pulled by registry digest) — every service running, the worker, launcher and **updater** healthy, the page answering — then the same line again recreates no container; a **second core**'s line (S-29.2) installs a second worker beside it in `~/agentic-worker-<slug>` (a fresh `HOME`) with its own project, names and page port, each line's re-run recreates nothing in either project, a hand `docker compose up -d` in the second folder hits the second project, and the second's `--uninstall --purge` leaves the first running; and `--uninstall --purge` leaves no container, volume, network or folder. `install.sh` names the first worker on a machine `agentic-worker`, so the check **refuses to start** on a daemon that has one (a developer's own worker); `install.ps1` has no real-daemon leg (backlog 1076) |
@@ -363,7 +363,9 @@ what a check depends on; the **nightly run of every check** is what catches a ch
 
 - **One build.** The `images` job builds the five images once (amd64, tagged `:dev`, every check's
   default), saves them as one zstd archive and uploads it; one `docker check (<name>)` job per selected
-  check loads it and runs the check, all in parallel. `image.yml`'s build is not reused: a job cannot
+  check loads it and runs the check, all in parallel — one job per **leg** for a check whose table entry
+  declares `legs` (`docker check (<name>:<leg>)`, the script run with `--leg <leg>`; the test holds the
+  table's legs equal to the script's `LEGS`). `image.yml`'s build is not reused: a job cannot
   `needs:` another workflow's job, and moving these into `image.yml` would put them behind both
   architectures' build legs and their compose checks, and a nightly trigger beside the jobs that
   publish `latest`.

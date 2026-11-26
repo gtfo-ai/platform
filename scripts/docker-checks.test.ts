@@ -25,6 +25,7 @@ import {
   DOCKER_CHECKS,
   HARNESS_PATHS,
   matchesPath,
+  matrixEntries,
   parseChanged,
   planChecks,
   RUN_ELSEWHERE,
@@ -386,7 +387,7 @@ describe('the plan command', () => {
       const written = plan(['--all', '--github-output'], { GITHUB_OUTPUT: output });
       expect(written.status, written.stderr).toBe(0);
       expect(written.stdout).toBe('');
-      expect(readFileSync(output, 'utf8')).toBe(`checks=${JSON.stringify(ALL)}\n`);
+      expect(readFileSync(output, 'utf8')).toBe(`checks=${JSON.stringify(matrixEntries(ALL))}\n`);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -407,6 +408,86 @@ describe('the plan command', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('unknown check');
   });
+
+  it('refuses a leg the table does not declare, rather than run the whole check under its name', () => {
+    const runEntry = (entry: string) =>
+      spawnSync(process.execPath, ['scripts/docker-checks.mjs', 'run', entry], {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        // No daemon: an entry that got past the refusal would start the check, which then stops on
+        // its own `DOCKER_HOST` refusal — a different message, so the assertion fails by name.
+        env: { PATH: process.env.PATH },
+      });
+    for (const entry of ['launcher-control-plane-check:nope', 'git-long-options-check:runs']) {
+      const result = runEntry(entry);
+      expect(result.status, entry).toBe(2);
+      expect(result.stderr, entry).toContain('unknown leg');
+      expect(result.stderr, entry).not.toContain('DOCKER_HOST');
+    }
+  });
+});
+
+/**
+ * A check whose phases share nothing but their setup runs as legs, one matrix job each. What has to
+ * hold is that the legs the table names are exactly the legs the script runs — a leg the script has
+ * and the table lacks is a set of assertions CI never makes — and that the plan gives the matrix the
+ * legs instead of the check.
+ */
+describe('a check that runs as legs', () => {
+  /** The `const LEGS = [...]` a check's script declares, or null when it declares none. */
+  const scriptLegs = (name: string): string[] | null => {
+    const match = /^const LEGS = \[([^\]]*)\];$/m.exec(read(`scripts/${name}.mjs`));
+    return match === null
+      ? null
+      : [...(match[1] as string).matchAll(/'([^']+)'/g)].map((leg) => leg[1] as string);
+  };
+
+  it('declares the same legs as its script, in both directions', () => {
+    const withLegs = DOCKER_CHECKS.filter((check) => (check.legs ?? []).length > 0);
+    // Not vacuous: the launcher control-plane check is split today.
+    expect(withLegs.map((check) => check.name)).toContain('launcher-control-plane-check');
+    for (const check of DOCKER_CHECKS) {
+      expect(scriptLegs(check.name), check.name).toEqual(
+        (check.legs ?? []).length > 0 ? [...(check.legs ?? [])] : null,
+      );
+    }
+  });
+
+  it('gives the matrix one entry per leg and never the bare name of a check with legs', () => {
+    const entries = matrixEntries(ALL);
+    expect(entries).toContain('launcher-control-plane-check:runs');
+    expect(entries).toContain('launcher-control-plane-check:restarts');
+    expect(entries).not.toContain('launcher-control-plane-check');
+    // A check without legs is its own entry, in table order.
+    expect(matrixEntries(ALWAYS)).toEqual(ALWAYS);
+    expect(entries.length).toBe(
+      DOCKER_CHECKS.reduce((sum, check) => sum + Math.max(1, (check.legs ?? []).length), 0),
+    );
+  });
+
+  it('the split check refuses a leg it does not have before it asks for a daemon', () => {
+    const env: Record<string, string> = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (
+        value !== undefined &&
+        name !== 'DOCKER_HOST' &&
+        name !== 'CLAUDE_CODE_OAUTH_TOKEN' &&
+        name !== 'ANTHROPIC_API_KEY'
+      ) {
+        env[name] = value;
+      }
+    }
+    for (const args of [['--leg', 'nope'], ['--leg']]) {
+      const result = spawnSync(
+        process.execPath,
+        [join(repositoryRoot, 'scripts/launcher-control-plane-check.mjs'), ...args],
+        { env, encoding: 'utf8', timeout: 60_000 },
+      );
+      expect(result.status, args.join(' ')).toBe(2);
+      expect(result.stderr, args.join(' ')).toContain('--leg runs|restarts');
+      expect(result.stderr, args.join(' ')).not.toContain('DOCKER_HOST');
+    }
+  }, 60_000);
 });
 
 describe('every Docker check is run by some workflow', () => {

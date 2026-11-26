@@ -25,8 +25,8 @@
  * tarball and fourteen days of retention. It proves nothing about the commit, the push or the
  * volume: there is no container and no git host in this tier. Those meet each other in
  * `apps/launcher/src/service.test.ts` (the order and the failure paths) and in
- * `test/e2e/workspace/docker-workspace.e2e.test.ts` (a real daemon, through the shared contract
- * suite).
+ * `test/e2e/workspace/docker-workspace-contract.e2e.test.ts` (a real daemon, through the shared
+ * contract suite).
  */
 import type { RunRecord, TaskDetailResponse } from '@platform/contracts';
 import { compilePipeline, FEATURE_TEMPLATE } from '@platform/domain';

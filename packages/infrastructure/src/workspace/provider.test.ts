@@ -1343,7 +1343,7 @@ describe('mirror', () => {
  * mirror by sub-path, and the sub-path's existence is an ordering — `updateMirror` makes it, the
  * clone helper checks it by name before any container carrying the mount is asked for. These start
  * from a daemon with **no** mirror on the volume, so the double's sub-path model is what is tested
- * rather than a seed. That the real daemon agrees is `docker-workspace.e2e.test.ts`'s to say.
+ * rather than a seed. That the real daemon agrees is `docker-workspace-git.e2e.test.ts`'s to say.
  */
 describe('one mirror, not the volume (WP-75)', () => {
   const noMirrorYet = (): boolean => !(daemon.subpaths.get('repo-cache')?.has('acme.git') ?? false);

@@ -2,7 +2,7 @@
  * The shared `WorkspaceProvider` contract suite, run against the fake.
  *
  * The Docker adapter runs the same file against a real daemon in
- * `test/e2e/workspace/docker-workspace.e2e.test.ts`. This tier is the one every later work package
+ * `test/e2e/workspace/docker-workspace-contract.e2e.test.ts`. This tier is the one every later work package
  * inherits, so a promise that holds here and not there is exactly the drift standing rule 1 is
  * about — which is why there is one suite and two runners rather than two suites.
  */

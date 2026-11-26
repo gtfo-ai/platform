@@ -10,8 +10,8 @@
  *
  * Both implementations run the same shared suite
  * (`test/contract/support/workspace/provider-suite.ts`): the fake in the contract tier, the Docker
- * one against a real daemon in `test/e2e/workspace/docker-workspace.e2e.test.ts`. Anything the
- * suite asserts is therefore asserted of both, which is the only mechanism that keeps a fake
+ * one against a real daemon in `test/e2e/workspace/docker-workspace-contract.e2e.test.ts`.
+ * Anything the suite asserts is therefore asserted of both, which is the only mechanism that keeps a fake
  * honest as it ages (standing rule 23).
  *
  * **Every citation below is resolved mechanically** by `scripts/citations.test.ts`: the file must be

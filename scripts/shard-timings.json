@@ -2,7 +2,7 @@
   "source": {
     "run": "45870823696",
     "retrieved": "2026-11-26",
-    "note": "the hybrid case (77504 ms in this run) moved from remote-worker-claims.e2e.test.ts to remote-worker.e2e.test.ts after it; their two entries are this run's file figures with that case's duration moved"
+    "note": "the hybrid case (77504 ms in this run) moved from remote-worker-claims.e2e.test.ts to remote-worker.e2e.test.ts after it; their two entries are this run's file figures with that case's duration moved; docker-workspace.e2e.test.ts (329760 ms here, 247217 ms in run 45885743280) was split into three files (BACKLOG 1654): each entry is its describes' per-test sum in run 45885743280 plus the whole file's 28386 ms of hooks and unlisted cases (every file now starts its own fixture), scaled by 329760/247217 to this run"
   },
   "workers": 3,
   "projects": {
@@ -147,7 +147,9 @@
     "e2e-fake-claude:test/e2e/worker/remote-worker-reoffer.e2e.test.ts": 99237,
     "e2e-fake-claude:test/e2e/worker/remote-worker.e2e.test.ts": 150881,
     "e2e-fake-claude:test/e2e/worker/ssh-sign-cap.e2e.test.ts": 3614,
-    "e2e-fake-claude:test/e2e/workspace/docker-workspace.e2e.test.ts": 329760,
+    "e2e-fake-claude:test/e2e/workspace/docker-workspace-contract.e2e.test.ts": 137731,
+    "e2e-fake-claude:test/e2e/workspace/docker-workspace-git.e2e.test.ts": 117908,
+    "e2e-fake-claude:test/e2e/workspace/docker-workspace.e2e.test.ts": 149849,
     "e2e-fake-claude:test/e2e/workspace/harness-volumes.e2e.test.ts": 11880,
     "process:packages/infrastructure/src/runlet/conformance.contract.test.ts": 12423,
     "process:packages/infrastructure/src/runlet/shim.test.ts": 3763,

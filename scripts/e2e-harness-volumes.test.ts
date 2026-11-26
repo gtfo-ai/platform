@@ -13,7 +13,7 @@
  * survives because the `rm` fails, and a network something is still attached to survives because
  * the daemon refuses it.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   HARNESS_KINDS,
@@ -162,12 +162,15 @@ describe('which resources the sweep may remove', () => {
  * `docker run` spelled through a variable rather than an array literal (none today).
  */
 describe('the Docker e2e files mark every container they start (WP-132)', () => {
-  const FILES = [
-    'test/e2e/support/docker-workspace.ts',
-    'test/e2e/workspace/docker-workspace.e2e.test.ts',
-    // Not `harness-volumes.e2e.test.ts`: it plants resources with deliberately chosen labels (a
-    // lookalike, a foreign run) to test the sweep itself, and removes each by name in its `finally`.
-  ];
+  // The workspace e2e is three files since BACKLOG 1654, read off disk so a fourth joins the census
+  // without an edit here. Not `harness-volumes.e2e.test.ts`: it plants resources with deliberately
+  // chosen labels (a lookalike, a foreign run) to test the sweep itself, and removes each by name in
+  // its `finally`.
+  const WORKSPACE_E2E = readdirSync(new URL('../test/e2e/workspace/', import.meta.url))
+    .filter((name) => /^docker-workspace.*\.e2e\.test\.ts$/.test(name))
+    .sort()
+    .map((name) => `test/e2e/workspace/${name}`);
+  const FILES = ['test/e2e/support/docker-workspace.ts', ...WORKSPACE_E2E];
   const sourceOf = (file: string): string =>
     readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
   /** The text from `open` to its balanced `close`. */
@@ -190,6 +193,10 @@ describe('the Docker e2e files mark every container they start (WP-132)', () => 
     );
 
   it('finds the sites it is about (calibration: the scope, before any verdict)', () => {
+    // The three files of the split, the original name among them: a pattern that matched nothing
+    // would leave only the support module in scope and every verdict below vacuous.
+    expect(WORKSPACE_E2E).toContain('test/e2e/workspace/docker-workspace.e2e.test.ts');
+    expect(WORKSPACE_E2E.length).toBeGreaterThanOrEqual(3);
     const all = FILES.map(sourceOf);
     expect(all.flatMap(runArrays).length).toBeGreaterThanOrEqual(30);
     expect(all.flatMap(creates).length).toBeGreaterThanOrEqual(4);

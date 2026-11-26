@@ -4,6 +4,8 @@ export interface DockerCheck {
   readonly when: 'always' | 'paths';
   readonly paths: readonly string[];
   readonly why: string;
+  /** The check's legs, each its own matrix job (`<name>:<leg>`, the script run with `--leg <leg>`). */
+  readonly legs?: readonly string[];
 }
 export declare const HARNESS_PATHS: readonly string[];
 export declare const DOCKER_CHECKS: readonly DockerCheck[];
@@ -12,5 +14,9 @@ export declare const matchesPath: (file: string, paths: readonly string[]) => bo
 export declare const planChecks: (
   changed: readonly string[] | null,
   checks?: readonly DockerCheck[],
+) => string[];
+export declare const matrixEntries: (
+  checks: readonly string[],
+  table?: readonly DockerCheck[],
 ) => string[];
 export declare const parseChanged: (text: string) => string[];

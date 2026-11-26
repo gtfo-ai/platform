@@ -159,7 +159,7 @@ const projectSource = {
  * The check's run is read-only against an anonymous `git://` fixture, so it asks for a `read`
  * credential and is told there is none — the path a public repository takes (TD-028's WP-76
  * amendment, decision 6): the create carries `credential: null` and the mirror fetch is anonymous.
- * A minted credential against a credentialled server is `docker-workspace.e2e.test.ts`'s (WP-76).
+ * A minted credential against a credentialled server is `docker-workspace-git.e2e.test.ts`'s (WP-76).
  */
 const credentials = {
   mint: async () => ({

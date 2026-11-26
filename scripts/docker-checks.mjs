@@ -25,6 +25,13 @@
  * A change to this file or to the workflow runs every check, and so does any run whose changed files
  * cannot be listed (a scheduled run, a dispatch, the first push of a branch) — `--all`.
  *
+ * **A check may run as legs.** A check whose phases share nothing but their setup declares `legs`,
+ * and the plan gives the workflow's matrix one entry per leg, `<name>:<leg>`, which `run` hands the
+ * script as `--leg <leg>` — so the legs run as parallel jobs, and the check's wall time is its
+ * longest leg rather than their sum. Which checks run is still decided per check ({@link planChecks});
+ * only the matrix entries are per leg ({@link matrixEntries}). `scripts/docker-checks.test.ts` holds
+ * each check's `legs` equal to the `LEGS` its script declares, so no leg the script has goes unrun.
+ *
  * Not required checks (CONTRIBUTING.md § Branch protection stays `ci.yml`'s jobs): a required check
  * that a path list skipped would block every merge it skipped, and a scheduled run has no pull request
  * to block. A failure is a red `docker check (<name>)` on the pull request or push; a scheduled run's
@@ -89,6 +96,7 @@ const WORKER = [
  *   when: 'always' | 'paths',
  *   paths: readonly string[],
  *   why: string,
+ *   legs?: readonly string[],
  * }} DockerCheck
  */
 
@@ -141,6 +149,9 @@ export const DOCKER_CHECKS = [
       'packages/prompts/',
     ],
     why: 'three containers and minutes of deliberate waiting (a two-minute shim observation among them)',
+    // About 125 s of runs and 130 s of restarts (the two-minute shim watch) one after the other
+    // made it the longest job of every run it was in (312 s, run 45885743233); as legs, each its own.
+    legs: ['runs', 'restarts'],
   },
   {
     name: 'worker-compose-check',
@@ -233,6 +244,19 @@ export const planChecks = (changed, checks = DOCKER_CHECKS) => {
     .map((check) => check.name);
 };
 
+/**
+ * The workflow's matrix for `checks`: a check's name, or `<name>:<leg>` for each of its legs.
+ *
+ * @param {readonly string[]} checks
+ * @param {readonly DockerCheck[]} [table]
+ * @returns {string[]}
+ */
+export const matrixEntries = (checks, table = DOCKER_CHECKS) =>
+  checks.flatMap((name) => {
+    const legs = table.find((check) => check.name === name)?.legs ?? [];
+    return legs.length === 0 ? [name] : legs.map((leg) => `${name}:${leg}`);
+  });
+
 /** `git diff --no-renames --name-only` output → the files, blank lines dropped. */
 export const parseChanged = (text) =>
   text
@@ -254,7 +278,7 @@ const plan = (args) => {
   const file = at === -1 ? undefined : args[at + 1];
   if (at !== -1 && (file === undefined || file.startsWith('--'))) return usage();
   const changed = file === undefined ? null : parseChanged(readFileSync(file, 'utf8'));
-  const checks = planChecks(changed);
+  const checks = matrixEntries(planChecks(changed));
   process.stderr.write(
     changed === null
       ? `every check runs (no list of changed files): ${checks.join(', ')}\n`
@@ -275,16 +299,28 @@ const plan = (args) => {
 };
 
 const run = (args) => {
-  const check = DOCKER_CHECKS.find((candidate) => candidate.name === args[0]);
+  const [name, leg] = (args[0] ?? '').split(':');
+  const check = DOCKER_CHECKS.find((candidate) => candidate.name === name);
   if (check === undefined) {
     process.stderr.write(
-      `unknown check '${args[0] ?? ''}'; known: ${DOCKER_CHECKS.map((c) => c.name).join(', ')}\n`,
+      `unknown check '${args[0] ?? ''}'; known: ${matrixEntries(DOCKER_CHECKS.map((c) => c.name)).join(', ')}\n`,
+    );
+    return 2;
+  }
+  // A leg the table does not declare is refused rather than run as the whole check: a typo would
+  // otherwise run both legs in one job and read as the leg passing.
+  if (leg !== undefined && !(check.legs ?? []).includes(leg)) {
+    process.stderr.write(
+      `unknown leg '${leg}' of ${check.name}; its legs: ${(check.legs ?? []).join(', ') || 'none'}\n`,
     );
     return 2;
   }
   const result = spawnSync(
     process.execPath,
-    [fileURLToPath(new URL(`${check.name}.mjs`, import.meta.url))],
+    [
+      fileURLToPath(new URL(`${check.name}.mjs`, import.meta.url)),
+      ...(leg === undefined ? [] : ['--leg', leg]),
+    ],
     {
       stdio: 'inherit',
     },

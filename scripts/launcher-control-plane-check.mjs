@@ -307,6 +307,7 @@ const RELABELLED_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000151a';
  */
 const cliArgs = process.argv.slice(2).filter((arg) => arg !== REAL_MODEL_FLAG);
 const FLAGS = [
+  '--leg',
   '--runner-image',
   '--observe-shim-ms',
   '--no-route-stall-ms',
@@ -318,6 +319,27 @@ const flagValue = (flag) => {
   return index === -1 ? undefined : (cliArgs[index + 1] ?? null);
 };
 const RUNNER_IMAGE = flagValue('--runner-image') ?? null;
+/**
+ * `--leg <runs|restarts>`: run one of the check's two halves, which share nothing but the fixture
+ * and the first launcher, so CI runs them as two jobs side by side (`scripts/docker-checks.mjs`'s
+ * `legs`, held equal to {@link LEGS} by `scripts/docker-checks.test.ts`). Without it, both run, one
+ * after the other, as they did before the split.
+ *
+ *  - **`runs`** — a run through the control plane and the shim's socket, the CLI's environment and
+ *    git credential, WP-279's refusals, WP-144's shutdown, the real `claude` three ways (backlog 342,
+ *    137, 346), and the host's look at what the runs left;
+ *  - **`restarts`** — the launcher restarted, stopped and killed around a create (backlog 136, 286,
+ *    339, 425), the two-minute watch of unattached shims, and the reaper through the verbs.
+ *
+ * Every `record` is in the shared setup or in exactly one leg. What the split changed is the order,
+ * and one thing a reader of the old order should know: the host's check that a run's container is
+ * gone used to run **after** the reaper's grace-0 pass, which would have removed a container a run
+ * left behind; in the `runs` leg no reaper runs before it, so it now asks the stronger question.
+ */
+const LEGS = ['runs', 'restarts'];
+const LEG = flagValue('--leg');
+const LEG_RUNS = LEG === undefined || LEG === 'runs';
+const LEG_RESTARTS = LEG === undefined || LEG === 'restarts';
 /**
  * `--observe-shim-ms <n>` (WP-103, backlog 286 (c)): how long the oldest unattached run container
  * is watched for before the check reads its state again. Two minutes by default; the WP-103 notes
@@ -366,6 +388,8 @@ const unknownArgs = cliArgs.filter(
 );
 if (
   unknownArgs.length > 0 ||
+  (LEG !== undefined && !LEGS.includes(LEG)) ||
+  (LEG !== undefined && REAL_MODEL.kind === 'on') ||
   flagValue('--runner-image') === null ||
   !Number.isSafeInteger(OBSERVE_SHIM_MS) ||
   OBSERVE_SHIM_MS < 0 ||
@@ -374,7 +398,7 @@ if (
   LAUNCHER_STOP_GRACE_S <= 0
 ) {
   process.stderr.write(
-    `usage: launcher-control-plane-check.mjs [--real-model] [--runner-image <ref>] [--observe-shim-ms <n>] [--no-route-stall-ms <n>] [--no-route-wall-ms <n>] [--launcher-stop-grace-s <n>] (got ${cliArgs.join(' ')}; compose.yml's launcher stop_grace_period: ${String(composeLauncherStopGraceS())})\n`,
+    `usage: launcher-control-plane-check.mjs [--real-model | --leg runs|restarts] [--runner-image <ref>] [--observe-shim-ms <n>] [--no-route-stall-ms <n>] [--no-route-wall-ms <n>] [--launcher-stop-grace-s <n>] (got ${cliArgs.join(' ')}; compose.yml's launcher stop_grace_period: ${String(composeLauncherStopGraceS())})\n`,
   );
   process.exit(2);
 }
@@ -1344,705 +1368,726 @@ try {
   await docker(['rm', '-f', LAUNCHER_NAME, BAD_LAUNCHER_NAME, RELABELLED_LAUNCHER_NAME], {
     allowFailure: true,
   });
+  // Both legs: the fixture and the launcher every phase talks to. The second and third launchers
+  // serve only the runs leg's refusals (backlog 34, WP-151), so the restarts leg starts neither.
   await docker(launcherArgs(LAUNCHER_NAME, fixture, []));
-  await docker(launcherArgs(BAD_LAUNCHER_NAME, fixture, ['-e', 'CHECK_CLI_PATH=/nowhere/claude']));
-  // WP-151: the run image with only its shim-protocol label changed, behind a third launcher.
-  await buildRelabelledImage();
-  await docker(
-    launcherArgs(RELABELLED_LAUNCHER_NAME, fixture, [
-      '-e',
-      `CHECK_RUNTIME_IMAGE=${RELABELLED_IMAGE}`,
-    ]),
-  );
+  if (LEG_RUNS) {
+    await docker(
+      launcherArgs(BAD_LAUNCHER_NAME, fixture, ['-e', 'CHECK_CLI_PATH=/nowhere/claude']),
+    );
+    // WP-151: the run image with only its shim-protocol label changed, behind a third launcher.
+    await buildRelabelledImage();
+    await docker(
+      launcherArgs(RELABELLED_LAUNCHER_NAME, fixture, [
+        '-e',
+        `CHECK_RUNTIME_IMAGE=${RELABELLED_IMAGE}`,
+      ]),
+    );
+  }
 
   const up = await waitForListening(LAUNCHER_NAME);
   record('the launcher container exposes the control plane', up, `${LAUNCHER_NAME}:${PORT}`);
-  const badUp = await waitForListening(BAD_LAUNCHER_NAME);
-  record(
-    'a second launcher is up with a CLI path the run image does not carry',
-    badUp,
-    `${BAD_LAUNCHER_NAME}:${PORT}`,
-  );
-  const relabelledUp = await waitForListening(RELABELLED_LAUNCHER_NAME);
-  record(
-    'WP-151: a third launcher is up on a run image whose shim protocol label is another number',
-    relabelledUp,
-    `${RELABELLED_LAUNCHER_NAME}:${PORT} on ${RELABELLED_IMAGE}`,
-  );
-
-  driven = await runRunner({});
-
-  try {
-    const lines = driven.stdout.split('\n').filter((line) => line.trim().length > 0);
-    report = JSON.parse(lines.at(-1) ?? '{}');
-  } catch {
-    report = null;
+  if (LEG_RUNS) {
+    const badUp = await waitForListening(BAD_LAUNCHER_NAME);
+    record(
+      'a second launcher is up with a CLI path the run image does not carry',
+      badUp,
+      `${BAD_LAUNCHER_NAME}:${PORT}`,
+    );
+    const relabelledUp = await waitForListening(RELABELLED_LAUNCHER_NAME);
+    record(
+      'WP-151: a third launcher is up on a run image whose shim protocol label is another number',
+      relabelledUp,
+      `${RELABELLED_LAUNCHER_NAME}:${PORT} on ${RELABELLED_IMAGE}`,
+    );
   }
 
-  if (report === null) {
-    record(
-      'the runner container produced a report',
-      false,
-      `stdout: ${driven.stdout}\nstderr: ${driven.stderr}`,
+  if (LEG_RUNS) {
+    driven = await runRunner({});
+
+    try {
+      const lines = driven.stdout.split('\n').filter((line) => line.trim().length > 0);
+      report = JSON.parse(lines.at(-1) ?? '{}');
+    } catch {
+      report = null;
+    }
+
+    if (report === null) {
+      record(
+        'the runner container produced a report',
+        false,
+        `stdout: ${driven.stdout}\nstderr: ${driven.stderr}`,
+      );
+    } else {
+      record(
+        'the control plane refuses a wrong token, terminally',
+        report.wrongTokenCode === 'invalid_spec',
+        `code: ${report.wrongTokenCode}`,
+      );
+      record(
+        'the runner reached the launcher over the network and read its configuration',
+        report.health?.status === 'ok' && report.health?.controlRoot === '/run/agentic/ctl',
+        JSON.stringify(report.health ?? null),
+      );
+      record(
+        'the launcher answered the CLI path the run image really carries (backlog 34)',
+        report.claudeCodePath === '/usr/local/bin/claude' &&
+          report.health?.claudeCodePath === '/usr/local/bin/claude',
+        `${report.claudeCodePath} (health: ${report.health?.claudeCodePath})`,
+      );
+      record(
+        'a wrong CLI path fails by name on the platform side, before a container exists',
+        typeof report.wrongCliPathError === 'string' &&
+          report.wrongCliPathError.includes('/nowhere/claude') &&
+          report.wrongCliPathError.includes(RUNTIME_IMAGE),
+        String(report.wrongCliPathError),
+      );
+      const relabelled = report.relabelledImageError;
+      const relabelledLeft = await runObjects(RELABELLED_RUN_ID);
+      record(
+        'WP-151: a run image declaring another shim protocol is refused as invalid_spec, naming the image and both numbers, before a container exists',
+        typeof relabelled === 'string' &&
+          relabelled.startsWith('invalid_spec/runtime_image_protocol_mismatch: ') &&
+          relabelled.includes(
+            `the run image ${RELABELLED_IMAGE} declares shim protocol ${String(RUNLET_PROTOCOL_VERSION - 1)}, and the runner speaks protocol ${String(RUNLET_PROTOCOL_VERSION)}`,
+          ) &&
+          relabelledLeft.containers.length === 0 &&
+          relabelledLeft.networks.length === 0,
+        `${String(relabelled)} | left: ${JSON.stringify(relabelledLeft)}`,
+      );
+      record(
+        'the workspace’s CLI path reached the bytes the SDK spawned with (rule 82)',
+        report.spawnCommand === '/repo/test/fixtures/runlet/fake-claude-cli',
+        `command: ${report.spawnCommand}`,
+      );
+      record(
+        'the control socket is on the shared ctl volume, under the runner’s own root',
+        typeof report.socketPath === 'string' &&
+          report.socketPath.startsWith('/run/agentic/ctl/') &&
+          report.socketPath.includes(RUN_ID) &&
+          report.workdir === '/work/repo',
+        `${report.socketPath} in ${report.workdir}`,
+      );
+      record(
+        '`spec.checkoutRef` reached the workspace spec (backlog 71)',
+        report.checkoutBranch === 'agentic/wp53-check',
+        `checkoutBranch: ${report.checkoutBranch}`,
+      );
+      record(
+        'the run is read-only and was minted nothing, so the launcher holds no git credential',
+        report.credentialScope === null,
+        `credentialScope: ${report.credentialScope}`,
+      );
+      record(
+        'a run started, streamed and ended through the control plane and the shim’s socket',
+        report.status === 'completed' && report.terminalReason === 'success',
+        `${report.status}/${report.terminalReason}${
+          report.ok === true
+            ? ''
+            : ` | ${report.outcomeError ?? ''} | ${(report.notes ?? []).join(' | ')}`
+        }`,
+      );
+      record(
+        'the CLI’s own output reached the platform’s transcript',
+        typeof report.text === 'string' && report.text.includes('the shim carried this'),
+        `entries: ${(report.kinds ?? []).join(', ')}`,
+      );
+      record(
+        'the workspace was released with the run’s own ending',
+        Array.isArray(report.releases) &&
+          report.releases.length === 1 &&
+          report.releases[0]?.kind === 'ended' &&
+          report.releases[0]?.status === 'completed',
+        JSON.stringify(report.releases ?? []),
+      );
+      record(
+        'a replayed create answers the stored handle (TD-028 decision 4)',
+        report.replayed === true && report.replayedHandleMatches === true,
+        `replayed: ${report.replayed}, same handle: ${report.replayedHandleMatches}`,
+      );
+    }
+
+    // WP-118 (PROGRESS backlog 342): which of the container's variables reached the process the
+    // shim started. The spec carries the model credential and nothing else, as production's does.
+    const environ = report === null ? null : environFindings(report.environ);
+    process.stdout.write(
+      `--- backlog 342: the CLI's environment (names) ---\n${JSON.stringify(report?.environ ?? null)}\n`,
     );
-  } else {
     record(
-      'the control plane refuses a wrong token, terminally',
-      report.wrongTokenCode === 'invalid_spec',
-      `code: ${report.wrongTokenCode}`,
+      'backlog 342: the CLI started from a production-shaped spec and reported its environment',
+      report?.environ?.source === '/proc/self/environ',
+      report?.environ === null || report?.environ === undefined
+        ? `no report in the transcript; the run ended ${report?.status}/${report?.terminalReason}`
+        : `${report.environ.names.length} names`,
     );
     record(
-      'the runner reached the launcher over the network and read its configuration',
-      report.health?.status === 'ok' && report.health?.controlRoot === '/run/agentic/ctl',
-      JSON.stringify(report.health ?? null),
+      'backlog 342: the CLI’s environment carries HTTPS_PROXY, HTTP_PROXY and NO_PROXY (the run has a sidecar)',
+      environ !== null && report?.environ != null && environ.proxy.length === 0,
+      `missing: ${JSON.stringify(environ?.proxy ?? null)}`,
     );
     record(
-      'the launcher answered the CLI path the run image really carries (backlog 34)',
-      report.claudeCodePath === '/usr/local/bin/claude' &&
-        report.health?.claudeCodePath === '/usr/local/bin/claude',
-      `${report.claudeCodePath} (health: ${report.health?.claudeCodePath})`,
+      'backlog 342: the CLI’s environment carries HOME, CLAUDE_CONFIG_DIR and PATH',
+      environ !== null && report?.environ != null && environ.container.length === 0,
+      `missing: ${JSON.stringify(environ?.container ?? null)}`,
     );
     record(
-      'a wrong CLI path fails by name on the platform side, before a container exists',
-      typeof report.wrongCliPathError === 'string' &&
-        report.wrongCliPathError.includes('/nowhere/claude') &&
-        report.wrongCliPathError.includes(RUNTIME_IMAGE),
-      String(report.wrongCliPathError),
-    );
-    const relabelled = report.relabelledImageError;
-    const relabelledLeft = await runObjects(RELABELLED_RUN_ID);
-    record(
-      'WP-151: a run image declaring another shim protocol is refused as invalid_spec, naming the image and both numbers, before a container exists',
-      typeof relabelled === 'string' &&
-        relabelled.startsWith('invalid_spec/runtime_image_protocol_mismatch: ') &&
-        relabelled.includes(
-          `the run image ${RELABELLED_IMAGE} declares shim protocol ${String(RUNLET_PROTOCOL_VERSION - 1)}, and the runner speaks protocol ${String(RUNLET_PROTOCOL_VERSION)}`,
-        ) &&
-        relabelledLeft.containers.length === 0 &&
-        relabelledLeft.networks.length === 0,
-      `${String(relabelled)} | left: ${JSON.stringify(relabelledLeft)}`,
+      'backlog 342: no RUNLET_* name reached the CLI',
+      environ !== null && report?.environ != null && environ.runlet.length === 0,
+      `RUNLET_*: ${JSON.stringify(environ?.runlet ?? null)}`,
     );
     record(
-      'the workspace’s CLI path reached the bytes the SDK spawned with (rule 82)',
-      report.spawnCommand === '/repo/test/fixtures/runlet/fake-claude-cli',
-      `command: ${report.spawnCommand}`,
+      `backlog 342, 481 and 488: one git list, GIT_CONFIG_COUNT=${EXPECTED_GIT_KEYS.length}, ${EXPECTED_GIT_KEYS.join(', ')}`,
+      environ !== null &&
+        environ.git.count === String(EXPECTED_GIT_KEYS.length) &&
+        JSON.stringify(environ.git.keys) === JSON.stringify(EXPECTED_GIT_KEYS),
+      JSON.stringify(environ?.git ?? null),
+    );
+
+    // WP-118 review round 1: the credential helper the CLI's git runs finds the shim.
+    const gitCredential = lastJsonLine(
+      await runRunner(
+        { CHECK_PHASE: 'git-credential', CHECK_GIT_CREDENTIAL_RUN_ID: GIT_CREDENTIAL_RUN_ID },
+        { name: 'agentic-wp118-runner-git-credential' },
+      ),
     );
     record(
-      'the control socket is on the shared ctl volume, under the runner’s own root',
-      typeof report.socketPath === 'string' &&
-        report.socketPath.startsWith('/run/agentic/ctl/') &&
-        report.socketPath.includes(RUN_ID) &&
-        report.workdir === '/work/repo',
-      `${report.socketPath} in ${report.workdir}`,
+      'the CLI’s git, with the CLI’s environment, gets the run credential from the shim’s cred.get for the project’s repository (WP-118 review, backlog 481)',
+      gitCredential?.ok === true &&
+        gitCredential.username === 'agentic-wp118' &&
+        gitCredential.passwordMatches === true,
+      JSON.stringify({
+        helper: gitCredential?.helper,
+        exitCode: gitCredential?.exitCode,
+        projectExit: gitCredential?.projectExit,
+        username: gitCredential?.username,
+        passwordMatches: gitCredential?.passwordMatches,
+        error: gitCredential?.error,
+        notes: gitCredential?.notes,
+      }),
     );
     record(
-      '`spec.checkoutRef` reached the workspace spec (backlog 71)',
-      report.checkoutBranch === 'agentic/wp53-check',
-      `checkoutBranch: ${report.checkoutBranch}`,
+      'backlog 481: the same git, host and run get no credential for another repository on the git host',
+      gitCredential?.otherRefused === true,
+      JSON.stringify({
+        otherExit: gitCredential?.otherExit,
+        otherRefused: gitCredential?.otherRefused,
+      }),
+    );
+
+    // WP-279 (TD-031 decision 4): the launcher writes the skills it is given and runs only the digests
+    // it is told — the two refusals, against the real launcher and daemon, and the honest control.
+    const wp279 = lastJsonLine(
+      await runRunner(
+        { CHECK_PHASE: 'wp279-refusals', CHECK_WP279_RUN_IDS: WP279_RUN_IDS.join(',') },
+        { name: 'agentic-wp279-runner-refusals' },
+      ),
+    );
+    const wp279Left = await Promise.all(WP279_RUN_IDS.map((runId) => runObjects(runId)));
+    process.stdout.write(
+      `--- WP-279: skills and images from the request ---\n${JSON.stringify({ wp279, wp279Left }, null, 2)}\n`,
     );
     record(
-      'the run is read-only and was minted nothing, so the launcher holds no git credential',
-      report.credentialScope === null,
-      `credentialScope: ${report.credentialScope}`,
+      'WP-279: the launcher answers its configured run and egress images by digest on /v1/health',
+      /^sha256:[0-9a-f]{64}$/.test(wp279?.healthImages?.run ?? '') &&
+        /^sha256:[0-9a-f]{64}$/.test(wp279?.healthImages?.egress ?? '') &&
+        wp279?.carriage === 'carried',
+      JSON.stringify({ images: wp279?.healthImages, carriage: wp279?.carriage }),
     );
     record(
-      'a run started, streamed and ended through the control plane and the shim’s socket',
-      report.status === 'completed' && report.terminalReason === 'success',
-      `${report.status}/${report.terminalReason}${
-        report.ok === true
-          ? ''
-          : ` | ${report.outcomeError ?? ''} | ${(report.notes ?? []).join(' | ')}`
+      'WP-279: skills whose digest is not their bytes’ are refused invalid_spec (skill_set_invalid), nothing created',
+      wp279?.skill?.created === false &&
+        wp279.skill.code === 'invalid_spec' &&
+        wp279.skill.reason === 'skill_set_invalid' &&
+        wp279Left[0]?.containers.length === 0 &&
+        wp279Left[0]?.networks.length === 0,
+      JSON.stringify({ skill: wp279?.skill, left: wp279Left[0] }),
+    );
+    record(
+      'WP-279: an image digest the daemon does not hold is refused invalid_spec naming it, never pulled, nothing created',
+      wp279?.image?.created === false &&
+        wp279.image.code === 'invalid_spec' &&
+        wp279.image.reason === 'image_not_local' &&
+        String(wp279.image.message).includes(wp279.absentDigest) &&
+        wp279Left[1]?.containers.length === 0 &&
+        wp279Left[1]?.networks.length === 0,
+      JSON.stringify({ image: wp279?.image, left: wp279Left[1] }),
+    );
+    record(
+      'WP-279: the same create with the honest skills and the launcher’s own digests starts and ends',
+      wp279?.honest?.created === true &&
+        wp279Left[2]?.containers.length === 0 &&
+        wp279Left[2]?.networks.length === 0,
+      JSON.stringify({ honest: wp279?.honest, left: wp279Left[2] }),
+    );
+
+    // WP-144: the runner's own stop on a live session, timed through the workspace's release.
+    const shutdown = lastJsonLine(
+      await runRunner(
+        { CHECK_PHASE: 'shutdown', CHECK_SHUTDOWN_RUN_ID: SHUTDOWN_RUN_ID },
+        { name: 'agentic-wp144-runner-shutdown' },
+      ),
+    );
+    const shutdownLeft = await runObjectsFull(SHUTDOWN_RUN_ID);
+    process.stdout.write(
+      `--- WP-144: a live run stopped for shutdown ---\n${JSON.stringify({ shutdown, shutdownLeft }, null, 2)}\n`,
+    );
+    record(
+      `WP-144: a live run stopped for shutdown ends failed/shutdown inside ${SHUTDOWN_BUDGET_MS / 1000} s, its workspace released`,
+      shutdown?.ok === true &&
+        shutdown.live === true &&
+        shutdown.status === 'failed' &&
+        shutdown.terminalReason === 'shutdown' &&
+        typeof shutdown.stopMs === 'number' &&
+        shutdown.stopMs < SHUTDOWN_BUDGET_MS &&
+        shutdownLeft.containers.length === 0 &&
+        shutdownLeft.networks.length === 0 &&
+        shutdownLeft.controlDirectory === false,
+      JSON.stringify({
+        stopMs: shutdown?.stopMs,
+        status: shutdown?.status,
+        terminalReason: shutdown?.terminalReason,
+        costUnmeasured: shutdown?.costUnmeasured,
+        releases: shutdown?.releases,
+        left: shutdownLeft,
+        error: shutdown?.error,
+      }),
+    );
+
+    realCli = await measureRealCli();
+    process.stdout.write(
+      `--- backlog 342 (a): the real CLI ---\n${JSON.stringify(realCli, null, 2)}\n`,
+    );
+    record(
+      'backlog 342 (a): the real CLI’s CONNECT api.anthropic.com reached the sidecar',
+      (realCli.sidecarLog ?? []).some(
+        (line) => line.includes('filtered domain') && line.includes('api.anthropic.com'),
+      ),
+      `claudeCodePath ${realCli.told?.claudeCodePath}; sidecar: ${JSON.stringify((realCli.sidecarLog ?? []).filter((line) => line.includes('api.anthropic.com')).slice(0, 2))}`,
+    );
+    record(
+      'backlog 342 (a): how the real CLI ended with a fake key and no model host (observation)',
+      realCli.told !== null,
+      JSON.stringify({
+        status: realCli.told?.status,
+        terminalReason: realCli.told?.terminalReason,
+        error: realCli.told?.error,
+        stderr: (realCli.told?.stderr ?? '').slice(-400),
+      }),
+    );
+
+    // WP-133 (backlog 137, its `local`-mode half): the real CLI as `compose.local.yml` runs it — the
+    // server's own `agentRunEnvironment` for `local` mode with an obviously fake subscription token,
+    // under the stock model host list. It reaches `api.anthropic.com`, which refuses the token; every
+    // host it asked for that is not on the run's list is in the sidecar's log.
+    localCli = await measureRealCli({
+      runId: LOCAL_CLI_RUN_ID,
+      mode: 'local',
+      modelHosts: STOCK_MODEL_EGRESS_HOSTS,
+      name: 'agentic-wp133-runner-local-cli',
+    });
+    const localText = JSON.stringify(localCli.told ?? {});
+    process.stdout.write(
+      `--- backlog 137 (local): the real CLI with a fake subscription token ---\n${JSON.stringify(
+        {
+          mode: localCli.told?.mode,
+          status: localCli.told?.status,
+          terminalReason: localCli.told?.terminalReason,
+          outcomeError: localCli.told?.outcomeError,
+          error: localCli.told?.error,
+          egressHosts: localCli.told?.egressHosts,
+          refusedHosts: localCli.refusedHosts,
+          sidecarLog: localCli.sidecarLog,
+          stderr: (localCli.told?.stderr ?? '').slice(-1_500),
+          transcript: (localCli.told?.transcript ?? '').slice(-2_500),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    record(
+      'backlog 137 (local): the run carries the server’s local-mode environment — CLAUDE_CODE_OAUTH_TOKEN by name, and nothing else (WP-133)',
+      JSON.stringify(localCli.told?.envNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]' &&
+        JSON.stringify(localCli.told?.secretEnvNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]',
+      JSON.stringify({
+        env: localCli.told?.envNames,
+        secretEnvNames: localCli.told?.secretEnvNames,
+      }),
+    );
+    record(
+      'backlog 137 (local): the run’s egress list is the stock model hosts and the git host (WP-133)',
+      JSON.stringify([...(localCli.told?.egressHosts ?? [])].sort()) ===
+        JSON.stringify([...STOCK_MODEL_EGRESS_HOSTS, fixture.repoContainer].sort()),
+      JSON.stringify({ egress: localCli.told?.egressHosts, stock: STOCK_MODEL_EGRESS_HOSTS }),
+    );
+    record(
+      'backlog 137 (local): the CLI reached the model host and was refused the fake subscription token (WP-133)',
+      // The CLI's own `api_retry` carries the status the model API answered: 401 is the API refusing
+      // the token, which it can only do once the request has crossed the sidecar to it.
+      (localCli.told?.transcript ?? '').includes('"error_status":401'),
+      JSON.stringify({
+        status: localCli.told?.status,
+        outcomeError: (localCli.told?.outcomeError ?? '').slice(0, 300),
+        error: (localCli.told?.error ?? '').slice(0, 300),
+      }),
+    );
+    record(
+      'backlog 137 (local): the sidecar refused no host — every host the CLI asked for is on the run’s list (WP-133)',
+      Array.isArray(localCli.refusedHosts) && localCli.refusedHosts.length === 0,
+      JSON.stringify({ refused: localCli.refusedHosts, lines: (localCli.sidecarLog ?? []).length }),
+    );
+    const launcherAfterLocal = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
+    const tokenSeen = [
+      [
+        'the runner’s record',
+        localCli.told?.leaked === true || localText.includes(FAKE_OAUTH_TOKEN),
+      ],
+      [
+        'the sidecar’s log',
+        (localCli.sidecarLog ?? []).some((line) => line.includes(FAKE_OAUTH_TOKEN)),
+      ],
+      [
+        'the launcher’s log',
+        `${launcherAfterLocal.stdout}${launcherAfterLocal.stderr}`.includes(FAKE_OAUTH_TOKEN),
+      ],
+    ]
+      .filter(([, seen]) => seen)
+      .map(([where]) => where);
+    record(
+      'backlog 137 (local): the token’s value is in no record and no log line, only its name (WP-133)',
+      localCli.told !== null && localCli.told?.leaked === false && tokenSeen.length === 0,
+      tokenSeen.length === 0
+        ? `leaked: ${String(localCli.told?.leaked)}`
+        : `seen in ${tokenSeen.join(', ')}`,
+    );
+
+    // WP-127 (backlog 346): the real CLI with its sidecar stopped. The retry sequence is printed
+    // whole; what is asserted is that the run ended `stalled` naming the route, which is what the
+    // shipped stall does once an `api_retry` is not progress — when the stall is shorter than the
+    // wall clock (the default flags). With both past the CLI's give-up, the ending is the CLI's own.
+    noRoute = await measureNoRoute();
+    process.stdout.write(
+      `--- backlog 346: the real CLI with no route to the model ---\n${JSON.stringify(noRoute, null, 2)}\n`,
+    );
+    record(
+      'backlog 346: the sidecar was stopped before the CLI started, and the CLI retried the model API',
+      noRoute.stopped?.ok === true &&
+        noRoute.told?.gate === 'sidecar stopped' &&
+        (noRoute.told?.retries ?? []).length > 0 &&
+        noRoute.told?.leaked === false,
+      JSON.stringify({
+        stopped: noRoute.stopped,
+        gate: noRoute.told?.gate,
+        retries: (noRoute.told?.retries ?? []).length,
+        last: (noRoute.told?.retries ?? []).at(-1) ?? null,
+        error: noRoute.told?.error,
+      }),
+    );
+    if (NO_ROUTE_STALL_MS < NO_ROUTE_WALL_MS) {
+      record(
+        'backlog 346: the retries did not hold the run open; it ended stalled, naming the route (WP-127)',
+        noRoute.told?.status === 'stalled' &&
+          typeof noRoute.told?.error === 'string' &&
+          noRoute.told.error.includes('no route to the model host') &&
+          noRoute.told.wallMs < NO_ROUTE_WALL_MS,
+        JSON.stringify({
+          status: noRoute.told?.status,
+          error: noRoute.told?.error,
+          wall_ms: noRoute.told?.wallMs,
+          stall_ms: NO_ROUTE_STALL_MS,
+        }),
+      );
+    } else {
+      record(
+        'backlog 346: with no platform stop before its give-up, the CLI gave up and the run’s error names the route (WP-127)',
+        noRoute.told?.status === 'failed' &&
+          typeof noRoute.told?.error === 'string' &&
+          noRoute.told.error.startsWith('the CLI gave up after retrying') &&
+          noRoute.told.error.includes('no route to the model host'),
+        JSON.stringify({
+          status: noRoute.told?.status,
+          terminalReason: noRoute.told?.terminalReason,
+          error: noRoute.told?.error,
+          wall_ms: noRoute.told?.wallMs,
+          stderr: (noRoute.told?.stderr ?? '').slice(-400),
+        }),
+      );
+    }
+
+    if (report !== null) {
+      record(
+        'the runner found no Agent SDK platform binary package for its own platform (backlog 34)',
+        RUNNER_IMAGE === null ||
+          !(report.sdkPlatformPackages ?? ['?']).some((entry) =>
+            entry.startsWith('@anthropic-ai+claude-agent-sdk-linux-'),
+          ),
+        `${RUNNER_IMAGE ?? RUNTIME_IMAGE + ' + checkout'}: ${JSON.stringify(report.sdkPlatformPackages ?? null)}`,
+      );
+    }
+  }
+
+  if (LEG_RESTARTS) {
+    // Backlog 136, measured (WP-82). What is asserted is what was measured on Docker Engine 29.7.2 /
+    // API 1.55 — the replay is refused at the network (409), rolls nothing back, leaves the live
+    // token alone and starts no second container — so a daemon that behaves differently fails this
+    // check instead of silently falsifying the sentences that quote it. That the first container
+    // outlives the replay is recorded as an observation: it is the orphan, which the reaper below
+    // removes as an unknown run (WP-103).
+    replay = await measureReplayAcrossRestart();
+    const firstContainer = replay.first?.containerId ?? null;
+    record(
+      'backlog 136: the first create succeeded and its run container was running before the restart',
+      replay.first?.ok === true &&
+        replay.beforeRestart.containers.some((line) => line.startsWith(`ws-${REPLAY_RUN_ID} `)),
+      JSON.stringify({ first: replay.first, objects: replay.beforeRestart }),
+    );
+    // WP-132 (backlog 425): with nothing in flight the close has nothing to wait for, so a grace
+    // set for a create costs an ordinary stop nothing. Bounded at a fifth of the grace, far above the
+    // sub-second it should take, so a close that waited on something idle fails here by name.
+    record(
+      `backlog 425: a launcher stopped with nothing in flight exits well inside its ${LAUNCHER_STOP_GRACE_S} s grace (WP-132)`,
+      replay.idleStopMs < (LAUNCHER_STOP_GRACE_S * 1000) / 5,
+      JSON.stringify({ idle_stop_ms: replay.idleStopMs, grace_s: LAUNCHER_STOP_GRACE_S }),
+    );
+    record(
+      'backlog 136: the launcher restarted with an empty idempotency map',
+      replay.restarted,
+      JSON.stringify({ objects: replay.afterRestart }),
+    );
+    record(
+      'backlog 136: the replayed create was refused, not performed a second time',
+      replay.retry !== null && replay.retry.ok === false,
+      JSON.stringify({
+        ok: replay.retry?.ok,
+        replayed: replay.retry?.replayed,
+        errorCode: replay.retry?.errorCode,
+        errorMessage: replay.retry?.errorMessage,
+      }),
+    );
+    record(
+      'backlog 136: the refused replay left the live run’s shim token as it was',
+      replay.retry !== null &&
+        replay.retry.tokenBefore === replay.retry.tokenAfter &&
+        replay.retry.tokenAfter === replay.first?.tokenAfter,
+      `before the replay ${replay.retry?.tokenBefore}, after ${replay.retry?.tokenAfter}, at first create ${replay.first?.tokenAfter} — ${
+        replay.retry?.tokenBefore === replay.retry?.tokenAfter
+          ? 'unchanged'
+          : 'REWRITTEN OR REMOVED'
       }`,
     );
-    record(
-      'the CLI’s own output reached the platform’s transcript',
-      typeof report.text === 'string' && report.text.includes('the shim carried this'),
-      `entries: ${(report.kinds ?? []).join(', ')}`,
+    const runContainers = replay.afterRetry.containers.filter((line) =>
+      line.startsWith(`ws-${REPLAY_RUN_ID} `),
     );
     record(
-      'the workspace was released with the run’s own ending',
-      Array.isArray(report.releases) &&
-        report.releases.length === 1 &&
-        report.releases[0]?.kind === 'ended' &&
-        report.releases[0]?.status === 'completed',
-      JSON.stringify(report.releases ?? []),
+      'backlog 136: the replay left no second run container',
+      runContainers.length <= 1,
+      JSON.stringify(replay.afterRetry),
     );
     record(
-      'a replayed create answers the stored handle (TD-028 decision 4)',
-      report.replayed === true && report.replayedHandleMatches === true,
-      `replayed: ${report.replayed}, same handle: ${report.replayedHandleMatches}`,
+      'backlog 136: whether the first run container outlived the replay (observation)',
+      true,
+      `first ${firstContainer?.slice(0, 12)}; now ${JSON.stringify(runContainers)}`,
     );
-  }
-
-  // WP-118 (PROGRESS backlog 342): which of the container's variables reached the process the
-  // shim started. The spec carries the model credential and nothing else, as production's does.
-  const environ = report === null ? null : environFindings(report.environ);
-  process.stdout.write(
-    `--- backlog 342: the CLI's environment (names) ---\n${JSON.stringify(report?.environ ?? null)}\n`,
-  );
-  record(
-    'backlog 342: the CLI started from a production-shaped spec and reported its environment',
-    report?.environ?.source === '/proc/self/environ',
-    report?.environ === null || report?.environ === undefined
-      ? `no report in the transcript; the run ended ${report?.status}/${report?.terminalReason}`
-      : `${report.environ.names.length} names`,
-  );
-  record(
-    'backlog 342: the CLI’s environment carries HTTPS_PROXY, HTTP_PROXY and NO_PROXY (the run has a sidecar)',
-    environ !== null && report?.environ != null && environ.proxy.length === 0,
-    `missing: ${JSON.stringify(environ?.proxy ?? null)}`,
-  );
-  record(
-    'backlog 342: the CLI’s environment carries HOME, CLAUDE_CONFIG_DIR and PATH',
-    environ !== null && report?.environ != null && environ.container.length === 0,
-    `missing: ${JSON.stringify(environ?.container ?? null)}`,
-  );
-  record(
-    'backlog 342: no RUNLET_* name reached the CLI',
-    environ !== null && report?.environ != null && environ.runlet.length === 0,
-    `RUNLET_*: ${JSON.stringify(environ?.runlet ?? null)}`,
-  );
-  record(
-    `backlog 342, 481 and 488: one git list, GIT_CONFIG_COUNT=${EXPECTED_GIT_KEYS.length}, ${EXPECTED_GIT_KEYS.join(', ')}`,
-    environ !== null &&
-      environ.git.count === String(EXPECTED_GIT_KEYS.length) &&
-      JSON.stringify(environ.git.keys) === JSON.stringify(EXPECTED_GIT_KEYS),
-    JSON.stringify(environ?.git ?? null),
-  );
-
-  // WP-118 review round 1: the credential helper the CLI's git runs finds the shim.
-  const gitCredential = lastJsonLine(
-    await runRunner(
-      { CHECK_PHASE: 'git-credential', CHECK_GIT_CREDENTIAL_RUN_ID: GIT_CREDENTIAL_RUN_ID },
-      { name: 'agentic-wp118-runner-git-credential' },
-    ),
-  );
-  record(
-    'the CLI’s git, with the CLI’s environment, gets the run credential from the shim’s cred.get for the project’s repository (WP-118 review, backlog 481)',
-    gitCredential?.ok === true &&
-      gitCredential.username === 'agentic-wp118' &&
-      gitCredential.passwordMatches === true,
-    JSON.stringify({
-      helper: gitCredential?.helper,
-      exitCode: gitCredential?.exitCode,
-      projectExit: gitCredential?.projectExit,
-      username: gitCredential?.username,
-      passwordMatches: gitCredential?.passwordMatches,
-      error: gitCredential?.error,
-      notes: gitCredential?.notes,
-    }),
-  );
-  record(
-    'backlog 481: the same git, host and run get no credential for another repository on the git host',
-    gitCredential?.otherRefused === true,
-    JSON.stringify({
-      otherExit: gitCredential?.otherExit,
-      otherRefused: gitCredential?.otherRefused,
-    }),
-  );
-
-  // WP-279 (TD-031 decision 4): the launcher writes the skills it is given and runs only the digests
-  // it is told — the two refusals, against the real launcher and daemon, and the honest control.
-  const wp279 = lastJsonLine(
-    await runRunner(
-      { CHECK_PHASE: 'wp279-refusals', CHECK_WP279_RUN_IDS: WP279_RUN_IDS.join(',') },
-      { name: 'agentic-wp279-runner-refusals' },
-    ),
-  );
-  const wp279Left = await Promise.all(WP279_RUN_IDS.map((runId) => runObjects(runId)));
-  process.stdout.write(
-    `--- WP-279: skills and images from the request ---\n${JSON.stringify({ wp279, wp279Left }, null, 2)}\n`,
-  );
-  record(
-    'WP-279: the launcher answers its configured run and egress images by digest on /v1/health',
-    /^sha256:[0-9a-f]{64}$/.test(wp279?.healthImages?.run ?? '') &&
-      /^sha256:[0-9a-f]{64}$/.test(wp279?.healthImages?.egress ?? '') &&
-      wp279?.carriage === 'carried',
-    JSON.stringify({ images: wp279?.healthImages, carriage: wp279?.carriage }),
-  );
-  record(
-    'WP-279: skills whose digest is not their bytes’ are refused invalid_spec (skill_set_invalid), nothing created',
-    wp279?.skill?.created === false &&
-      wp279.skill.code === 'invalid_spec' &&
-      wp279.skill.reason === 'skill_set_invalid' &&
-      wp279Left[0]?.containers.length === 0 &&
-      wp279Left[0]?.networks.length === 0,
-    JSON.stringify({ skill: wp279?.skill, left: wp279Left[0] }),
-  );
-  record(
-    'WP-279: an image digest the daemon does not hold is refused invalid_spec naming it, never pulled, nothing created',
-    wp279?.image?.created === false &&
-      wp279.image.code === 'invalid_spec' &&
-      wp279.image.reason === 'image_not_local' &&
-      String(wp279.image.message).includes(wp279.absentDigest) &&
-      wp279Left[1]?.containers.length === 0 &&
-      wp279Left[1]?.networks.length === 0,
-    JSON.stringify({ image: wp279?.image, left: wp279Left[1] }),
-  );
-  record(
-    'WP-279: the same create with the honest skills and the launcher’s own digests starts and ends',
-    wp279?.honest?.created === true &&
-      wp279Left[2]?.containers.length === 0 &&
-      wp279Left[2]?.networks.length === 0,
-    JSON.stringify({ honest: wp279?.honest, left: wp279Left[2] }),
-  );
-
-  // WP-144: the runner's own stop on a live session, timed through the workspace's release.
-  const shutdown = lastJsonLine(
-    await runRunner(
-      { CHECK_PHASE: 'shutdown', CHECK_SHUTDOWN_RUN_ID: SHUTDOWN_RUN_ID },
-      { name: 'agentic-wp144-runner-shutdown' },
-    ),
-  );
-  const shutdownLeft = await runObjectsFull(SHUTDOWN_RUN_ID);
-  process.stdout.write(
-    `--- WP-144: a live run stopped for shutdown ---\n${JSON.stringify({ shutdown, shutdownLeft }, null, 2)}\n`,
-  );
-  record(
-    `WP-144: a live run stopped for shutdown ends failed/shutdown inside ${SHUTDOWN_BUDGET_MS / 1000} s, its workspace released`,
-    shutdown?.ok === true &&
-      shutdown.live === true &&
-      shutdown.status === 'failed' &&
-      shutdown.terminalReason === 'shutdown' &&
-      typeof shutdown.stopMs === 'number' &&
-      shutdown.stopMs < SHUTDOWN_BUDGET_MS &&
-      shutdownLeft.containers.length === 0 &&
-      shutdownLeft.networks.length === 0 &&
-      shutdownLeft.controlDirectory === false,
-    JSON.stringify({
-      stopMs: shutdown?.stopMs,
-      status: shutdown?.status,
-      terminalReason: shutdown?.terminalReason,
-      costUnmeasured: shutdown?.costUnmeasured,
-      releases: shutdown?.releases,
-      left: shutdownLeft,
-      error: shutdown?.error,
-    }),
-  );
-
-  realCli = await measureRealCli();
-  process.stdout.write(
-    `--- backlog 342 (a): the real CLI ---\n${JSON.stringify(realCli, null, 2)}\n`,
-  );
-  record(
-    'backlog 342 (a): the real CLI’s CONNECT api.anthropic.com reached the sidecar',
-    (realCli.sidecarLog ?? []).some(
-      (line) => line.includes('filtered domain') && line.includes('api.anthropic.com'),
-    ),
-    `claudeCodePath ${realCli.told?.claudeCodePath}; sidecar: ${JSON.stringify((realCli.sidecarLog ?? []).filter((line) => line.includes('api.anthropic.com')).slice(0, 2))}`,
-  );
-  record(
-    'backlog 342 (a): how the real CLI ended with a fake key and no model host (observation)',
-    realCli.told !== null,
-    JSON.stringify({
-      status: realCli.told?.status,
-      terminalReason: realCli.told?.terminalReason,
-      error: realCli.told?.error,
-      stderr: (realCli.told?.stderr ?? '').slice(-400),
-    }),
-  );
-
-  // WP-133 (backlog 137, its `local`-mode half): the real CLI as `compose.local.yml` runs it — the
-  // server's own `agentRunEnvironment` for `local` mode with an obviously fake subscription token,
-  // under the stock model host list. It reaches `api.anthropic.com`, which refuses the token; every
-  // host it asked for that is not on the run's list is in the sidecar's log.
-  localCli = await measureRealCli({
-    runId: LOCAL_CLI_RUN_ID,
-    mode: 'local',
-    modelHosts: STOCK_MODEL_EGRESS_HOSTS,
-    name: 'agentic-wp133-runner-local-cli',
-  });
-  const localText = JSON.stringify(localCli.told ?? {});
-  process.stdout.write(
-    `--- backlog 137 (local): the real CLI with a fake subscription token ---\n${JSON.stringify(
-      {
-        mode: localCli.told?.mode,
-        status: localCli.told?.status,
-        terminalReason: localCli.told?.terminalReason,
-        outcomeError: localCli.told?.outcomeError,
-        error: localCli.told?.error,
-        egressHosts: localCli.told?.egressHosts,
-        refusedHosts: localCli.refusedHosts,
-        sidecarLog: localCli.sidecarLog,
-        stderr: (localCli.told?.stderr ?? '').slice(-1_500),
-        transcript: (localCli.told?.transcript ?? '').slice(-2_500),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  record(
-    'backlog 137 (local): the run carries the server’s local-mode environment — CLAUDE_CODE_OAUTH_TOKEN by name, and nothing else (WP-133)',
-    JSON.stringify(localCli.told?.envNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]' &&
-      JSON.stringify(localCli.told?.secretEnvNames) === '["CLAUDE_CODE_OAUTH_TOKEN"]',
-    JSON.stringify({
-      env: localCli.told?.envNames,
-      secretEnvNames: localCli.told?.secretEnvNames,
-    }),
-  );
-  record(
-    'backlog 137 (local): the run’s egress list is the stock model hosts and the git host (WP-133)',
-    JSON.stringify([...(localCli.told?.egressHosts ?? [])].sort()) ===
-      JSON.stringify([...STOCK_MODEL_EGRESS_HOSTS, fixture.repoContainer].sort()),
-    JSON.stringify({ egress: localCli.told?.egressHosts, stock: STOCK_MODEL_EGRESS_HOSTS }),
-  );
-  record(
-    'backlog 137 (local): the CLI reached the model host and was refused the fake subscription token (WP-133)',
-    // The CLI's own `api_retry` carries the status the model API answered: 401 is the API refusing
-    // the token, which it can only do once the request has crossed the sidecar to it.
-    (localCli.told?.transcript ?? '').includes('"error_status":401'),
-    JSON.stringify({
-      status: localCli.told?.status,
-      outcomeError: (localCli.told?.outcomeError ?? '').slice(0, 300),
-      error: (localCli.told?.error ?? '').slice(0, 300),
-    }),
-  );
-  record(
-    'backlog 137 (local): the sidecar refused no host — every host the CLI asked for is on the run’s list (WP-133)',
-    Array.isArray(localCli.refusedHosts) && localCli.refusedHosts.length === 0,
-    JSON.stringify({ refused: localCli.refusedHosts, lines: (localCli.sidecarLog ?? []).length }),
-  );
-  const launcherAfterLocal = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
-  const tokenSeen = [
-    ['the runner’s record', localCli.told?.leaked === true || localText.includes(FAKE_OAUTH_TOKEN)],
-    [
-      'the sidecar’s log',
-      (localCli.sidecarLog ?? []).some((line) => line.includes(FAKE_OAUTH_TOKEN)),
-    ],
-    [
-      'the launcher’s log',
-      `${launcherAfterLocal.stdout}${launcherAfterLocal.stderr}`.includes(FAKE_OAUTH_TOKEN),
-    ],
-  ]
-    .filter(([, seen]) => seen)
-    .map(([where]) => where);
-  record(
-    'backlog 137 (local): the token’s value is in no record and no log line, only its name (WP-133)',
-    localCli.told !== null && localCli.told?.leaked === false && tokenSeen.length === 0,
-    tokenSeen.length === 0
-      ? `leaked: ${String(localCli.told?.leaked)}`
-      : `seen in ${tokenSeen.join(', ')}`,
-  );
-
-  // WP-127 (backlog 346): the real CLI with its sidecar stopped. The retry sequence is printed
-  // whole; what is asserted is that the run ended `stalled` naming the route, which is what the
-  // shipped stall does once an `api_retry` is not progress — when the stall is shorter than the
-  // wall clock (the default flags). With both past the CLI's give-up, the ending is the CLI's own.
-  noRoute = await measureNoRoute();
-  process.stdout.write(
-    `--- backlog 346: the real CLI with no route to the model ---\n${JSON.stringify(noRoute, null, 2)}\n`,
-  );
-  record(
-    'backlog 346: the sidecar was stopped before the CLI started, and the CLI retried the model API',
-    noRoute.stopped?.ok === true &&
-      noRoute.told?.gate === 'sidecar stopped' &&
-      (noRoute.told?.retries ?? []).length > 0 &&
-      noRoute.told?.leaked === false,
-    JSON.stringify({
-      stopped: noRoute.stopped,
-      gate: noRoute.told?.gate,
-      retries: (noRoute.told?.retries ?? []).length,
-      last: (noRoute.told?.retries ?? []).at(-1) ?? null,
-      error: noRoute.told?.error,
-    }),
-  );
-  if (NO_ROUTE_STALL_MS < NO_ROUTE_WALL_MS) {
-    record(
-      'backlog 346: the retries did not hold the run open; it ended stalled, naming the route (WP-127)',
-      noRoute.told?.status === 'stalled' &&
-        typeof noRoute.told?.error === 'string' &&
-        noRoute.told.error.includes('no route to the model host') &&
-        noRoute.told.wallMs < NO_ROUTE_WALL_MS,
-      JSON.stringify({
-        status: noRoute.told?.status,
-        error: noRoute.told?.error,
-        wall_ms: noRoute.told?.wallMs,
-        stall_ms: NO_ROUTE_STALL_MS,
-      }),
+    process.stdout.write(
+      `--- backlog 136 launcher log after the restart ---\n${replay.launcherLog.stdout}\n${replay.launcherLog.stderr}\n`,
     );
-  } else {
-    record(
-      'backlog 346: with no platform stop before its give-up, the CLI gave up and the run’s error names the route (WP-127)',
-      noRoute.told?.status === 'failed' &&
-        typeof noRoute.told?.error === 'string' &&
-        noRoute.told.error.startsWith('the CLI gave up after retrying') &&
-        noRoute.told.error.includes('no route to the model host'),
-      JSON.stringify({
-        status: noRoute.told?.status,
-        terminalReason: noRoute.told?.terminalReason,
-        error: noRoute.told?.error,
-        wall_ms: noRoute.told?.wallMs,
-        stderr: (noRoute.told?.stderr ?? '').slice(-400),
-      }),
-    );
-  }
 
-  if (report !== null) {
+    // Backlog 286 (WP-103). Criterion 1 measured these before the fix was chosen (the numbers are in
+    // the entry); what is asserted now is what the fix changed, and what it deliberately did not.
+    orphans = {
+      stop: await measureRestartDuringCreate(RESTART_STOP_RUN_ID, 'stop'),
+      kill: await measureRestartDuringCreate(RESTART_KILL_RUN_ID, 'kill'),
+      timeout: await measureCreateOutlivingTimeout(),
+    };
+    // (c) is observed on the unattached run containers still up: the 136 replay's first run, which
+    // nothing ever attached to after the restart.
+    orphans.shims = await observeUnattachedShims(OBSERVE_SHIM_MS);
+    orphans.reap = await reapThroughTheVerbs();
+    process.stdout.write(`--- backlog 286 measurement ---\n${JSON.stringify(orphans, null, 2)}\n`);
+    for (const how of ['stop', 'kill']) {
+      const measured = orphans[how];
+      record(
+        how === 'stop'
+          ? 'backlog 286 (a) and 425: a launcher stopped during a create answers it, under compose.yml’s own grace (WP-132)'
+          : 'backlog 286 (a): a launcher killed during a create is not answered, and leaves objects behind (measured)',
+        measured.networkAfterMs !== null &&
+          measured.restarted &&
+          // WP-132 (backlog 425): under the launcher's own `stop_grace_period` a stop during a create
+          // is drained and the create **answered** — the only ending accepted for a stop. A kill
+          // still leaves its objects for the reaper.
+          ((how === 'stop' && measured.told?.ok === true) ||
+            (how === 'kill' &&
+              measured.told?.ok === false &&
+              measured.told?.errorCode === 'engine_unavailable' &&
+              measured.afterDown.networks.length === 1 &&
+              !measured.afterDown.containers.some((line) => line.startsWith('ws-')))),
+        JSON.stringify({
+          told: measured.told?.errorCode,
+          cause: measured.told?.errorCause,
+          down_ms: measured.downMs,
+          launcher: measured.launcherTail.filter((line) => line.startsWith('launcher ')).slice(-3),
+          after_down: measured.afterDown,
+        }),
+      );
+    }
+    // WP-127, backlog 339 (b), and WP-132, backlog 425: what a stop does to an in-flight create. The
+    // close waits for the create. WP-127 measured that under ten seconds the daemon killed the
+    // launcher before its close resolved (exit 137, no close line), and with a 90 s grace the close
+    // resolved 12.1 s after the signal (at load 14). Since WP-132 the launcher has a grace of its own,
+    // set from that measurement with margin (`compose.yml`), so the one ending accepted is the
+    // drained one: SIGTERM logged, the close resolved inside the grace, exit 0, the create answered.
+    {
+      const log = orphans.stop.launcherLog;
+      const has = (prefix) => log.some((line) => line.startsWith(prefix));
+      const closedAfterMs = Number(
+        /^launcher closed after (\d+) ms/.exec(
+          log.find((line) => line.startsWith('launcher closed after')) ?? '',
+        )?.[1] ?? Number.NaN,
+      );
+      const drained =
+        orphans.stop.launcherExitCode === 0 &&
+        Number.isFinite(closedAfterMs) &&
+        closedAfterMs < LAUNCHER_STOP_GRACE_S * 1000 &&
+        orphans.stop.told?.ok === true;
+      record(
+        `backlog 339 and 425: a launcher stopped during a create drains it inside its ${LAUNCHER_STOP_GRACE_S} s grace and answers it (WP-132)`,
+        has('launcher signal: SIGTERM') &&
+          !has('launcher close rejected') &&
+          !has('launcher uncaught') &&
+          !has('launcher unhandled') &&
+          drained,
+        JSON.stringify({
+          ending: drained
+            ? 'drained'
+            : orphans.stop.launcherExitCode === 137
+              ? 'killed at the grace'
+              : 'neither',
+          grace_s: LAUNCHER_STOP_GRACE_S,
+          closed_after_ms: Number.isFinite(closedAfterMs) ? closedAfterMs : null,
+          network_after_ms: orphans.stop.networkAfterMs,
+          exit: orphans.stop.launcherExitCode,
+          down_ms: orphans.stop.downMs,
+          log: log.filter((line) => line.startsWith('launcher ')).slice(-4),
+        }),
+      );
+    }
+    const abandoned = orphans.timeout.launcherLog.filter((line) =>
+      line.includes('a create request closed before its answer was written'),
+    ).length;
     record(
-      'the runner found no Agent SDK platform binary package for its own platform (backlog 34)',
-      RUNNER_IMAGE === null ||
-        !(report.sdkPlatformPackages ?? ['?']).some((entry) =>
-          entry.startsWith('@anthropic-ai+claude-agent-sdk-linux-'),
+      'backlog 286 (b): three creates that outlived the client each told the runner engine_unavailable',
+      (orphans.timeout.told?.attempts ?? []).every(
+        (attempt) => attempt.errorCode === 'engine_unavailable',
+      ) && (orphans.timeout.told?.attempts ?? []).length === TIMEOUT_RUN_IDS.length,
+      JSON.stringify((orphans.timeout.told?.attempts ?? []).map((attempt) => attempt.ms)),
+    );
+    record(
+      'backlog 286 (b): the launcher abandoned every one, so no run container, network or control directory is left (WP-103)',
+      orphans.timeout.abandonedAfterMs !== null &&
+        orphans.timeout.runningRunContainers === 0 &&
+        abandoned === TIMEOUT_RUN_IDS.length &&
+        TIMEOUT_RUN_IDS.every(
+          (runId) =>
+            orphans.timeout.objects[runId].containers.length === 0 &&
+            orphans.timeout.objects[runId].networks.length === 0 &&
+            !orphans.timeout.objects[runId].controlDirectory,
         ),
-      `${RUNNER_IMAGE ?? RUNTIME_IMAGE + ' + checkout'}: ${JSON.stringify(report.sdkPlatformPackages ?? null)}`,
-    );
-  }
-
-  // Backlog 136, measured (WP-82). What is asserted is what was measured on Docker Engine 29.7.2 /
-  // API 1.55 — the replay is refused at the network (409), rolls nothing back, leaves the live
-  // token alone and starts no second container — so a daemon that behaves differently fails this
-  // check instead of silently falsifying the sentences that quote it. That the first container
-  // outlives the replay is recorded as an observation: it is the orphan, which the reaper below
-  // removes as an unknown run (WP-103).
-  replay = await measureReplayAcrossRestart();
-  const firstContainer = replay.first?.containerId ?? null;
-  record(
-    'backlog 136: the first create succeeded and its run container was running before the restart',
-    replay.first?.ok === true &&
-      replay.beforeRestart.containers.some((line) => line.startsWith(`ws-${REPLAY_RUN_ID} `)),
-    JSON.stringify({ first: replay.first, objects: replay.beforeRestart }),
-  );
-  // WP-132 (backlog 425): with nothing in flight the close has nothing to wait for, so a grace
-  // set for a create costs an ordinary stop nothing. Bounded at a fifth of the grace, far above the
-  // sub-second it should take, so a close that waited on something idle fails here by name.
-  record(
-    `backlog 425: a launcher stopped with nothing in flight exits well inside its ${LAUNCHER_STOP_GRACE_S} s grace (WP-132)`,
-    replay.idleStopMs < (LAUNCHER_STOP_GRACE_S * 1000) / 5,
-    JSON.stringify({ idle_stop_ms: replay.idleStopMs, grace_s: LAUNCHER_STOP_GRACE_S }),
-  );
-  record(
-    'backlog 136: the launcher restarted with an empty idempotency map',
-    replay.restarted,
-    JSON.stringify({ objects: replay.afterRestart }),
-  );
-  record(
-    'backlog 136: the replayed create was refused, not performed a second time',
-    replay.retry !== null && replay.retry.ok === false,
-    JSON.stringify({
-      ok: replay.retry?.ok,
-      replayed: replay.retry?.replayed,
-      errorCode: replay.retry?.errorCode,
-      errorMessage: replay.retry?.errorMessage,
-    }),
-  );
-  record(
-    'backlog 136: the refused replay left the live run’s shim token as it was',
-    replay.retry !== null &&
-      replay.retry.tokenBefore === replay.retry.tokenAfter &&
-      replay.retry.tokenAfter === replay.first?.tokenAfter,
-    `before the replay ${replay.retry?.tokenBefore}, after ${replay.retry?.tokenAfter}, at first create ${replay.first?.tokenAfter} — ${
-      replay.retry?.tokenBefore === replay.retry?.tokenAfter ? 'unchanged' : 'REWRITTEN OR REMOVED'
-    }`,
-  );
-  const runContainers = replay.afterRetry.containers.filter((line) =>
-    line.startsWith(`ws-${REPLAY_RUN_ID} `),
-  );
-  record(
-    'backlog 136: the replay left no second run container',
-    runContainers.length <= 1,
-    JSON.stringify(replay.afterRetry),
-  );
-  record(
-    'backlog 136: whether the first run container outlived the replay (observation)',
-    true,
-    `first ${firstContainer?.slice(0, 12)}; now ${JSON.stringify(runContainers)}`,
-  );
-  process.stdout.write(
-    `--- backlog 136 launcher log after the restart ---\n${replay.launcherLog.stdout}\n${replay.launcherLog.stderr}\n`,
-  );
-
-  // Backlog 286 (WP-103). Criterion 1 measured these before the fix was chosen (the numbers are in
-  // the entry); what is asserted now is what the fix changed, and what it deliberately did not.
-  orphans = {
-    stop: await measureRestartDuringCreate(RESTART_STOP_RUN_ID, 'stop'),
-    kill: await measureRestartDuringCreate(RESTART_KILL_RUN_ID, 'kill'),
-    timeout: await measureCreateOutlivingTimeout(),
-  };
-  // (c) is observed on the unattached run containers still up: the 136 replay's first run, which
-  // nothing ever attached to after the restart.
-  orphans.shims = await observeUnattachedShims(OBSERVE_SHIM_MS);
-  orphans.reap = await reapThroughTheVerbs();
-  process.stdout.write(`--- backlog 286 measurement ---\n${JSON.stringify(orphans, null, 2)}\n`);
-  for (const how of ['stop', 'kill']) {
-    const measured = orphans[how];
-    record(
-      how === 'stop'
-        ? 'backlog 286 (a) and 425: a launcher stopped during a create answers it, under compose.yml’s own grace (WP-132)'
-        : 'backlog 286 (a): a launcher killed during a create is not answered, and leaves objects behind (measured)',
-      measured.networkAfterMs !== null &&
-        measured.restarted &&
-        // WP-132 (backlog 425): under the launcher's own `stop_grace_period` a stop during a create
-        // is drained and the create **answered** — the only ending accepted for a stop. A kill
-        // still leaves its objects for the reaper.
-        ((how === 'stop' && measured.told?.ok === true) ||
-          (how === 'kill' &&
-            measured.told?.ok === false &&
-            measured.told?.errorCode === 'engine_unavailable' &&
-            measured.afterDown.networks.length === 1 &&
-            !measured.afterDown.containers.some((line) => line.startsWith('ws-')))),
       JSON.stringify({
-        told: measured.told?.errorCode,
-        cause: measured.told?.errorCause,
-        down_ms: measured.downMs,
-        launcher: measured.launcherTail.filter((line) => line.startsWith('launcher ')).slice(-3),
-        after_down: measured.afterDown,
+        abandoned,
+        abandoned_after_ms: orphans.timeout.abandonedAfterMs,
+        objects: orphans.timeout.objects,
       }),
     );
-  }
-  // WP-127, backlog 339 (b), and WP-132, backlog 425: what a stop does to an in-flight create. The
-  // close waits for the create. WP-127 measured that under ten seconds the daemon killed the
-  // launcher before its close resolved (exit 137, no close line), and with a 90 s grace the close
-  // resolved 12.1 s after the signal (at load 14). Since WP-132 the launcher has a grace of its own,
-  // set from that measurement with margin (`compose.yml`), so the one ending accepted is the
-  // drained one: SIGTERM logged, the close resolved inside the grace, exit 0, the create answered.
-  {
-    const log = orphans.stop.launcherLog;
-    const has = (prefix) => log.some((line) => line.startsWith(prefix));
-    const closedAfterMs = Number(
-      /^launcher closed after (\d+) ms/.exec(
-        log.find((line) => line.startsWith('launcher closed after')) ?? '',
-      )?.[1] ?? Number.NaN,
-    );
-    const drained =
-      orphans.stop.launcherExitCode === 0 &&
-      Number.isFinite(closedAfterMs) &&
-      closedAfterMs < LAUNCHER_STOP_GRACE_S * 1000 &&
-      orphans.stop.told?.ok === true;
     record(
-      `backlog 339 and 425: a launcher stopped during a create drains it inside its ${LAUNCHER_STOP_GRACE_S} s grace and answers it (WP-132)`,
-      has('launcher signal: SIGTERM') &&
-        !has('launcher close rejected') &&
-        !has('launcher uncaught') &&
-        !has('launcher unhandled') &&
-        drained,
-      JSON.stringify({
-        ending: drained
-          ? 'drained'
-          : orphans.stop.launcherExitCode === 137
-            ? 'killed at the grace'
-            : 'neither',
-        grace_s: LAUNCHER_STOP_GRACE_S,
-        closed_after_ms: Number.isFinite(closedAfterMs) ? closedAfterMs : null,
-        network_after_ms: orphans.stop.networkAfterMs,
-        exit: orphans.stop.launcherExitCode,
-        down_ms: orphans.stop.downMs,
-        log: log.filter((line) => line.startsWith('launcher ')).slice(-4),
-      }),
+      'backlog 286 (c): an unattached shim is still running when last looked at (observation)',
+      orphans.shims.second.length > 0 &&
+        orphans.shims.second.every((row) => row.status === 'running'),
+      JSON.stringify(orphans.shims.second),
     );
-  }
-  const abandoned = orphans.timeout.launcherLog.filter((line) =>
-    line.includes('a create request closed before its answer was written'),
-  ).length;
-  record(
-    'backlog 286 (b): three creates that outlived the client each told the runner engine_unavailable',
-    (orphans.timeout.told?.attempts ?? []).every(
-      (attempt) => attempt.errorCode === 'engine_unavailable',
-    ) && (orphans.timeout.told?.attempts ?? []).length === TIMEOUT_RUN_IDS.length,
-    JSON.stringify((orphans.timeout.told?.attempts ?? []).map((attempt) => attempt.ms)),
-  );
-  record(
-    'backlog 286 (b): the launcher abandoned every one, so no run container, network or control directory is left (WP-103)',
-    orphans.timeout.abandonedAfterMs !== null &&
-      orphans.timeout.runningRunContainers === 0 &&
-      abandoned === TIMEOUT_RUN_IDS.length &&
-      TIMEOUT_RUN_IDS.every(
-        (runId) =>
-          orphans.timeout.objects[runId].containers.length === 0 &&
-          orphans.timeout.objects[runId].networks.length === 0 &&
-          !orphans.timeout.objects[runId].controlDirectory,
+    const { first: reapFirst, second: reapSecond } = orphans.reap;
+    record(
+      'the restarted launcher lists, off the daemon, the runs a stop and a kill left (TD-028 decision 12)',
+      [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, NETWORK_ONLY_RUN_ID, REPLAY_RUN_ID].every(
+        (runId) => (reapFirst.told?.listedBefore ?? []).includes(runId),
       ),
-    JSON.stringify({
-      abandoned,
-      abandoned_after_ms: orphans.timeout.abandonedAfterMs,
-      objects: orphans.timeout.objects,
-    }),
-  );
-  record(
-    'backlog 286 (c): an unattached shim is still running when last looked at (observation)',
-    orphans.shims.second.length > 0 &&
-      orphans.shims.second.every((row) => row.status === 'running'),
-    JSON.stringify(orphans.shims.second),
-  );
-  const { first: reapFirst, second: reapSecond } = orphans.reap;
-  record(
-    'the restarted launcher lists, off the daemon, the runs a stop and a kill left (TD-028 decision 12)',
-    [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, NETWORK_ONLY_RUN_ID, REPLAY_RUN_ID].every((runId) =>
-      (reapFirst.told?.listedBefore ?? []).includes(runId),
-    ),
-    JSON.stringify(reapFirst.told?.listedBefore ?? null),
-  );
-  record(
-    'the reaper removed the three terminal runs, one of them only a network, and kept the live one (criterion 2)',
-    JSON.stringify((reapFirst.told?.destroyed ?? []).map((entry) => entry.runId).sort()) ===
-      JSON.stringify([RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, NETWORK_ONLY_RUN_ID].sort()) &&
-      (reapFirst.told?.destroyed ?? []).every((entry) => entry.found === true) &&
-      reapFirst.told?.report?.kept?.run_live === 1 &&
-      reapFirst.replayContainerRunning,
-    JSON.stringify({
-      report: reapFirst.told?.report,
-      replay_running: reapFirst.replayContainerRunning,
-    }),
-  );
-  for (const runId of [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID]) {
-    const left = reapFirst.after[runId];
+      JSON.stringify(reapFirst.told?.listedBefore ?? null),
+    );
     record(
-      `a reaped run has no container, network or control directory left, and keeps its volume (${runId.slice(-4)})`,
-      left.containers.length === 0 &&
-        left.networks.length === 0 &&
-        !left.controlDirectory &&
-        left.volumes.includes(`ws-${runId}`),
-      JSON.stringify(left),
+      'the reaper removed the three terminal runs, one of them only a network, and kept the live one (criterion 2)',
+      JSON.stringify((reapFirst.told?.destroyed ?? []).map((entry) => entry.runId).sort()) ===
+        JSON.stringify([RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, NETWORK_ONLY_RUN_ID].sort()) &&
+        (reapFirst.told?.destroyed ?? []).every((entry) => entry.found === true) &&
+        reapFirst.told?.report?.kept?.run_live === 1 &&
+        reapFirst.replayContainerRunning,
+      JSON.stringify({
+        report: reapFirst.told?.report,
+        replay_running: reapFirst.replayContainerRunning,
+      }),
+    );
+    for (const runId of [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID]) {
+      const left = reapFirst.after[runId];
+      record(
+        `a reaped run has no container, network or control directory left, and keeps its volume (${runId.slice(-4)})`,
+        left.containers.length === 0 &&
+          left.networks.length === 0 &&
+          !left.controlDirectory &&
+          left.volumes.includes(`ws-${runId}`),
+        JSON.stringify(left),
+      );
+    }
+    record(
+      'a run a killed create left with only its network is listed and reaped: no network left (WP-118 pre-review)',
+      reapFirst.after[NETWORK_ONLY_RUN_ID].networks.length === 0 &&
+        reapFirst.after[NETWORK_ONLY_RUN_ID].containers.length === 0,
+      JSON.stringify(reapFirst.after[NETWORK_ONLY_RUN_ID]),
+    );
+    record(
+      'an unknown run past its grace is removed with its sidecar, network and control directory',
+      JSON.stringify((reapSecond.told?.destroyed ?? []).map((entry) => entry.runId)) ===
+        JSON.stringify([REPLAY_RUN_ID]) &&
+        reapSecond.told?.report?.reaped?.unknown === 1 &&
+        reapSecond.after.containers.length === 0 &&
+        reapSecond.after.networks.length === 0 &&
+        !reapSecond.after.controlDirectory,
+      JSON.stringify({ report: reapSecond.told?.report, after: reapSecond.after }),
     );
   }
-  record(
-    'a run a killed create left with only its network is listed and reaped: no network left (WP-118 pre-review)',
-    reapFirst.after[NETWORK_ONLY_RUN_ID].networks.length === 0 &&
-      reapFirst.after[NETWORK_ONLY_RUN_ID].containers.length === 0,
-    JSON.stringify(reapFirst.after[NETWORK_ONLY_RUN_ID]),
-  );
-  record(
-    'an unknown run past its grace is removed with its sidecar, network and control directory',
-    JSON.stringify((reapSecond.told?.destroyed ?? []).map((entry) => entry.runId)) ===
-      JSON.stringify([REPLAY_RUN_ID]) &&
-      reapSecond.told?.report?.reaped?.unknown === 1 &&
-      reapSecond.after.containers.length === 0 &&
-      reapSecond.after.networks.length === 0 &&
-      !reapSecond.after.controlDirectory,
-    JSON.stringify({ report: reapSecond.told?.report, after: reapSecond.after }),
-  );
 
-  if (report?.ok !== true) {
-    const shimLog = await docker(['logs', `ws-${RUN_ID}`], { allowFailure: true });
-    const launcherLog = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
-    process.stderr.write(
-      `--- run container log ---\n${shimLog.stdout}\n${shimLog.stderr}\n--- launcher log ---\n${launcherLog.stdout}\n${launcherLog.stderr}\n--- runner stderr ---\n${driven?.stderr ?? ''}\n`,
+  if (LEG_RUNS) {
+    if (report?.ok !== true) {
+      const shimLog = await docker(['logs', `ws-${RUN_ID}`], { allowFailure: true });
+      const launcherLog = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
+      process.stderr.write(
+        `--- run container log ---\n${shimLog.stdout}\n${shimLog.stderr}\n--- launcher log ---\n${launcherLog.stdout}\n${launcherLog.stderr}\n--- runner stderr ---\n${driven?.stderr ?? ''}\n`,
+      );
+    }
+
+    // Asked of the **daemon by the host**, which the runner container deliberately cannot do: a
+    // second create for one run id must not have left a second container, and teardown must have
+    // removed the ones that were made.
+    for (const [label, runId] of [
+      ['the run', RUN_ID],
+      ['the replayed run', IDEMPOTENCY_RUN_ID],
+    ]) {
+      const container = await docker(['container', 'inspect', `ws-${runId}`], {
+        allowFailure: true,
+      });
+      record(`${label}’s container is gone after the run ended`, !container.ok, `ws-${runId}`);
+    }
+    const badContainer = await docker(['container', 'inspect', `ws-${BAD_RUN_ID}`], {
+      allowFailure: true,
+    });
+    record(
+      'the run whose CLI path was wrong never got a container at all',
+      !badContainer.ok,
+      `ws-${BAD_RUN_ID}`,
+    );
+    const volume = await docker(['volume', 'inspect', `ws-${RUN_ID}`], { allowFailure: true });
+    record(
+      'the workspace volume outlives the run, per retention',
+      volume.ok,
+      volume.ok ? 'kept' : 'the volume was removed with the container',
     );
   }
-
-  // Asked of the **daemon by the host**, which the runner container deliberately cannot do: a
-  // second create for one run id must not have left a second container, and teardown must have
-  // removed the ones that were made.
-  for (const [label, runId] of [
-    ['the run', RUN_ID],
-    ['the replayed run', IDEMPOTENCY_RUN_ID],
-  ]) {
-    const container = await docker(['container', 'inspect', `ws-${runId}`], { allowFailure: true });
-    record(`${label}’s container is gone after the run ended`, !container.ok, `ws-${runId}`);
-  }
-  const badContainer = await docker(['container', 'inspect', `ws-${BAD_RUN_ID}`], {
-    allowFailure: true,
-  });
-  record(
-    'the run whose CLI path was wrong never got a container at all',
-    !badContainer.ok,
-    `ws-${BAD_RUN_ID}`,
-  );
-  const volume = await docker(['volume', 'inspect', `ws-${RUN_ID}`], { allowFailure: true });
-  record(
-    'the workspace volume outlives the run, per retention',
-    volume.ok,
-    volume.ok ? 'kept' : 'the volume was removed with the container',
-  );
 } catch (error) {
   record('the check ran to completion', false, String(error?.stack ?? error));
 } finally {
@@ -2080,7 +2125,11 @@ if (replay !== null) {
 }
 
 const failed = results.filter((result) => !result.ok);
+// A run that recorded nothing measured nothing: never a PASS (WP-22's criterion). Deliberately
+// unreachable today — the setup records the first launcher in both legs and the catch records a
+// throw — so it guards a future leg or gate that skips both, not a path any run takes now.
+const passed = failed.length === 0 && results.length > 0;
 process.stdout.write(
-  `\n${failed.length === 0 ? 'PASS' : 'FAIL'}: launcher-control-plane-check (${results.length - failed.length}/${results.length} checks)\n`,
+  `\n${passed ? 'PASS' : 'FAIL'}: launcher-control-plane-check${LEG === undefined ? '' : ` --leg ${LEG}`} (${results.length - failed.length}/${results.length} checks)\n`,
 );
-process.exit(failed.length === 0 ? 0 : 1);
+process.exit(passed ? 0 : 1);

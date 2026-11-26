@@ -36,8 +36,9 @@
  *    (≈ 4.7 s) — so 5 000 ms.
  *
  * What it cannot do: a single file longer than a part's fair share still bounds that part (the
- * 222 s `unattended-commands.test.ts` in the unit tier, the 239 s `docker-workspace.e2e.test.ts`
- * in e2e). Splitting such a file is the only answer, and it is the file's, not this module's.
+ * 222 s `unattended-commands.test.ts` in the unit tier). Splitting such a file is the only answer,
+ * and it is the file's, not this module's — which is how the 239–330 s `docker-workspace.e2e.test.ts`
+ * became three files of the e2e tier (BACKLOG 1654).
  */
 
 /** The table `scripts/shard-timings.json` holds. */
