@@ -9,6 +9,7 @@
 import type { Id } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { conflictBackoffMs } from '../events/concurrency.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
 import { INITIAL_TASK_VERSION, TaskConcurrentModificationError } from './store.js';
@@ -47,6 +48,37 @@ describe('retryOnTaskConflict', () => {
     });
     expect(result).toBe('written');
     expect(attempts).toBe(MAX_TASK_CONFLICT_ATTEMPTS);
+  });
+
+  /**
+   * BD-034 (BACKLOG 1659): a lost race is recoverable, so the job side waits between attempts — a
+   * growing, jittered delay between transactions — and gives up only after six in a row.
+   */
+  it('backs off between attempts, growing, and never after the last one', async () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    await retryOnTaskConflict(
+      {
+        taskId: TASK,
+        what: 'a write',
+        sleep: async (ms) => {
+          waits.push(ms);
+        },
+      },
+      async () => {
+        attempts += 1;
+        throw conflict(attempts);
+      },
+    ).catch(() => undefined);
+    expect(MAX_TASK_CONFLICT_ATTEMPTS).toBe(6);
+    expect(attempts).toBe(MAX_TASK_CONFLICT_ATTEMPTS);
+    expect(waits).toHaveLength(MAX_TASK_CONFLICT_ATTEMPTS - 1);
+    waits.forEach((ms, index) => {
+      expect(ms).toBeGreaterThanOrEqual(Math.floor((25 * 2 ** index) / 2));
+      expect(ms).toBeLessThanOrEqual(25 * 2 ** index);
+    });
+    expect(conflictBackoffMs(1, () => 0)).toBe(13);
+    expect(conflictBackoffMs(5, () => 1)).toBe(400);
   });
 
   it('gives up one attempt past the bound, with a typed failure that names the unit', async () => {

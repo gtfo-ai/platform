@@ -38,12 +38,24 @@ export const isConcurrencyConflict = (error: unknown): error is ConcurrencyConfl
  * `retryOnTaskConflict` — because two numbers describing one policy is the drift standing rule 63
  * is about.
  *
- * Three, and the number is a judgement rather than a measurement: a conflict means another
- * transaction committed between this one's read and its write, so the losing side re-reads a row
- * that is *already* settled. Losing three times running needs three independent writers landing in
- * the same handful of milliseconds, which the shipped configuration cannot produce
- * (`APP_DISPATCH_MAX_CONCURRENCY` is 1 and every pipeline job worker's concurrency is 1). The
- * honest way to move it is to measure a real conflict rate, and nothing produces production load
- * yet (PROGRESS backlog 1).
+ * Six (three until 2026-11-26, BD-034, BACKLOG 1659), and the number is a judgement rather than a
+ * measurement: a conflict means another transaction committed between this one's read and its
+ * write, so the losing side re-reads a row that is *already* settled. One task is written by several
+ * queues at once — `stage.execute`, `pipeline.outbound`, the review window, a person's command, the
+ * dispatcher — each at concurrency 1 but on as many replicas as run, so a short burst can beat a
+ * writer three times running; a lost race is recoverable by definition, and BD-034 says a
+ * recoverable condition waits rather than escalates. `retryOnTaskConflict` also backs off between
+ * its attempts ({@link conflictBackoffMs}); the bus re-runs at once, because a bus failure falls
+ * through to the dispatch's own retry with backoff, never to a person. Six losses in a row spread
+ * over most of a second is a writer that keeps rewriting the row — a loop a person has to look at.
  */
-export const MAX_CONCURRENCY_CONFLICT_ATTEMPTS = 3;
+export const MAX_CONCURRENCY_CONFLICT_ATTEMPTS = 6;
+
+/**
+ * The wait before job-side attempt `attempt + 1` after attempt `attempt` lost its race (BD-034,
+ * BACKLOG 1659): 25 ms doubling (25, 50, 100, 200, 400), each scaled by a jitter in `[0.5, 1]` so
+ * two losers do not collide again in step — at most 775 ms across the five waits. Taken **between**
+ * transactions, never inside one: nothing is held while it waits.
+ */
+export const conflictBackoffMs = (attempt: number, random: () => number = Math.random): number =>
+  Math.round(25 * 2 ** Math.max(0, Math.min(attempt - 1, 10)) * (0.5 + random() / 2));
