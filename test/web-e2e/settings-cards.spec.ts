@@ -67,6 +67,7 @@ const READY: Readonly<
   session: (section) => section.getByText('operator@example.invalid'),
   keyboard: (section) => section.getByRole('checkbox'),
   accounts: (section) => section.getByRole('button', { name: 'Link an account' }),
+  password: (section) => section.getByLabel('Current password'),
 };
 
 /** What each project settings section shows once it has drawn. */

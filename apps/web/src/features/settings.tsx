@@ -18,7 +18,8 @@
  *  - **Personal** — *Session* (who is signed in, with which role), *Keyboard shortcuts* (whether
  *    single-key shortcuts are on — this browser's own choice, `app/shortcuts.ts`) and *Your
  *    accounts* (the person's own Jira and GitLab accounts, linked by a provider-proven code —
- *    `features/your-accounts.tsx`, S-26.8a, a lazy chunk of its own); there is no *Appearance*,
+ *    `features/your-accounts.tsx`, S-26.8a, a lazy chunk of its own) and *Password* (the person's
+ *    own, `features/change-password.tsx`); there is no *Appearance*,
  *    since the application has one dark theme (TD-033's 2026-11-05 amendment).
  *
  * `/settings` opens the first section the caller's role may change (S-25.6, research/21 S13):
@@ -57,6 +58,7 @@ import { PageHeader } from '../ui/page-header.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { USER_STATUS_LABEL } from '../ui/words/settings.js';
+import { ChangePassword } from './change-password.js';
 import { DeadLetters } from './dead-letters.js';
 import { FailedJobs } from './failed-jobs.js';
 import { IdentityMappings } from './identities.js';
@@ -276,6 +278,7 @@ const Instance = (): ReactElement => {
 const SECTION: Readonly<Record<OrgSettingsSectionId, () => ReactElement>> = {
   keyboard: KeyboardShortcuts,
   session: Session,
+  password: ChangePassword,
   accounts: () => (
     <Suspense fallback={<Loading label="Loading your accounts…" />}>
       <YourAccounts />

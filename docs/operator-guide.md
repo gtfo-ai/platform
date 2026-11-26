@@ -225,7 +225,7 @@ APP_SECRET_KEY=paste-the-generated-value-here
 
 # The first administrator, created at boot while the instance has no users at all.
 APP_BOOTSTRAP_ADMIN_EMAIL=you@example.com
-APP_BOOTSTRAP_ADMIN_PASSWORD=       # at least 12 characters; change it after first sign-in
+APP_BOOTSTRAP_ADMIN_PASSWORD=       # at least 12 characters; change it after first sign-in (Settings → Password)
 
 # The origin this instance is reached on. It is what webhook URLs are built from,
 # so it has to be the URL a provider can actually POST to. Empty under compose means

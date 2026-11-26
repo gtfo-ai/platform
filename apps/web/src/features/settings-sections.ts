@@ -100,6 +100,9 @@ export const ORG_SETTINGS_GROUPS = [
       // S-26.8a: a person's own Jira and GitLab accounts (`identity.link`, any signed-in user).
       // Last, so `/settings` still lands a member on Keyboard shortcuts (`firstOrgSection`).
       { id: 'accounts', label: 'Your accounts', changeableFrom: 'viewer' },
+      // The signed-in person's own password (Better Auth's `change-password`). After
+      // Keyboard shortcuts, so `/settings` still lands a member there (`firstOrgSection`).
+      { id: 'password', label: 'Password', changeableFrom: 'viewer' },
     ],
   },
 ] as const satisfies readonly SettingsGroup[];

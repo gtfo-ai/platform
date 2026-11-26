@@ -1,5 +1,5 @@
 /**
- * The three Better Auth calls the SPA makes, and the platform's one pre-session read (TD-022,
+ * The four Better Auth calls the SPA makes, and the platform's one pre-session read (TD-022,
  * technical/08 § Auth).
  *
  * Better Auth owns `/api/auth/*` and its payloads are camelCase — the one documented exception to
@@ -46,10 +46,28 @@ export interface SignInCredentials {
   readonly password: string;
 }
 
+export interface ChangePasswordRequest {
+  readonly currentPassword: string;
+  readonly newPassword: string;
+  /** Sign out every other session of this user; this browser gets a fresh session cookie. */
+  readonly revokeOtherSessions: boolean;
+}
+
+/**
+ * Better Auth's password length bounds (its defaults: `authOptions` sets neither). The form checks
+ * them before it sends, because Better Auth's refusal is `{ code, message }` — not the platform's
+ * problem document — so the client sees every `400` as `unexpected_response` and cannot tell a
+ * short password from a wrong current one. Checked here, a `400` can only mean the current password.
+ */
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 128;
+
 export interface AuthApi {
   readonly getSession: () => Promise<SessionResponse>;
   readonly signIn: (credentials: SignInCredentials) => Promise<void>;
   readonly signOut: () => Promise<void>;
+  /** `POST /api/auth/change-password` — the signed-in user's own password. */
+  readonly changePassword: (request: ChangePasswordRequest) => Promise<void>;
   /**
    * `GET /api/setup-state` (WP-291) — whether anybody has signed in to this instance yet. The
    * platform's own route rather than Better Auth's, so its payload is snake_case and strict.
@@ -67,6 +85,16 @@ export const createAuthApi = (client: ApiClient): AuthApi => ({
   },
   signOut: async () => {
     await client.command('/api/auth/sign-out', { schema: signInResponseSchema, body: {} });
+  },
+  changePassword: async (request) => {
+    await client.command('/api/auth/change-password', {
+      schema: signInResponseSchema,
+      body: {
+        currentPassword: request.currentPassword,
+        newPassword: request.newPassword,
+        revokeOtherSessions: request.revokeOtherSessions,
+      },
+    });
   },
   setupState: () => client.get('/api/setup-state', { schema: setupStateResponseSchema }),
 });

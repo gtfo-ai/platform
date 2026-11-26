@@ -452,6 +452,7 @@ describe('the org settings sub-routes', () => {
     ['session', (scope: Scope) => scope.findByText('Role: Administrator')],
     ['keyboard', (scope: Scope) => scope.findByRole('checkbox')],
     ['accounts', (scope: Scope) => scope.findByRole('button', { name: 'Link an account' })],
+    ['password', (scope: Scope) => scope.findByLabelText('Current password')],
   ] as const)(
     'draws the %s section’s content inside a card, never on the page canvas (S-25.10b)',
     async (section, content) => {
@@ -550,7 +551,7 @@ describe('the section tables', () => {
       ['People', ['users']],
       ['Admin', ['integrations', 'workers', 'audit']],
       ['Operations', ['instance']],
-      ['Personal', ['session', 'keyboard', 'accounts']],
+      ['Personal', ['session', 'keyboard', 'accounts', 'password']],
     ]);
     for (const role of ['member', 'viewer', undefined] as const) {
       expect(groups(role)).toEqual([
@@ -558,7 +559,7 @@ describe('the section tables', () => {
         ['People', ['users']],
         ['Admin', ['workers']],
         ['Operations', ['instance']],
-        ['Personal', ['session', 'keyboard', 'accounts']],
+        ['Personal', ['session', 'keyboard', 'accounts', 'password']],
       ]);
     }
     expect(

@@ -2086,7 +2086,7 @@ command records nothing.
 **Settings** — the gear in the top bar, also in the account menu — is one page per section, picked from the list on the
 left (on a phone, a one-line menu above the section that names the one you are on) — **Policies ·
 Notifications · Date & time · Budgets · Users · Linked accounts · Integrations · Workers · Audit log · Stuck
-events · Failed background jobs · Instance · Session · Keyboard shortcuts · Your accounts** — grouped as
+events · Failed background jobs · Instance · Session · Keyboard shortcuts · Your accounts · Password** — grouped as
 *Organisation*, *People*, *Admin*, *Operations* and *Personal*. **Opening Settings opens the first
 section your role may change**: *Policies* for an administrator, *Budgets* for a maintainer,
 *Keyboard shortcuts* for everybody else. An address that is no section (a mistyped
@@ -2129,6 +2129,11 @@ administrator; anybody else who opens one of their addresses lands where *Settin
   **Unlink** (it asks first; answers and approvals from that account stop counting as yours, and a
   task you already own stays yours until the ticket's assignee changes), and **Link an account**,
   below.
+- **Password** — change the password you sign in with: your **current password**, the **new
+  password** (at least 8 characters) twice, and **Sign out my other sessions**, on by default —
+  every other browser signed in as you is signed out, this one stays signed in. A wrong current
+  password changes nothing and says so. There is no *forgot password* and no administrator reset
+  of somebody else's password yet.
 
 **Linking your own Jira or GitLab account** (*Settings → Your accounts*, every signed-in person). A
 linked account can answer questions and approve plans from Jira or GitLab, so the platform never
