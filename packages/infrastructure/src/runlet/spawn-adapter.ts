@@ -577,6 +577,10 @@ export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
         // as benign — the SDK ending stdin, or the SIGTERM frame, racing the launcher's stop — so
         // it is left to the `close` that always follows it, rather than failing the transport.
         // A protocol error, or any other socket error, still fails it.
+        // `FrameConnection.send`'s synchronous `catch` calls `raise()` without destroying the
+        // socket, so returning here would leave the socket open with no `close` to follow. That is
+        // safe only because Node never throws `EPIPE` synchronously from `socket.write` — it is
+        // always the asynchronous `error` event, which the `close` follows.
         if (
           (resultRead || spawnOptions.signal.aborted) &&
           PEER_GONE_CODES.has((error as NodeJS.ErrnoException).code ?? '')

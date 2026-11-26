@@ -499,6 +499,24 @@ describe('the runner-side SpawnedProcess', () => {
       },
     );
 
+    /**
+     * The other half of backlog 556's guard: after the session's result only a **peer-gone** socket
+     * error (`EPIPE`, `ECONNRESET`) is left to the close. A protocol error that arrives then still
+     * fails the transport. Canary: the guard's code check dropped (any error after the result read
+     * as the close), and `errors` stays empty.
+     */
+    it('still fails the transport for an unexpected frame after the session’s result (backlog 556)', async () => {
+      const { logger } = recordingLogger();
+      const { spawn, child, errors, peer } = await started(logger);
+      const exited = exitOf(child);
+      spawn.noteSessionResult();
+      peer.send({ type: 'signal', name: 'SIGKILL' });
+      await exited;
+      expect(errors.map((error) => error.message)).toEqual([
+        'a signal frame arrived at the runner, which only the runner sends',
+      ]);
+    });
+
     it('still fails the transport, at error, for a close with neither an exit frame nor a result, and no stop', async () => {
       const { logger, lines } = recordingLogger();
       const { child, errors, peer } = await started(logger);
