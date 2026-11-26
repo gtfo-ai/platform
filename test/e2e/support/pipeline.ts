@@ -1417,7 +1417,9 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
           }
           if (result instanceof Promise) {
             // A branch of its own that only records: the caller still awaits (and handles) the
-            // promise it is given.
+            // promise it is given. Its rejection handler also handles the fake's rejection, so a
+            // product call that drops a rejected provider promise no longer surfaces in e2e as an
+            // unhandled rejection — this recording swallows that signal.
             result.then(
               () => {
                 call.outcome = 'answered';
