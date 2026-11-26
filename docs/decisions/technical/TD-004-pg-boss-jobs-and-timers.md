@@ -113,3 +113,38 @@ an operator-raised timeout have no such bound, which is why the recovery row exi
 larger expiry. **A recovery row's own work may split:** a `knowledge.apply` batch the provider refuses
 whole (`invalid_request`, which names no file) is retried one proposal per commit, once, in the same
 job, so only the refused proposal reaches `apply_failed` (backlog 420).
+
+## Amendment (BD-034's follow-ups, 2026-11-26) — a live queue's options change by a queue migration
+
+*As built for BD-034 (BACKLOG 1656, 1659).* A queue's options (retries, backoff, expiry) live on
+pg-boss's own `queue` row, and `create_queue` is `insert … on conflict do nothing`, so
+`JOB_QUEUE_DEFINITIONS` shapes a **fresh** database only. A change to a queue that already exists
+is a **queue migration**: a named row of `JOB_QUEUE_MIGRATIONS` (`ports/job-queues.ts`, `<nnnn>_<words>`)
+that `migrate` applies **once, in order**, after it has declared the queues, under the same
+advisory lock, through pg-boss's own `updateQueue`, and records in `job_queue_migrations`
+(migration 0123) after the update (`packages/infrastructure/src/jobs/job-queue-migrations.ts`).
+
+- **Forward-only**, like the SQL migrations: a released row is never edited — `migrate` refuses a
+  recorded name whose options differ from the build's — and a later change is a new row. A name the
+  build does not know (a newer build's) is ignored: the options are data an older worker reads like
+  any other, so a rollback needs nothing (TD-032).
+- **Not a SQL file**: the numbered SQL runs before pg-boss is installed, and an `update` is not an
+  additive statement (TD-032), so the record table is the only SQL.
+- **A job keeps the options it was sent with**: pg-boss copies them onto the job row at insert, so a
+  job enqueued before a queue migration finishes on the old policy.
+- `job-queues.test.ts` holds every row's options equal to its queue's row in the table, so a fresh
+  database and a migrated one carry the same policy.
+
+The first two rows move `pipeline.outbound` and `mr.comment.debounce` onto `PROVIDER_JOB_RETRY`:
+24 retries backing off from 30 s, capped at 15 minutes (`retryDelayMaxSeconds`, pg-boss's
+`retryDelayMax`, now part of `JobQueueDefinition`) — about five hours of a provider outage before
+the bound-and-escalate ending. A provider's **refusal** (`IntegrationError.retryable` false) keeps
+the old three-try bound in `escalatingOnLastTry` and then completes the job rather than spending the
+hours (`PERMANENT_FAILURE_TRIES`), so a credential or a permission still reaches a person in about a
+minute and a half. Every number derived from the policy moves with it: `retryWindowMs` honours the
+cap, so the `notifications_undelivered` gauge and the notification re-post wait for the whole
+window (about eleven and a half hours at its worst case, almost all of it 25 tries' expiries) —
+until then a retry is still delivering the notification. `stage.execute` is **not** migrated: it is
+`stately` per task, so a job waiting hours in `retry` would swallow the task's next wake-up; its
+failures are re-enqueued by the `stranded_stage` row instead, which waits out its backoff *before*
+it enqueues, so the task's slot stays free meanwhile (BD-034's amendment).
