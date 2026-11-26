@@ -7,8 +7,9 @@
  * is the person's word; the commands carry this platform's origin; the Claude sign-in and the three
  * troubleshooting items say what the owner's setup log needed; Approve is done only once a new
  * worker of this person appears — read again every 5 s on that step, and not on Install; Ready
- * lists the blockers in words; the last step links each project's Execution settings and ends on
- * its board; every step has exactly one primary button; a worker's name is rendered as text.
+ * lists the blockers in words; the last step opens the new worker's *What this machine takes* card
+ * (its projects chosen and saved there), links each project's Execution settings and ends on its
+ * board; every step has exactly one primary button; a worker's name is rendered as text.
  */
 import type { ProjectExecutionResponse, ProjectSummary, WorkerSummary } from '@platform/contracts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -67,6 +68,8 @@ interface World {
   workers: WorkerSummary[];
   projects: { summary: ProjectSummary; execution: ProjectExecutionResponse }[];
   asked: string[];
+  /** The bodies of `PUT /api/workers/:id/claim-policy`, in order. */
+  policies: unknown[];
 }
 
 const newWorld = (over: Partial<World> = {}): World => ({
@@ -77,6 +80,7 @@ const newWorld = (over: Partial<World> = {}): World => ({
     { summary: project(2, 'web', 'Web App'), execution: execution('workers_only') },
   ],
   asked: [],
+  policies: [],
   ...over,
 });
 
@@ -84,10 +88,32 @@ const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 const fetchFor = (world: World) =>
-  (async (input: RequestInfo | URL): Promise<Response> => {
+  (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input), 'http://localhost');
     const path = url.pathname;
     world.asked.push(path);
+    const policy = /^\/api\/workers\/([^/]+)\/claim-policy$/.exec(path);
+    if (policy !== null && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as {
+        claim_policy: NonNullable<WorkerSummary['claim_policy']>;
+        claim_project_ids: string[] | null;
+      };
+      world.policies.push(body);
+      world.workers = world.workers.map((worker) =>
+        worker.id === policy[1]
+          ? {
+              ...worker,
+              claim_policy: body.claim_policy,
+              claim_projects:
+                body.claim_project_ids?.map((id) => ({
+                  id,
+                  key: world.projects.find((entry) => entry.summary.id === id)?.summary.key ?? null,
+                })) ?? null,
+            }
+          : worker,
+      );
+      return json({ worker_id: policy[1], ...body, performed: true });
+    }
     if (path.startsWith('/api/auth/get-session')) return json(session(world.role));
     if (path === '/api/workers') {
       return json({ items: world.workers, scope: 'own', timezone: 'UTC' });
@@ -538,5 +564,32 @@ describe('Add a worker: Choose projects', () => {
     const primary = primaries();
     expect(primary.map((element) => element.textContent)).toEqual(['Go to Workers']);
     expect(screen.queryByRole('link', { name: 'Skip for now' })).toBeNull();
+  });
+  it('lets the person choose this computer’s projects, unticking the others, and says it changes later', async () => {
+    const world = ready();
+    start(world, wizardUrl('projects'));
+    const choice = within(
+      (await screen.findByRole('heading', { level: 3, name: 'What this machine takes' })).closest(
+        'section',
+      ) as HTMLElement,
+    );
+    // Open on arrival: nothing is decided for the person, and no project is ticked yet.
+    fireEvent.click(choice.getByRole('radio', { name: 'Only these:' }));
+    const server = choice.getByRole('checkbox', { name: 'Server Things' }) as HTMLInputElement;
+    const web = choice.getByRole('checkbox', { name: 'Web App' }) as HTMLInputElement;
+    expect([server.checked, web.checked]).toEqual([false, false]);
+    fireEvent.click(web);
+    fireEvent.click(server);
+    fireEvent.click(server);
+    expect([server.checked, web.checked]).toEqual([false, true]);
+    fireEvent.click(choice.getByRole('button', { name: 'Save' }));
+    await choice.findByText('Saved · applies to the next run');
+    expect(world.policies).toEqual([
+      { claim_policy: 'everything', claim_project_ids: [world.projects[1]?.summary.id] },
+    ]);
+    // A save that resolved closes the controls; *Change* opens them again.
+    expect(choice.queryByRole('checkbox')).toBeNull();
+    expect(choice.getByRole('button', { name: 'Change' })).toBeTruthy();
+    expect(screen.getByText(/You can change what this computer takes at any time/)).toBeTruthy();
   });
 });

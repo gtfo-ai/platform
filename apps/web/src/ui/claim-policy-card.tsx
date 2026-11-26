@@ -41,6 +41,13 @@ import { Flash } from './flash.js';
 import { UntrustedText } from './untrusted.js';
 import { projectListWords, MACHINE_TAKES_WORDS as W } from './words/claim-policy.js';
 
+/** *Change*'s controls while they are open. */
+interface Draft {
+  readonly policy: WorkerClaimPolicy;
+  readonly some: boolean;
+  readonly chosen: readonly string[];
+}
+
 /** A project the machine's person may take tasks in: its name is the chip's and the sentence's. */
 export interface ClaimPolicyProject {
   readonly id: string;
@@ -94,6 +101,11 @@ export interface ClaimPolicyCardProps {
    * only once they open (S-26.8a). Optional: the worker's page passes none.
    */
   readonly onOpenChange?: (open: boolean) => void;
+  /**
+   * Open the controls on mount, as *Change* would (the *Add a worker* wizard's *Choose projects*
+   * step, where choosing is the step's whole point). Needs `onSave`; focus is left where it is.
+   */
+  readonly startOpen?: boolean;
 }
 
 /**
@@ -209,6 +221,7 @@ export const ClaimPolicyCard = ({
   headingLevel: Heading = 'h2',
   framed = true,
   onOpenChange,
+  startOpen = false,
 }: ClaimPolicyCardProps): ReactElement => {
   const id = useId();
   const section = useRef<HTMLElement>(null);
@@ -225,11 +238,18 @@ export const ClaimPolicyCard = ({
       target === 'draft' ? 'input[type="radio"]:checked' : 'button[data-claim-policy-change]';
     section.current?.querySelector<HTMLElement>(selector)?.focus();
   });
-  const [draft, setDraft] = useState<{
-    readonly policy: WorkerClaimPolicy;
-    readonly some: boolean;
-    readonly chosen: readonly string[];
-  } | null>(null);
+  /** The draft *Change* opens: the stored setting, less any project the person left. */
+  const draftOf = (): Draft => ({
+    policy: stored.policy,
+    some: stored.projectIds !== null,
+    // A project the person left is not offered back: saving it would be refused.
+    chosen: (stored.projectIds ?? []).filter((entry) =>
+      projects.some((project) => project.id === entry),
+    ),
+  });
+  const [draft, setDraft] = useState<Draft | null>(() =>
+    startOpen && onSave !== undefined ? draftOf() : null,
+  );
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -325,14 +345,7 @@ export const ClaimPolicyCard = ({
                 return;
               }
               focusNext.current = 'draft';
-              setDraft({
-                policy: stored.policy,
-                some: stored.projectIds !== null,
-                // A project the person left is not offered back: saving it would be refused.
-                chosen: (stored.projectIds ?? []).filter((entry) =>
-                  projects.some((project) => project.id === entry),
-                ),
-              });
+              setDraft(draftOf());
               setSaved(false);
               setError(null);
               onOpenChange?.(true);

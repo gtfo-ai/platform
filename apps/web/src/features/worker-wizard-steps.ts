@@ -14,7 +14,7 @@
  * | start | a worker of theirs from this wizard exists | always — a person may already hold the code |
  * | approve | a worker of theirs from this wizard exists (`GET /api/workers`) | done |
  * | ready | that worker takes work — by itself, or when its owner picks a run (`worker-readiness.ts`, over the server's `claim_blockers`) | done |
- * | projects *(optional)* | some project of theirs lets workers run it | — (the last step) |
+ * | projects *(optional)* — the worker's claim card is chosen and saved here | some project of theirs lets workers run it | — (the last step) |
  *
  * **Install is the one step whose done-ness is the person's word**: running the installer is
  * invisible to the platform. The core cannot tell that a pending device code is this person's either (the

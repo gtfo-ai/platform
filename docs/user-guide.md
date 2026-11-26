@@ -2460,8 +2460,11 @@ off.
    disabled, the platform unable to name its own images) is listed too. A last line says whether it
    has taken its first run; that is not needed to continue. A worker that takes only the runs its
    owner picks may continue.
-5. **Choose projects** (optional). Each of your projects, and whether workers run its stages; for
-   one that does not, an administrator gets **Use workers for …** (its *Execution* settings) and
+5. **Choose projects** (optional). The new worker's **What this machine takes** card, opened: pick
+   *Only these:* and tick the projects this computer takes tasks from (and which tasks), then
+   **Save** — or leave *All projects you can see*. The same card stays on the worker's row of the
+   **Workers** screen and on its own page, so you can change it later. Below it, each of your
+   projects and whether workers run its stages (the project's own setting); for one that does not, an administrator gets **Use workers for …** (its *Execution* settings) and
    anyone else is told to ask one. The wizard ends on **Open the board** of the first project
    workers run, or **Go to Workers** when there is none.
 

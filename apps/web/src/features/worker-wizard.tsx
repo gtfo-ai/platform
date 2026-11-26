@@ -12,7 +12,8 @@
  *
  * The worker's own page (`http://127.0.0.1:7357` on that computer) owns the Claude sign-in and shows
  * the device code; this wizard owns the install, the approval, whether the worker can take work and
- * which projects let it. The approval itself is the existing `/workers/approve` page — the warning,
+ * which projects it takes (its *What this machine takes* card, opened on the last step) and which
+ * projects let it. The approval itself is the existing `/workers/approve` page — the warning,
  * the requesting machine's details and the five-minute confirmation stay exactly there (TD-031 §10c)
  * — opened in a new tab, so this page keeps watching for the new worker.
  *
@@ -34,11 +35,12 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { type ReactElement, type ReactNode, useEffect } from 'react';
 import { queryKeys } from '../api/keys.js';
-import { useProjects, useSession } from '../app/queries.js';
+import { useProjects, useSession, useSettingsCommands } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
+import { ClaimPolicyCard, type ClaimPolicyProject } from '../ui/claim-policy-card.js';
 import { CopyField } from '../ui/copy-field.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import {
@@ -79,6 +81,7 @@ import {
   workerInstallCommands,
   workerWizardDonenessOf,
 } from './worker-wizard-steps.js';
+import { claimPolicySaveRefusal, storedClaimPolicyOf } from './workers.js';
 
 /** How often the waiting steps ask for the workers again (see the module note). */
 export const WATCH_INTERVAL_MS = 5_000;
@@ -543,68 +546,131 @@ interface ProjectRow {
   readonly failed: boolean;
 }
 
+/**
+ * *What this machine takes* for the worker this wizard set up — the Workers screen's card
+ * (`ui/claim-policy-card.tsx`, `PUT /api/workers/:id/claim-policy`), opened, so the person picks
+ * the projects (and which tasks) here rather than finding them already decided. The same card stays
+ * on the Workers screen and on the worker's own page, which is where it is changed later.
+ */
+const WorkerChoice = ({
+  worker,
+  rows,
+}: {
+  readonly worker: WorkerSummary;
+  readonly rows: readonly ProjectRow[];
+}): ReactElement => {
+  const commands = useSettingsCommands();
+  const projects: readonly ClaimPolicyProject[] = rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    key: row.key,
+  }));
+  const unassignedHasTaker: Record<string, boolean> = {};
+  for (const row of rows) {
+    if (row.execution !== null) unassignedHasTaker[row.id] = row.execution.others_take_unassigned;
+  }
+  return (
+    <div data-worker-choice="">
+      <ClaimPolicyCard
+        stored={storedClaimPolicyOf(worker)}
+        projects={projects}
+        surface="workers"
+        headingLevel="h3"
+        startOpen
+        unassignedHasTaker={unassignedHasTaker}
+        onSave={async (next) => {
+          try {
+            await commands.setWorkerClaimPolicy.mutateAsync({
+              workerId: worker.id,
+              body: {
+                claim_policy: next.policy,
+                claim_project_ids: next.projectIds === null ? null : [...next.projectIds],
+              },
+            });
+          } catch (error) {
+            throw new Error(claimPolicySaveRefusal(error));
+          }
+        }}
+      />
+    </div>
+  );
+};
+
 const ProjectsStep = ({
   rows,
   isAdmin,
+  worker,
 }: {
   readonly rows: readonly ProjectRow[];
   readonly isAdmin: boolean;
+  /** The worker this wizard set up, when it is known: its card is the step's choice. */
+  readonly worker: WorkerSummary | null;
 }): ReactElement => (
-  <div className="flex flex-col gap-4">
+  <div className="flex flex-col gap-6">
+    {worker === null || rows.length === 0 ? null : <WorkerChoice worker={worker} rows={rows} />}
     {rows.length === 0 ? (
       <p className="text-sm text-fg-muted">You are not a member of any project yet.</p>
     ) : (
-      <ul aria-label="Your projects" className="flex flex-col gap-3">
-        {rows.map((row) => {
-          const takes = row.execution === null ? null : projectTakesWorkers(row.execution);
-          return (
-            <li key={row.id} data-project={row.key} className="flex flex-col gap-1">
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                {takes === null ? null : (
-                  <StatusIcon
-                    status={takes ? 'success' : 'skipped'}
-                    label={takes ? 'Workers run it' : 'Workers don’t run it'}
-                  />
-                )}
-                <span className="font-medium">
-                  <UntrustedText value={row.name} />
-                </span>
-                <span className="text-fg-muted">
-                  {row.failed
-                    ? 'Its setting could not be read.'
-                    : row.execution === null
-                      ? 'Reading…'
-                      : takes
-                        ? row.execution.mode === 'workers_only'
-                          ? 'Workers run its stages.'
-                          : 'Workers run its stages, with the platform server.'
-                        : credentialKeepsWorkersOff(row.execution)
-                          ? 'Workers don’t run its stages: its git connection keeps its credential off developers’ computers.'
-                          : 'Workers don’t run its stages: it runs on the platform server only.'}
-                </span>
-              </div>
-              {takes === false ? (
-                isAdmin ? (
-                  <Link
-                    to="/projects/$key/settings/$section"
-                    params={{ key: row.key, section: 'execution' }}
-                    className="pl-6 text-sm text-link underline"
-                  >
-                    Use workers for <UntrustedText value={row.name} />
-                  </Link>
-                ) : (
-                  <p className="pl-6 text-xs text-fg-muted">
-                    Ask an administrator to turn on workers for <UntrustedText value={row.name} />.
-                  </p>
-                )
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      <div className="flex flex-col gap-2">
+        <h3 className="text-base font-semibold text-fg">Which projects let workers run</h3>
+        <p className="text-xs text-fg-muted">
+          Each project’s own setting: a worker takes nothing from a project that keeps its stages on
+          the platform server, whatever it is set to take above.
+        </p>
+        <ul aria-label="Your projects" className="flex flex-col gap-3">
+          {rows.map((row) => {
+            const takes = row.execution === null ? null : projectTakesWorkers(row.execution);
+            return (
+              <li key={row.id} data-project={row.key} className="flex flex-col gap-1">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  {takes === null ? null : (
+                    <StatusIcon
+                      status={takes ? 'success' : 'skipped'}
+                      label={takes ? 'Workers run it' : 'Workers don’t run it'}
+                    />
+                  )}
+                  <span className="font-medium">
+                    <UntrustedText value={row.name} />
+                  </span>
+                  <span className="text-fg-muted">
+                    {row.failed
+                      ? 'Its setting could not be read.'
+                      : row.execution === null
+                        ? 'Reading…'
+                        : takes
+                          ? row.execution.mode === 'workers_only'
+                            ? 'Workers run its stages.'
+                            : 'Workers run its stages, with the platform server.'
+                          : credentialKeepsWorkersOff(row.execution)
+                            ? 'Workers don’t run its stages: its git connection keeps its credential off developers’ computers.'
+                            : 'Workers don’t run its stages: it runs on the platform server only.'}
+                  </span>
+                </div>
+                {takes === false ? (
+                  isAdmin ? (
+                    <Link
+                      to="/projects/$key/settings/$section"
+                      params={{ key: row.key, section: 'execution' }}
+                      className="pl-6 text-sm text-link underline"
+                    >
+                      Use workers for <UntrustedText value={row.name} />
+                    </Link>
+                  ) : (
+                    <p className="pl-6 text-xs text-fg-muted">
+                      Ask an administrator to turn on workers for <UntrustedText value={row.name} />
+                      .
+                    </p>
+                  )
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     )}
     <p className="text-xs text-fg-muted">
-      Which of these this computer takes by itself is chosen on the worker’s own page.
+      You can change what this computer takes at any time: <em>Change</em> on its row of the Workers
+      screen, or on the worker’s own page.
     </p>
   </div>
 );
@@ -618,7 +684,8 @@ const PURPOSE: Readonly<Record<WorkerWizardStepId, string>> = {
     'Sign the worker in to your Claude subscription on its own page. A few minutes, once per computer.',
   approve: 'Let this platform trust the computer: approve the code its page shows.',
   ready: 'Check that the worker can take work now, and fix what stops it.',
-  projects: 'See which of your projects let workers run their stages, and where to change that.',
+  projects:
+    'Choose which projects (and which tasks) this computer takes, and see which projects let workers run.',
 };
 
 const Footer = ({
@@ -846,7 +913,11 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
     ) : rows === null ? (
       <Skeleton label="Reading your projects…" lines={3} />
     ) : (
-      <ProjectsStep rows={rows} isAdmin={user?.role === 'admin'} />
+      <ProjectsStep
+        rows={rows}
+        isAdmin={user?.role === 'admin'}
+        worker={worker === null || worker === false ? null : worker}
+      />
     );
 
   return (
