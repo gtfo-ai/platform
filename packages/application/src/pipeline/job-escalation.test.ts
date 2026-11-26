@@ -11,7 +11,9 @@
  */
 import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { IntegrationError } from '../ports/integrations/common.js';
 import { OUTBOUND_DUTY_EXHAUSTION } from '../ports/job-exhaustion.js';
+import { PERMANENT_FAILURE_TRIES, PROVIDER_JOB_RETRY } from '../ports/job-queues.js';
 import type { JobContext } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
@@ -21,6 +23,7 @@ import {
   escalateExhaustedJob,
   escalateTaskWithBrief,
   escalatingOnLastTry,
+  retrySpanWords,
 } from './job-escalation.js';
 import { type PipelineJobOptions, reviewWindowHandler } from './jobs.js';
 import { OUTBOUND_ESCALATION_TEXT, pipelineOutboundHandler } from './outbound.js';
@@ -201,6 +204,115 @@ describe('pipeline.outbound: a duty a person waits on, failing on its last try',
       }),
     ).rejects.toThrow('the database is down');
     expect(await stateOf(harness, taskId)).toBe('waiting_answers');
+  });
+});
+
+/**
+ * BD-034 (BACKLOG 1656): the queue retries for hours, so a provider's outage is waited out; a
+ * provider's **refusal**, which another try does not fix, keeps the old three-try bound and then
+ * ends the job instead of re-running it (and re-amending the brief) for five hours.
+ */
+describe('pipeline.outbound since BD-034: an outage waits, a refusal ends at three tries', () => {
+  const throwingFirst = (inner: UnitOfWork, error: Error): UnitOfWork => {
+    let calls = 0;
+    return {
+      transaction: async <T>(fn: (scope: TransactionScope) => Promise<T>): Promise<T> => {
+        calls += 1;
+        if (calls === 1) {
+          throw error;
+        }
+        return inner.transaction(fn);
+      },
+    };
+  };
+  const run = async (error: Error, retries: { count: number; limit: number }) => {
+    const { harness, taskId } = await harnessWithTask();
+    const handler = pipelineOutboundHandler({
+      ...(harness.humanCommands as unknown as Record<string, unknown>),
+      ...escalationOptions(harness, throwingFirst(harness.memory, error)),
+    } as never);
+    const outcome = handler({
+      id: 'job-mr-ready',
+      queue: JOB_QUEUES.pipelineOutbound,
+      signal: new AbortController().signal,
+      retries,
+      data: {
+        duty: 'mr_ready',
+        project_id: PROJECT,
+        task_id: taskId,
+        cause_event_id: CAUSE,
+      } as never,
+    });
+    return { harness, taskId, outcome };
+  };
+  const forbidden = () => new IntegrationError('forbidden', 'fake-git', 'HTTP 403');
+  const unavailable = () => new IntegrationError('unavailable', 'fake-git', 'HTTP 503');
+
+  it('escalates a refusal at its third try with a brief that says so, and completes the job', async () => {
+    const { harness, taskId, outcome } = await run(forbidden(), {
+      count: PERMANENT_FAILURE_TRIES - 1,
+      limit: PROVIDER_JOB_RETRY.retryLimit,
+    });
+    await expect(outcome).resolves.toBeUndefined();
+    expect(await stateOf(harness, taskId)).toBe('needs_human');
+    const brief = briefOf(harness) ?? '';
+    expect(brief).toContain(
+      '"mr_ready" job was refused by the provider (forbidden) on each of its 3 tries',
+    );
+    expect(brief).toContain('Check the integration');
+    // It is not on the failed-jobs list, so the brief does not send anybody there.
+    expect(brief).not.toContain('failed-jobs list');
+    expect(brief).not.toContain('HTTP 403');
+  });
+
+  it('finds a refusal carried as the cause of the thrown error', async () => {
+    const wrapped = new Error('the duty failed', { cause: forbidden() });
+    const { harness, taskId, outcome } = await run(wrapped, {
+      count: PERMANENT_FAILURE_TRIES - 1,
+      limit: PROVIDER_JOB_RETRY.retryLimit,
+    });
+    await expect(outcome).resolves.toBeUndefined();
+    expect(await stateOf(harness, taskId)).toBe('needs_human');
+  });
+
+  it('leaves a refusal before its third try to the retry policy (the other side of the bound)', async () => {
+    const { harness, taskId, outcome } = await run(forbidden(), {
+      count: PERMANENT_FAILURE_TRIES - 2,
+      limit: PROVIDER_JOB_RETRY.retryLimit,
+    });
+    await expect(outcome).rejects.toThrow('HTTP 403');
+    expect(await stateOf(harness, taskId)).toBe('waiting_answers');
+  });
+
+  it('keeps retrying an outage past the third try, escalating nothing', async () => {
+    const { harness, taskId, outcome } = await run(unavailable(), {
+      count: PERMANENT_FAILURE_TRIES + 5,
+      limit: PROVIDER_JOB_RETRY.retryLimit,
+    });
+    await expect(outcome).rejects.toThrow('HTTP 503');
+    expect(await stateOf(harness, taskId)).toBe('waiting_answers');
+  });
+
+  it('escalates an outage on the queue’s last try, saying it tried for about five hours', async () => {
+    const { harness, taskId, outcome } = await run(unavailable(), {
+      count: PROVIDER_JOB_RETRY.retryLimit,
+      limit: PROVIDER_JOB_RETRY.retryLimit,
+    });
+    await expect(outcome).rejects.toThrow('HTTP 503');
+    expect(await stateOf(harness, taskId)).toBe('needs_human');
+    const brief = briefOf(harness) ?? '';
+    expect(brief).toContain(
+      `"mr_ready" job failed on all ${String(PROVIDER_JOB_RETRY.retryLimit + 1)} of its tries over at least 5 hours, each wait longer than the last up to 15 minutes`,
+    );
+    expect(brief).toContain('failed-jobs list');
+  });
+
+  it('words a short span in seconds and a job of one try with no span', () => {
+    expect(retrySpanWords(JOB_QUEUES.pipelineOutbound, 3)).toBe(
+      ' over at least 90 seconds, each wait longer than the last up to 15 minutes',
+    );
+    expect(retrySpanWords(JOB_QUEUES.pipelineOutbound, 1)).toBe('');
+    expect(retrySpanWords('not.a.queue', 3)).toBe('');
   });
 });
 

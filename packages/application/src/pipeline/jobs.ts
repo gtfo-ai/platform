@@ -65,7 +65,10 @@ import {
   MAX_LIST_COMMENTS_LIMIT,
   type TicketComment,
 } from '../ports/integrations/task-management.js';
-import { jobQueueDefinition } from '../ports/job-queues.js';
+import { jobQueueDefinition, retryDelaysMs } from '../ports/job-queues.js';
+
+export { retryDelaysMs } from '../ports/job-queues.js';
+
 import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -731,8 +734,9 @@ export const DEFAULT_JOB_EXPIRE_SECONDS = 15 * 60;
  * `dist/plans.js`, the `start_after` expression of the fail path): retry *n* (counting from zero)
  * waits `retry_delay × (2^(n+1)/2 + 2^(n+1)/2 × random())`, so at most `retry_delay × 2^(n+1)`;
  * without backoff it waits `retry_delay`. An attempt may also hold the job for its whole expiry
- * before the queue calls it lost and retries it — that term dominates, and it is why the window of
- * `pipeline.outbound` is about 48 minutes rather than the three the delays alone would suggest.
+ * before the queue calls it lost and retries it — that term dominates: `pipeline.outbound`'s window
+ * was about 48 minutes against three minutes of delays, and since BD-034 it is about eleven and a
+ * half hours (25 tries × 15 minutes of expiry, plus about five and a quarter hours of delays).
  * An over-estimate is the safe direction: a gauge that waits too long reports a failure late, one
  * that waits too little reports a delivery that is still in flight as a failure.
  */
@@ -741,15 +745,10 @@ export const retryWindowMs = (policy: {
   readonly retryDelaySeconds: number;
   readonly retryBackoff: boolean;
   readonly expireInSeconds?: number;
+  readonly retryDelayMaxSeconds?: number;
 }): number => {
   const expire = policy.expireInSeconds ?? DEFAULT_JOB_EXPIRE_SECONDS;
-  let delays = 0;
-  for (let retry = 0; retry < policy.retryLimit; retry += 1) {
-    delays += policy.retryBackoff
-      ? Math.max(policy.retryDelaySeconds, 1) * 2 ** (retry + 1)
-      : policy.retryDelaySeconds;
-  }
-  return (delays + (policy.retryLimit + 1) * expire) * 1000;
+  return retryDelaysMs(policy, 'longest') + (policy.retryLimit + 1) * expire * 1000;
 };
 
 /**

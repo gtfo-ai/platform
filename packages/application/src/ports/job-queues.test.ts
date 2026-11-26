@@ -29,7 +29,11 @@ import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import {
   declareJobQueues,
   JOB_QUEUE_DEFINITIONS,
+  JOB_QUEUE_MIGRATIONS,
   jobQueueDefinition,
+  PERMANENT_FAILURE_TRIES,
+  PROVIDER_JOB_RETRY,
+  retryDelaysMs,
   UnknownJobQueueError,
 } from './job-queues.js';
 import { isValidJobName, JOB_QUEUES, type JobQueueDefinition } from './jobs.js';
@@ -143,5 +147,43 @@ describe('declareJobQueues', () => {
     });
     expect(declared).toEqual(JOB_QUEUE_DEFINITIONS);
     expect(names).toEqual(JOB_QUEUE_DEFINITIONS.map((definition) => definition.name));
+  });
+});
+
+/**
+ * The queue migrations (TD-004's 2026-11-26 amendment, BD-034): a fresh database gets a queue's
+ * options from its table row and an existing one from its migration, so the two must agree.
+ */
+describe('JOB_QUEUE_MIGRATIONS', () => {
+  it('names each migration once, in order, in the record’s `<nnnn>_<words>` shape', () => {
+    const names = JOB_QUEUE_MIGRATIONS.map((migration) => migration.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect([...names].sort()).toEqual(names);
+    for (const name of names) {
+      expect(name).toMatch(/^[0-9]{4}_[a-z0-9_]+$/);
+    }
+  });
+
+  it('states for its queue exactly what the queue’s row in the table carries now', () => {
+    for (const migration of JOB_QUEUE_MIGRATIONS) {
+      const row = jobQueueDefinition(migration.queue);
+      for (const [key, value] of Object.entries(migration.options)) {
+        expect(row[key as keyof typeof row], `${migration.name}: ${key}`).toBe(value);
+      }
+    }
+  });
+
+  it('moves the two provider-calling queues a person waits on to about five hours of retries (BD-034)', () => {
+    expect(JOB_QUEUE_MIGRATIONS.map((migration) => migration.queue)).toEqual([
+      JOB_QUEUES.pipelineOutbound,
+      JOB_QUEUES.mrCommentDebounce,
+    ]);
+    for (const queue of [JOB_QUEUES.pipelineOutbound, JOB_QUEUES.mrCommentDebounce]) {
+      expect(jobQueueDefinition(queue)).toMatchObject(PROVIDER_JOB_RETRY);
+    }
+    expect(retryDelaysMs(PROVIDER_JOB_RETRY, 'shortest')).toBeGreaterThanOrEqual(5 * 60 * 60_000);
+    expect(retryDelaysMs(PROVIDER_JOB_RETRY, 'longest')).toBeLessThan(6 * 60 * 60_000);
+    // A refusal keeps the three tries every such job had before (BACKLOG 1656).
+    expect(PERMANENT_FAILURE_TRIES).toBe(3);
   });
 });

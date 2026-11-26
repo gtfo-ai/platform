@@ -5,7 +5,11 @@
  * it is idempotent, it refuses to run when an applied file has been edited, and two of them
  * starting at once serialise on the advisory lock instead of racing.
  */
-import { JOB_QUEUE_DEFINITIONS } from '@platform/application';
+import {
+  JOB_QUEUE_DEFINITIONS,
+  JOB_QUEUE_MIGRATIONS,
+  PROVIDER_JOB_RETRY,
+} from '@platform/application';
 import { db } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -430,9 +434,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
         retry_limit: number;
         retry_delay: number;
         retry_backoff: boolean;
+        retry_delay_max: number | null;
         expire_seconds: number;
       }>(
-        'select name, policy, retry_limit, retry_delay, retry_backoff, expire_seconds from pgboss.queue',
+        'select name, policy, retry_limit, retry_delay, retry_backoff, retry_delay_max, expire_seconds from pgboss.queue',
       );
       return new Map(queues.map((queue) => [queue.name, queue]));
     });
@@ -444,6 +449,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
         retry_limit: definition.retryLimit ?? 2,
         retry_delay: definition.retryDelaySeconds ?? 0,
         retry_backoff: definition.retryBackoff ?? false,
+        // BD-034: the backoff's cap, stated on the provider-calling queues and absent elsewhere.
+        retry_delay_max: definition.retryDelayMaxSeconds ?? null,
         expire_seconds: definition.expireInSeconds ?? 900,
       });
     }
@@ -606,6 +613,87 @@ describe('migrate on an empty PostgreSQL 18', () => {
       await expect(db.findUnknownMigrations(client)).resolves.toEqual(['9999_from_the_future']);
       await client.query("delete from platform_migrations where name = '9999_from_the_future'");
     });
+  });
+});
+
+/**
+ * TD-004's 2026-11-26 amendment (BD-034, BACKLOG 1656): a queue that already exists keeps its row
+ * through `create_queue`, so the long provider retry reaches an existing database only through a
+ * queue migration — applied once, recorded, and refused when its options are edited.
+ */
+describe('queue migrations', () => {
+  const queueRow = async (connectionString: string, name: string) =>
+    withClient(connectionString, async (client) => {
+      const { rows } = await client.query<{
+        retry_limit: number;
+        retry_delay: number;
+        retry_backoff: boolean;
+        retry_delay_max: number | null;
+      }>(
+        'select retry_limit, retry_delay, retry_backoff, retry_delay_max from pgboss.queue where name = $1',
+        [name],
+      );
+      return rows[0];
+    });
+
+  it('moves a queue declared with the old three tries onto the long retry, once, and records it', async () => {
+    const database = await createTestDatabase('queuemig');
+    try {
+      const fresh = await db.runMigrations({ connectionString: database.connectionString });
+      // A fresh database: the queues are created with the table's options, and the migrations are
+      // applied over them (the same values) and recorded.
+      expect(fresh.queueMigrationsApplied).toEqual(
+        JOB_QUEUE_MIGRATIONS.map((migration) => migration.name),
+      );
+      // A database from before BD-034: the two queues carry the old policy, nothing is recorded.
+      await withClient(database.connectionString, async (client) => {
+        await client.query(
+          `update pgboss.queue set retry_limit = 2, retry_delay = 30, retry_backoff = true, retry_delay_max = null
+            where name in ('pipeline.outbound', 'mr.comment.debounce')`,
+        );
+        await client.query('delete from job_queue_migrations');
+      });
+      expect(await queueRow(database.connectionString, 'pipeline.outbound')).toMatchObject({
+        retry_limit: 2,
+        retry_delay_max: null,
+      });
+
+      const upgraded = await db.runMigrations({ connectionString: database.connectionString });
+      expect(upgraded.queueMigrationsApplied).toEqual([
+        '0001_pipeline_outbound_retry_hours',
+        '0002_mr_comment_debounce_retry_hours',
+      ]);
+      for (const name of ['pipeline.outbound', 'mr.comment.debounce']) {
+        expect(await queueRow(database.connectionString, name), name).toEqual({
+          retry_limit: PROVIDER_JOB_RETRY.retryLimit,
+          retry_delay: PROVIDER_JOB_RETRY.retryDelaySeconds,
+          retry_backoff: true,
+          retry_delay_max: PROVIDER_JOB_RETRY.retryDelayMaxSeconds,
+        });
+      }
+      // stage.execute is not migrated: its row keeps the table's options.
+      expect(await queueRow(database.connectionString, 'stage.execute')).toMatchObject({
+        retry_limit: 2,
+        retry_delay_max: null,
+      });
+
+      // Applied once: the next migrate finds both recorded.
+      const again = await db.runMigrations({ connectionString: database.connectionString });
+      expect(again.queueMigrationsApplied).toEqual([]);
+
+      // Forward-only: a recorded row whose options this build does not carry refuses the migrate.
+      await withClient(database.connectionString, async (client) => {
+        await client.query(
+          `update job_queue_migrations set options = '{"retryLimit": 2}'::jsonb
+            where name = '0001_pipeline_outbound_retry_hours'`,
+        );
+      });
+      await expect(
+        db.runMigrations({ connectionString: database.connectionString }),
+      ).rejects.toThrow(/0001_pipeline_outbound_retry_hours was applied with options/);
+    } finally {
+      await database.drop();
+    }
   });
 });
 

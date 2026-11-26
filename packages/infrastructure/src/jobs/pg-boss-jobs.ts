@@ -238,6 +238,7 @@ export const pgBossQueueOptions = (definition: JobQueueDefinition): Record<strin
     retryLimit: definition.retryLimit,
     retryDelay: definition.retryDelaySeconds,
     retryBackoff: definition.retryBackoff,
+    retryDelayMax: definition.retryDelayMaxSeconds,
     expireInSeconds: definition.expireInSeconds,
     deleteAfterSeconds: definition.deleteAfterSeconds,
     deadLetter: definition.deadLetterQueue,

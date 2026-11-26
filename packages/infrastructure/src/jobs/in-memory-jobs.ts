@@ -184,7 +184,12 @@ const retryDelayMs = (queue: StoredQueue, attempts: number): number => {
   }
   const exponent = Math.min(16, attempts);
   const base = Math.max(queue.retryDelaySeconds, 1);
-  return base * 2 ** exponent * MS_PER_SECOND;
+  // pg-boss's `LEAST(retry_delay_max, …)` (BD-034, BACKLOG 1656): the top of the band, capped.
+  const seconds =
+    queue.retryDelayMaxSeconds === undefined
+      ? base * 2 ** exponent
+      : Math.min(queue.retryDelayMaxSeconds, base * 2 ** exponent);
+  return seconds * MS_PER_SECOND;
 };
 
 const trailingStartAfterMs = (nowMs: number, windowSeconds: number): number => {

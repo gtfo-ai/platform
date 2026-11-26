@@ -801,6 +801,19 @@ export const expiredJobEscalations = pgTable('expired_job_escalations', {
 });
 
 /**
+ * The queue migrations `migrate` applied (TD-004's 2026-11-26 amendment, BD-034, migration 0123):
+ * one row per named change to a live pg-boss queue's options (`JOB_QUEUE_MIGRATIONS`), with the
+ * options applied, keys sorted. Written once after the update and never changed; no foreign key
+ * (`queue` names a row of `pgboss.queue`).
+ */
+export const jobQueueMigrations = pgTable('job_queue_migrations', {
+  name: text('name').primaryKey(),
+  queue: text('queue').notNull(),
+  options: jsonb('options').$type<JsonObject>().notNull(),
+  appliedAt: timestamp('applied_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * S-28.5's one-off ticket-status sweep (migration 0115, `recovery/ticket-status-sweep.ts`): one row
  * per live task whose ticket the sweep re-read, written before the read is enqueued; the earliest
  * `swept_at` is the sweep's cutoff.

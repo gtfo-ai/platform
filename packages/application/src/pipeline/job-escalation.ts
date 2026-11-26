@@ -47,6 +47,8 @@ import type { Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { amendEscalation, escalateTask, IllegalTransitionError } from '@platform/domain';
 import type { EventStore } from '../ports/event-store.js';
+import { IntegrationError, type IntegrationErrorCode } from '../ports/integrations/common.js';
+import { jobQueueDefinition, PERMANENT_FAILURE_TRIES, retryDelaysMs } from '../ports/job-queues.js';
 import type { JobContext, Jobs } from '../ports/jobs.js';
 import { isLastTry, JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -90,22 +92,88 @@ export interface ExhaustedJob {
    * try, so the wrapper's brief is unchanged.
    */
   readonly expiredAfterSeconds?: number;
+  /**
+   * Set when the provider **refused** the call rather than failed it (BD-034, BACKLOG 1656): the
+   * `IntegrationError` code of a failure another try does not fix (a credential, a permission, a
+   * request the provider calls wrong). Such a job escalates at {@link PERMANENT_FAILURE_TRIES} tries
+   * and then **ends** rather than spending its queue's hours of retries, so the brief says why and
+   * does not send a person to the failed-jobs list, which does not list it.
+   */
+  readonly refusal?: IntegrationErrorCode;
 }
 
 export type ExhaustedJobEnding = 'escalated' | 'amended' | 'notified' | 'unreachable' | 'absent';
 
+/**
+ * How long `tries` tries of a job on `queue` waited between them at the least, in words (BD-034:
+ * a brief says how long and how often the platform tried) — the bottom of each backoff band of the
+ * queue's own policy (`retryDelaysMs`), so the brief never claims more patience than was spent.
+ */
+export const retrySpanWords = (queue: string, tries: number): string => {
+  let definition: ReturnType<typeof jobQueueDefinition>;
+  try {
+    definition = jobQueueDefinition(queue);
+  } catch {
+    return '';
+  }
+  const ms = retryDelaysMs(
+    {
+      retryLimit: Math.max(0, tries - 1),
+      retryDelaySeconds: definition.retryDelaySeconds ?? 0,
+      retryBackoff: definition.retryBackoff ?? false,
+      ...(definition.retryDelayMaxSeconds === undefined
+        ? {}
+        : { retryDelayMaxSeconds: definition.retryDelayMaxSeconds }),
+    },
+    'shortest',
+  );
+  const minutes = Math.round(ms / 60_000);
+  const span =
+    ms < 120_000
+      ? `${String(Math.round(ms / 1000))} seconds`
+      : minutes < 120
+        ? `${String(minutes)} minutes`
+        : `${String(Math.floor(minutes / 60))} hours`;
+  const cap = definition.retryDelayMaxSeconds;
+  return definition.retryBackoff === true && cap !== undefined && tries > 1
+    ? ` over at least ${span}, each wait longer than the last up to ${String(Math.round(cap / 60))} minutes`
+    : tries > 1
+      ? ` over at least ${span}`
+      : '';
+};
+
 const reasonFor = (job: ExhaustedJob): string =>
-  job.expiredAfterSeconds === undefined
-    ? `${job.duty ?? job.queue} failed on all ${job.tries} tries`
-    : `${job.duty ?? job.queue} ran past its ${job.expiredAfterSeconds}-second limit on the last of ${job.tries} tries`;
+  job.refusal !== undefined
+    ? `${job.duty ?? job.queue} was refused by the provider (${job.refusal}) on ${job.tries} tries`
+    : job.expiredAfterSeconds === undefined
+      ? `${job.duty ?? job.queue} failed on all ${job.tries} tries`
+      : `${job.duty ?? job.queue} ran past its ${job.expiredAfterSeconds}-second limit on the last of ${job.tries} tries`;
 
 const briefFor = (job: ExhaustedJob, ticketKey: string): string =>
   `The platform could not ${job.what} for ${ticketKey}: the ${job.duty === null ? job.queue : `"${job.duty}"`} ` +
-  (job.expiredAfterSeconds === undefined
-    ? `job failed on all ${job.tries} of its tries, and nothing tries it again. `
-    : `job ran past its ${job.expiredAfterSeconds}-second limit on the last of its ${job.tries} tries and was stopped, so whether it finished is not known, and nothing tries it again. `) +
-  `${job.remedy} ` +
-  'The failure itself is on the organisation’s failed-jobs list (Settings), for an administrator.';
+  (job.refusal !== undefined
+    ? `job was refused by the provider (${job.refusal}) on each of its ${job.tries} tries. Another try does not fix a refusal — a credential, a permission or a request the provider will not take — so the job stopped. ${job.remedy} Check the integration's credential and its permissions first.`
+    : (job.expiredAfterSeconds === undefined
+        ? `job failed on all ${job.tries} of its tries${retrySpanWords(job.queue, job.tries)}, and nothing tries it again. `
+        : `job ran past its ${job.expiredAfterSeconds}-second limit on the last of its ${job.tries} tries${retrySpanWords(job.queue, job.tries)} and was stopped, so whether it finished is not known, and nothing tries it again. `) +
+      `${job.remedy} ` +
+      'The failure itself is on the organisation’s failed-jobs list (Settings), for an administrator.');
+
+/**
+ * The provider's **permanent** refusal behind a thrown error, or `null` (BD-034, BACKLOG 1656): an
+ * `IntegrationError` — the error itself or its `cause` — whose `retryable` is false. Everything
+ * else (a provider outage or throttle, a database failure, a write that lost its races, an error of
+ * no known class) is retried on the queue's long policy, because another try may well fix it.
+ */
+export const permanentRefusalOf = (error: unknown): IntegrationErrorCode | null => {
+  const candidates = [error, error instanceof Error ? error.cause : undefined];
+  for (const candidate of candidates) {
+    if (candidate instanceof IntegrationError && !candidate.retryable) {
+      return candidate.code;
+    }
+  }
+  return null;
+};
 
 /**
  * Escalates the task of a job whose last try failed; answers which of the endings it took. Never
@@ -237,11 +305,19 @@ export const escalatingOnLastTry =
     try {
       await handler(job);
     } catch (error) {
-      const exhausted = isLastTry(job) ? describe(job) : null;
+      const tries = (job.retries?.count ?? 0) + 1;
+      // BD-034 (BACKLOG 1656): a refusal another try does not fix keeps the old three-try bound and
+      // then ends the job; everything else waits for the queue's last try, hours away.
+      const refusal = permanentRefusalOf(error);
+      const refused = refusal !== null && tries >= PERMANENT_FAILURE_TRIES;
+      const exhausted = isLastTry(job) || refused ? describe(job) : null;
       if (exhausted !== null) {
-        const tries = (job.retries?.count ?? 0) + 1;
         try {
-          const ending = await escalateExhaustedJob(options, { ...exhausted, tries });
+          const ending = await escalateExhaustedJob(options, {
+            ...exhausted,
+            tries,
+            ...(refused && refusal !== null ? { refusal } : {}),
+          });
           (options.logger ?? silentLogger).warn(
             {
               task_id: exhausted.taskId,
@@ -249,9 +325,26 @@ export const escalatingOnLastTry =
               duty: exhausted.duty,
               tries,
               ending,
+              refusal: refused ? refusal : null,
             },
-            'a job a person waits on failed on its last try, so its task was escalated with a brief',
+            refused
+              ? 'a job a person waits on was refused by its provider on every try, so its task was escalated with a brief and the job ends'
+              : 'a job a person waits on failed on its last try, so its task was escalated with a brief',
           );
+          if (refused) {
+            // The escalation is the ending: no retry is left to spend on a refusal, and a rethrow
+            // would re-run the duty and amend the brief on every one of the queue's hours of tries.
+            (options.logger ?? silentLogger).error(
+              {
+                task_id: exhausted.taskId,
+                queue: exhausted.queue,
+                duty: exhausted.duty,
+                err: error,
+              },
+              'the refused job is completed rather than failed, so it is not on the failed-jobs list; this line is its record',
+            );
+            return;
+          }
         } catch (escalationError) {
           (options.logger ?? silentLogger).error(
             { task_id: exhausted.taskId, queue: exhausted.queue, err: escalationError },

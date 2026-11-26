@@ -28,6 +28,7 @@ import {
   silentLogger,
 } from '@platform/application';
 import { PgBoss } from 'pg-boss';
+import { applyJobQueueMigrations } from '../jobs/job-queue-migrations.js';
 import { pgBossQueueOptions } from '../jobs/pg-boss-jobs.js';
 import { createDatabaseClient } from './client.js';
 import type { MigrationClass } from './migration-class.js';
@@ -71,6 +72,8 @@ export type MigrateEvent =
   | { readonly kind: 'migration_skipped'; readonly name: string }
   | { readonly kind: 'pgboss'; readonly schema: string; readonly version: number | null }
   | { readonly kind: 'queues'; readonly declared: readonly string[] }
+  /** The queue migrations applied this run (BD-034, TD-004's 2026-11-26 amendment). */
+  | { readonly kind: 'queue_migrations'; readonly applied: readonly string[] }
   | { readonly kind: 'grants'; readonly role: string }
   | { readonly kind: 'retention'; readonly scope: string; readonly days: number | null }
   | { readonly kind: 'partitions'; readonly created: readonly string[] }
@@ -84,6 +87,8 @@ export interface MigrateReport {
   readonly pgBossSchemaVersion: number | null;
   /** Every queue name `migrate` declared (create-if-absent: an existing queue is left as it is). */
   readonly queuesDeclared: readonly string[];
+  /** The queue migrations (`JOB_QUEUE_MIGRATIONS`) this run applied; the recorded ones are skipped. */
+  readonly queueMigrationsApplied: readonly string[];
   readonly grantsAppliedTo: string | null;
   readonly transcriptRetentionDays: number | null;
   readonly partitionsCreated: readonly string[];
@@ -169,10 +174,14 @@ export interface MigrateDependencies {
   ) => Promise<InstalledJobs>;
 }
 
-/** What installing pg-boss did: its schema version, and the queues declared from the table. */
+/**
+ * What installing pg-boss did: its schema version, the queues declared from the table, and the
+ * queue migrations applied to queues that already existed (TD-004's 2026-11-26 amendment).
+ */
 export interface InstalledJobs {
   readonly schemaVersion: number | null;
   readonly queuesDeclared: readonly string[];
+  readonly queueMigrationsApplied: readonly string[];
 }
 
 /** The log table is created outside the migration files: it has to exist to record the first one. */
@@ -230,7 +239,16 @@ const installPgBoss = async (
       },
       queues,
     );
-    return { schemaVersion, queuesDeclared };
+    // TD-004's 2026-11-26 amendment (BD-034): `create_queue` left every existing queue as it was, so
+    // a change to a live queue's options is applied here — once per named row, recorded in
+    // `job_queue_migrations` (migration 0123, applied above), still under the advisory lock.
+    const queueMigrationsApplied = await applyJobQueueMigrations({
+      query: async (text, values) =>
+        (await boss.getDb().executeSql(text, values === undefined ? undefined : [...values]))
+          .rows as Record<string, unknown>[],
+      updateQueue: async (queue, options) => boss.updateQueue(queue, options),
+    });
+    return { schemaVersion, queuesDeclared, queueMigrationsApplied };
   } finally {
     // `close` returns the connections; nothing is in flight, so there is nothing to drain.
     await boss.stop({ close: true, graceful: false });
@@ -558,6 +576,7 @@ export const runMigrations = async (
     const pgBossSchemaVersion = installed.schemaVersion;
     log({ kind: 'pgboss', schema: pgBossSchema, version: pgBossSchemaVersion });
     log({ kind: 'queues', declared: installed.queuesDeclared });
+    log({ kind: 'queue_migrations', applied: installed.queueMigrationsApplied });
 
     // The retention window is stored, not passed at call time, so the application role can only
     // ever trigger the retention the operator configured here. Note this is a rewrite on every
@@ -598,6 +617,7 @@ export const runMigrations = async (
       pgBossSchema,
       pgBossSchemaVersion,
       queuesDeclared: installed.queuesDeclared,
+      queueMigrationsApplied: installed.queueMigrationsApplied,
       grantsAppliedTo,
       transcriptRetentionDays: retentionDays,
       partitionsCreated,
