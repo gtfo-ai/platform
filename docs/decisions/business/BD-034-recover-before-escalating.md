@@ -92,6 +92,6 @@ The product owner asked for the four follow-ups end to end. As built:
 - **The expired-job ending** (`expired_job`): with the long policy, a try that expires is retried like a throw; only the queue's **last** try expiring escalates, hours later, and then whether the work happened is unknown — a person reads it.
 - **The platform merge's lost `mr.merged`** (3 passes ≈10 minutes apart): the first pass already records the merge through the inbox, and a later pass with the same delivery id is a duplicate, so more passes change nothing. A task still at Ready after the platform recorded its own merge is a defect a person has to look at.
 - **A provider's refusal** at a bound-and-escalate duty (above), a `stage.execute` job that keeps failing for a reason that is not transient (a schema refusal, a type error, an expired two-hour try), and a write conflict that loses six times in a row over most of a second (a writer that keeps rewriting the row).
-- **A poll-only binding's late result**: no webhook reaches it after the gate parked the task, so its CI-timeout escalation is still resumed by a person (BACKLOG 1660).
+- **A poll-only binding's late result**: no webhook reaches it after the gate parked the task, so its CI-timeout escalation is still resumed by a person (BACKLOG 1663).
 
 Money stays bounded as before: none of these retries starts a paid run that the task's budget does not cap.
