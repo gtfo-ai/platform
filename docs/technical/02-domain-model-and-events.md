@@ -475,7 +475,12 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > parsed by a strict schema) and is cleared by any answer, a `pending` included. A backstop count
 > bounds the chain if a clock is wrong. At the bound the task is escalated `undecided` with a brief
 > naming the binding's host, the time and the code (*"gitlab.com did not answer for 60 minutes:
-> unavailable"*). A non-transient failure (`unauthorised`, `forbidden`, `not_found`,
+> unavailable"*). **Since BD-034 (2026-11-26)** the outage limit is 24 hours from the first failure,
+> and the CI gate gets the later of that and its CI timeout. A gate that answers *pending* no longer
+> parks after `MAX_GATE_CHECKS`: it waits by time from its entry, backing off from 30 s to 5 min, 60
+> minutes for a provider computation and 24 hours for a custom gate's declared event (`gate-wait.ts`).
+> The CI gate waits past its timeout for a pipeline that is still `pending` or `running`, one read
+> every 5 minutes up to 24 hours from the entry (`ci-wait.ts`). A non-transient failure (`unauthorised`, `forbidden`, `not_found`,
 > `invalid_response`, …) keeps the old ending: the job throws. Before this, AUT-6820's CI gate threw
 > through pg-boss's two retries in ten minutes, and the stranded-stage recovery (WP-108) — which
 > now says, when the entry's last job **failed**, that the job failed and with which error class

@@ -1061,11 +1061,21 @@ rest. One setting, `APP_POLL_SWEEP_INTERVAL_MS`, bounds how long a lost poll of 
 **A finished pipeline is not polled either, so the CI gate waits for it itself** (WP-136): on a
 poll-only binding it asks GitLab for the merge request's head pipeline every 30 seconds for its first
 five checks and every minute after, until `pipeline.limits.ci_timeout_minutes` (default 60, 10–1440,
-settable in `.agentic/config.yml`) has passed since the task entered the gate, and then parks the task
-*Needs human* with a brief naming that key. A binding with a webhook secret waits the same way and
+settable in `.agentic/config.yml`) has passed since the task entered the gate. A pipeline that is
+still **pending or running** at the timeout is waited for past it (BD-034): one read every five
+minutes, up to 24 hours from the gate's entry, and only then is the task parked. A `manual`
+pipeline, or no pipeline at all, parks the task *Needs human* at the timeout with a brief naming
+that key. A binding with a webhook secret waits the same way and
 up to the same timeout (since 2026-11-26: five checks 30 seconds apart parked every task whose
 pipeline took longer than about two and a half minutes); the pipeline's own event settles the gate the
 moment it arrives, and the gate's re-checks are the safety net for a webhook that was lost. A resume after a pause keeps the gate's clock; a hand-back at `ci_gate` restarts it.
+**What the platform retries before it asks a person** (BD-034). Every other gate that has no answer
+yet waits by time, backing off from 30 seconds to 5 minutes: 60 minutes for the provider to compute
+mergeability, 24 hours for a custom gate's declared event. A provider that does not answer a gate is
+asked again for 24 hours. A run that could not start is retried 8 times over about 35 minutes. A run
+that ended before the model took a single turn is re-planned 6 times over about 47 minutes. A run whose
+`runner` was stopped is handed back 5 times, a usage limit is re-planned 3 times, and a lost worker's
+run is re-planned 3 times. Only past those bounds is the task parked, and the brief says what was tried.
 
 ## 5. Upgrade
 

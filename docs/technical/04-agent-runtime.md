@@ -1008,7 +1008,9 @@ re-offered once per stage entry (decision 12).
 > about*. The lease sweep counts `lost_runs` in its ending's transaction and, for an entry's first loss,
 > revokes the run's minted credential after the commit and then enqueues `stage.execute` (the lost worker
 > excluded, any claimant may take it); the second loss escalates naming both runs and the machines that
-> held them. Steer, cancel and take-over reach a remote holder on its
+> held them. **Since BD-034 (2026-11-26)** an entry is re-planned after three losses, three usage limits
+> and five shutdown hand-backs; a run that ended before the model took a turn is re-planned six times,
+> 1 to 16 minutes apart; and a start failure gets eight attempts, backing off from 30 s to 10 min. Steer, cancel and take-over reach a remote holder on its
 heartbeat response (decision 14).
 
 > **The claimant's spec is the stored plan (WP-275a, TD-031's 2026-11-04 amendment §2).** Transaction
