@@ -33,7 +33,9 @@
  * else is refused rather than guessed at, because two vitest steps would write one blob name.
  *
  *  - **`--shard i/n`** runs that step with `--shard=i/n` and a blob report (vitest splits the test
- *    *files* between the `n` parts, by a hash of their path, so every file is in exactly one), and
+ *    *files* between the `n` parts, by their measured durations — `scripts/balanced-sequencer.ts`
+ *    over `scripts/shard-timings.json`, refreshed by `node scripts/shard-timings.mjs <run-id>` —
+ *    so every file is in exactly one, a file the table does not name included), and
  *    **stops after it**: the steps after it — `coverage:ratchet` after `test` — judge the whole
  *    tier, which no part has. A part's own coverage thresholds are not checked either
  *    (`vitest.config.ts`), for the same reason. Its line is `PASS: <target> (shard i/n)`.

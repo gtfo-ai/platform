@@ -145,7 +145,11 @@ jobs:
   # name.** A runner has four vCPUs and vitest runs three workers, so `unit + contract` (CPU-bound:
   # 616 s of tests in a 456 s run) and `e2e-fake-claude` (1988 s of tests in a 747 s run) were each
   # bounded by one machine. Each is now split into parts by `scripts/verify.mjs --shard <i>/<n>`
-  # — vitest gives every test file to exactly one part — and the job that keeps the tier's name is
+  # — vitest gives every test file to exactly one part, **by measured duration** rather than by a
+  # hash of its path (`scripts/balanced-sequencer.ts`; the hash split once gave e2e part 3 1124 s of
+  # file time against 553 s and 496 s and made it the run's critical path). The figures are
+  # `scripts/shard-timings.json`; after a change moves a tier's balance, refresh them from a green
+  # run with `node scripts/shard-timings.mjs <run-id>` — and the job that keeps the tier's name is
   # the **merge**: `--merge-reports` refuses unless every part's blob is there, replays every part's
   # results (one failed test fails it), and, for `unit + contract`, merges the coverage, checks the
   # thresholds on the whole and runs the ratchet. The part count is the matrix's length and the
@@ -330,7 +334,7 @@ jobs:
       # here rather than pulled, so the tier tests **this commit's** images —
       # and a missing image fails the suite rather than skipping a case, which
       # is WP-22's criterion (PROGRESS backlog 27). Built in every part, because
-      # which part holds the workspace files is vitest's hash of their paths.
+      # which part holds the workspace files is the duration balance's choice, not a fixed one.
       # No `--size-check` here: the budgets are `image.yml`'s job, and measuring an unpacked image
       # size costs this tier nothing it needs.
       - name: build the run images this tier needs

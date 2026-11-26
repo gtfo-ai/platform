@@ -168,7 +168,22 @@ const MIRROR_SUPPORT_FILES: readonly string[] = [
 ];
 
 /**
- * Builds the mirror: its own repository, the two shipped files the collection depends on, the
+ * The shipped files `vitest.config.ts` loads when the mirror's vitest reads it: the configuration,
+ * the nested-checkout exclusion it calls, and the sequencer it names (`sequence.sequencer`) with
+ * the pure rule that sequencer imports. A file the configuration imports and this list misses
+ * fails the mirror's `vitest list` as an unresolved import.
+ */
+const MIRROR_SHIPPED_FILES = [
+  'vitest.config.ts',
+  'scripts/nested-checkouts.ts',
+  'scripts/balanced-sequencer.ts',
+  'scripts/shard-balance.ts',
+  'scripts/shard-timings.json',
+];
+
+/**
+ * Builds the mirror: its own repository, the shipped files the collection depends on
+ * ({@link MIRROR_SHIPPED_FILES}), the
  * dependencies by symlink (`node_modules` is excluded by every project and skipped by the walk),
  * and the stand-in files above.
  */
@@ -182,12 +197,9 @@ const buildMirror = (): string => {
     `${JSON.stringify({ name: 'nested-checkout-mirror', private: true, type: 'module' })}\n`,
     'utf8',
   );
-  copyFileSync(join(repositoryRoot, 'vitest.config.ts'), join(root, 'vitest.config.ts'));
   mkdirSync(join(root, 'scripts'), { recursive: true });
-  copyFileSync(
-    join(repositoryRoot, 'scripts', 'nested-checkouts.ts'),
-    join(root, 'scripts', 'nested-checkouts.ts'),
-  );
+  for (const path of MIRROR_SHIPPED_FILES)
+    copyFileSync(join(repositoryRoot, path), join(root, path));
   symlinkSync(join(repositoryRoot, 'node_modules'), join(root, 'node_modules'), 'dir');
   for (const path of MIRROR_OWN_FILES) write(join(root, path));
   for (const path of MIRROR_SUPPORT_FILES) {

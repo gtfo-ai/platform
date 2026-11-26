@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { BalancedSequencer } from './scripts/balanced-sequencer.js';
 import { nestedCheckoutExcludes } from './scripts/nested-checkouts.js';
 
 const repositoryRoot = fileURLToPath(new URL('.', import.meta.url));
@@ -378,6 +379,11 @@ export const isShardRun = (argv: readonly string[]): boolean =>
  */
 export default defineConfig({
   test: {
+    // A split run (`--shard`, `scripts/verify.mjs`) gives each part its files by measured duration
+    // rather than by a hash of their paths, and runs them longest first; an unsplit run is ordered
+    // as vitest's own `BaseSequencer` orders it. Root-level only: vitest reads no project's.
+    // `scripts/shard-balance.ts` has the rule, `scripts/shard-timings.json` the figures.
+    sequence: { sequencer: BalancedSequencer },
     projects: [
       {
         test: {
