@@ -583,10 +583,10 @@ const main = async () => {
   try {
     // ── The registry and the attested builds ──────────────────────────────────────────────
     stages.set('the local registry');
-    // Pulled on its own bound first: `docker run` would pull it inside the 60 s a query is given,
-    // and a slow Docker Hub spent it there once (docker checks run 44759408943: the run was killed
-    // after `Downloaded newer image for registry:2`, 64 s into the step). The other two worker
-    // checks already give the registry's start a download's bound.
+    // Pulled on its own bound first: `docker run` would pull it inside the 60 s a query is given.
+    // Docker checks run 44759408943 failed here 64 s into the step with no daemon message after
+    // `Downloaded newer image for registry:2` — measured; that the 60 s bound killed it and the
+    // download spent most of it is inferred. `worker-install-check.mjs` pulls first the same way.
     await docker(['pull', '--quiet', 'registry:2'], { timeoutMs: 10 * 60_000 });
     await docker([
       'run',

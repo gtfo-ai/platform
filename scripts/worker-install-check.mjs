@@ -566,6 +566,9 @@ const main = async () => {
     // ── The registry and this build's images ──────────────────────────────────────────────
     stages.set('the local registry');
     const registryPort = await freePort();
+    // Pulled on a download's bound first, so `run` below spends its 60 s starting a container and
+    // never downloading one (`worker-update-check.mjs` has the run this was inferred from).
+    await docker(['pull', '--quiet', 'registry:2'], { timeoutMs: 10 * 60_000 });
     await docker(
       ['run', '-d', '--name', REGISTRY_CONTAINER, '-p', `${registryPort}:5000`, 'registry:2'],
       {
