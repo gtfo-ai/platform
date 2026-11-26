@@ -1,0 +1,80 @@
+name: ci on main
+
+# **A push to `main` runs `ci.yml` only when its pull request did not already** (CI speed,
+# 2026-11-26). `main` moves only by fast-forwarding to the head of a pull request whose CI is green,
+# so the push carries a commit `ci.yml` has run on, on the same tree; running it again cost
+# seventeen jobs of the organisation's twenty concurrent ones and held the next pull request in the
+# queue. `scripts/main-push-verified.mjs` decides, and it decides **to run** on anything short of
+# positive proof — an API error, a force push, a run in progress or red, no pull request into
+# `main`. The skipped call reads as skipped on the commit, beside the pull request run's green
+# checks on the same sha, which are the verdict.
+#
+# The `pull_request` run stays `ci.yml`'s own trigger, unchanged, so the required checks keep their
+# names.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Every push runs, at once and to the end, as `ci.yml`'s own push group did. Not `ci-…`: the called
+# workflow's group is that prefix, and a caller and a callee in one group wait for each other.
+concurrency:
+  group: ci-main-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  verified:
+    name: verified on its pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # two API reads and no install
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      verified: ${{ steps.proof.outputs.verified }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No dependency is installed — the script is plain Node — so there is no cache to restore.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - id: proof
+        name: did ci.yml pass on this commit's pull request?
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/main-push-verified.mjs --workflow .github/workflows/ci.yml --github-output
+
+  # **The pnpm store cache is written from `main`.** A pull request's run reads caches saved on its
+  # own ref or on the default branch, and `ci.yml`'s push run was what saved one on `main` after a
+  # lockfile change. With that run skipped, this job keeps doing it: setup-node saves the store only
+  # when its key (the lockfile's hash) missed, so on most pushes it restores and installs in seconds.
+  pnpm-cache:
+    name: pnpm store cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # an install, as every ci.yml job's first step
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+  # `!cancelled()`, not the default `success()`: a proof job that itself failed must run everything
+  # rather than skip it.
+  ci:
+    needs: verified
+    if: ${{ !cancelled() && needs.verified.outputs.verified != 'true' }}
+    # zizmor's self-repository note asks for the newer `$/` spelling; `./` is the one the pinned
+    # actionlint and `scripts/release.test.ts`'s pin census both know, and it names this repository
+    # at this commit all the same.
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]

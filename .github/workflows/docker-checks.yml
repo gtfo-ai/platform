@@ -41,6 +41,10 @@ jobs:
     name: plan docker checks
     runs-on: ubuntu-latest
     timeout-minutes: 10 # the floor: 9 s and 14 s in the first two runs (PR #45)
+    permissions:
+      contents: read
+      # `main-push-verified.mjs` reads this workflow's runs for the pushed commit.
+      actions: read
     outputs:
       checks: ${{ steps.plan.outputs.checks }}
     steps:
@@ -59,14 +63,30 @@ jobs:
       # runs every check, because a list that cannot be computed is not an empty list. `--no-renames`:
       # a rename is listed as a deletion and an addition, so moving a file out of a listed path still
       # selects the check (with rename detection only the new name is printed).
+      # **A push to `main` whose pull request already ran these checks runs none** (as `ci-main.yml`
+      # does for `ci.yml`): `main` moves only by fast-forwarding to a green pull request's head, so
+      # the same tree was checked. Only on positive proof — anything short of it runs the plan below,
+      # and the nightly run still runs every check on `main`.
+      - id: proof
+        if: github.event_name == 'push'
+        name: did this workflow pass on this commit's pull request?
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/main-push-verified.mjs --workflow .github/workflows/docker-checks.yml --github-output
       - id: plan
         name: the checks this change runs
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
+          VERIFIED: ${{ steps.proof.outputs.verified }}
         run: |
           set -euo pipefail
+          if [ "${VERIFIED:-}" = "true" ]; then
+            echo "checks=[]" >> "$GITHUB_OUTPUT"
+            echo "no check runs: this commit passed them on its pull request"
+            exit 0
+          fi
           range=""
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             range="${PR_BASE}...${PR_HEAD}"

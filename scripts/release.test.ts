@@ -1182,7 +1182,7 @@ const unboundedJobs = (workflow: string): string[] =>
     if (name.startsWith('(')) return [name];
     // A job that calls a reusable workflow (`uses:` at job level) cannot carry `timeout-minutes`
     // (GitHub refuses the key there); the called workflow's jobs carry their own, and every
-    // workflow in this directory is in the census below. None exists today.
+    // workflow in this directory is in the census below. `ci-main.yml` calls `ci.yml` so.
     if (body.some((line) => /^ {4}uses:\s/.test(line))) return [];
     const minutes = body
       .map((line) => /^ {4}timeout-minutes:\s*(\S+)/.exec(line)?.[1])
