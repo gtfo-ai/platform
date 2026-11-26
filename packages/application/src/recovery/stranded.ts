@@ -1345,7 +1345,9 @@ const recoverStrandedStages = async (
     // job — eight times, backing off to an hour, while the failure is one another try may fix (a
     // provider or the database not answering, a write that lost its races), once otherwise — and
     // escalated when the entry's failed jobs pass that bound.
-    const failed = row.endedRun === null ? row.failedJob : null;
+    // The store reads only failed jobs after the entry's newest ended run, so an owed re-plan whose
+    // re-enqueued job keeps failing is bounded here too (review of BD-034's follow-ups).
+    const failed = row.endedRun === null || row.endedRun.replanOwed ? row.failedJob : null;
     const failedBoundSpent = failed !== null && (failed.jobs ?? 1) > failedStageJobBound(failed);
     if (
       row.recoveryAttemptedAt === null &&

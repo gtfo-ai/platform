@@ -203,18 +203,20 @@ const strandedSql = (schema: string): string => `
         from ${schema}.job j
        where j.name = $1 and j.singleton_key = 'task:' || t.id::text and j.state = 'failed'
          and j.data ->> 'stage' = t.current_stage and j.data ->> 'attempt' = s.attempt::text
-         and j.completed_on >= s.entered_at
+         and j.completed_on >= greatest(s.entered_at, er.ended_at)
        order by j.completed_on desc
        limit 1
     ) fj on true
     -- BACKLOG 1659: how many of this entry's stage.execute jobs pg-boss failed — the pass's bound on
-    -- re-enqueuing a stage whose job keeps failing for a reason another try may fix.
+    -- re-enqueuing a stage whose job keeps failing for a reason another try may fix. Like the newest
+    -- failed job above, only those after the entry's newest ended run: an owed re-plan whose
+    -- re-enqueued job keeps failing is bounded by them too (review of BD-034's follow-ups).
     left join lateral (
       select count(*)::int as failed_jobs
         from ${schema}.job j
        where j.name = $1 and j.singleton_key = 'task:' || t.id::text and j.state = 'failed'
          and j.data ->> 'stage' = t.current_stage and j.data ->> 'attempt' = s.attempt::text
-         and j.completed_on >= s.entered_at
+         and j.completed_on >= greatest(s.entered_at, er.ended_at)
     ) fc on true
    where t.state in ('active', 'merged', 'retro')
      and s.state = 'running' and s.exited_at is null
