@@ -37,6 +37,7 @@ import {
   settleOutcomeOfFinish,
 } from './remote-runs.js';
 import { MAX_RUN_START_ATTEMPTS, type SettleRunRequest, type SettleRunResult } from './settle.js';
+import { runStartRetryDelayMs } from './stage-enqueue.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000281b1';
 const W1 = '00000000-0000-4000-8000-0000000281f1';
@@ -419,11 +420,11 @@ describe('the remote claim (WP-281, TD-031 decisions 2, 7, 8)', () => {
 
   /**
    * TD-031's 2026-11-05 amendment (backlog 740): a mint that fails after the claim is a **start
-   * failure**, never a release — so Q59(a)'s bound spaces the retries `RUN_START_RETRY_MS` apart and
+   * failure**, never a release — so Q59(a)'s bound spaces the retries from `RUN_START_RETRY_MS`, backing off (BD-034), and
    * ends them in `needs_human` after `MAX_RUN_START_ATTEMPTS`, each attempt one failed run, with no
    * worker excluded. Before the amendment the offer reopened at once and the claim re-minted forever.
    */
-  it('settles an always-failing retryable mint as not started, three times 30 s apart, then needs_human — never a release', async () => {
+  it('settles an always-failing retryable mint as not started, backing off from 30 s, then needs_human — never a release', async () => {
     const mints: number[] = [];
     let harnessRef: PipelineHarness | null = null;
     const w = await world({
@@ -439,7 +440,7 @@ describe('the remote claim (WP-281, TD-031 decisions 2, 7, 8)', () => {
     for (let attempt = 1; attempt <= MAX_RUN_START_ATTEMPTS + 1; attempt += 1) {
       const answer = await claimAs(w, W1);
       expect(answer.kind).toBe(attempt <= MAX_RUN_START_ATTEMPTS ? 'not_packaged' : 'none');
-      w.harness.clock.advance(RUN_START_RETRY_MS);
+      w.harness.clock.advance(runStartRetryDelayMs(attempt));
       await w.harness.drain();
     }
     expect(mints).toHaveLength(MAX_RUN_START_ATTEMPTS);

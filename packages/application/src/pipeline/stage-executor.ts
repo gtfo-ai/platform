@@ -342,7 +342,13 @@ export type StageExecutionOutcome =
       readonly kind: 'replanned';
       readonly runId: Id;
       readonly reason: string;
-      readonly cause: 'usage_limited' | 'lost';
+      /**
+       * `turnless` (BD-034): the run ended before the model took a turn — infrastructure, re-planned
+       * up to `MAX_TURNLESS_REPLANS` times, each after its `delayMs`.
+       */
+      readonly cause: 'usage_limited' | 'lost' | 'turnless';
+      /** How long the re-plan waits before its `stage.execute` fires; absent is at once. */
+      readonly delayMs?: number;
     };
 
 export interface StageExecutorOptions {

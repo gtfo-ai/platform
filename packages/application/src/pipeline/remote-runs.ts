@@ -28,7 +28,7 @@
  *   **settles as `not_started`** under the worker's claim, exactly as the server's claimant settles a
  *   start that threw. A mint failure is **never a release** (TD-031's 2026-11-05 amendment, backlog
  *   740): it is retryable as the mint error says (`IntegrationError.retryable`), so Q59(a)'s bound —
- *   `RUN_START_RETRY_MS` apart, `MAX_RUN_START_ATTEMPTS` per stage entry, then `needs_human` — ends a
+ *   backing off from `RUN_START_RETRY_MS` (BD-034), `MAX_RUN_START_ATTEMPTS` per stage entry, then `needs_human` — ends a
  *   provider that refuses every mint, and no worker is excluded for the provider's fault.
  *
  * ## The run token

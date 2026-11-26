@@ -145,7 +145,7 @@ describe('a stage run handed back by its runner’s stop (WP-144)', () => {
     expect(taskOf(harness).costActualUsd).toBeCloseTo(0.5, 6);
   });
 
-  it('escalates the third stop, with a brief naming the stops, and queues nothing more', async () => {
+  it('escalates the stop past the bound, with a brief naming the stops, and queues nothing more', async () => {
     const harness = harnessWith();
     await harness.publish([ticketMatched()]);
 
@@ -156,20 +156,27 @@ describe('a stage run handed back by its runner’s stop (WP-144)', () => {
       states.push(taskOf(harness).task.state);
     }
 
-    expect(states).toEqual(['active', 'active', 'needs_human']);
+    // BD-034: five hand-backs (two until 2026-11-26), the sixth stop escalates.
+    expect(MAX_SHUTDOWN_HAND_BACKS).toBe(5);
+    expect(states).toEqual([
+      ...Array<string>(MAX_SHUTDOWN_HAND_BACKS).fill('active'),
+      'needs_human',
+    ]);
     const escalated = harness.events().find((entry) => entry.type === 'task.escalated') as Extract<
       DomainEvent,
       { type: 'task.escalated' }
     >;
-    expect(escalated.payload.reason).toContain('stopped during this stage 3 times');
-    expect(escalated.payload.blocker_brief).toContain('interrupted 3 times');
-    expect(escalated.payload.blocker_brief).toContain('The first 2 were started again');
-    // Every one of the three runs reads `shutdown`; the third is the one that escalated.
+    expect(escalated.payload.reason).toContain('stopped during this stage 6 times');
+    expect(escalated.payload.blocker_brief).toContain('interrupted 6 times');
+    expect(escalated.payload.blocker_brief).toContain('The first 5 were started again');
+    // Every one of the six runs reads `shutdown`; the sixth is the one that escalated.
     for (const runId of refinementRunIds(harness)) {
       expect((await runOf(harness, runId))?.terminalReason).toBe('shutdown');
     }
-    expect(refinementRunIds(harness)).toHaveLength(3);
-    expect(harness.jobs.history.filter((r) => r.queue === 'stage.execute')).toHaveLength(3);
+    expect(refinementRunIds(harness)).toHaveLength(MAX_SHUTDOWN_HAND_BACKS + 1);
+    expect(harness.jobs.history.filter((r) => r.queue === 'stage.execute')).toHaveLength(
+      MAX_SHUTDOWN_HAND_BACKS + 1,
+    );
     expect(stageJobs(harness)).toHaveLength(0);
   });
 

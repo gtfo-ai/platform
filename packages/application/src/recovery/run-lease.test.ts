@@ -21,7 +21,7 @@ import { MemoryEventing } from '../testing/memory-eventing.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
 import type { ExpiredRunLease, ExpiredRunQuery } from './run-lease.js';
-import { sweepExpiredRunLeases } from './run-lease.js';
+import { MAX_LOST_RUN_REPLANS, sweepExpiredRunLeases } from './run-lease.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000d1' as Id;
@@ -185,7 +185,13 @@ const sweep = async (options: {
       claimExpiredRun: async () => options.claim,
       earlierLostRuns: async () =>
         (options.earlierLosses ?? 0) > 0
-          ? [{ runId: EARLIER_RUN, leaseOwner: 'worker:00000000-0000-4000-8000-0000000000b7' }]
+          ? [
+              { runId: EARLIER_RUN, leaseOwner: 'worker:00000000-0000-4000-8000-0000000000b7' },
+              ...Array.from({ length: (options.earlierLosses ?? 1) - 1 }, (_, index) => ({
+                runId: `00000000-0000-4000-8000-0000000000f${String(index)}` as Id,
+                leaseOwner: `worker:00000000-0000-4000-8000-0000000000c${String(index)}`,
+              })),
+            ]
           : [],
     },
     pipeline: store,
@@ -292,10 +298,20 @@ describe('the run-lease sweep', () => {
     expect(jobs.take('stage.execute')).toHaveLength(1);
   });
 
-  it('escalates the entry’s second loss, naming both runs and both machines (WP-286)', async () => {
+  it('re-plans the entry’s second and third losses (BD-034)', async () => {
+    for (const earlierLosses of [1, 2]) {
+      const { report, stored, jobs } = await sweep({ claim: true, earlierLosses });
+      expect(report.replanned, String(earlierLosses)).toBe(1);
+      expect(stored?.task.state, String(earlierLosses)).toBe('active');
+      expect(jobs.take('stage.execute'), String(earlierLosses)).toHaveLength(1);
+    }
+  });
+
+  it('escalates the entry’s fourth loss, naming every run and every machine (WP-286, BD-034)', async () => {
+    expect(MAX_LOST_RUN_REPLANS).toBe(3);
     const { report, run, stored, jobs, order, eventing } = await sweep({
       claim: true,
-      earlierLosses: 1,
+      earlierLosses: MAX_LOST_RUN_REPLANS,
     });
 
     expect(report).toEqual({ found: 1, ended: 1, skipped: 0, replanned: 0 });
@@ -308,8 +324,11 @@ describe('the run-lease sweep', () => {
     expect(brief).toContain(
       `run ${EARLIER_RUN} (held by worker 00000000-0000-4000-8000-0000000000b7)`,
     );
-    expect(brief).toContain(`run ${RUN} (held by server-1:0f0f0f0f)`);
-    expect(brief).toContain('lost its run twice');
+    expect(brief).toContain(
+      `run 00000000-0000-4000-8000-0000000000f1 (held by worker 00000000-0000-4000-8000-0000000000c1) and run ${RUN} (held by server-1:0f0f0f0f)`,
+    );
+    expect(brief).toContain('lost its run 4 times');
+    expect(brief).toContain('The first 3 losses were each offered again to another claimant');
   });
 
   it('records no cost at all, because nobody measured this run (standing rule 16)', async () => {
@@ -335,11 +354,11 @@ describe('the run-lease sweep', () => {
    * case above is the same sweep after the marker.
    */
   it('records a measured zero and a start failure for a run that never asked for its CLI (WP-150)', async () => {
-    // The entry's second loss, so the brief is the escalation's (its first would re-plan, WP-286).
+    // The entry's last loss, so the brief is the escalation's (an earlier one re-plans, BD-034).
     const { run, eventing, store, stored } = await sweep({
       claim: true,
       reachedCli: false,
-      earlierLosses: 1,
+      earlierLosses: MAX_LOST_RUN_REPLANS,
     });
 
     expect(run?.status).toBe('failed');

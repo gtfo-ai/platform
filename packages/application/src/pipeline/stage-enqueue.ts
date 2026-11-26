@@ -10,15 +10,28 @@ import type { StageExecuteData } from './jobs.js';
 import type { StageExecutionJob } from './stage-executor.js';
 
 /**
- * How long a stage waits before trying to *start* a run again after a transport failure (Q59(a)).
+ * How long a stage waits before its **first** retry to *start* a run after a transport failure
+ * (Q59(a)).
  *
  * The same thirty seconds as {@link GATE_RECHECK_MS}, and for the same reason: a re-enqueue with no
  * delay spins through {@link MAX_RUN_START_ATTEMPTS} in milliseconds and escalates the task before
- * the launcher it is waiting for has finished restarting. Three attempts at this delay is the whole
- * bound — about a minute of flapping absorbed, and a launcher that is down parks the task about a
- * minute later instead of never.
+ * the launcher it is waiting for has finished restarting. Later retries back off from it
+ * ({@link runStartRetryDelayMs}, BD-034).
  */
 export const RUN_START_RETRY_MS = 30_000;
+
+/** The longest wait between two start attempts (BD-034): ten minutes. */
+export const RUN_START_RETRY_MAX_MS = 10 * 60_000;
+
+/**
+ * The delay after start attempt number `attempt` failed (BD-034): 30 s, 60 s, 2, 4, 8, then 10
+ * minutes — the seven retries `MAX_RUN_START_ATTEMPTS` allows span about thirty-five minutes.
+ */
+export const runStartRetryDelayMs = (attempt: number): number =>
+  Math.min(
+    RUN_START_RETRY_MAX_MS,
+    RUN_START_RETRY_MS * 2 ** Math.max(0, Math.min(attempt - 1, 20)),
+  );
 
 /**
  * How long a handed-back stage waits before its run is started again (WP-144 ruling (a)).

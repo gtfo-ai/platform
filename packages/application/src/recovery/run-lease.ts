@@ -216,8 +216,17 @@ export interface RunLeaseReplan {
   readonly revokeCredentials: (runId: Id) => Promise<void>;
 }
 
-/** How many times one stage entry is re-planned after the sweep ended its run: once (TD-031 §12). */
-export const MAX_LOST_RUN_REPLANS = 1;
+/**
+ * How many times one stage entry is re-planned after the sweep ended its run: three (BD-034; once
+ * until 2026-11-26, TD-031 §12). A lost lease is the machine's, never the task's — a closed laptop, a
+ * restarted worker — and every re-plan's offer excludes the machines that lost it, so the fourth
+ * loss means three claimants in a row dropped the run, which a person has to look at.
+ */
+export const MAX_LOST_RUN_REPLANS = 3;
+
+/** "twice", "three times", … — how many runs an entry lost, in the brief's words. */
+const timesWords = (count: number): string =>
+  count === 2 ? 'twice' : count === 3 ? 'three times' : `${String(count)} times`;
 
 export interface RunLeaseSweepOptions {
   readonly store: ExpiredRunStore;
@@ -286,9 +295,9 @@ const machineOf = (leaseOwner: string | null): string => {
   return leaseOwner;
 };
 
-/** Why the task was parked after its entry's second lost run (WP-286). */
-const secondLossReason = (run: ExpiredRunLease): string =>
-  `the "${run.stage ?? 'no stage'}" stage lost its run to a missing lease twice`;
+/** Why the task was parked after its entry's last allowed lost run (WP-286, BD-034). */
+const secondLossReason = (run: ExpiredRunLease, losses: number): string =>
+  `the "${run.stage ?? 'no stage'}" stage lost its run to a missing lease ${timesWords(losses)}`;
 
 /** The brief of the second loss: both runs and both machines (WP-286 (1)). */
 const secondLossBrief = (
@@ -297,13 +306,20 @@ const secondLossBrief = (
   earlier: readonly { readonly runId: Id; readonly leaseOwner: string | null }[],
   unspawned: boolean,
 ): string => {
-  const runs = [...earlier, { runId: run.runId, leaseOwner: run.leaseOwner }]
-    .map((lost) => `run ${lost.runId} (held by ${machineOf(lost.leaseOwner)})`)
-    .join(' and ');
+  const all = [...earlier, { runId: run.runId, leaseOwner: run.leaseOwner }];
+  const listed = all.map((lost) => `run ${lost.runId} (held by ${machineOf(lost.leaseOwner)})`);
+  const runs =
+    listed.length <= 2
+      ? listed.join(' and ')
+      : `${listed.slice(0, -1).join(', ')} and ${listed.at(-1) ?? ''}`;
+  const offeredAgain =
+    all.length <= 2
+      ? 'The first loss was offered again to another claimant'
+      : `The first ${String(all.length - 1)} losses were each offered again to another claimant`;
   return (
     `The "${run.stage ?? 'no stage'}" stage of ${ticketKey} (attempt ${String(run.attempt)}) lost ` +
-    `its run twice: ${runs} stopped renewing their lease, so the platform ended each. The first ` +
-    'loss was offered again to another claimant; this one is not. A lost lease means only that ' +
+    `its run ${timesWords(all.length)}: ${runs} stopped renewing their lease, so the platform ended each. ` +
+    `${offeredAgain}; this one is not. A lost lease means only that ` +
     'nothing was driving the run — a closed laptop, a revoked worker, a process that died — not ' +
     'that the agent failed.' +
     (unspawned
@@ -578,7 +594,7 @@ const endOneRun = async (
                 brief: blockerBrief(run, task.task.ticket.key, unspawned),
               }
             : {
-                reason: secondLossReason(run),
+                reason: secondLossReason(run, lost),
                 brief: secondLossBrief(
                   run,
                   task.task.ticket.key,

@@ -3796,6 +3796,90 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * BD-034's bound: a stage entry's runs that ended before the model took a turn, counted from
+       * the runs. Per entry, and only a zero-turn `failed` ending of a turnless reason counts.
+       */
+      it('counts the turnless failures of one stage entry, and of nothing else (BD-034)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        for (const attempt of [1, 2]) {
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'refinement' as Slug,
+            attempt,
+            causedByEventId: null,
+          });
+        }
+        const endedRun = async (
+          attempt: number,
+          terminalReason: 'shutdown' | 'crash' | 'error_during_execution',
+          numTurns: number,
+        ) => {
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: stored.task.id,
+            projectId,
+            stage: 'refinement' as Slug,
+            role: 'product_manager',
+            mode: 'normal',
+            attempt,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+product_manager',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            providerMode: 'api',
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z',
+            startedAt: '2026-06-01T09:00:01.000Z',
+          });
+          await store.runs.finish(tx, {
+            runId,
+            status: 'failed',
+            terminalReason,
+            sessionId: null,
+            numTurns,
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_write_5m_tokens: 0,
+              cache_write_1h_tokens: 0,
+              cache_read_tokens: 0,
+            },
+            cost: null,
+            wallMs: 10,
+          });
+        };
+        await endedRun(1, 'shutdown', 0);
+        await endedRun(1, 'crash', 0);
+        await endedRun(1, 'error_during_execution', 0);
+        // The model took a turn: not turnless.
+        await endedRun(1, 'error_during_execution', 2);
+        await endedRun(2, 'error_during_execution', 0);
+        const count = async (stage: string, attempt: number) =>
+          store.runs.turnlessFailures(tx, {
+            taskId: stored.task.id,
+            stage: stage as Slug,
+            attempt,
+          });
+        expect(await count('refinement', 1)).toBe(2);
+        expect(await count('refinement', 2)).toBe(1);
+        expect(await count('implementation', 1)).toBe(0);
+      });
+
+      /**
        * Backlog 467: `finish` stores the saved work, and `lastSavedWork` answers for the **latest
        * ended** run of the stage only — a live run is not an ending, and a later ending that saved
        * nothing means the branch no longer holds a previous attempt's unfinished work.

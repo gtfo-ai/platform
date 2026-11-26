@@ -32,6 +32,7 @@ import {
   TaskNotPausedByItsCapError,
 } from './commands.js';
 import { RUN_START_RETRY_MS } from './jobs.js';
+import { runStartRetryDelayMs } from './stage-enqueue.js';
 import {
   COST_UNREPORTED,
   MAX_RUN_START_ATTEMPTS,
@@ -888,15 +889,27 @@ describe('a run whose start failed for a transport reason', () => {
     await harness.publish([ticketMatched()]);
 
     const attempts: string[] = [taskOf(harness).task.state];
+    const delays: number[] = [];
     for (let round = 0; round < MAX_RUN_START_ATTEMPTS; round += 1) {
-      harness.clock.advance(RUN_START_RETRY_MS);
+      // BD-034: the retries back off — the delay after attempt n failed.
+      const [queued] = harness.jobs.enqueued.filter((request) => request.queue === 'stage.execute');
+      if (queued?.startAfter !== undefined) {
+        delays.push(queued.startAfter.getTime() - harness.clock.epochMs);
+      }
+      harness.clock.advance(runStartRetryDelayMs(round + 1));
       await harness.drain();
       attempts.push(taskOf(harness).task.state);
     }
 
-    // Two retries after the first failure, then the third failure escalates: the bound is
+    // Retries after the first failure until the last attempt escalates: the bound is
     // `MAX_RUN_START_ATTEMPTS`, and the states show it rather than a single end assertion (rule 10).
-    expect(attempts).toEqual(['active', 'active', 'needs_human', 'needs_human']);
+    expect(MAX_RUN_START_ATTEMPTS).toBe(8);
+    expect(attempts).toEqual([
+      ...Array<string>(MAX_RUN_START_ATTEMPTS - 1).fill('active'),
+      'needs_human',
+      'needs_human',
+    ]);
+    expect(delays).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);
     expect(escalationOf(harness)?.payload.reason).toContain('could not be started');
     // One failed `runs` row per flap — the signal an operator reads, and the reason the bound exists.
     expect(harness.types().filter((type) => type === 'run.failed')).toHaveLength(
@@ -918,7 +931,7 @@ describe('a run whose start failed for a transport reason', () => {
    * over every failure of the entry (or carried on a payload a hand-back did not reset… and did), the
    * escalation would land on the second failure after the hand-back, not the third.
    */
-  it('restarts the count after a shutdown hand-back, and escalates on the third failure after it', async () => {
+  it('restarts the count after a shutdown hand-back, and escalates when the attempts after it are spent', async () => {
     const harness = harnessThatFlaps();
     await harness.publish([ticketMatched()]);
     const states: string[] = [taskOf(harness).task.state];
@@ -940,13 +953,18 @@ describe('a run whose start failed for a transport reason', () => {
       throwsOnStart: transportFailure(),
     });
     for (let round = 0; round < MAX_RUN_START_ATTEMPTS; round += 1) {
-      harness.clock.advance(RUN_START_RETRY_MS);
+      harness.clock.advance(round === 0 ? RUN_START_RETRY_MS : runStartRetryDelayMs(round));
       await harness.drain();
       states.push(taskOf(harness).task.state);
     }
 
-    expect(states).toEqual(['active', 'active', 'active', 'active', 'needs_human']);
-    // The attempts the records name, in order: the first failure, then 1, 2, 3 after the hand-back.
+    expect(states).toEqual([
+      'active',
+      'active',
+      ...Array<string>(MAX_RUN_START_ATTEMPTS - 1).fill('active'),
+      'needs_human',
+    ]);
+    // The attempts the records name, in order: the first failure, then 1… after the hand-back.
     expect(
       harness
         .events()
@@ -954,7 +972,7 @@ describe('a run whose start failed for a transport reason', () => {
         .map((entry) => (entry.payload as { start_failure?: { attempt: number } }).start_failure)
         .filter((failure) => failure !== undefined)
         .map((failure) => failure.attempt),
-    ).toEqual([1, 1, 2, 3]);
+    ).toEqual([1, ...Array.from({ length: MAX_RUN_START_ATTEMPTS }, (_, index) => index + 1)]);
     expect(escalationOf(harness)?.payload.reason).toContain('could not be started');
   });
 
@@ -1354,7 +1372,7 @@ describe('a run that never started records the launcher’s reason (backlog 453)
     });
     await harness.publish([ticketMatched()]);
     for (let round = 1; round < MAX_RUN_START_ATTEMPTS; round += 1) {
-      harness.clock.advance(RUN_START_RETRY_MS);
+      harness.clock.advance(runStartRetryDelayMs(round));
       await harness.drain();
     }
     const failures = harness
@@ -1363,11 +1381,12 @@ describe('a run that never started records the launcher’s reason (backlog 453)
       .map(
         (entry) => (entry as Extract<DomainEvent, { type: 'run.failed' }>).payload.start_failure,
       );
-    expect(failures.map((failure) => [failure?.attempt, failure?.retryable])).toEqual([
-      [1, true],
-      [2, true],
-      [3, false],
-    ]);
+    expect(failures.map((failure) => [failure?.attempt, failure?.retryable])).toEqual(
+      Array.from({ length: MAX_RUN_START_ATTEMPTS }, (_, index) => [
+        index + 1,
+        index + 1 < MAX_RUN_START_ATTEMPTS,
+      ]),
+    );
     // A message is carried; the log-only `detail` is not.
     expect(failures[0]?.detail).toBe('Docker engine request timed out');
   });

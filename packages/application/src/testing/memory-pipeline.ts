@@ -2360,6 +2360,20 @@ export const createMemoryPipelineStore = (
           run.attempt === entry.attempt &&
           run.terminalReason === 'shutdown',
       ).length,
+    /** BD-034's bound, over this store's rows with the SQL adapter's predicate. */
+    turnlessFailures: async (_tx, entry) =>
+      [...runs.values()].filter(
+        (run) =>
+          run.taskId === entry.taskId &&
+          run.stage === entry.stage &&
+          run.attempt === entry.attempt &&
+          (run.status === 'failed' || run.status === 'stalled') &&
+          run.numTurns === 0 &&
+          (run.terminalReason === 'error_during_execution' ||
+            run.terminalReason === 'crash' ||
+            run.terminalReason === 'stalled') &&
+          !startFailures.has(run.id),
+      ).length,
     totalsFor: async (_tx, taskId) => {
       const owned = [...runs.values()].filter((run: StoredRun) => run.taskId === taskId);
       return {

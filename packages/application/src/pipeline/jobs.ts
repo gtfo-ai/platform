@@ -760,6 +760,7 @@ export const GATE_RECHECK_MS = 30_000;
 export {
   enqueueStage,
   RUN_START_RETRY_MS,
+  runStartRetryDelayMs,
   SHUTDOWN_HAND_BACK_DELAY_MS,
 } from './stage-enqueue.js';
 

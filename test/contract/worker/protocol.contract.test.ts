@@ -35,6 +35,7 @@ import {
   type RemoteRunCalls,
   type RemoteRuns,
   RUN_START_RETRY_MS,
+  runStartRetryDelayMs,
   sshString,
   workerLeaseOwner,
 } from '@platform/application';
@@ -846,7 +847,7 @@ describe('the worker protocol (WP-281): 401 on every authenticated verb (census)
 });
 
 describe('a mint failure after a remote claim (TD-031’s 2026-11-05 amendment, backlog 740)', () => {
-  it('is a start failure: an always-unavailable minter is asked 3 times, 30 s apart, then the task needs a human — no release', async () => {
+  it('is a start failure: an always-unavailable minter is asked MAX_RUN_START_ATTEMPTS times, backing off from 30 s, then the task needs a human — no release', async () => {
     const mints: number[] = [];
     const w = await world({
       mintFails: () => new IntegrationError('unavailable', 'fake-git', 'the provider answered 503'),
@@ -861,7 +862,7 @@ describe('a mint failure after a remote claim (TD-031’s 2026-11-05 amendment, 
         bodies(1)[WORKER_PATHS.claims],
       );
       expect(response.statusCode).toBe(204);
-      w.harness.clock.advance(RUN_START_RETRY_MS);
+      w.harness.clock.advance(runStartRetryDelayMs(attempt));
       await w.harness.drain();
     }
     expect(mints).toHaveLength(MAX_RUN_START_ATTEMPTS);

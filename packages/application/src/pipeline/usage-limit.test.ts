@@ -126,7 +126,7 @@ describe('a stage run a usage limit ended (WP-285)', () => {
     expect(taskOf(harness).costActualUsd).toBeCloseTo(0.38, 6);
   });
 
-  it('escalates the second limit of the entry with the brief TD-031 names, and queues nothing more', async () => {
+  it('escalates the limit past the bound with the brief TD-031 names, and queues nothing more', async () => {
     const harness = harnessWith();
     await harness.publish([ticketMatched()]);
     await harness.drain();
@@ -137,9 +137,14 @@ describe('a stage run a usage limit ended (WP-285)', () => {
       DomainEvent,
       { type: 'task.escalated' }
     >;
-    expect(escalated.payload.reason).toContain('usage limits ended this stage twice');
-    expect(escalated.payload.blocker_brief).toContain('stopped by a usage limit 2 times');
-    expect(entryRow(harness)).toMatchObject({ usageLimitedRuns: 2 });
+    // BD-034: three re-plans (one until 2026-11-26), the fourth limit escalates.
+    expect(MAX_USAGE_LIMITED_REPLANS).toBe(3);
+    expect(escalated.payload.reason).toContain('usage limits ended this stage 4 times');
+    expect(escalated.payload.blocker_brief).toContain('stopped by a usage limit 4 times');
+    expect(escalated.payload.blocker_brief).toContain(
+      'The first 3 times the stage was offered again',
+    );
+    expect(entryRow(harness)).toMatchObject({ usageLimitedRuns: 4 });
     expect(entryRow(harness)?.exitedAt).not.toBeNull();
     for (const runId of refinementRunIds(harness)) {
       expect((await runOf(harness, runId))?.terminalReason).toBe('rate_limited');
@@ -147,8 +152,8 @@ describe('a stage run a usage limit ended (WP-285)', () => {
     expect(harness.jobs.enqueued.filter((request) => request.queue === 'stage.execute')).toEqual(
       [],
     );
-    // Both runs charged, each once.
-    expect(taskOf(harness).costActualUsd).toBeCloseTo(0.36, 6);
+    // Every run charged, each once.
+    expect(taskOf(harness).costActualUsd).toBeCloseTo(0.18 * (1 + MAX_USAGE_LIMITED_REPLANS), 6);
   });
 
   it('does not re-run a stage whose task a person paused during the run (the pause stands)', async () => {

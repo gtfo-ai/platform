@@ -113,7 +113,11 @@ import { MEASURED_ZERO_COST, NO_RUN_USAGE } from './cli-spawn.js';
 import { questionDeadlineRuleFor, questionTimeoutOf } from './deadline-rules.js';
 import { toRunAggregate } from './run-aggregate.js';
 import { runRedactorFor } from './run-redaction.js';
-import { enqueueStage, RUN_START_RETRY_MS, SHUTDOWN_HAND_BACK_DELAY_MS } from './stage-enqueue.js';
+import {
+  enqueueStage,
+  runStartRetryDelayMs,
+  SHUTDOWN_HAND_BACK_DELAY_MS,
+} from './stage-enqueue.js';
 import type { StageExecutionOutcome, StageExecutorOptions } from './stage-executor.js';
 import { revalidate } from './stage-revalidation.js';
 import {
@@ -146,30 +150,63 @@ export type SettleOptions = Pick<
 
 /**
  * How many times a stage's run may fail to *start* for a transport reason before the task is
- * escalated (Q59(a)).
+ * escalated (Q59(a); BD-034).
  *
- * Three, with `RUN_START_RETRY_MS` between them: about a minute of flapping absorbed without
- * telling anybody, and a launcher that is genuinely down parks the task about a minute later rather
- * than never. Since WP-275a the count is the stage entry's stored runs (`RunRepository.startFailures`),
- * read under the settle's lock — never a payload a restart could reset.
+ * Eight, backing off from `RUN_START_RETRY_MS` (`runStartRetryDelayMs`: 30 s doubling to 10 min):
+ * about half an hour of a launcher, a Docker daemon or a worker that is restarting absorbed without
+ * telling anybody — three attempts thirty seconds apart until 2026-11-26, which parked a task for a
+ * launcher that came back two minutes later. Since WP-275a the count is the stage entry's stored
+ * runs (`RunRepository.startFailures`), read under the settle's lock — never a payload a restart
+ * could reset.
  */
-export const MAX_RUN_START_ATTEMPTS = 3;
+export const MAX_RUN_START_ATTEMPTS = 8;
 
 /**
  * How many times one stage entry may be **handed back** by a `runner` stop before the next stop
- * escalates it (WP-144 ruling (b)): two. An upgrade or a restart in the middle of a run is the
- * ordinary case and costs nothing but the interrupted work; a third stop of the same entry is a
- * process that keeps being stopped under one stage, and a person is told, with a brief naming the
- * stops. Counted from the entry's runs' end reasons (`RunRepository.shutdownEndings`), not a column.
+ * escalates it (WP-144 ruling (b); BD-034): five (two until 2026-11-26). An upgrade or a restart in
+ * the middle of a run is the ordinary case — every change merged is a release (TD-019), so a long
+ * stage can meet several in a day — and costs nothing but the interrupted work; a sixth stop of the
+ * same entry is a process that keeps being stopped under one stage, and a person is told, with a
+ * brief naming the stops. Counted from the entry's runs' end reasons (`RunRepository.shutdownEndings`),
+ * not a column. Each re-run's spend is charged as any run's, so the task's budget still caps them.
  */
-export const MAX_SHUTDOWN_HAND_BACKS = 2;
+export const MAX_SHUTDOWN_HAND_BACKS = 5;
 
 /**
  * How many times one stage entry is planned again after a usage limit ended its run (WP-285,
- * TD-031 decision 11): **once** — counted on the entry's row (`task_stages.usage_limited_runs`) — so
- * the second limit escalates.
+ * TD-031 decision 11; BD-034): **three** (once until 2026-11-26) — counted on the entry's row
+ * (`task_stages.usage_limited_runs`) — so the fourth limit escalates. A usage limit is the
+ * claimant's subscription, not the task: the limited worker pauses until its reset, and the
+ * re-planned offer waits for a claimant with room.
  */
-export const MAX_USAGE_LIMITED_REPLANS = 1;
+export const MAX_USAGE_LIMITED_REPLANS = 3;
+
+/**
+ * How many times one stage entry is planned again after a run that ended before the model took a
+ * single turn (BD-034, `RunRepository.turnlessFailures`): six. Such an ending — `failed` or
+ * `stalled` with `num_turns = 0` and `error_during_execution`, `crash` or `stalled` — is the
+ * infrastructure's (no route to the model, a CLI that died before its first answer, a worker whose
+ * Claude sign-in was not ready yet), never the model's, so it is worth another try; the re-plan
+ * waits `turnlessReplanDelayMs` (1 min doubling to 16 min, about three quarters of an hour in all),
+ * and the seventh such ending escalates with a brief naming them.
+ */
+export const MAX_TURNLESS_REPLANS = 6;
+
+/** The delay before turnless re-plan number `replans`: 1, 2, 4, 8, then 16 minutes. */
+export const turnlessReplanDelayMs = (replans: number): number =>
+  Math.min(16 * 60_000, 60_000 * 2 ** Math.max(0, Math.min(replans - 1, 20)));
+
+/**
+ * Did this run end before the model took a single turn (BD-034)? The predicate
+ * `RunRepository.turnlessFailures` counts, applied to the outcome being settled.
+ */
+export const isTurnlessFailure = (outcome: RunOutcome): boolean =>
+  (outcome.status === 'failed' || outcome.status === 'stalled') &&
+  outcome.numTurns === 0 &&
+  (outcome.terminalReason === 'error_during_execution' ||
+    outcome.terminalReason === 'crash' ||
+    outcome.terminalReason === 'stalled') &&
+  outcome.startFailure === undefined;
 
 /** The name WP-12 puts on `run_stopped.data.reason` when the CLI reported no usable cost. */
 export const COST_UNREPORTED = 'cost_unreported';
@@ -778,6 +815,9 @@ const recordUnsuccessful = async (
   if (outcome.terminalReason === 'rate_limited') {
     return recordUsageLimited(scope, input, stored, context);
   }
+  if (isTurnlessFailure(outcome) && input.stopReason !== COST_UNREPORTED) {
+    return recordTurnless(scope, input, stored, context);
+  }
 
   const costUnreported = input.stopReason === COST_UNREPORTED;
   const overspent = outcome.status === 'budget_exceeded' && !costUnreported;
@@ -1056,7 +1096,7 @@ const recordUsageLimited = async (
     kind: 'usage_limited',
   });
   if (limited === null || limited > MAX_USAGE_LIMITED_REPLANS) {
-    const reason = 'usage limits ended this stage twice';
+    const reason = `usage limits ended this stage ${String(limited ?? 1)} times`;
     return escalateOnRun(
       scope,
       input,
@@ -1066,7 +1106,7 @@ const recordUsageLimited = async (
       failed.events,
       `The "${job.stage}" stage of ${stored.task.ticket.key} was stopped by a usage limit ` +
         `${String(limited ?? 1)} times (attempt ${String(job.attempt)}; the last run is ${run.id}). ` +
-        'The first time the stage was offered again; this time it is not. The claimants that hit ' +
+        `${limited === null ? 'The stage entry has no row to count the limits on, so it is not offered again' : `The first ${String(MAX_USAGE_LIMITED_REPLANS)} times the stage was offered again; this time it is not`}. The claimants that hit ` +
         'their limit pause until it resets. Nothing was wrong with the task: hand it back at this ' +
         'stage once a claimant has usage left, or move the project to a claimant whose ' +
         'subscription has room.' +
@@ -1078,7 +1118,90 @@ const recordUsageLimited = async (
     kind: 'replanned',
     runId: run.id,
     cause: 'usage_limited',
-    reason: 'a usage limit stopped the run; the stage is offered once more to another claimant',
+    reason: `a usage limit stopped the run; the stage is offered again (${String(limited)} of ${String(MAX_USAGE_LIMITED_REPLANS)})`,
+  };
+};
+
+/**
+ * **A run that ended before the model took a single turn** (BD-034): the infrastructure's ending,
+ * not the task's — the agent never ran. Recorded like any failed run (its spend charged as any
+ * run's), and then, like a usage limit's ending, the stage entry is **planned again** with the task
+ * untouched — still at this stage, on this attempt, its stage row open — and `stage.execute`
+ * enqueued after the commit, `turnlessReplanDelayMs` later. The count is the entry's earlier
+ * turnless runs (`RunRepository.turnlessFailures`), read **before** this run's row moves, plus this
+ * one; past {@link MAX_TURNLESS_REPLANS} the task escalates with a brief naming how many runs ended
+ * so and the last one's error. A task a person moved meanwhile is recorded onto and never re-run.
+ */
+const recordTurnless = async (
+  scope: TransactionScope,
+  input: RecordInput,
+  stored: StoredTask,
+  context: CommandContext,
+): Promise<StageExecutionOutcome> => {
+  const { options, outcome, run, job } = input;
+  const { store } = options;
+  if (revalidate(stored, job).kind === 'skipped') {
+    return recordOntoStoppedTask(scope, input, stored, context);
+  }
+  const earlier = await store.runs.turnlessFailures(scope.tx, {
+    taskId: job.taskId,
+    stage: job.stage,
+    attempt: job.attempt,
+  });
+  const turnless = earlier + 1;
+  const failed = failRun(
+    run,
+    {
+      status: outcome.status as 'failed' | 'stalled',
+      terminalReason: outcome.terminalReason,
+      error: outcome.error ?? outcome.terminalReason,
+      ...failedSpendOf(outcome),
+      ...endingDetailOf(outcome),
+    },
+    context,
+  );
+  const owned = await store.runs.finish(scope.tx, {
+    runId: run.id,
+    status: outcome.status,
+    terminalReason: outcome.terminalReason,
+    sessionId: outcome.sessionId,
+    numTurns: outcome.numTurns,
+    usage: outcome.usage,
+    cost: rowCostOf(outcome),
+    wallMs: outcome.wallMs,
+    costIsFloor: costIsFloorOf(input),
+    ...endingDetailOf(outcome),
+    lease: input.fence,
+  });
+  if (!owned) {
+    return lostTheRun({ ...input, scope });
+  }
+  await store.tasks.addSpend(scope.tx, job.taskId, spendOf(outcome));
+  if (turnless > MAX_TURNLESS_REPLANS) {
+    return escalateOnRun(
+      scope,
+      input,
+      withSavedBranch(stored, outcome),
+      context,
+      `the "${job.stage}" stage's runs ended ${String(turnless)} times before the model took a turn (the last: ${outcome.terminalReason})`,
+      failed.events,
+      `The "${job.stage}" stage of ${stored.task.ticket.key} started ${String(turnless)} runs (attempt ` +
+        `${String(job.attempt)}; the last is ${run.id}) and each ended before the model answered a ` +
+        `single turn — the last as ${outcome.terminalReason}: ${(outcome.error ?? outcome.terminalReason).slice(0, 300)}. ` +
+        `The first ${String(MAX_TURNLESS_REPLANS)} were offered again automatically, waiting 1 minute and then ` +
+        'twice as long each time up to 16 minutes; this one is not. No agent work was lost, because ' +
+        'none was done. This is the infrastructure, not the task: check that the machines that ran ' +
+        "these runs can reach the model (network, proxy, the Claude sign-in or API key) and look at the runs' pages, then " +
+        'hand the task back at this stage.',
+    );
+  }
+  await scope.events.append(failed.events);
+  return {
+    kind: 'replanned',
+    runId: run.id,
+    cause: 'turnless',
+    delayMs: turnlessReplanDelayMs(turnless),
+    reason: `the run ended before the model took a turn (${outcome.terminalReason}); the stage is offered again (${String(turnless)} of ${String(MAX_TURNLESS_REPLANS)})`,
   };
 };
 
@@ -1414,8 +1537,9 @@ const taskGone = (): SettleRunResult => ({
 
 /**
  * The wake-up a settle owes its stage entry, **after its commit** (`Jobs.enqueue` joins no
- * transaction): a start failure's retry after `RUN_START_RETRY_MS` (Q59(a)), a hand-back's re-run
- * after `SHUTDOWN_HAND_BACK_DELAY_MS` (WP-144), a usage limit's re-plan at once (WP-285). The attempt's model and effort ride along as the run
+ * transaction): a start failure's retry after `runStartRetryDelayMs` (Q59(a), backing off since
+ * BD-034), a hand-back's re-run after `SHUTDOWN_HAND_BACK_DELAY_MS` (WP-144), a usage limit's
+ * re-plan at once (WP-285), a turnless run's re-plan after its `delayMs` (BD-034). The attempt's model and effort ride along as the run
  * row recorded them, so a person's per-attempt override survives a flap as it did on the payload.
  * A process that dies between the commit and this leaves the entry to the stranded-stage recovery.
  */
@@ -1441,10 +1565,10 @@ const enqueueFollowOn = async (
     startAfter: new Date(
       now +
         (outcome.kind === 'retry'
-          ? RUN_START_RETRY_MS
+          ? runStartRetryDelayMs(outcome.startAttempts)
           : outcome.kind === 'handed_back'
             ? SHUTDOWN_HAND_BACK_DELAY_MS
-            : 0),
+            : (outcome.delayMs ?? 0)),
     ),
   });
   if (

@@ -2894,6 +2894,21 @@ export const createPostgresPipelineStore = (
       );
       return Number(rows[0]?.n ?? 0);
     },
+    /** BD-034's bound — the port's docblock has the predicate. */
+    turnlessFailures: async (tx, entry) => {
+      const { rows } = await sqlOf(tx).query<{ n: number }>(
+        `select count(*)::int as n
+           from runs r
+           join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and s.stage = $2 and s.attempt = $3
+            and r.status in ('failed', 'stalled')
+            and r.num_turns = 0
+            and r.terminal_reason in ('error_during_execution', 'crash', 'stalled')
+            and r.exit_detail is null`,
+        [entry.taskId, entry.stage, entry.attempt],
+      );
+      return Number(rows[0]?.n ?? 0);
+    },
     /**
      * `estimated` counts only the runs the platform **priced** (`usd_estimated` set) — until WP-131
      * it was `usd_reported is null`, which also counted a run nobody measured and published the
