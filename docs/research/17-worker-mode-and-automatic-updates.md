@@ -152,6 +152,14 @@ Measured for WP-294 with the pinned CLI (`claude --version` → `2.1.267 (Claude
 - **A pasted value** is echoed masked except its last six characters; a bogus `code#state` answered
   *"OAuth error: Request failed with status code 400 … Press Enter to retry."* — so the pasted value is
   the `code#state` string Claude's callback page shows (the owner's run, 2026-11-05).
+- **Enter must be a write of its own** (re-measured 2026-11-26, same CLI, in the running worker,
+  after every user of the worker reported the browser sign-in ending in *no token after the code*).
+  Writing `code#state\r` to the pty in **one** write leaves the masked code in the field and
+  nothing else — no request is made (104 characters of echo in 25 s; the owner's log read
+  `chars_after_code: 112`, `token_prefix_seen: false`). Writing the code and then `\r` separately —
+  0, 50, 150 and 500 ms apart — submits it (*"OAuth error … 400"* for a bogus code). The CLI's input
+  treats a multi-character chunk as a paste, so a `\r` inside it is not Enter. The worker writes
+  them 100 ms apart, and the fake CLI now refuses the one-write form.
 - **The token line**: not observed here (it needs a real account). The owner's run printed it as
   `sk-ant-oat01-…`, 108 characters, wrapped at their terminal's width; with 500 columns it fits one
   line, and the reader joins a wrapped one up to that length. `[unverified]` beyond the owner's report:

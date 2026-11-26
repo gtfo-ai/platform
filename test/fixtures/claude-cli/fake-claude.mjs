@@ -1,7 +1,8 @@
 /**
  * A fake `claude` for the worker's sign-in (WP-294 (4)): it replays V-WM10's measured
  * `claude setup-token` screen (`setup-token.transcript.json`, whose `source` block says which parts
- * are recorded and which composed), reads the pasted code from stdin, and answers the token check
+ * are recorded and which composed), reads the pasted code from stdin — submitted only by an Enter
+ * written on its own, as the real CLI's paste handling requires — and answers the token check
  * (`claude -p … --output-format json`) as the pinned CLI does — `is_error: false` for the fixture's
  * token, `api_error_status: 401` for any other.
  *
@@ -25,11 +26,15 @@ if (args[0] === 'setup-token') {
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
     if (answered) return;
-    typed += chunk;
-    const end = typed.indexOf('\r');
-    if (end < 0) return;
+    // As the pinned CLI does (measured 2026-11-26, 2.1.267): a chunk of more than one character is
+    // a paste, and a `\r` inside it is not Enter — `code\r` in one write is never submitted. Enter
+    // is a chunk of its own.
+    if (chunk !== '\r') {
+      typed += chunk.replace(/[\r\n]/g, '');
+      return;
+    }
     answered = true;
-    const code = typed.slice(0, end);
+    const code = typed;
     if (code !== fixture.good_code) {
       process.stdout.write(fixture.after_refused_code);
       return;

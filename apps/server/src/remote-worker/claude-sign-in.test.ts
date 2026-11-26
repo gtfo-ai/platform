@@ -575,7 +575,11 @@ describe('never trapped at “Checking with Claude” (the owner’s report, 202
     await session.start();
     clis[0]?.emit(fixture.screen);
     session.submitCode(fixture.good_code);
-    expect(clis[0]?.written).toEqual([`${fixture.good_code}\r`]);
+    // The code, then Enter as a write of its own: `code\r` in one chunk is a paste to the CLI and
+    // is never submitted (the owner's report, 2026-11-26).
+    expect(clis[0]?.written).toEqual([fixture.good_code]);
+    await until('the Enter', () => (clis[0]?.written.length ?? 0) === 2);
+    expect(clis[0]?.written).toEqual([fixture.good_code, '\r']);
     const token = fixture.token;
     clis[0]?.emit(`\r\nYour OAuth token:\r\n${token.slice(0, 25)}\x1b[1C${token.slice(25)}\r\n`);
     await until('the check', () => checks.length === 1);
