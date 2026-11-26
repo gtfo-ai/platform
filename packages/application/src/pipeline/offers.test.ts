@@ -162,7 +162,12 @@ describe('offerRun — routing (WP-278, TD-031 decision 8)', () => {
       { kind: 'ask', assigneeUserId: ASKER },
     );
     expect(asked).toEqual([
-      { projectId: '00000000-0000-4000-8000-000000002743', userId: ASKER, now: NOW },
+      {
+        projectId: '00000000-0000-4000-8000-000000002743',
+        userId: ASKER,
+        now: NOW,
+        excludedWorkerIds: [],
+      },
     ]);
     expect(routing).toEqual({
       assigneeUserId: ASKER,
