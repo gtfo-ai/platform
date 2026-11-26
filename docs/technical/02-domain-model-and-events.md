@@ -443,8 +443,8 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > - **cannot be decided** — the provider lists **no** changed file (a merge request's diff is
 >   computed asynchronously, so `[]` is *not yet*, never *nothing*), or lists as many files as the
 >   read's bound so the rest are unseen — is never read as *no tamper* (fail closed on a mutation):
->   an empty list keeps the gate `pending` until `MAX_GATE_CHECKS` (on a poll-only git binding,
->   until `pipeline.limits.ci_timeout_minutes` from the gate's entry — WP-136) and then escalates
+>   an empty list keeps the gate `pending` until `pipeline.limits.ci_timeout_minutes` from the
+>   gate's entry (WP-136; on every git binding since 2026-11-26) and then escalates
 >   `undecided`;
 >   a list at the bound escalates `unsupported` at once.
 >
@@ -468,7 +468,7 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > recognised by class or code only (`TimeoutError`, undici's `fetch failed`, the socket codes in
 > `NETWORK_ERROR_CODES`) — the gate answers *unreachable*, and `stage.execute` re-asks after 30 s,
 > doubling to a 5-minute ceiling, **without** spending `MAX_GATE_CHECKS` (a failed read is not a
-> check). The bound is a time: on the CI gate of a poll-only binding, WP-136's own clock
+> check). The bound is a time: on the CI gate (of every git binding since 2026-11-26), WP-136's own clock
 > (`ci_timeout_minutes` from the gate's entry, the last re-ask moved up to it, so an outage never
 > extends the configured wait); on every other gate, 60 minutes from the first failure in a row,
 > which rides the job's payload (`provider_failing_since`, `provider_failures`; the payload is now
@@ -493,7 +493,7 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   `task_stages.ci_pending_read` (technical/03): the pipeline's id and page, the live head it was
 >   read for, its status, the held manual job's name and page (only for a pipeline whose own status
 >   is `manual`; redacted, then cut at 100 characters), the draft flag, the read's instant and the
->   CI timeout bounding the wait (`null` on a webhook binding). A pending read that found no
+>   CI timeout bounding the wait (`null` on a webhook binding until 2026-11-26, the CI timeout since). A pending read that found no
 >   pipeline writes `null`; a closed attempt keeps its last read. `GET /api/tasks/:id` serves the
 >   open attempt's as `gate_wait` (technical/08) — only while the task is `active`, since a pause
 >   closes no attempt and the CI job stops checking a paused task (BACKLOG 1301) — and so do the
@@ -506,7 +506,7 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   job on the provider (named as people know it, `GitLab`), or change the job's rule, then Retry.
 >   Any other status (the person started the job, so it is `running`), another pipeline, another
 >   head or another held job waits as before;
-> - **the two endings are marked on the row**: the poll-only timeout and the held retry record
+> - **the two endings are marked on the row**: the CI timeout (poll-only until 2026-11-26, every binding since) and the held retry record
 >   `task_stages.ci_ending` (`ci_timed_out`, `ci_held_unchanged`) in the settling transaction, so
 >   the task read words the stop (`stop.ci_ending`) and serves the parked attempt's last read
 >   (`last_gate_wait`) without parsing `return_reason`, whose words are unchanged;

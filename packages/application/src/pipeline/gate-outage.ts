@@ -36,7 +36,7 @@
  * `MAX_GATE_CHECKS`. The gate re-asks after {@link GATE_OUTAGE_FIRST_RECHECK_MS}, doubling up to
  * {@link GATE_OUTAGE_MAX_RECHECK_MS}, and stops at a deadline:
  *
- *  - **the CI gate on a poll-only binding** keeps WP-136's clock: `pipeline.limits.ci_timeout_minutes`
+ *  - **the CI gate** (on every git binding since 2026-11-26) keeps WP-136's clock: `pipeline.limits.ci_timeout_minutes`
  *    from the gate's entry (`task_stages.entered_at`), so an outage cannot extend the wait a person
  *    configured, and the last re-check is moved up to the deadline rather than past it;
  *  - **every other gate** gets {@link GATE_OUTAGE_LIMIT_MINUTES} from the first failure in a row,
@@ -125,7 +125,7 @@ export const GATE_OUTAGE_FIRST_RECHECK_MS = 30_000;
 export const GATE_OUTAGE_MAX_RECHECK_MS = 5 * 60_000;
 
 /**
- * How long a gate other than the poll-only CI wait keeps asking a provider that does not answer —
+ * How long a gate other than the CI gate keeps asking a provider that does not answer —
  * the default CI timeout's sixty minutes (`DEFAULT_CI_TIMEOUT_MINUTES`), so every gate tolerates the
  * outage the CI gate tolerates out of the box.
  */

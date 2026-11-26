@@ -739,11 +739,11 @@ export const retryWindowMs = (policy: {
  * It is a `startAfter`, not a sleep, and it is not zero: a gate that re-enqueues itself with no
  * delay spins through {@link MAX_GATE_CHECKS} in a few milliseconds and parks the task for a human
  * before the pipeline it is waiting for has even started. Thirty seconds against a five-check
- * budget gives a CI pipeline two and a half minutes to reach a terminal status before anyone is
- * asked to look at it; the event (`ci.pipeline.finished`) normally arrives long before that and
- * settles the gate without a re-check at all. **Not on a poll-only git binding** (WP-136), which
- * receives no such event: there the CI gate keeps this delay for its first five checks, then asks
- * every minute until `pipeline.limits.ci_timeout_minutes` (`ci-wait.ts`).
+ * budget gives a gate two and a half minutes. **Not the CI gate** (WP-136, on every git binding
+ * since 2026-11-26): a real pipeline routinely runs longer than that, so the CI gate keeps this
+ * delay for its first five checks, then asks every minute until
+ * `pipeline.limits.ci_timeout_minutes` (`ci-wait.ts`) — unless the pipeline's own
+ * `ci.pipeline.finished` settles it first (`ci-settle.ts`).
  */
 export const GATE_RECHECK_MS = 30_000;
 
@@ -1057,11 +1057,11 @@ export const stageExecuteHandler = (
       ) {
         return;
       }
-      // WP-136: the CI gate on a poll-only binding is bounded by time, not by the five checks —
-      // unless its attempt has no row to time it from, which keeps the five checks below.
+      // WP-136: the CI gate is bounded by time, not by the five checks (on every git binding since
+      // 2026-11-26) — unless its attempt has no row to time it from, which keeps the five checks.
       if (
         result.ciWait !== undefined &&
-        (await waitForPollOnlyCi(options, request, detail, result.ciWait, checks))
+        (await waitForCi(options, request, detail, result.ciWait, checks))
       ) {
         return;
       }
@@ -1175,8 +1175,7 @@ export type GateSettlement =
       readonly kind: 'escalate';
       /**
        * The word the gate's row is closed `failed` with (WP-46, backlog 160): `undecided` (still
-       * pending after `MAX_GATE_CHECKS`, or — the CI gate on a poll-only binding, WP-136 — after
-       * its CI timeout) or `unsupported` (the project's providers cannot answer).
+       * pending after `MAX_GATE_CHECKS`, or — the CI gate, WP-136 — after its CI timeout) or `unsupported` (the project's providers cannot answer).
        */
       readonly outcome: TaskStageOutcome;
       readonly reason: string;
@@ -1301,7 +1300,7 @@ const recordCiRead = async (
 };
 
 /**
- * **A pending CI read on a poll-only binding** (WP-136, `ci-wait.ts`): re-check on the cadence,
+ * **A pending CI read** (WP-136, `ci-wait.ts`; every git binding since 2026-11-26): re-check on the cadence,
  * or park at the CI timeout or the backstop. Answers whether it decided; `false` only for an
  * attempt with no `task_stages` row, which has no instant to time the wait from — the caller then
  * keeps the five-check bound rather than inventing a clock (standing rule 16).
@@ -1311,7 +1310,7 @@ const recordCiRead = async (
  * whose own job carries its own clock — so this fire does nothing (TD-004: a timer cannot be
  * cancelled, so it re-validates).
  */
-const waitForPollOnlyCi = async (
+const waitForCi = async (
   options: PipelineJobOptions,
   request: StageExecutionJob,
   detail: string,
@@ -1350,8 +1349,15 @@ const waitForPollOnlyCi = async (
     return true;
   }
   logger.info(
-    { ...fields, checks, timeout_minutes: wait.timeoutMinutes, ending: decision.kind, detail },
-    'the CI gate on a poll-only binding stopped waiting; the task is parked',
+    {
+      ...fields,
+      checks,
+      timeout_minutes: wait.timeoutMinutes,
+      poll_only: wait.pollOnly,
+      ending: decision.kind,
+      detail,
+    },
+    'the CI gate stopped waiting; the task is parked',
   );
   await settle(options, request, {
     kind: 'escalate',
@@ -1371,9 +1377,9 @@ const waitForPollOnlyCi = async (
  * stranded-stage recovery could only describe as a stage that *"never started"*.
  *
  * `gate_checks` rides through unchanged: a failed read is not a check. The bound:
- *  - the CI gate on a **poll-only** binding: WP-136's own clock — `ci_timeout_minutes` from the
- *    attempt's `task_stages.entered_at`, read here; a **closed** row is an attempt somebody left,
- *    and this fire does nothing (as in {@link waitForPollOnlyCi}). An attempt with no row is timed
+ *  - the CI gate (on every git binding since 2026-11-26): WP-136's own clock — `ci_timeout_minutes`
+ *    from the attempt's `task_stages.entered_at`, read here; a **closed** row is an attempt somebody
+ *    left, and this fire does nothing (as in {@link waitForCi}). An attempt with no row is timed
  *    from the first failure instead, the fail-closed direction of the same bound;
  *  - every other gate: {@link GATE_OUTAGE_LIMIT_MINUTES} from the first failure in a row.
  */

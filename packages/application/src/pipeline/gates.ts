@@ -161,10 +161,11 @@ export type GateResult =
       readonly manualNotRun?: CiManualNotRun;
     }
   /**
-   * The answer is not available yet; the job asks again. `ciWait` is present exactly when the CI
-   * gate is waiting on a **poll-only** git binding (WP-136): the job then bounds the wait by time
-   * rather than by {@link MAX_GATE_CHECKS} (`ci-wait.ts`). `ciRead` is present on **every** pending
-   * answer of the CI gate, whatever the binding (backlog 1078): the job records it on the attempt.
+   * The answer is not available yet; the job asks again. `ciWait` is present on **every** pending
+   * answer of the CI gate that has a git binding (WP-136, widened 2026-11-26 to a binding a webhook
+   * reaches): the job then bounds the wait by time rather than by {@link MAX_GATE_CHECKS}
+   * (`ci-wait.ts`). `ciRead` is present on **every** pending answer of the CI gate, whatever the
+   * binding (backlog 1078): the job records it on the attempt.
    */
   | {
       readonly kind: 'pending';
@@ -262,30 +263,40 @@ export interface CiPlayJobs {
 
 /**
  * How many times a gate may answer `pending` before the task is parked for a human — every gate,
- * except the CI gate on a poll-only git binding, whose bound is a time (WP-136, {@link CiWait}).
+ * except the CI gate, whose bound is a time (WP-136, {@link CiWait}). The rebase gate keeps the
+ * count: it waits on the provider computing mergeability, not on a process that runs for minutes.
  */
 export const MAX_GATE_CHECKS = 5;
 
 /**
- * **The CI gate is waiting on a binding no webhook reaches** (WP-136, the product owner's decision
- * of 2026-10-03).
+ * **The CI gate is waiting for a pipeline** (WP-136, the product owner's decision of 2026-10-03;
+ * widened 2026-11-26).
  *
- * A binding a webhook reaches is normally settled by the pipeline's own `ci.pipeline.finished`
- * long before {@link MAX_GATE_CHECKS} run out; a poll-only binding (`MergeRequestPollPlan
- * .receives_webhooks: false`, WP-123) is told nothing, so five checks thirty seconds apart parked
- * every task whose pipeline took longer than about two and a half minutes. For that binding — and
- * only at `ci_gate` — the evaluator answers `pending` with this, and the job bounds the wait by
- * `pipeline.limits.ci_timeout_minutes` from the gate's current entry instead (`ci-wait.ts`).
- *
- * A binding with **no** poll plan (polling off) keeps the five checks: the ruling's condition is the
- * plan's own `receives_webhooks`, and a binding that neither polls nor receives is a configuration
- * the five-check park already names.
+ * Five checks thirty seconds apart ({@link MAX_GATE_CHECKS}) parked every task whose pipeline took
+ * longer than about two and a half minutes. WP-136 lifted that for a poll-only binding
+ * (`MergeRequestPollPlan.receives_webhooks: false`, WP-123), on the assumption that a binding a
+ * webhook reaches is settled by the pipeline's own `ci.pipeline.finished` long before the five
+ * checks run out. **That assumption was false** (fontai, GO-705, 2026-11-26): the gate parked at
+ * 2 min 08 s on a webhook binding while GitLab pipeline 19204 ran for nine more minutes, and its
+ * `failed` webhook arrived to a task already parked. So at `ci_gate` the evaluator answers `pending`
+ * with this on **every** git binding — a poll-only one, one a webhook reaches, and one with no poll
+ * plan at all (polling off, so the webhook is its only other news) — and the job bounds the wait by
+ * `pipeline.limits.ci_timeout_minutes` from the gate's current entry (`ci-wait.ts`). On a webhook
+ * binding the recheck is the safety net for a lost delivery; the delivery itself still settles the
+ * gate the moment it arrives (`ci-settle.ts`), and the recheck that fires after finds its attempt
+ * closed and does nothing.
  */
 export interface CiWait {
   /** The configured timeout, read at this evaluation (`pipeline.limits.ci_timeout_minutes`). */
   readonly timeoutMinutes: number;
   /** The provider id of the git binding, named in the brief (`gitlab`). */
   readonly provider: string;
+  /**
+   * Whether the binding is **poll-only** (its poll plan says `receives_webhooks: false`): the brief
+   * then says the platform asked the provider rather than waiting for a webhook. `false` for a
+   * binding a webhook reaches and for one with no poll plan.
+   */
+  readonly pollOnly: boolean;
   /** The head pipeline the gate read, or `null` when none has started for the head commit. */
   readonly pipeline: { readonly id: string; readonly status: string } | null;
 }
@@ -332,8 +343,9 @@ export interface GateProviderOutage {
   /** The binding's host (`gitlab.com`), named in the brief; `null` for an adapter that dials none. */
   readonly host: string | null;
   /**
-   * `pipeline.limits.ci_timeout_minutes` when this is the CI gate on a **poll-only** binding — the
-   * wait WP-136 bounds by time from the gate's entry, which an outage does not extend — else `null`.
+   * `pipeline.limits.ci_timeout_minutes` when this is the CI gate (on any git binding since
+   * 2026-11-26) — the wait WP-136 bounds by time from the gate's entry, which an outage does not
+   * extend — else `null`.
    */
   readonly ciTimeoutMinutes: number | null;
   /** The failure itself, for the job's log line (the executor has already redacted it in place). */
@@ -691,9 +703,9 @@ const composeFailureDetail = (
 };
 
 /**
- * A pending CI read, with the wait a **poll-only** binding gets (WP-136, {@link CiWait}) — or as it
- * was, for a binding a webhook reaches or one with no poll plan. The settings are read only here,
- * on a pending answer, so a settled gate costs nothing more than before.
+ * A pending CI read, with the time-bounded wait (WP-136, {@link CiWait}) — on every git binding
+ * since 2026-11-26. The settings are read only here, on a pending answer, so a settled gate costs
+ * nothing more than before.
  */
 const withCiWait = async (
   options: CiGateOptions,
@@ -703,7 +715,7 @@ const withCiWait = async (
   pipeline: CiWait['pipeline'],
 ): Promise<GateResult> => {
   const git = bindings.git;
-  if (git === null || git.port.pollPlan()?.receives_webhooks !== false) {
+  if (git === null) {
     return result;
   }
   const settings = await options.settings.forProject(stored.task.projectId);
@@ -712,6 +724,7 @@ const withCiWait = async (
     ciWait: {
       timeoutMinutes: ciTimeoutMinutesOf(settings),
       provider: git.ref.provider,
+      pollOnly: git.port.pollPlan()?.receives_webhooks === false,
       pipeline,
     },
   };
@@ -1028,7 +1041,7 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
        */
       const readProvider = async (): Promise<GateResult> => {
         if (stage.id === 'ci_gate') {
-          // WP-136: the head pipeline the read saw, for a poll-only binding's brief.
+          // WP-136: the head pipeline the read saw, for the CI timeout's brief.
           let seenPipeline: CiWait['pipeline'] = null;
           // Backlog 1078: the pending pipeline the read saw, recorded on the attempt by the job.
           let pendingRead: CiPipelineRead | null = null;
@@ -1189,15 +1202,16 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
         if (code === null) {
           throw error;
         }
-        // The settings are read only for the one gate whose bound they state, after the failure.
-        const pollOnlyCi =
-          stage.id === CI_GATE_STAGE && binding.port.pollPlan()?.receives_webhooks === false;
+        // The settings are read only for the one gate whose bound they state, after the failure —
+        // the CI gate on every binding (WP-136, widened 2026-11-26), so an outage on a webhook
+        // binding cannot extend the configured wait by its own 60-minute ceiling either.
+        const ciGate = stage.id === CI_GATE_STAGE;
         return {
           kind: 'unreachable',
           code,
           provider: binding.ref.provider,
           host: binding.ref.host,
-          ciTimeoutMinutes: pollOnlyCi
+          ciTimeoutMinutes: ciGate
             ? ciTimeoutMinutesOf(await options.settings.forProject(stored.task.projectId))
             : null,
           error,

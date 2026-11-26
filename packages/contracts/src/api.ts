@@ -1753,7 +1753,7 @@ export type TaskReturn = z.infer<typeof taskReturnSchema>;
  * `task_stages.ci_ending` — the two endings of {@link taskStopSchema}'s `no_answer` at `ci_gate`
  * that the page words on their own:
  *
- * - `ci_timed_out` — the wait on a poll-only binding reached `pipeline.limits.ci_timeout_minutes`;
+ * - `ci_timed_out` — the CI gate's wait (on any git binding since 2026-11-26) reached `pipeline.limits.ci_timeout_minutes`;
  * - `ci_held_unchanged` — a Retry's first read found the previous attempt's pipeline, on the same
  *   head, still held at a manual job, so the gate escalated at once rather than wait again.
  */
@@ -1772,7 +1772,7 @@ export const MAX_TASK_STOP_RECORDED_CHARS = 2_000;
  * - `same_failure` — closed `converged`: CI failed with the same jobs three times in a row
  *   (product/04 S4), or a review repeated its findings;
  * - `no_answer` — closed `undecided`: the check never got an answer in the time or the checks it is
- *   allowed (the CI timeout on a poll-only binding, the five checks, a provider that did not answer).
+ *   allowed (the CI gate's CI timeout, another gate's five checks, a provider that did not answer).
  *   Nothing failed. `recorded` is the sentence the platform wrote (`return_reason`) — platform text
  *   that quotes provider text (a job's name), so it is rendered as untrusted text — cut at
  *   {@link MAX_TASK_STOP_RECORDED_CHARS} with `recorded_cut` saying so; `null` when none was written.
@@ -1829,8 +1829,8 @@ export const MAX_GATE_WAIT_HELD_JOB_CHARS = 100;
  * `status` is the git port's vocabulary — in practice `pending`, `running` or `manual`, the
  * statuses the gate waits on. `draft` is the merge request's draft flag at that read. `checked_at`
  * is the read's instant, `waiting_since` the attempt's entry (`task_stages.entered_at`, which the
- * CI timeout counts from), and `timeout_minutes` the CI timeout that bounds this wait — `null` on a
- * binding a webhook reaches, whose wait is bounded by a count of checks instead.
+ * CI timeout counts from), and `timeout_minutes` the CI timeout that bounds this wait — on every git binding since 2026-11-26; `null` on a read
+ * recorded before then on a binding a webhook reaches, whose wait was bounded by a count of checks.
  */
 export const gateWaitSchema = z.strictObject({
   pipeline_id: nonEmptyStringSchema,

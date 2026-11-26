@@ -157,7 +157,7 @@ pipeline:
     human_rounds: 3
     rebase_attempts: 2           # conflict-resolution runs per MR (product/04 S6b)
     rebase_rechecks: 10          # gate re-checks: the default branch moving (WP-26), and the rebase gate re-entering ci_gate for a head CI never passed (WP-79)
-    ci_timeout_minutes: 60       # 10..1440; how long ci_gate waits for a pipeline when the git binding receives no webhooks (poll-only), from the gate's entry; webhook bindings keep five checks 30 s apart (WP-136)
+    ci_timeout_minutes: 60       # 10..1440; how long ci_gate waits for a pipeline, from the gate's entry, on every git binding (WP-136; a webhook binding too since 2026-11-26, its pipeline event settling the gate earlier)
     question_timeout: 1 working day   # a blocking question's expiry; also paces an approval's at most five reminders, (n − ½) timeouts after the request — an approval itself never expires (BD-006, 2026-11-07)
   wip:                           # BD-010's per-project WIP limits (WP-91); each 1..50 / 1..200
     max_parallel_tasks: 2        # tasks moving through stages at once

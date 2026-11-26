@@ -547,8 +547,7 @@ green inside the timeout passes the gate within a minute of finishing; one still
 timeout parks the task *Needs human* with a brief naming the pipeline, its status and the key — or
 saying *no pipeline has started for the head commit*, and for a `manual` pipeline that it waits for
 someone to start its manual job. When the pipeline has finished, **Hand back** at `ci_gate` from the
-task page: that is a new entry with a fresh timeout. A **pause and resume** keeps the clock: a task resumed after its timeout is read once more and then parks; only a hand-back restarts it. (A binding with a webhook secret keeps the old
-five checks 30 seconds apart, because the pipeline's own event settles it.) A
+task page: that is a new entry with a fresh timeout. A **pause and resume** keeps the clock: a task resumed after its timeout is read once more and then parks; only a hand-back restarts it. (A binding with a webhook secret waits the same way since 2026-11-26 — its old five checks 30 seconds apart parked fontai's GO-705 at 2 minutes while its pipeline ran nine more — and the pipeline's own event settles the gate the moment it arrives.) A
 project with no CI at all passes the gate's pipeline half — but **only when the default branch has
 no CI file** (WP-138): a head with no pipeline on a project that has one is a pipeline that has not
 started, and the gate waits for it rather than passing. Which file is GitLab's answer (WP-139): the
@@ -556,8 +555,7 @@ project's *CI/CD configuration file* setting (`ci_config_path`) — `.gitlab-ci.
 `deploy/.gitlab-ci.yml` for GoParking — and a configuration in another project or at a URL counts as
 present without being read. GitLab omits the setting for a token that may not read the code; the
 gate then cannot tell and waits. The file's presence is read from the platform's own mirror
-(`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too — on a poll-only
-binding up to the same CI timeout.
+(`APP_KNOWLEDGE_MIRROR_ROOT`); a process that has none cannot tell, and waits too — up to the same CI timeout.
 
 **Budgets on a large repository — Autix's caps as a worked example** (Q116 (a), WP-150). The shipped
 per-run caps (product/04: refinement 2, architecture 5, implementation 15, code review 5, business

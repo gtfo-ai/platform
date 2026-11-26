@@ -1059,8 +1059,10 @@ rest. One setting, `APP_POLL_SWEEP_INTERVAL_MS`, bounds how long a lost poll of 
 poll-only binding it asks GitLab for the merge request's head pipeline every 30 seconds for its first
 five checks and every minute after, until `pipeline.limits.ci_timeout_minutes` (default 60, 10–1440,
 settable in `.agentic/config.yml`) has passed since the task entered the gate, and then parks the task
-*Needs human* with a brief naming that key. A binding with a webhook secret keeps the gate's five checks
-30 seconds apart, because the pipeline's own event settles it. A resume after a pause keeps the gate's clock; a hand-back at `ci_gate` restarts it.
+*Needs human* with a brief naming that key. A binding with a webhook secret waits the same way and
+up to the same timeout (since 2026-11-26: five checks 30 seconds apart parked every task whose
+pipeline took longer than about two and a half minutes); the pipeline's own event settles the gate the
+moment it arrives, and the gate's re-checks are the safety net for a webhook that was lost. A resume after a pause keeps the gate's clock; a hand-back at `ci_gate` restarts it.
 
 ## 5. Upgrade
 

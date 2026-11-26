@@ -3963,12 +3963,15 @@ describe('the rebase gate', () => {
 });
 
 /**
- * **The CI gate on a poll-only binding waits for the pipeline, up to a CI timeout** (WP-136, the
- * product owner's decision of 2026-10-03). A binding no webhook reaches is told nothing when its
- * pipeline finishes, so the gate's own re-checks are the only reader: thirty seconds apart for the
- * first five, sixty after, until `pipeline.limits.ci_timeout_minutes` from the gate's entry.
+ * **The CI gate waits for the pipeline, up to a CI timeout** (WP-136, the product owner's decision
+ * of 2026-10-03; widened to every git binding 2026-11-26). A binding no webhook reaches is told
+ * nothing when its pipeline finishes, so the gate's own re-checks are the only reader: thirty
+ * seconds apart for the first five, sixty after, until `pipeline.limits.ci_timeout_minutes` from the
+ * gate's entry. A binding a webhook reaches waits the same way — five checks parked fontai's GO-705
+ * at 2 min 08 s while its pipeline ran nine more minutes — and its pipeline's own event settles the
+ * gate the moment it arrives.
  */
-describe('the CI gate on a poll-only binding (WP-136)', () => {
+describe('the CI gate waits for a pipeline up to its CI timeout (WP-136)', () => {
   const MINUTE = 60_000;
   const POLL_ONLY = { interval_seconds: 60, receives_webhooks: false } as const;
   const WEBHOOK = { interval_seconds: 60, receives_webhooks: true } as const;
@@ -4138,18 +4141,93 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
     );
   });
 
-  it('leaves a webhook binding and a binding with no poll plan at five checks (unchanged)', async () => {
+  /**
+   * 2026-11-26 (fontai, GO-705, GitLab 19.5.8): on a binding a webhook reaches the gate parked
+   * after five checks 30 s apart while the pipeline ran for nine more minutes. It now waits the CI
+   * timeout from its entry, as a poll-only binding does — and so does a binding with no poll plan.
+   */
+  it('keeps a webhook binding and a binding with no poll plan waiting past five checks, until the CI timeout', async () => {
     for (const plan of [WEBHOOK, null]) {
-      const harness = waiting(() => pipeline('running'), { plan });
+      const harness = waiting(() => pipeline('running'), { plan, timeoutMinutes: 20 });
       await harness.publish([ticketMatched()]);
-      for (let check = 1; check < MAX_GATE_CHECKS; check += 1) {
+      const entered = harness.clock.epochMs;
+      // Five checks and more: still waiting, the next check queued rather than an escalation.
+      const delays: number[] = [];
+      for (let check = 1; check < MAX_GATE_CHECKS + 3; check += 1) {
+        delays.push(await nextCheck(harness));
+      }
+      expect(taskOf(harness).task.state, String(plan)).toBe('active');
+      expect(lastEscalation(harness), String(plan)).toBeUndefined();
+      expect(stageJobs(harness), String(plan)).toHaveLength(1);
+      expect(delays, String(plan)).toEqual([
+        30_000, 30_000, 30_000, 30_000, 60_000, 60_000, 60_000,
+      ]);
+      expect(ciRows(harness), String(plan)).toEqual([[1, 'running', null]]);
+
+      while (taskOf(harness).task.state === 'active') {
         await nextCheck(harness);
       }
+      expect(harness.clock.epochMs - entered, String(plan)).toBe(20 * MINUTE);
       expect(taskOf(harness).task.state, String(plan)).toBe('needs_human');
-      expect(lastEscalation(harness)?.payload.reason).toContain(
-        `could not be decided after ${MAX_GATE_CHECKS} attempts`,
+      const escalation = lastEscalation(harness);
+      expect(escalation?.payload.reason, String(plan)).toBe(
+        'the CI gate on a fake-git binding timed out: the merge request was still running (pipeline pipeline-9) after 20 minutes (pipeline.limits.ci_timeout_minutes = 20); the last read: pipeline pipeline-9 is running',
       );
+      expect(escalation?.payload.blocker_brief, String(plan)).toBe(
+        'The CI pipeline pipeline-9 for this merge request was still running after 20 minutes — the CI timeout (`pipeline.limits.ci_timeout_minutes = 20`). ' +
+          "No pipeline event from fake-git settled it, and the platform's own check every minute still read it unfinished. " +
+          'Look at the pipeline; when it has finished, hand the task back at ci_gate. If pipelines here routinely take longer, raise ci_timeout_minutes.',
+      );
+      expect(ciRows(harness), String(plan)).toEqual([[1, 'failed', 'undecided']]);
+      expect(stageJobs(harness), String(plan)).toEqual([]);
     }
+  });
+
+  /**
+   * The webhook still settles the gate the moment it arrives (`ci-settle.ts`), past the old five
+   * checks; the recheck already queued for that attempt then finds its row closed and does nothing.
+   */
+  it('settles a webhook binding’s gate from the finished pipeline’s event, and the queued recheck does nothing', async () => {
+    const harness = waiting(() => pipeline('running'), { plan: WEBHOOK });
+    await harness.publish([ticketMatched()]);
+    for (let check = 1; check < MAX_GATE_CHECKS + 2; check += 1) {
+      await nextCheck(harness);
+    }
+    expect(taskOf(harness).task.state).toBe('active');
+    expect(lastEscalation(harness)).toBeUndefined();
+    // The recheck of attempt 1 that is queued when the event arrives.
+    const [stale] = stageJobs(harness);
+    expect(stale?.data).toMatchObject({ stage: 'ci_gate', attempt: 1 });
+
+    const task = taskOf(harness);
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: task.task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'failed',
+        failed_jobs: [{ name: 'test:unit', log_ref: 'log:1' }],
+        coverage_pct: null,
+      }),
+    ]);
+    expect(lastEscalation(harness)).toBeUndefined();
+    expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(1);
+    expect(ciRows(harness)[0]).toEqual([1, 'returned', 'protected_paths_clean']);
+
+    // The stale recheck of attempt 1 is still queued (a timer cannot be cancelled, TD-004); it
+    // fires and, its row closed, settles nothing. A re-entered attempt's own checks may fire too.
+    const staleQueued = () =>
+      stageJobs(harness).some((request) => (request.data as { attempt?: number }).attempt === 1);
+    expect(staleQueued()).toBe(true);
+    const rowsBefore = ciRows(harness);
+    for (let fired = 0; staleQueued() && fired < 3; fired += 1) {
+      await nextCheck(harness);
+    }
+    expect(staleQueued()).toBe(false);
+    expect(ciRows(harness)[0]).toEqual(rowsBefore[0]);
+    expect(lastEscalation(harness)).toBeUndefined();
+    expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(1);
   });
 
   it('leaves another gate on a poll-only binding at five checks (unchanged)', async () => {
@@ -4343,7 +4421,8 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
     it('records the read on the open attempt at every check, on a poll-only and a webhook binding', async () => {
       for (const [plan, timeout] of [
         [POLL_ONLY, 60],
-        [WEBHOOK, null],
+        // Since 2026-11-26 a webhook binding's wait is bounded by the CI timeout too.
+        [WEBHOOK, 60],
       ] as const) {
         let status: ReturnType<typeof pipeline> = pipeline('running');
         const harness = waiting(() => status, { plan });
@@ -4528,14 +4607,14 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
       ]);
     });
 
-    it('records no ending for the five checks of a webhook binding, which is not a timeout', async () => {
-      const harness = waiting(() => held(), { plan: WEBHOOK });
+    it('records the timeout ending on a webhook binding too (2026-11-26)', async () => {
+      const harness = waiting(() => held(), { plan: WEBHOOK, timeoutMinutes: 10 });
       await harness.publish([ticketMatched()]);
       while (taskOf(harness).task.state === 'active') {
         await nextCheck(harness);
       }
       expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
-      expect(ciEndings(harness)).toEqual([[1, null]]);
+      expect(ciEndings(harness)).toEqual([[1, 'ci_timed_out']]);
     });
 
     /**
@@ -4617,8 +4696,8 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
  * (PROGRESS backlog 490, first local test). AUT-6820's CI gate read threw while the host's network
  * to gitlab.com was down; pg-boss failed the job in ten minutes and the task was escalated as a stage
  * that *"never started"*. A transient failure is now an outage: re-asked after 30 s, doubling to
- * 5 min, until the gate's own bound — the CI timeout from the entry on a poll-only binding, sixty
- * minutes from the first failure elsewhere — and then parked with a brief naming the host and code.
+ * 5 min, until the gate's own bound — the CI gate's timeout from its entry (on every git binding
+ * since 2026-11-26), sixty minutes from the first failure on any other gate — and then parked with a brief naming the host and code.
  */
 describe('a gate whose provider does not answer (backlog 490)', () => {
   const MINUTE = 60_000;
@@ -4760,8 +4839,11 @@ describe('a gate whose provider does not answer (backlog 490)', () => {
     expect(queuedPayload(harness)).toMatchObject({ provider_failures: 2 });
   });
 
-  it('parks after sixty minutes of failed reads, naming the host, the code and the bound', async () => {
+  it('parks a CI gate with no poll plan at its CI timeout from the entry, naming the host, the code and the bound', async () => {
+    // 2026-11-26: the CI gate's outage is bounded by its CI timeout on every binding, so an outage
+    // cannot add the platform's own 60-minute ceiling to the configured wait.
     const { harness, state } = await atGate();
+    const entered = harness.clock.epochMs;
     await nextCheck(harness);
     state.answer = down;
     const firstFailure = harness.clock.epochMs + 30_000;
@@ -4770,19 +4852,22 @@ describe('a gate whose provider does not answer (backlog 490)', () => {
       await nextCheck(harness);
       reads += 1;
     }
-    expect(harness.clock.epochMs - firstFailure).toBe(60 * MINUTE);
+    expect(harness.clock.epochMs - entered).toBe(60 * MINUTE);
+    expect(harness.clock.epochMs - firstFailure).toBe(59 * MINUTE);
     // 30 + 60 + 120 + 240 s, ten reads 5 min apart, and the last step cut to the deadline.
     expect(reads).toBe(16);
     expect(taskOf(harness).task.state).toBe('needs_human');
     const escalation = lastEscalation(harness);
+    const bound =
+      "the CI timeout of 60 minutes from the gate's entry (`pipeline.limits.ci_timeout_minutes = 60`)";
     expect(escalation?.payload.blocker_brief).toBe(
-      `${HOST} did not answer for 60 minutes: unavailable. ` +
-        `The "ci_gate" gate asked ${String(reads)} times without an answer, waiting 30 seconds and then twice as long each time up to 5 minutes, until the platform's 60-minute limit for a provider outage at a gate. ` +
+      `${HOST} did not answer for 59 minutes: unavailable. ` +
+        `The "ci_gate" gate asked ${String(reads)} times without an answer, waiting 30 seconds and then twice as long each time up to 5 minutes, until ${bound}. ` +
         'Nothing about the merge request was decided: this is the provider being unreachable, not a result. ' +
         `Check that ${HOST} is reachable from the platform's host (and its status page), then hand the task back at ci_gate.`,
     );
     expect(escalation?.payload.reason).toBe(
-      `the "ci_gate" gate could not be decided: ${HOST} did not answer for 60 minutes: unavailable (${String(reads)} failed reads); it stopped at the platform's 60-minute limit for a provider outage at a gate`,
+      `the "ci_gate" gate could not be decided: ${HOST} did not answer for 59 minutes: unavailable (${String(reads)} failed reads); it stopped at ${bound}`,
     );
     expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
     expect(stageJobs(harness)).toEqual([]);
@@ -4809,6 +4894,57 @@ describe('a gate whose provider does not answer (backlog 490)', () => {
       "until the CI timeout of 15 minutes from the gate's entry (`pipeline.limits.ci_timeout_minutes = 15`)",
     );
     expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
+  });
+
+  /**
+   * Every gate but the CI gate keeps the platform's own ceiling: sixty minutes from the first failed
+   * read in a row (the CI gate's bound moved to its CI timeout on every binding, 2026-11-26).
+   */
+  it('parks another gate after sixty minutes of failed reads, naming the host, the code and the ceiling', async () => {
+    const state: { answer: () => ReturnType<typeof mergeRequest> | Error } = {
+      // Mergeability not computed yet: the rebase gate waits.
+      answer: () => mergeRequest(null),
+    };
+    const harness = harnessWith({
+      git: {
+        ref: {
+          integrationId: '00000000-0000-4000-8000-00000000a001',
+          provider: 'fake-git',
+          type: 'git',
+          host: HOST,
+        } as never,
+        getMergeRequest: async () => {
+          const value = state.answer();
+          if (value instanceof Error) {
+            throw value;
+          }
+          return value;
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.currentStage).toBe('rebase_gate');
+    state.answer = down;
+    const firstFailure = harness.clock.epochMs + 30_000;
+    let reads = 0;
+    while (taskOf(harness).task.state === 'active') {
+      await nextCheck(harness);
+      reads += 1;
+    }
+    expect(harness.clock.epochMs - firstFailure).toBe(60 * MINUTE);
+    // 30 + 60 + 120 + 240 s, ten reads 5 min apart, and the last step cut to the deadline.
+    expect(reads).toBe(16);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = lastEscalation(harness);
+    expect(escalation?.payload.blocker_brief).toBe(
+      `${HOST} did not answer for 60 minutes: unavailable. ` +
+        `The "rebase_gate" gate asked ${String(reads)} times without an answer, waiting 30 seconds and then twice as long each time up to 5 minutes, until the platform's 60-minute limit for a provider outage at a gate. ` +
+        'Nothing about the merge request was decided: this is the provider being unreachable, not a result. ' +
+        `Check that ${HOST} is reachable from the platform's host (and its status page), then hand the task back at rebase_gate.`,
+    );
+    expect(escalation?.payload.reason).toBe(
+      `the "rebase_gate" gate could not be decided: ${HOST} did not answer for 60 minutes: unavailable (${String(reads)} failed reads); it stopped at the platform's 60-minute limit for a provider outage at a gate`,
+    );
   });
 
   it('keeps today’s ending for a failure a later attempt does not fix: the job throws', async () => {
@@ -5687,6 +5823,19 @@ describe('the stage-row invariant (WP-46, backlogs 158 and 160)', () => {
   const latestRow = (harness: PipelineHarness, stage: string) =>
     harness.store.stageRows.filter((row) => row.stage === stage).at(-1);
 
+  /** Moves the clock to the next queued stage job and fires it (the CI gate's own cadence). */
+  const nextGateCheck = async (harness: PipelineHarness): Promise<void> => {
+    const due = harness.jobs.enqueued
+      .filter((request) => request.queue === JOB_QUEUES.stageExecute)
+      .map((request) => request.startAfter?.getTime() ?? harness.clock.epochMs)
+      .sort((a, b) => a - b)[0];
+    if (due === undefined) {
+      throw new Error('no gate check is queued');
+    }
+    harness.clock.advance(Math.max(0, due - harness.clock.epochMs));
+    await harness.drain();
+  };
+
   const openRows = (harness: PipelineHarness) =>
     harness.store.stageRows.filter((row) => row.state === 'running').map((row) => row.stage);
 
@@ -5723,18 +5872,19 @@ describe('the stage-row invariant (WP-46, backlogs 158 and 160)', () => {
   it('closes a gate that could not be decided, and leaves it open while it still re-checks (160, site 1)', async () => {
     const harness = pendingCi();
     await harness.publish([ticketMatched()]);
-    // The first check ran on entry; the last of `MAX_GATE_CHECKS` is the one that escalates.
-    for (let check = 2; check < MAX_GATE_CHECKS; check += 1) {
-      harness.clock.advance(GATE_RECHECK_MS);
-      await harness.drain();
+    // The first check ran on entry; the CI gate waits its CI timeout (WP-136, every binding since
+    // 2026-11-26), and the check that reaches it is the one that escalates.
+    let check = 1;
+    while (taskOf(harness).task.state === 'active') {
       // Still re-checking: the task is at the gate and not parked, so the row is open.
       expect(latestRow(harness, 'ci_gate'), `check ${check}`).toMatchObject({
         state: 'running',
         exitedAt: null,
       });
+      await nextGateCheck(harness);
+      check += 1;
     }
-    harness.clock.advance(GATE_RECHECK_MS);
-    await harness.drain();
+    expect(check).toBeGreaterThan(MAX_GATE_CHECKS);
 
     expect(taskOf(harness).task.state).toBe('needs_human');
     expect(latestRow(harness, 'ci_gate')).toMatchObject({
@@ -5743,16 +5893,15 @@ describe('the stage-row invariant (WP-46, backlogs 158 and 160)', () => {
       returnedTo: null,
     });
     expect(latestRow(harness, 'ci_gate')?.exitedAt).not.toBeNull();
-    expect(latestRow(harness, 'ci_gate')?.returnReason).toContain('could not be decided');
+    expect(latestRow(harness, 'ci_gate')?.returnReason).toContain('timed out');
     expect(openRows(harness)).toEqual([]);
   });
 
   it('re-opens the gate a human retries after the escalation (160, criterion 3)', async () => {
     const harness = pendingCi();
     await harness.publish([ticketMatched()]);
-    for (let check = 0; check < MAX_GATE_CHECKS; check += 1) {
-      harness.clock.advance(GATE_RECHECK_MS);
-      await harness.drain();
+    while (taskOf(harness).task.state === 'active') {
+      await nextGateCheck(harness);
     }
     expect(taskOf(harness).task.state).toBe('needs_human');
 

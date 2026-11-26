@@ -93,7 +93,8 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
       type: 'git',
     },
     capabilities: () => ({}),
-    // WP-136: no poll plan unless a case says otherwise — the five-check bound of a webhook binding.
+    // WP-136: no poll plan unless a case says otherwise — since 2026-11-26 the CI gate's time bound
+    // applies to it as to every binding (`ciWaitOn`).
     pollPlan: () => null,
     // WP-139: the CI configuration where GitLab keeps it by default, read from the mirror.
     repositorySettings: async () => ({
@@ -211,6 +212,17 @@ const runningRead = (headSha = HEAD_SHA, draft = false) => ({
     draft,
   },
 });
+
+/**
+ * The CI gate's time-bounded wait on a binding with no poll plan — the default here (WP-136,
+ * widened 2026-11-26: every git binding waits up to `ci_timeout_minutes`, default 60).
+ */
+const ciWaitOn = (
+  pipeline: { readonly id: string; readonly status: string } | null = {
+    id: 'pipeline-1',
+    status: 'running',
+  },
+) => ({ timeoutMinutes: 60, provider: 'fake-git', pollOnly: false, pipeline });
 
 const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   task: {
@@ -943,6 +955,7 @@ describe('the CI gate', () => {
       kind: 'pending',
       detail: 'pipeline pipeline-1 is running',
       ciRead: runningRead(),
+      ciWait: ciWaitOn(),
     });
   });
 
@@ -982,6 +995,7 @@ describe('the CI gate', () => {
       kind: 'pending',
       detail: 'pipeline pipeline-1 is running',
       ciRead: runningRead(HEAD_SHA, true),
+      ciWait: ciWaitOn(),
     });
     // Backlog 1078: the held pipeline's read names the job the detail names, and the draft.
     expect((draft as { ciRead?: unknown }).ciRead).toEqual({
@@ -1039,6 +1053,7 @@ describe('the CI gate', () => {
       kind: 'pending',
       detail: 'the merge request has no head commit yet',
       ciRead: { provider: 'fake-git', pipeline: null },
+      ciWait: ciWaitOn(null),
     });
   });
 
@@ -1062,6 +1077,7 @@ describe('the CI gate', () => {
       kind: 'pending',
       detail: 'pipeline pipeline-1 is running',
       ciRead: runningRead('c'.repeat(40)),
+      ciWait: ciWaitOn(),
     });
   });
 });
@@ -1976,9 +1992,9 @@ describe('the merged gate', () => {
 });
 
 /**
- * WP-136: the evaluator marks a pending CI read on a **poll-only** binding with the wait the job
- * bounds by time — and nothing else: a webhook binding, a binding with no poll plan, and the
- * rebase gate answer `pending` exactly as before.
+ * WP-136: the evaluator marks a pending CI read with the wait the job bounds by time — on a
+ * poll-only binding, and since 2026-11-26 (fontai, GO-705) on a webhook binding and one with no
+ * poll plan too; the rebase gate answers `pending` exactly as before.
  */
 describe('the CI gate on a poll-only binding (WP-136)', () => {
   const POLL_ONLY = { interval_seconds: 60, receives_webhooks: false };
@@ -1997,6 +2013,7 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
       ciWait: {
         timeoutMinutes: 90,
         provider: 'fake-git',
+        pollOnly: true,
         pipeline: { id: 'pipeline-1', status: 'running' },
       },
     });
@@ -2008,23 +2025,31 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
     );
     expect(none).toMatchObject({
       kind: 'pending',
-      ciWait: { timeoutMinutes: 60, pipeline: null },
+      ciWait: { timeoutMinutes: 60, pollOnly: true, pipeline: null },
     });
   });
 
-  it('leaves a webhook binding, a binding with no poll plan and the rebase gate unmarked', async () => {
+  it('marks a webhook binding and a binding with no poll plan too, not as poll-only (2026-11-26)', async () => {
     for (const plan of [{ interval_seconds: 60, receives_webhooks: true }, null]) {
-      const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
-        pollPlan: () => plan,
-        getPipelineStatus: async () => pipelineStatus('running'),
-      });
-      // No `ciWait` — but the read is carried on every binding (backlog 1078).
+      const result = await evaluate(
+        templateStage('ci_gate'),
+        storedTask(MR),
+        {
+          pollPlan: () => plan,
+          getPipelineStatus: async () => pipelineStatus('running'),
+        },
+        { ciTimeoutMinutes: 45 },
+      );
       expect(result, JSON.stringify(plan)).toEqual({
         kind: 'pending',
         detail: 'pipeline pipeline-1 is running',
         ciRead: runningRead(),
+        ciWait: { ...ciWaitOn(), timeoutMinutes: 45 },
       });
     }
+  });
+
+  it('leaves the rebase gate unmarked', async () => {
     const rebase = await evaluate(templateStage('rebase_gate'), storedTask(MR), {
       pollPlan: () => POLL_ONLY,
       getMergeRequest: async () => liveMergeRequest(HEAD_SHA, null),
@@ -2117,12 +2142,13 @@ describe('a gate whose provider does not answer (backlog 490)', () => {
         kind: 'unreachable',
         code,
         provider: 'fake-git',
-        ciTimeoutMinutes: null,
+        // The CI gate's outage is bounded by its CI timeout on every binding (2026-11-26).
+        ciTimeoutMinutes: stage === 'ci_gate' ? 60 : null,
       });
     }
   });
 
-  it('carries the CI timeout only for the CI gate on a poll-only binding', async () => {
+  it('carries the CI timeout for the CI gate on every binding, and not for the rebase gate', async () => {
     const failing = {
       pollPlan: () => POLL_ONLY,
       getMergeRequest: async () => {
@@ -2133,6 +2159,14 @@ describe('a gate whose provider does not answer (backlog 490)', () => {
       await evaluation(templateStage('ci_gate'), storedTask(MR), failing, {
         ciTimeoutMinutes: 15,
       }),
+    ).toMatchObject({ kind: 'unreachable', code: 'timeout', ciTimeoutMinutes: 15 });
+    expect(
+      await evaluation(
+        templateStage('ci_gate'),
+        storedTask(MR),
+        { ...failing, pollPlan: () => ({ interval_seconds: 60, receives_webhooks: true }) },
+        { ciTimeoutMinutes: 15 },
+      ),
     ).toMatchObject({ kind: 'unreachable', code: 'timeout', ciTimeoutMinutes: 15 });
     expect(
       await evaluation(templateStage('rebase_gate'), storedTask(MR), failing, {

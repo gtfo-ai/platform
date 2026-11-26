@@ -57,7 +57,7 @@
  *    that would not load, a project with no git binding, a task with no merge request. An unreadable
  *    head is not an unmoved one (standing rule 20: fail closed on a mutation), and the gate it
  *    re-enters has its own bounded answer for a provider that stays down (`MAX_GATE_CHECKS` — or
- *    the CI timeout on a poll-only binding, WP-136 — then `needs_human`), so failing closed here
+ *    the CI gate's CI timeout, WP-136 — then `needs_human`), so failing closed here
  *    costs a gate evaluation rather than a stuck task.
  *
  * ## The edge it adds, and which loop it spends (standing rule 81)

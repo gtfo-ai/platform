@@ -1,12 +1,15 @@
 /**
- * **The CI gate's wait on a poll-only git binding** (WP-136, the product owner's decision of
- * 2026-10-03; PROGRESS § "Architect ruling (M8 additions, session 11)").
+ * **The CI gate's wait for a pipeline** (WP-136, the product owner's decision of 2026-10-03;
+ * PROGRESS § "Architect ruling (M8 additions, session 11)"; widened 2026-11-26).
  *
- * Every gate parks after {@link MAX_GATE_CHECKS} checks thirty seconds apart, and on a binding a
- * webhook reaches the pipeline's own `ci.pipeline.finished` settles the CI gate long before that
- * (`ci-settle.ts`). A **poll-only** binding receives no such event, so a pipeline longer than about
- * two and a half minutes parked every task. For that binding, and only at `ci_gate`, the bound is a
- * **time** instead of a count:
+ * Every other gate parks after {@link MAX_GATE_CHECKS} checks thirty seconds apart, so a pipeline
+ * longer than about two and a half minutes parked every task. WP-136 gave a **poll-only** binding a
+ * time bound on the assumption that a webhook's `ci.pipeline.finished` settles the gate long before
+ * the five checks on any other binding; fontai's GO-705 (2026-11-26) measured that false — parked at
+ * 2 min 08 s, its pipeline's `failed` webhook arrived nine minutes later. So at `ci_gate`, on **every**
+ * git binding (poll-only, webhook, or no poll plan), the bound is a **time** instead of a count; on a
+ * binding a webhook reaches the recheck is the safety net for a lost delivery, and the delivery
+ * still settles the gate the moment it arrives (`ci-settle.ts`):
  *
  *  - **the clock** is the gate's current entry, `task_stages.entered_at`, read on every fire — so a
  *    lost or recovered job, a restart or a replay cannot extend it, and a hand-back at `ci_gate` is
@@ -48,7 +51,7 @@ export type CiWaitDecision =
   | { readonly kind: 'backstop'; readonly limit: number };
 
 /**
- * What a pending CI read on a poll-only binding does next. `checks` is this fire's count (the
+ * What a pending CI read does next. `checks` is this fire's count (the
  * first evaluation is 1). An instant that does not parse is **not** "within the timeout" (standing
  * rule 16): `NaN` fails the comparison and the gate parks rather than waiting for ever.
  */
@@ -92,6 +95,10 @@ const manualNote = (wait: CiWait): string =>
 const timeoutKey = (wait: CiWait): string =>
   `pipeline.limits.ci_timeout_minutes = ${String(wait.timeoutMinutes)}`;
 
+/** "a poll-only gitlab binding" or "a gitlab binding" — the reason's words for the binding. */
+const bindingWords = (wait: CiWait): string =>
+  `${wait.pollOnly ? 'a poll-only ' : 'a '}${wait.provider} binding`;
+
 /** The escalation's reason — what the gate's row and the `task.escalated` event carry. */
 export const ciWaitReason = (
   wait: CiWait,
@@ -99,8 +106,8 @@ export const ciWaitReason = (
   checks: number,
 ): string =>
   decision.kind === 'timed_out'
-    ? `the CI gate on a poll-only ${wait.provider} binding timed out: the merge request ${sawWhat(wait)} after ${String(wait.timeoutMinutes)} minutes (${timeoutKey(wait)})`
-    : `the CI gate on a poll-only ${wait.provider} binding stopped at its backstop of ${String(decision.limit)} checks before its clock reached ${String(wait.timeoutMinutes)} minutes (${timeoutKey(wait)}); the merge request ${sawWhat(wait)} at check ${String(checks)}`;
+    ? `the CI gate on ${bindingWords(wait)} timed out: the merge request ${sawWhat(wait)} after ${String(wait.timeoutMinutes)} minutes (${timeoutKey(wait)})`
+    : `the CI gate on ${bindingWords(wait)} stopped at its backstop of ${String(decision.limit)} checks before its clock reached ${String(wait.timeoutMinutes)} minutes (${timeoutKey(wait)}); the merge request ${sawWhat(wait)} at check ${String(checks)}`;
 
 /**
  * The brief a person reads on the task page — the ruling's (e) sentence, with the provider's id
@@ -119,8 +126,11 @@ export const ciWaitBrief = (
     decision.kind === 'timed_out'
       ? `${what} — the CI timeout (\`${timeoutKey(wait)}\`).`
       : `The CI gate stopped after ${String(checks)} checks, its backstop, before its clock reached the CI timeout (\`${timeoutKey(wait)}\`); ${wait.pipeline === null ? 'no pipeline had started for the head commit' : `pipeline ${wait.pipeline.id} was still ${wait.pipeline.status}`}.`;
+  const how = wait.pollOnly
+    ? `This project's ${wait.provider} binding is poll-only, so the platform asked ${wait.provider} every minute rather than waiting for a webhook.`
+    : `No pipeline event from ${wait.provider} settled it, and the platform's own check every minute still read it unfinished.`;
   return (
-    `${head} This project's ${wait.provider} binding is poll-only, so the platform asked ${wait.provider} every minute rather than waiting for a webhook.` +
+    `${head} ${how}` +
     `${manualNote(wait)} Look at the pipeline; when it has finished, hand the task back at ci_gate. If pipelines here routinely take longer, raise ci_timeout_minutes.`
   );
 };
