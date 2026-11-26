@@ -922,11 +922,15 @@ describe('the scaling split: ROLE=api beside ROLE=worker', () => {
     const writes = pipeline.gitCalls().filter((call) => call.method === 'commitFiles');
     expect(writes.map((call) => call.process)).toEqual(['worker']);
     // …and the job itself crossed the database: it was enqueued by a process that subscribes
-    // nothing and completed by one that does.
-    const [job] = await pipeline.query<{ state: string }>(
-      "select state::text as state from pgboss.job where name = 'knowledge.apply' order by created_on desc limit 1",
-    );
-    expect(job?.state).toBe('completed');
+    // nothing and completed by one that does. Waited for, never read once: pg-boss records the
+    // completion in its own write **after** the handler returns, so the proposal can read
+    // `applied` while the job still reads `active` (run 42761109019, attempt 1).
+    await pipeline.waitFor('the knowledge.apply job to be completed', async () => {
+      const [job] = await pipeline.query<{ state: string }>(
+        "select state::text as state from pgboss.job where name = 'knowledge.apply' order by created_on desc limit 1",
+      );
+      return job?.state === 'completed';
+    });
   }, 240_000);
 
   it('answers ready on the API while a worker that cannot compose a pipeline is 503 for that reason', async () => {
