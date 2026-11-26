@@ -1489,13 +1489,21 @@ export interface TaskRepository {
    * The CI gate's wait on a poll-only binding is timed from this instant, read on every fire, so a
    * lost, recovered or replayed job cannot restart the clock; a hand-back opens a new attempt, and
    * a job of the old attempt finds it closed.
+   *
+   * `ciEnding` is how the CI gate's own wait ended the attempt (`task_stages.ci_ending`, backlog
+   * 1078), `null` for every other ending and while it is open — what a late pipeline result asks
+   * before it resumes a task the wait parked (BD-034, BACKLOG 1658).
    */
   stageAttemptEntry(
     tx: Transaction,
     taskId: Id,
     stage: Slug,
     attempt: number,
-  ): Promise<{ readonly open: boolean; readonly enteredAt: IsoDateTime } | null>;
+  ): Promise<{
+    readonly open: boolean;
+    readonly enteredAt: IsoDateTime;
+    readonly ciEnding: CiGateEnding | null;
+  } | null>;
   /**
    * Records the CI gate's last pending read on `stage`'s attempt `attempt` — `null` for a pending
    * read that found no pipeline to wait on (backlog 1078, migration 0107). Writes **only an open

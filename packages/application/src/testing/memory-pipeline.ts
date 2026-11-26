@@ -1735,6 +1735,7 @@ export const createMemoryPipelineStore = (
       return {
         open: row.state === 'running' && row.exitedAt === null,
         enteredAt: new Date(row.enteredAtMs).toISOString() as IsoDateTime,
+        ciEnding: row.ciEnding ?? null,
       };
     },
     // Backlog 1078: the SQL store's two statements — open rows only, and parsed both ways.

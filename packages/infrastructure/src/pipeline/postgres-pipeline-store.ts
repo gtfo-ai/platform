@@ -1943,18 +1943,27 @@ export const createPostgresPipelineStore = (
     },
 
     stageAttemptEntry: async (tx, taskId, stage, attempt) => {
-      const { rows } = await sqlOf(tx).query<{ open: boolean; entered_at: Date }>(
-        `select (state = 'running' and exited_at is null) as open, entered_at from task_stages
+      const { rows } = await sqlOf(tx).query<{
+        open: boolean;
+        entered_at: Date;
+        ci_ending: string | null;
+      }>(
+        `select (state = 'running' and exited_at is null) as open, entered_at, ci_ending
+           from task_stages
           where task_id = $1 and stage = $2 and attempt = $3`,
         [taskId, stage, attempt],
       );
       const row = rows[0];
-      return row === undefined
-        ? null
-        : {
-            open: row.open,
-            enteredAt: new Date(row.entered_at).toISOString() as IsoDateTime,
-          };
+      if (row === undefined) {
+        return null;
+      }
+      // BACKLOG 1658: a value the schema does not know reads as no ending, never as a timeout.
+      const ending = ciGateEndingSchema.safeParse(row.ci_ending);
+      return {
+        open: row.open,
+        enteredAt: new Date(row.entered_at).toISOString() as IsoDateTime,
+        ciEnding: ending.success ? ending.data : null,
+      };
     },
 
     // Backlog 1078: the one writer of `ci_pending_read`, open rows only (the port's docblock).

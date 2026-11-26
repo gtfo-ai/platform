@@ -2398,6 +2398,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.stageAttemptEntry(tx, stored.task.id, 'ci_gate', 1)).toEqual({
           open: false,
           enteredAt: open?.enteredAt,
+          ciEnding: null,
         });
         await store.tasks.recordStageEntered(tx, {
           taskId: stored.task.id,
@@ -2603,6 +2604,11 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         ).toBe(false);
         expect(await store.tasks.recordCiEnding(tx, key(1), 'ci_held_unchanged')).toBe(false);
         expect(await store.tasks.ciPendingReadOf(tx, stored.task.id, 'ci_gate', 1)).toEqual(later);
+        // BACKLOG 1658: the closed attempt answers how the wait ended it — what a late pipeline
+        // result asks before it resumes the task — and an attempt with no ending answers null.
+        expect(
+          (await store.tasks.stageAttemptEntry(tx, stored.task.id, 'ci_gate', 1))?.ciEnding,
+        ).toBe('ci_timed_out');
         await store.tasks.recordStageEntered(tx, {
           taskId: stored.task.id,
           stage: 'ci_gate',

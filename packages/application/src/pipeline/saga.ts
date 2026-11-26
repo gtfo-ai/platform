@@ -2004,7 +2004,13 @@ const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
             projectId: event.payload.project_id,
             iid,
           });
-    if (stored === null || stored.task.state !== 'active') {
+    // BD-034 (BACKLOG 1658): a finished pipeline also reaches a task the CI gate's wait parked —
+    // `ci_settle` resumes it only if that wait is why it waits (`ci-late-result.ts`).
+    if (
+      stored === null ||
+      (stored.task.state !== 'active' &&
+        !(stored.task.state === 'needs_human' && event.type === 'ci.pipeline.finished'))
+    ) {
       return;
     }
     const stage = stored.task.currentStage;
