@@ -10,7 +10,10 @@
  * organisation configuration's row, Q103) is found and counted by the gauge's own reading.
  */
 import type { Transaction } from '@platform/application';
-import { undeliveredNotificationBounds } from '@platform/application';
+import {
+  IMMEDIATE_UNDELIVERED_AFTER_MS,
+  undeliveredNotificationBounds,
+} from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { notify, recovery as recoveryAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
@@ -213,6 +216,15 @@ describe('the re-post row (backlog 236 (2))', () => {
     );
     return row.rows[0]?.id as Id;
   };
+  /**
+   * The instant an hour-old row is past the gauge's immediate bound: BD-034's follow-ups moved the
+   * bound to the long provider retry's window, so it follows the constant (the store takes its own
+   * 48-minute bound below).
+   */
+  const pastTheWindow = (): IsoDateTime =>
+    new Date(
+      Date.now() + IMMEDIATE_UNDELIVERED_AFTER_MS - 48 * MINUTE,
+    ).toISOString() as IsoDateTime;
   const undelivered = async (ids: readonly Id[]) =>
     (
       await withTx((tx) =>
@@ -257,7 +269,7 @@ describe('the re-post row (backlog 236 (2))', () => {
     // refused-configuration row too, which is what Q103's half of 236 needed.
     const counted = await notify.countStaleUndeliveredNotifications(
       pool,
-      undeliveredNotificationBounds(ago(0)),
+      undeliveredNotificationBounds(pastTheWindow()),
     );
     expect(counted.immediate).toBeGreaterThanOrEqual(2);
   });
@@ -288,7 +300,7 @@ describe('the re-post row (backlog 236 (2))', () => {
     });
     const beforeCount = await notify.countStaleUndeliveredNotifications(
       pool,
-      undeliveredNotificationBounds(ago(0)),
+      undeliveredNotificationBounds(pastTheWindow()),
     );
     await withTx((tx) => repostStore.withholdRepost(tx, { id: withheld, at: ago(0) }));
     const row = await pool.query<{ delivered_as: string | null; has_at: boolean }>(
@@ -299,7 +311,7 @@ describe('the re-post row (backlog 236 (2))', () => {
     expect(await undelivered([withheld])).toEqual([]);
     const afterCount = await notify.countStaleUndeliveredNotifications(
       pool,
-      undeliveredNotificationBounds(ago(0)),
+      undeliveredNotificationBounds(pastTheWindow()),
     );
     expect(afterCount.immediate).toBe(beforeCount.immediate - 1);
     // The same guard as the mark: a delivered row is never turned into a withheld one.

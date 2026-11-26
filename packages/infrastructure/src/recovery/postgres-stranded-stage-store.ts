@@ -161,9 +161,11 @@ const strandedSql = (schema: string): string => `
                   -- A transport failure to start (Q59(a)): its start failure is recorded.
                   or (er.status = 'failed' and er.terminal_reason = 'error_during_execution'
                       and er.exit_detail is not null)
-                  -- A run that ended before the model took a turn (BD-034's turnless re-plan).
+                  -- A run that ended before the model took a turn (BD-034's turnless re-plan):
+                  -- its CLI was spawned (a run that never started reads 0 turns too, owing nothing).
                   or (er.status = 'failed' and er.terminal_reason = 'error_during_execution'
-                      and er.exit_detail is null and er.num_turns = 0), false)
+                      and er.exit_detail is null and er.num_turns = 0
+                      and er.started_at is not null), false)
            as replan_owed,
          fj.completed_on as failed_at, fj.tries as failed_tries,
          fj.failed_name, fj.failed_code, fj.failed_cause_name, fj.failed_cause_code,
@@ -176,7 +178,7 @@ const strandedSql = (schema: string): string => `
     -- below, so a row here is an **ended** run, and the pass never re-enqueues such an attempt.
     left join lateral (
       select r.status::text as status, r.terminal_reason::text as terminal_reason, r.ended_at,
-             r.num_turns, r.exit_detail, r.model, r.effort::text as effort
+             r.num_turns, r.exit_detail, r.started_at, r.model, r.effort::text as effort
         from runs r
        where r.task_stage_id = s.id
        -- Run ids are random (v4) UUIDs, so the newest is the latest creation (WP-108 review round 2).

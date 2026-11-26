@@ -18,7 +18,10 @@ const MIGRATIONS: readonly JobQueueMigration[] = [
   { name: '0002_b', queue: 'queue.b', options: { retryLimit: 5, retryBackoff: true } },
 ];
 
-const recorder = (recorded: Record<string, string> = {}) => {
+const recorder = (
+  recorded: Record<string, string> = {},
+  options: { readonly tableMissing?: boolean } = {},
+) => {
   const calls: string[] = [];
   const rows = new Map(Object.entries(recorded));
   return {
@@ -26,6 +29,9 @@ const recorder = (recorded: Record<string, string> = {}) => {
     rows,
     ports: {
       query: async (text: string, values?: readonly unknown[]) => {
+        if (text.includes('to_regclass')) {
+          return [{ present: options.tableMissing !== true }];
+        }
         if (text.startsWith('select')) {
           return [...rows].map(([name, options]) => ({ name, options }));
         }
@@ -75,6 +81,14 @@ describe('applyJobQueueMigrations', () => {
       /0002_b was applied with options \{"retryBackoff":true,"retryLimit":4\} but this build carries \{"retryBackoff":true,"retryLimit":5\}/,
     );
     // 0001_a is not recorded, and still nothing was applied: the refusal comes first.
+    expect(fake.calls).toEqual([]);
+  });
+});
+
+describe('a database migrated short of the record table', () => {
+  it('applies nothing and reads nothing more: the migrate that creates the table applies them all', async () => {
+    const fake = recorder({}, { tableMissing: true });
+    expect(await applyJobQueueMigrations(fake.ports, MIGRATIONS)).toEqual([]);
     expect(fake.calls).toEqual([]);
   });
 });
