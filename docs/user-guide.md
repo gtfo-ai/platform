@@ -2419,6 +2419,15 @@ runs: Docker has no free network ranges.* — and runs on it once it is fixed an
 pressed; if nobody does before the offer times out, the task stops naming the machine and the
 cause.
 
+**A task keeps its owner when its machine drops it.** When the machine running a task loses it (it
+stopped checking in, it handed the run back, it hit its usage limit), the task stays its owner's: only
+the owner's machines, and machines set to take everyone's tasks, take it again — never another
+person's machine that takes only its own and unassigned tasks. The owner's machine that dropped it
+may take it again ten minutes later (a usage-limited one once its limit resets, whichever is later),
+so a task whose owner has one machine waits for it — *Waiting for Jan's machine.* — rather than
+stopping. If no machine takes it before the offer times out, the task stops for a person with a
+brief that names the owner.
+
 **Workers** lists the machines registered to run agent stages for this platform — yours, or every
 one if you are an administrator. What your machines take is also what you see (BD-035, *Which projects
 you see* above): the card's **Change** offers every project you may run in, including the ones you do

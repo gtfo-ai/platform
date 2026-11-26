@@ -32,7 +32,7 @@ import type {
   StoredRunOffer,
   Transaction,
 } from '@platform/application';
-import { decideRelease } from '@platform/application';
+import { decideRelease, OWNER_EXCLUSION_BACKOFF_MS } from '@platform/application';
 import type {
   AgentRole,
   Id,
@@ -111,6 +111,24 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
   },
 });
 
+/** {@link OWNER_EXCLUSION_BACKOFF_MS} in whole seconds — a constant, so no injection surface. */
+const OWNER_EXCLUSION_BACKOFF_SECONDS = Math.ceil(OWNER_EXCLUSION_BACKOFF_MS / 1000);
+
+/**
+ * **Offer `o`'s exclusions admit the `workers` row `w` at `now`** (BACKLOG 1661, TD-031's
+ * 2026-11-26 amendment item 5) — `exclusionRefuses` in `@platform/application`, negated: `w` is
+ * not in `excluded_worker_ids`, or its user is the person the offer is "mine" of
+ * ({@link offerIsMineSql}: the task's owner, an ask's asker) and {@link OWNER_EXCLUSION_BACKOFF_MS}
+ * has passed since the later of `offered_at` and `released_at` (`exclusionClock`). Another
+ * person's excluded machine stays excluded for the offer's life (TD-031 §12). Asked inside
+ * {@link workerEligibleSql}'s own `workers w`, where `w.user_id` is in scope.
+ */
+const exclusionAdmitsSql = (now: string): string => `(
+                not (w.id = any(o.excluded_worker_ids))
+                or (${offerIsMineSql('w.user_id')}
+                    and ${now}::timestamptz >= greatest(o.offered_at, coalesce(o.released_at, o.offered_at))
+                                               + make_interval(secs => ${OWNER_EXCLUSION_BACKOFF_SECONDS})))`;
+
 /**
  * **A remote worker's eligibility for offer `o`** (WP-281, TD-031 decision 8), checked inside the one
  * claim statement:
@@ -118,7 +136,8 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
  * - a **stage** or an **ask** offer — since WP-283 (backlog 741) the worker routes compose the ask's
  *   own ending (TD-031 §13), so an ask goes to the asker's worker inside its head start (the offer's
  *   `assignee_user_id` is the asker) and then to the pool;
- * - the worker is not excluded from it (`excluded_worker_ids`, decisions 6 and 12);
+ * - the worker is not excluded from it (`excluded_worker_ids`, decisions 6 and 12) — or it is the
+ *   owner's machine and its exclusion's backoff has passed ({@link exclusionAdmitsSql}, BACKLOG 1661);
  * - it holds the offer's run and egress images — the digests the offer names, or the core's own for
  *   an offer that names none (decision 4);
  * - the worker is not revoked, its user may act (backlog 714: here, in the statement that commits the
@@ -139,8 +158,7 @@ export const workerEligibleSql = (p: {
   readonly run: string;
   readonly egress: string;
 }): string => `(
-         not (${p.worker}::uuid = any(o.excluded_worker_ids))
-     and coalesce(o.image_digests ->> 'run', ${p.run}::text) = any(${p.held}::text[])
+         coalesce(o.image_digests ->> 'run', ${p.run}::text) = any(${p.held}::text[])
      and coalesce(o.image_digests ->> 'egress', ${p.egress}::text) = any(${p.held}::text[])
      and exists (
            select 1
@@ -154,6 +172,7 @@ export const workerEligibleSql = (p: {
               and (w.workspace_unavailable_until is null
                    or w.workspace_unavailable_until <= ${p.now}::timestamptz)
               and ${userMayRunInProjectSql('w.user_id', 'o.project_id')}
+              and ${exclusionAdmitsSql(p.now)}
               and (o.workers_from <= ${p.now}::timestamptz
                    or (o.assignee_user_id = w.user_id and ${p.now}::timestamptz < o.assignee_until)))
      and not ${remoteRunCredentialRefusedSql('o.project_id')})`;
@@ -791,16 +810,23 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       expires_at: Date;
       blocked_name: string | null;
       blocked_cause: string | null;
+      owner_id: string | null;
+      owner_name: string | null;
     }>(
       // S-28.12: the machine that last handed the run back for a workspace failure and still
-      // cannot provision one — what the escalation's brief names.
+      // cannot provision one — what the escalation's brief names. BACKLOG 1661: a stage offer's
+      // task owner, whose machines the task waited for — only when workers could take it at all.
       `select o.run_id, o.task_id, o.project_id, o.kind, o.offered_at, o.expires_at,
-              bw.name as blocked_name, bw.workspace_unavailable_cause as blocked_cause
+              bw.name as blocked_name, bw.workspace_unavailable_cause as blocked_cause,
+              ou.id as owner_id, ou.name as owner_name
          from run_offers o
          left join workers bw
            on bw.id = o.worker_id
           and o.release_reason = 'provision_failed'
           and bw.workspace_unavailable_at is not null
+         left join tasks ot
+           on ot.id = o.task_id and o.kind = 'stage' and o.workers_from is not null
+         left join users ou on ou.id = ot.owner_user_id
         where o.state = 'open' and o.expires_at <= $1::timestamptz
         order by o.expires_at, o.id
         limit $2`,
@@ -820,6 +846,7 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
               name: row.blocked_name,
               cause: workspaceUnavailableCauseSchema.safeParse(row.blocked_cause).data ?? 'unknown',
             },
+      owner: row.owner_id === null ? null : { name: row.owner_name ?? '' },
     }));
   },
   unroutedOpen: async (tx, limit) => {

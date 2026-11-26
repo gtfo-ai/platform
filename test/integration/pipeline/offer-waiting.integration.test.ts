@@ -24,6 +24,7 @@
  */
 import {
   claimRunOffer,
+  OWNER_EXCLUSION_BACKOFF_MS,
   type PipelineStore,
   type RunOfferClaim,
   type Transaction,
@@ -749,6 +750,56 @@ describe('the owner’s machine is up and the claim refuses it (review of #105)'
       }),
       { reason: 'owner_worker_offline' },
     );
+  });
+});
+
+describe('the owner keeps the task: an excluded machine of the owner’s waits out its backoff (BACKLOG 1661)', () => {
+  it('reads owner_worker_cannot_take naming the owner inside the backoff, and nothing once it has passed — as the claim does', async () => {
+    await claimantPresent(false);
+    const entry = await fixture({
+      owner: 'mine',
+      policy: 'mine',
+      state: 'connected',
+      routing: 'workers',
+      exclude: true,
+    });
+    const inside = await waitingOfRun(entry.runId);
+    expect(inside).toMatchObject({
+      reason: 'owner_worker_cannot_take',
+      user: { user_id: entry.alice, name: 'Alice' },
+      blockers: [],
+    });
+    expect(await admitted(entry.runId, false, entry.machines)).toBe(false);
+    // The exclusion was made a minute and the backoff ago: Alice's machine may take it again.
+    await pool.query(
+      `update run_offers set offered_at = now() - make_interval(secs => $2::float8)
+        where run_id = $1`,
+      [entry.runId, OWNER_EXCLUSION_BACKOFF_MS / 1000 + 60],
+    );
+    expect(await waitingOfRun(entry.runId)).toMatchObject({ reason: null });
+    expect(await admitted(entry.runId, false, entry.machines)).toBe(true);
+  });
+
+  it('keeps another person’s excluded machine off after the backoff: the task is not theirs', async () => {
+    await claimantPresent(false);
+    const entry = await fixture({
+      owner: 'another',
+      policy: 'everything',
+      state: 'connected',
+      routing: 'workers',
+      exclude: true,
+    });
+    await pool.query(
+      `update run_offers set offered_at = now() - make_interval(secs => $2::float8)
+        where run_id = $1`,
+      [entry.runId, OWNER_EXCLUSION_BACKOFF_MS / 1000 + 60],
+    );
+    // Bob owns it and has no machine; Alice's `everything` machine stays excluded.
+    expect(await waitingOfRun(entry.runId)).toMatchObject({
+      reason: 'owner_no_worker',
+      user: { user_id: entry.bob, name: 'Bob' },
+    });
+    expect(await admitted(entry.runId, false, entry.machines)).toBe(false);
   });
 });
 

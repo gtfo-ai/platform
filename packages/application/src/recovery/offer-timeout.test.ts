@@ -130,6 +130,35 @@ describe('the offer-timeout recovery row (WP-278)', () => {
     expect(await pass(harness)).toEqual({ found: 0, ended: 0 });
   });
 
+  it('names the task’s owner in the brief — “its owner” from a store that keeps no names (BACKLOG 1661)', async () => {
+    const harness = await unclaimed();
+    const [offer] = harness.store.offerRows();
+    const taskId = offer?.taskId as Id;
+    const current = await harness.store.tasks.ownership({} as never, taskId);
+    expect(
+      await harness.store.tasks.saveOwner({} as never, taskId, {
+        expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+        next: {
+          ownerUserId: ASKER,
+          ownerSource: 'platform',
+          ownerChangedAt: harness.clock.now(),
+          ticketAssignee: null,
+        },
+      }),
+    ).toBe(true);
+    harness.clock.advance(TIMEOUT_SECONDS * 1000);
+    const expired = await harness.store.offers.expiredOpen({} as never, {
+      now: harness.clock.now(),
+      limit: 10,
+    });
+    expect(expired.map((entry) => entry.owner)).toEqual([{ name: '' }]);
+    expect(await pass(harness)).toEqual({ found: 1, ended: 1 });
+    const escalation = harness.events().find((event) => event.type === 'task.escalated');
+    const brief = (escalation?.payload as { blocker_brief?: string } | undefined)?.blocker_brief;
+    expect(brief).toContain("The task is its owner's, so it waited for its owner's machines");
+    expect(brief).not.toContain('Check where this project');
+  });
+
   it('withdraws nothing a claim took first — the conditional update is the decision', async () => {
     const harness = await unclaimed();
     const [offer] = harness.store.offerRows();
@@ -364,5 +393,41 @@ describe('the offer timeout’s brief names a machine that cannot start runs (S-
     expect(brief).toContain('The machine that last took it, jan-mbp, cannot start runs');
     expect(brief).toContain('no free network ranges');
     expect(brief).toContain('press Try again on its page');
+    expect(brief).toContain('or connect another worker');
+  });
+});
+
+describe('the offer timeout’s brief names the task’s owner (BACKLOG 1661)', () => {
+  const at = {
+    offeredAt: '2026-11-26T04:40:00.000Z' as IsoDateTime,
+    expiresAt: '2026-11-27T04:40:00.000Z' as IsoDateTime,
+  };
+
+  it('says the task waited for its owner’s machines, and never to connect just any worker', () => {
+    const brief = offerTimeoutBrief({ ...at, blockedMachine: null, owner: { name: 'Vojtěch' } });
+    expect(brief).toMatch(/^no claimant took this run: /);
+    expect(brief).toContain("The task is Vojtěch's, so it waited for Vojtěch's machines");
+    expect(brief).toContain("Start one of Vojtěch's workers, or assign the task to someone");
+    expect(brief).not.toContain('Check where this project');
+  });
+
+  it('names the owner beside a machine that cannot start runs', () => {
+    const brief = offerTimeoutBrief({
+      ...at,
+      blockedMachine: { name: 'jan-mbp', cause: 'disk_full' },
+      owner: { name: 'Jan' },
+    });
+    expect(brief).toContain("The task is Jan's");
+    expect(brief).toContain('The machine that last took it, jan-mbp, cannot start runs');
+    expect(brief).not.toContain('or connect another worker');
+  });
+
+  it('says its owner when the account has no name, and nothing of an owner for an unowned task', () => {
+    expect(offerTimeoutBrief({ ...at, blockedMachine: null, owner: { name: ' ' } })).toContain(
+      "The task is its owner's",
+    );
+    expect(offerTimeoutBrief({ ...at, blockedMachine: null, owner: null })).not.toContain(
+      'The task is',
+    );
   });
 });

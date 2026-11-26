@@ -48,6 +48,7 @@ import {
 } from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
+import { RUN_START_RETRY_MAX_MS } from './stage-enqueue.js';
 import type {
   ClaimedRunOffer,
   ExecutionRoutingRepository,
@@ -65,6 +66,60 @@ export const serverLeaseOwner = (process: string): string => `server:${process}`
  * neither: it wakes and claims through the one claim, which picks the oldest eligible offer.
  */
 export const RUN_OFFERS_TOPIC = 'run_offers';
+
+/**
+ * **How long an exclusion keeps the owner's own machine off an offer** (BACKLOG 1661, TD-031's
+ * 2026-11-26 amendment item 5: *the owner keeps the task*). An owner is not given back when a claim
+ * is released or its run is lost, so only the owner's machines — and machines that take everyone's
+ * tasks — take the task's later offers. A machine of the owner's the offer excludes (a lost lease's
+ * re-plan, a `usage_limited` or `provision_failed` release) is therefore eligible **again** once
+ * this has passed since the exclusion, so the task waits for its owner rather than strands until
+ * the offer's timeout.
+ *
+ * BD-034 gives the lost lease and the release no wait of their own (the re-plan and the reopen are
+ * at once); the value is BD-034's longest wait between two start attempts,
+ * {@link RUN_START_RETRY_MAX_MS} (ten minutes), because an excluded machine is one whose start did
+ * not hold. With the default offer timeout (24 h) a machine of the owner's that keeps failing is
+ * re-tried at most 144 times before the offer expires and escalates; a usage-limited one waits
+ * for its pause as well (`workers.paused_until`), whichever is later.
+ */
+export const OWNER_EXCLUSION_BACKOFF_MS = RUN_START_RETRY_MAX_MS;
+
+/**
+ * **Whether an offer's exclusion still refuses a worker** — the rule `workerEligibleSql` and the
+ * memory store's `workerEligible` both apply (BACKLOG 1661):
+ *
+ * - a worker the offer does not exclude is never refused by this;
+ * - an excluded worker whose user is **not** the person the offer is "mine" of (the task's owner,
+ *   an ask's asker — `offerIsMineSql`'s rule) stays excluded for the offer's life (TD-031 §12);
+ * - an excluded worker of **that** person's is refused only until {@link OWNER_EXCLUSION_BACKOFF_MS}
+ *   after `excludedSince` — {@link exclusionClock}'s instant.
+ */
+export const exclusionRefuses = (input: {
+  readonly excluded: boolean;
+  readonly offerIsMine: boolean;
+  readonly excludedSince: IsoDateTime;
+  readonly now: IsoDateTime;
+}): boolean =>
+  input.excluded &&
+  !(
+    input.offerIsMine &&
+    Date.parse(input.now) >= Date.parse(input.excludedSince) + OWNER_EXCLUSION_BACKOFF_MS
+  );
+
+/**
+ * **When an offer's exclusions were made**: `excluded_worker_ids` carries no instant of its own, so
+ * the later of the offer's `offered_at` (a re-planned entry's carried exclusions are written then)
+ * and its `released_at` (a release appends its worker then). One clock for the whole list: a later
+ * release by another machine restarts the owner's machine's wait too, which only waits longer.
+ */
+export const exclusionClock = (offer: {
+  readonly offeredAt: IsoDateTime;
+  readonly releasedAt: IsoDateTime | null;
+}): IsoDateTime =>
+  offer.releasedAt !== null && Date.parse(offer.releasedAt) > Date.parse(offer.offeredAt)
+    ? offer.releasedAt
+    : offer.offeredAt;
 
 /**
  * **The one claim** (TD-031 §2). Every claimant calls this and nothing else touches an offer's

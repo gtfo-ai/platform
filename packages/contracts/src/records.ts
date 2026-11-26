@@ -1023,8 +1023,9 @@ export const taskOwnerViewSchema = z.strictObject({
  *   paused by its owner, and the claim refuses it: `blockers` says why, in the Workers screen's
  *   vocabulary (`images_outdated`, `images_missing`, `protocol_outdated`, `draining`,
  *   `usage_limited`, `platform_images_unresolved`), or is empty when the refusal is the offer's or
- *   the project's (an exclusion after a lost run, a head start, the mode or the run credential —
- *   the execution read names those);
+ *   the project's (an exclusion after a lost run or a hand-back — for the owner's own machine only
+ *   until its backoff passes, BACKLOG 1661 — a head start, the mode or the run credential — the
+ *   execution read names those);
  * - `no_taker` — nobody owns the task, and no machine or server takes it now;
  * - `assignee_not_linked` — nobody owns the task and its tracker assignee is a person the platform
  *   cannot map to a member (*held elsewhere*), so only a machine that takes everyone's tasks can.
