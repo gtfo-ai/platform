@@ -45,7 +45,7 @@ export const lifecycleMapsAnySlot = (block: TicketLifecycle | null | undefined):
  * Whether the binding claims — TD-029 decision 1: `claim` defaults to **true when a `lifecycle`
  * block is present**, and a binding with no block never claims (BD-031 ruling 2: nothing mapped
  * behaves exactly as before). A block that holds **only** the status policy (`start_from`, `closed`,
- * `on_ticket_closed` — M28 ruling 1, S-28.4) is read as no block here: choosing which statuses start
+ * `on_ticket_closed` — M28 ruling 1, S-28.4 — and `qa_pass`, TD-029 amendment G) is read as no block here: choosing which statuses start
  * work is not asking the platform to assign tickets. An explicit `claim: true` beside them claims.
  */
 export const lifecycleClaims = (block: TicketLifecycle | null | undefined): boolean => {

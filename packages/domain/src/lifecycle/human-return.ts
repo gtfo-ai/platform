@@ -58,7 +58,10 @@
  *     — **and only when the ticket has been seen
  *     leaving the `qa` status**: a recorded change out of it (`leftQa`, WP-178 criterion (14)), or
  *     an entry status at the `qa` slot or a sighting of it since (`entryStatus`/`seenAtQa`,
- *     amendment (b)). Otherwise `none`.
+ *     amendment (b)). **When the block sets `qa_pass`** (TD-029 amendment G, S-28.24) the status
+ *     must also be one of those names: any other status that is not a return status waits
+ *     (`none`), so a ticket moved from the `qa` status to a *testing* status is not a pass.
+ *     Absent, the rule is unchanged. Otherwise `none`.
  */
 import {
   humanReturnFormSchema,
@@ -405,6 +408,19 @@ const reopenedPlatformThreads = <TWord extends HumanWord>(
   return out;
 };
 
+/**
+ * TD-029 amendment G (S-28.24): with `qa_pass` set, only a status it names passes `qa`; absent,
+ * every status does (the other conjuncts of {@link isPass} decide).
+ */
+const passesByQaPassList = (slots: HumanReturnSlots, status: string): boolean => {
+  const list = slots.lifecycle.qa_pass;
+  if (list === undefined) {
+    return true;
+  }
+  const key = lifecycleStatusKey(status);
+  return list.some((name) => lifecycleStatusKey(name) === key);
+};
+
 const isPass = (input: HumanReturnInput<HumanWord>, returnsByStatus: boolean): boolean => {
   const qa = input.slots.lifecycle.qa;
   if (
@@ -414,7 +430,8 @@ const isPass = (input: HumanReturnInput<HumanWord>, returnsByStatus: boolean): b
     input.status === null ||
     lifecycleStatusKey(input.status) === lifecycleStatusKey(qa) ||
     returnStatusKeys(input.slots).has(lifecycleStatusKey(input.status)) ||
-    platformStatusKeys(input).has(lifecycleStatusKey(input.status))
+    platformStatusKeys(input).has(lifecycleStatusKey(input.status)) ||
+    !passesByQaPassList(input.slots, input.status)
   ) {
     return false;
   }

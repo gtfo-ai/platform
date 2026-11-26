@@ -872,6 +872,83 @@ describe('which statuses start work and which are finished (S-28.4, M28 rulings 
   });
 });
 
+/**
+ * S-28.24 (TD-029 amendment G): *QA passes only on* — the binding's `qa_pass`. Shown only while the
+ * QA moment is mapped, round-trips the ticked list, and says what an unlisted status does.
+ */
+describe('QA passes only on (S-28.24, TD-029 amendment G)', () => {
+  const QA_PASS = 'QA passes only on';
+  const qaPassGroup = (card: HTMLElement): HTMLElement | null =>
+    card.querySelector<HTMLElement>('[data-lifecycle-policy="qa_pass"]');
+
+  it('appears only when QA is mapped, and says what an unlisted status does', async () => {
+    const state = world();
+    renderSettings(state);
+    const card = await lifecycleCard();
+    expect(qaPassGroup(card)).toBeNull();
+    const user = userEvent.setup();
+    await user.selectOptions(slotSelect(card, 'QA'), 'Testing');
+    const group = within(card).getByRole('group', { name: QA_PASS });
+    expect(group.textContent).toContain(
+      'A status not ticked here and not in Returned keeps the task waiting at QA.',
+    );
+    expect(group.textContent).toContain(
+      'the platform merges only while the ticket is in one of them',
+    );
+    // The QA status itself is not offered: it cannot also pass QA.
+    expect(
+      (within(group).getAllByRole('checkbox') as HTMLInputElement[]).map((box) => box.value),
+    ).toEqual(['Doing', 'Waiting for review', 'Sent back', 'Finished']);
+    await user.selectOptions(slotSelect(card, 'QA'), '');
+    expect(qaPassGroup(card)).toBeNull();
+  });
+
+  it('round-trips the ticked list: a stored list is ticked, and saving writes it back', async () => {
+    const state = world({
+      bindings: bindingsWith({
+        lifecycle: { qa: 'Testing', done: 'Finished', qa_pass: ['finished'] },
+      }),
+    });
+    renderSettings(state);
+    const card = await lifecycleCard();
+    const group = within(card).getByRole('group', { name: QA_PASS });
+    const ticked = () =>
+      (within(group).getAllByRole('checkbox') as HTMLInputElement[])
+        .filter((box) => box.checked)
+        .map((box) => box.value);
+    expect(ticked()).toEqual(['Finished']);
+    const user = userEvent.setup();
+    await user.click(within(group).getByRole('checkbox', { name: 'Doing (in progress)' }));
+    await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect((trackerConfigOf(state.puts[0]).lifecycle as Record<string, unknown>).qa_pass).toEqual([
+      'Doing',
+      'Finished',
+    ]);
+  });
+
+  it('saves nothing for it while QA is unmapped or nothing is ticked, so the old rule stays', () => {
+    const { draft } = lifecycleDraftOf(
+      { lifecycle: { qa: 'Testing', qa_pass: ['Finished'] } },
+      STATUSES,
+    );
+    expect(draft.qaPass).toEqual(['Finished']);
+    const lifecycleOf = (next: typeof draft) =>
+      lifecycleOverlayOf(undefined, next, null, STATUSES).lifecycle as Record<string, unknown>;
+    expect(lifecycleOf(draft).qa_pass).toEqual(['Finished']);
+    expect('qa_pass' in lifecycleOf({ ...draft, qaPass: [] })).toBe(false);
+    expect('qa_pass' in lifecycleOf({ ...draft, names: { ...draft.names, qa: '' } })).toBe(false);
+    // A ticked status another moment took since is dropped, not sent for the server to refuse.
+    expect(
+      lifecycleOf({ ...draft, names: { ...draft.names, in_progress: 'finished' } }).qa_pass,
+    ).toBeUndefined();
+    // A stored name the tracker no longer lists is named, and left out.
+    expect(
+      lifecycleDraftOf({ lifecycle: { qa: 'Testing', qa_pass: ['Gone'] } }, STATUSES).dropped,
+    ).toEqual([{ slot: 'qa_pass', name: 'Gone' }]);
+  });
+});
+
 describe('the lifecycle helpers', () => {
   it('reads a stored status policy, and previews pick up from as starting work (S-28.4)', () => {
     const { draft, dropped } = lifecycleDraftOf(
@@ -962,6 +1039,7 @@ describe('the lifecycle helpers', () => {
     expect(slotOfDetailPath('pickup_status')).toBe('pick_up_from');
     expect(slotOfDetailPath('lifecycle.qa')).toBe('qa');
     expect(slotOfDetailPath('lifecycle.returned[3]')).toBe('returned');
+    expect(slotOfDetailPath('lifecycle.qa_pass[1]')).toBe('qa_pass');
     expect(slotOfDetailPath('lifecycle.claim')).toBeNull();
     expect(slotOfDetailPath('project_keys')).toBeNull();
   });

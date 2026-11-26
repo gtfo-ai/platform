@@ -1101,12 +1101,18 @@ export const ON_TICKET_CLOSED = ['cancel', 'stop', 'ignore'] as const;
 export type OnTicketClosed = (typeof ON_TICKET_CLOSED)[number];
 
 /**
- * The block's **status policy** keys (M28 ruling 1, S-28.4): which statuses a ticket may be started
- * from and which mean a person finished it. They are not slots — the platform never writes them —
- * and they are not the claim's switch: a block that holds **only** these keys does not claim
+ * The block's **status policy** keys (M28 ruling 1, S-28.4; `qa_pass` since S-28.24, TD-029
+ * amendment G): which statuses a ticket may be started from, which mean a person finished it, and
+ * which alone pass the `qa` stage. They are not slots — the platform never writes them — and they
+ * are not the claim's switch: a block that holds **only** these keys does not claim
  * (`lifecycleClaims` in the domain), so a binding that sets them does not start assigning tickets.
  */
-export const LIFECYCLE_STATUS_POLICY_KEYS = ['start_from', 'closed', 'on_ticket_closed'] as const;
+export const LIFECYCLE_STATUS_POLICY_KEYS = [
+  'start_from',
+  'closed',
+  'on_ticket_closed',
+  'qa_pass',
+] as const;
 
 /** The slots that name **one** status each, in the order a ticket normally passes them. */
 export const LIFECYCLE_SINGLE_SLOTS = [
@@ -1168,6 +1174,8 @@ const lifecycleStatusNameSchema = nonEmptyStringSchema
  * `on_ticket_closed` (M28 ruling 1, S-28.4) are the **status policy**: which statuses a ticket is
  * started from and which mean a person finished it — read whether or not the block exists (absent,
  * the tracker's To Do and Done categories decide), and a block holding only them does not claim.
+ * `qa_pass` (TD-029 amendment G, S-28.24) is the fourth policy key: the statuses that alone pass the
+ * `qa` stage and admit the platform's merge of a task that had one.
  * None of them carries a `.default()`,
  * because published schemas carry none (the package convention) — the reader applies the default.
  */
@@ -1202,6 +1210,20 @@ export const ticketLifecycleSchema = z
     closed: z.array(lifecycleStatusNameSchema).max(MAX_LIFECYCLE_POLICY_STATUSES).optional(),
     /** `cancel` (the reader's default), `stop` or `ignore` — see {@link ON_TICKET_CLOSED}. */
     on_ticket_closed: z.enum(ON_TICKET_CLOSED).optional(),
+    /**
+     * **The statuses that alone pass the `qa` stage** (TD-029 amendment G, S-28.24). Absent: the
+     * stage passes on any status the ticket leaves `qa` for that is not a return status (TD-029
+     * decision 9). Set: it passes only on one of these, every other status waits, and the
+     * platform's merge (TD-038) merges a task that had a `qa` stage only while the ticket's fresh
+     * status is one of these (or the `ready_for_merge` slot's). Never written by the platform. It
+     * needs `qa` mapped, is disjoint from `qa`, `in_progress`, `in_review`, `approved`, `returned`,
+     * `start_from` and `closed`, and may equal `done` or `ready_for_merge`.
+     */
+    qa_pass: z
+      .array(lifecycleStatusNameSchema)
+      .min(1)
+      .max(MAX_LIFECYCLE_POLICY_STATUSES)
+      .optional(),
   })
   .superRefine((block, ctx) => {
     // M28 ruling 1: each list names a status once, and no status both starts and closes a ticket.
@@ -1271,6 +1293,49 @@ export const ticketLifecycleSchema = z
         });
       }
       returned.add(key);
+    }
+    // TD-029 amendment G (S-28.24): `qa_pass` names each status once, needs `qa`, and never names a
+    // status another key already gives a meaning the pass would contradict. `done` and
+    // `ready_for_merge` are allowed — on the owner's flow the accepting status *is* `done`.
+    const qaPass = block.qa_pass;
+    if (qaPass !== undefined) {
+      if (block.qa === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['qa_pass'],
+          message: 'qa_pass needs the qa slot mapped; without a qa stage there is nothing to pass',
+        });
+      }
+      const holders = new Map<string, string>();
+      for (const slot of ['qa', 'in_progress', 'in_review', 'approved'] as const) {
+        const name = block[slot];
+        if (name !== undefined) holders.set(lifecycleStatusKey(name), `the ${slot} slot`);
+      }
+      for (const name of block.returned ?? []) holders.set(lifecycleStatusKey(name), 'returned');
+      for (const name of block.start_from ?? []) {
+        holders.set(lifecycleStatusKey(name), 'start_from');
+      }
+      for (const name of block.closed ?? []) holders.set(lifecycleStatusKey(name), 'closed');
+      const passKeys = new Set<string>();
+      for (const [index, name] of qaPass.entries()) {
+        const key = lifecycleStatusKey(name);
+        if (passKeys.has(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['qa_pass', index],
+            message: 'qa_pass names one status twice',
+          });
+        }
+        passKeys.add(key);
+        const holder = holders.get(key);
+        if (holder !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['qa_pass', index],
+            message: `"${name}" is in qa_pass and in ${holder}; a status that passes QA cannot also mean that`,
+          });
+        }
+      }
     }
   });
 

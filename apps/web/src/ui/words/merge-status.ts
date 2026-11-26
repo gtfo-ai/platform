@@ -24,6 +24,9 @@ const WAITING_NOW: Readonly<Record<string, string>> = {
   review_not_approved: 'the latest review did not approve the change',
   plan_not_decided: 'the plan approval is not decided',
   ticket_closed: 'the ticket was closed, so the merge is left to a person',
+  // S-28.24 (TD-029 amendment G): the binding names the statuses that pass QA, and this is not one.
+  ticket_not_qa_passed:
+    'the ticket is not at a status that passes QA in this project’s lifecycle settings, so the platform waits for the tester; it merges once a person moves the ticket to one of them',
   ticket_hands_off: 'a person moved the ticket, so the merge is left to them',
   ticket_unread: 'the ticket could not be read, and the platform does not merge blind',
   merge_request_not_open: 'the merge request is not open',

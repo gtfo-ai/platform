@@ -652,6 +652,124 @@ describe('humanReturnDecision (WP-174 criterion 6, M28 R1)', () => {
 });
 
 /**
+ * S-28.24 — TD-029 amendment G: the owner's Jira flow, with invented names. *CR accepted* is the
+ * `qa` slot, *Testing* is QA in progress (no slot), *Releasable* is both the accepting status and
+ * `done`, and *In progress*, *To do* and *Waiting for review* send the task back.
+ */
+describe('qa_pass — QA passes only on the statuses a binding names (TD-029 amendment G)', () => {
+  const OWNER = {
+    in_progress: 'In progress',
+    qa: 'CR accepted',
+    returned: ['To do', 'Waiting for review'],
+    done: 'Releasable',
+  };
+  const withPass = { lifecycle: { ...OWNER, qa_pass: ['Releasable'] }, pickUpFrom: null };
+  const without = { lifecycle: OWNER, pickUpFrom: null };
+  const atQa = (overrides: Partial<HumanReturnInput>): HumanReturnInput =>
+    input({ stage: 'qa', entryStatus: 'CR accepted', leftQa: null, ...overrides });
+
+  it('CR accepted → Testing waits; Testing → Releasable passes', () => {
+    expect(
+      humanReturnDecision(atQa({ slots: withPass, status: 'Testing', leftQa: 'Testing' })),
+    ).toEqual({ kind: 'none', seen: [] });
+    expect(
+      humanReturnDecision(atQa({ slots: withPass, status: 'releasable ', leftQa: 'Testing' })),
+    ).toEqual({ kind: 'pass', status: 'releasable ', seen: [] });
+    // The control: without qa_pass the same move to Testing is today's pass.
+    expect(
+      humanReturnDecision(atQa({ slots: without, status: 'Testing', leftQa: 'Testing' })).kind,
+    ).toBe('pass');
+  });
+
+  it.each(['In progress', 'To do', 'Waiting for review'])('%s still returns the task', (status) => {
+    expect(humanReturnDecision(atQa({ slots: withPass, status }))).toMatchObject({
+      kind: 'return',
+      forms: ['status'],
+      status,
+    });
+  });
+
+  it('an unlisted status waits, and the qa status itself waits', () => {
+    expect(
+      humanReturnDecision(atQa({ slots: withPass, status: 'Blocked', leftQa: 'Blocked' })).kind,
+    ).toBe('none');
+    expect(humanReturnDecision(atQa({ slots: withPass, status: 'CR accepted' })).kind).toBe('none');
+  });
+
+  it('a re-entry whose entry status is already Releasable waits: QA is asked again', () => {
+    expect(
+      humanReturnDecision(
+        atQa({ slots: withPass, status: 'Releasable', entryStatus: 'Releasable', seenAtQa: false }),
+      ).kind,
+    ).toBe('none');
+    // Once the window sees CR accepted again, the move to Releasable is the tester's pass.
+    expect(
+      humanReturnDecision(
+        atQa({ slots: withPass, status: 'Releasable', entryStatus: 'Releasable', seenAtQa: true }),
+      ).kind,
+    ).toBe('pass');
+  });
+
+  /**
+   * Property: absent `qa_pass` is today's rule. A list naming the current status changes nothing;
+   * a list that does not name it changes only a `pass` into `none`, with the same seen words.
+   */
+  it('changes nothing but a pass the list does not name (property)', () => {
+    const name = fc.constantFrom(
+      'In progress',
+      'CR accepted',
+      'Testing',
+      'Releasable',
+      'To do',
+      'Waiting for review',
+      'Blocked',
+    );
+    fc.assert(
+      fc.property(
+        name,
+        fc.option(name, { nil: null }),
+        fc.option(name, { nil: null }),
+        fc.boolean(),
+        fc.constantFrom(...HUMAN_STAGES),
+        fc.array(
+          fc.constantFrom('ticket_comment', 'mr_note', 'mr_diff') as fc.Arbitrary<HumanWordForm>,
+          {
+            maxLength: 2,
+          },
+        ),
+        fc.array(name, { maxLength: 2 }),
+        (status, entryStatus, leftQa, seenAtQa, stage, forms, platformStatuses) => {
+          const base = {
+            stage,
+            status,
+            entryStatus,
+            leftQa,
+            seenAtQa,
+            platformStatuses,
+            words: forms.map((form) => word(form, 'please look')),
+          };
+          const today = humanReturnDecision(input({ ...base, slots: without }));
+          const naming = humanReturnDecision(
+            input({
+              ...base,
+              slots: { lifecycle: { ...OWNER, qa_pass: [status.toUpperCase()] }, pickUpFrom: null },
+            }),
+          );
+          expect(naming).toEqual(today);
+          const other = humanReturnDecision(
+            input({
+              ...base,
+              slots: { lifecycle: { ...OWNER, qa_pass: ['Not this one'] }, pickUpFrom: null },
+            }),
+          );
+          expect(other).toEqual(today.kind === 'pass' ? { kind: 'none', seen: today.seen } : today);
+        },
+      ),
+    );
+  });
+});
+
+/**
  * S-28.13 — TD-029 Amendment D.3: the platform closes its own finding thread after an approval with
  * *"Reopen this thread to have it changed"*, so a platform thread the platform resolved (a
  * `resolved` ledger row since the horizon) that is open again returns the task at Ready even with

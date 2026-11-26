@@ -5,7 +5,7 @@
  * brief quotes (AUT's To Do / In Progress / Done categories) and which is the case that motivated
  * the rule: a labelled ticket released three weeks earlier became a task again.
  */
-import type { TicketStatusCategory } from '@platform/contracts';
+import type { TicketLifecycle, TicketStatusCategory } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { lifecycleClaims } from './claim.js';
@@ -227,6 +227,27 @@ describe('lifecycleClaims and the status policy keys (M28 ruling 1)', () => {
     expect(lifecycleClaims({ start_from: ['To Do'], claim: false, in_progress: 'Doing' })).toBe(
       false,
     );
+  });
+
+  it('qa_pass is policy, not a slot: a block with it claims exactly as the block without it (S-28.24)', () => {
+    const blocks: readonly TicketLifecycle[] = [
+      { qa: 'CR accepted' },
+      { qa: 'CR accepted', claim: false },
+      { qa: 'CR accepted', done: 'Releasable', start_from: ['To Do'] },
+      { qa: 'CR accepted', claim: true },
+    ];
+    for (const block of blocks) {
+      expect(lifecycleClaims({ ...block, qa_pass: ['Releasable'] }), JSON.stringify(block)).toBe(
+        lifecycleClaims(block),
+      );
+    }
+    // Alone it is policy: a block holding only policy keys does not claim.
+    expect(lifecycleClaims({ qa_pass: ['Releasable'] })).toBe(false);
+    // And the platform never writes it, so it is no platform status (amendment G decision 1).
+    expect(
+      ticketStatusPolicyOf(null, { qa: 'CR accepted', qa_pass: ['Accepted by QA'] })
+        .platformStatuses,
+    ).toEqual(['CR accepted']);
   });
 });
 

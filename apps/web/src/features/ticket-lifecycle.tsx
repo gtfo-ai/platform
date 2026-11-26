@@ -48,6 +48,11 @@
  *   three choices below them are `on_ticket_closed` — *cancel* (the default since S-28.14, M28
  *   ruling 4b), *stop* or *ignore*, one plain sentence each (`ON_CLOSED_COPY`); the default is saved
  *   absent unless the overlay already stores a choice. At least one status must start work.
+ * - **QA passes only on** (S-28.24, TD-029 amendment G): a checkbox list shown only while the *QA*
+ *   moment is mapped — the binding's `qa_pass`. Ticked, the QA stage passes only on those statuses
+ *   (any other status that is not *Returned* keeps the task waiting at QA) and the platform merges
+ *   only while the ticket is in one of them; none ticked is saved absent, today's rule. The
+ *   statuses another moment already names are not offered (the schema refuses them).
  *
  * Status names are provider text (BD-022). They are rendered as React text — in an `<option>` or a
  * checkbox's label, through `sanitiseUntrusted`; everywhere else through `UntrustedText`.
@@ -150,6 +155,8 @@ export interface LifecycleDraft {
    * and removes when it lets go, or `''` for none (the default).
    */
   readonly claimLabel: string;
+  /** `qa_pass` (S-28.24): the ticked statuses; empty is absent (any status passes QA). */
+  readonly qaPass: readonly string[];
 }
 
 /** A stored `on_ticket_closed`, or the reader's default (`cancel`) for anything else. */
@@ -186,15 +193,31 @@ export const POLICY_COPY: Readonly<Record<PolicyList, { label: string; hint: str
   },
 };
 
+/** `qa_pass` (S-28.24, TD-029 amendment G): the statuses that alone pass QA. */
+export type QaPassList = 'qa_pass';
+
+/** What *QA passes only on* does, in a user's words — including what an unlisted status does. */
+export const QA_PASS_COPY = {
+  label: 'QA passes only on',
+  hint: 'Optional. Tick the statuses that mean a tester accepted the work. The QA stage then passes only when a person moves the ticket to one of these, and the platform merges only while the ticket is in one of them (or in Ready for merge). A status not ticked here and not in Returned keeps the task waiting at QA. None ticked: any status the ticket leaves QA for passes, as before.',
+} as const;
+
+/** Every list the form saves beside the slots. */
+export type LifecycleList = PolicyList | QaPassList;
+
 /** A stored name the loaded set does not hold, and the slot (or list) it was stored in. */
 export interface DroppedName {
-  readonly slot: LifecycleSlot | PolicyList;
+  readonly slot: LifecycleSlot | LifecycleList;
   readonly name: string;
 }
 
 /** The label a dropped name's slot or list is shown with. */
 const droppedLabel = (slot: DroppedName['slot']): string =>
-  slot === 'start_from' || slot === 'closed' ? POLICY_COPY[slot].label : SLOT_COPY[slot].label;
+  slot === 'qa_pass'
+    ? QA_PASS_COPY.label
+    : slot === 'start_from' || slot === 'closed'
+      ? POLICY_COPY[slot].label
+      : SLOT_COPY[slot].label;
 
 /**
  * The tracker's own defaults (M28 ruling 1): the To Do category starts work, the Done category is
@@ -313,7 +336,7 @@ export const lifecycleDraftOf = (
     .map((name) => match('returned', nonEmptyString(name)))
     .filter((name) => name !== '');
   // S-28.4: a stored list is matched name by name; absent is the category default (`null`).
-  const policyList = (list: PolicyList): readonly string[] | null => {
+  const policyList = (list: LifecycleList): readonly string[] | null => {
     const stored: unknown = block?.[list];
     return Array.isArray(stored)
       ? stored.map((name) => match(list, nonEmptyString(name))).filter((name) => name !== '')
@@ -333,9 +356,30 @@ export const lifecycleDraftOf = (
       // S-28.14: a stored choice is kept; absent is the reader's default, `cancel`.
       onClosed: onClosedOf(block?.on_ticket_closed),
       claimLabel: nonEmptyString(effective.claim_label) ?? '',
+      qaPass: policyList('qa_pass') ?? [],
     },
     dropped,
   };
+};
+
+/** The statuses another moment names, which `qa_pass` may not (compared as the server compares). */
+const qaPassTaken = (draft: LifecycleDraft): ReadonlySet<string> =>
+  new Set(
+    [
+      draft.names.qa,
+      draft.names.in_progress,
+      draft.names.in_review,
+      draft.names.approved,
+      ...draft.returned,
+    ]
+      .filter((name) => name !== '')
+      .map(lifecycleStatusKey),
+  );
+
+/** The ticked `qa_pass` names another moment has not taken since they were ticked. */
+export const tickedQaPass = (draft: LifecycleDraft): readonly string[] => {
+  const taken = qaPassTaken(draft);
+  return draft.qaPass.filter((name) => !taken.has(lifecycleStatusKey(name)));
 };
 
 /**
@@ -391,6 +435,11 @@ export const lifecycleOverlayOf = (
   }
   if (draft.closed !== null && !sameStatuses(draft.closed, defaults.closed)) {
     lifecycle.closed = [...draft.closed];
+  }
+  // S-28.24: only beside a mapped QA moment (the schema refuses it without one); none is absent.
+  const qaPass = tickedQaPass(draft);
+  if (draft.names.qa !== '' && qaPass.length > 0) {
+    lifecycle.qa_pass = [...qaPass];
   }
   // S-28.14: the default (`cancel`) is saved absent unless the overlay already stores a choice, so
   // a block that never chose keeps following the default; a stored `stop` is kept as `stop`.
@@ -468,12 +517,12 @@ export const wizardWritesDefaultBlock = (input: {
 };
 
 /** The slot a `422 lifecycle_status_unknown` detail's `path` names, or `null` for another path. */
-export const slotOfDetailPath = (path: string): LifecycleSlot | PolicyList | null => {
+export const slotOfDetailPath = (path: string): LifecycleSlot | LifecycleList | null => {
   if (path === 'pickup_status') {
     return 'pick_up_from';
   }
-  const list = /^lifecycle\.(start_from|closed)\[\d+\]$/u.exec(path)?.[1];
-  if (list === 'start_from' || list === 'closed') {
+  const list = /^lifecycle\.(start_from|closed|qa_pass)\[\d+\]$/u.exec(path)?.[1];
+  if (list === 'start_from' || list === 'closed' || list === 'qa_pass') {
     return list;
   }
   if (/^lifecycle\.returned\[\d+\]$/u.test(path)) {
@@ -486,8 +535,8 @@ export const slotOfDetailPath = (path: string): LifecycleSlot | PolicyList | nul
 /** The refused slots of a failed save, each with the server's sentences. */
 const refusedSlots = (
   error: unknown,
-): ReadonlyMap<LifecycleSlot | PolicyList, readonly string[]> => {
-  const refused = new Map<LifecycleSlot | PolicyList, string[]>();
+): ReadonlyMap<LifecycleSlot | LifecycleList, readonly string[]> => {
+  const refused = new Map<LifecycleSlot | LifecycleList, string[]>();
   if (!(error instanceof ApiError) || error.code !== 'lifecycle_status_unknown') {
     return refused;
   }
@@ -610,6 +659,49 @@ const PolicyRow = ({
     hint={
       extraHint === undefined ? POLICY_COPY[list].hint : `${POLICY_COPY[list].hint} ${extraHint}`
     }
+    onChange={onChange}
+  >
+    {(refusal ?? []).map((message) => (
+      <p key={message} role="alert" className="text-xs text-danger">
+        <UntrustedText value={message} />
+      </p>
+    ))}
+  </CheckboxList>
+);
+
+/**
+ * The statuses *QA passes only on* offers (S-28.24): every loaded status but the ones another
+ * moment already names — `qa`, `in_progress`, `in_review`, `approved` and `returned` — which the
+ * schema refuses. `done` and `ready_for_merge` stay offered: they may be the accepting status.
+ */
+export const qaPassOptions = (
+  draft: LifecycleDraft,
+  statuses: readonly TicketStatus[],
+): readonly TicketStatus[] => {
+  const taken = qaPassTaken(draft);
+  return statuses.filter((status) => !taken.has(lifecycleStatusKey(status.name)));
+};
+
+/** *QA passes only on* (S-28.24): a `CheckboxList`, shown only while the QA moment is mapped. */
+const QaPassRow = ({
+  statuses,
+  value,
+  refusal,
+  onChange,
+}: {
+  readonly statuses: readonly TicketStatus[];
+  readonly value: readonly string[];
+  readonly refusal: readonly string[] | undefined;
+  readonly onChange: (names: readonly string[]) => void;
+}): ReactElement => (
+  <CheckboxList
+    legend={QA_PASS_COPY.label}
+    data={{ 'data-lifecycle-policy': 'qa_pass' }}
+    options={statuses.map((status) => ({ value: status.name, label: optionText(status) }))}
+    value={value}
+    max={MAX_LIFECYCLE_POLICY_STATUSES}
+    invalid={refusal !== undefined}
+    hint={QA_PASS_COPY.hint}
     onChange={onChange}
   >
     {(refusal ?? []).map((message) => (
@@ -853,6 +945,14 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
           refusal={refused.get('returned')}
           onChange={(names) => setDraft({ ...draft, returned: names })}
         />
+        {draft.names.qa === '' ? null : (
+          <QaPassRow
+            statuses={qaPassOptions(draft, items)}
+            value={tickedQaPass(draft)}
+            refusal={refused.get('qa_pass')}
+            onChange={(names) => setDraft({ ...draft, qaPass: names })}
+          />
+        )}
       </div>
       <div className="flex flex-col gap-3" data-lifecycle="status-policy">
         <p className="text-xs text-fg-muted">

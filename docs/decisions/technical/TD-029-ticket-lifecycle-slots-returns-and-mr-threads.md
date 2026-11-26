@@ -646,4 +646,4 @@ would write the status that signals QA's acceptance, and the reverse sync's own-
 (c) Reading the pass off the `done` slot — `done` means *merged* in every other install.
 
 **Residuals.** A ticket moved RELESABLE → TESTING between the fresh check and the provider's merge call is merged (one
-call's length). A binding that sets `qa_pass` but no `qa` is refused, not ignored. BACKLOG 1663.
+call's length). A binding that sets `qa_pass` but no `qa` is refused, not ignored. BACKLOG 1666.

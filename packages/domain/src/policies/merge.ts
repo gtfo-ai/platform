@@ -19,7 +19,16 @@
  * Neither reads anything: the duty reads the task, the verdict, the merge request and the ticket
  * outside every transaction and hands the facts here.
  */
-import type { MergeBy } from '@platform/contracts';
+import {
+  lifecycleStatusKey,
+  type MergeBy,
+  type TicketLifecycle,
+  type TicketStatusCategory,
+} from '@platform/contracts';
+import {
+  type TicketStatusPolicy,
+  ticketStatusDisposition,
+} from '../lifecycle/status-disposition.js';
 import { sha256Hex } from '../prompt/sha256.js';
 
 /** Why a person merges this task — TD-038 decision 2 (no probation, no risk class). */
@@ -86,6 +95,11 @@ export const mergeByPersonReasons = (input: MergeByInput): readonly MergeByPerso
  *    plan still waiting or rejected never reaches Ready, so this is a defect said, not a merge);
  *  - `ticket_closed` / `ticket_hands_off` — the ticket's fresh status (TD-029 B/E); `ticket_unread`
  *    when a bound ticket could not be read (fail closed);
+ *  - `ticket_not_qa_passed` — between the two (TD-029 amendment G, TD-038 amendment D, S-28.24): a
+ *    task with a `qa` stage whose binding sets `qa_pass`, and whose ticket's fresh status is neither
+ *    in that list nor the `ready_for_merge` slot's ({@link freshTicketAtMerge}). It precedes
+ *    `ticket_hands_off` because a testing status is usually In Progress, and *QA has not passed*
+ *    is the truer sentence there;
  *  - `merge_request_not_open` — merged, closed or locked; `provider_blocked` — draft, a provider
  *    blocker, or `mergeable` not `true` (S-28.13's read: pipeline, conflicts, threads, approvals);
  *  - `merge_settings_unknown` — the provider did not say whether a merge squashes or removes the
@@ -108,6 +122,7 @@ export type PlatformMergeWait =
   | 'review_not_approved'
   | 'plan_not_decided'
   | 'ticket_closed'
+  | 'ticket_not_qa_passed'
   | 'ticket_hands_off'
   | 'ticket_unread'
   | 'merge_request_not_open'
@@ -127,6 +142,11 @@ export interface PlatformMergeFacts {
   readonly plan: MergePlanDecision | null;
   /** The ticket's fresh disposition: `null` when the project judges no ticket status. */
   readonly ticket: 'open' | 'closed' | 'hands_off' | 'unread' | null;
+  /**
+   * Whether the ticket's fresh status passes QA (TD-029 amendment G): `null` when the item does not
+   * apply — no `qa` stage, no `qa_pass`, or no status read. Absent is `null`.
+   */
+  readonly qaPassed?: boolean | null;
   readonly mergeRequest: {
     readonly state: 'opened' | 'merged' | 'closed' | 'locked';
     readonly draft: boolean;
@@ -144,6 +164,67 @@ export interface PlatformMergeFacts {
   readonly hasCiGate: boolean;
 }
 
+/** Every {@link PlatformMergeWait}, in the order {@link platformMergeWait} asks them. */
+export const PLATFORM_MERGE_WAITS = [
+  'not_at_ready',
+  'person_words',
+  'review_not_approved',
+  'plan_not_decided',
+  'ticket_closed',
+  'ticket_not_qa_passed',
+  'ticket_hands_off',
+  'ticket_unread',
+  'merge_request_not_open',
+  'provider_blocked',
+  'merge_settings_unknown',
+  'head_not_recorded',
+  'head_moved',
+  'needs_rebase',
+] as const satisfies readonly PlatformMergeWait[];
+
+// The list is the whole union: a wait added to the type and not here fails the typecheck.
+export type UnlistedPlatformMergeWait = Exclude<
+  PlatformMergeWait,
+  (typeof PLATFORM_MERGE_WAITS)[number]
+>;
+const everyWaitListed: [UnlistedPlatformMergeWait] extends [never] ? true : never = true;
+void everyWaitListed;
+
+/**
+ * **The ticket's fresh status, as the merge reads it** (TD-038 decision 3, TD-029 amendment G
+ * decision 4). The disposition is today's — the platform holds the ticket, so its own statuses read
+ * `open`, a closed status `closed`, a person's In Progress status `hands_off` — with one change for
+ * a task whose frozen `qa_stage` is true and whose binding (read live) sets `qa_pass`: a status in
+ * the list reads `open` even when it is no slot, and `qaPassed` says whether the status is in the
+ * list or is the `ready_for_merge` slot's — the platform writes that one itself after QA's pass, so
+ * a binding mapping both would otherwise wait for ever on its own write. Otherwise `qaPassed` is
+ * `null` and nothing about the merge changes.
+ */
+export const freshTicketAtMerge = (input: {
+  readonly status: string;
+  readonly category: TicketStatusCategory | null;
+  readonly policy: TicketStatusPolicy;
+  readonly lifecycle: TicketLifecycle | null | undefined;
+  readonly qaStage: boolean;
+}): { readonly ticket: 'open' | 'closed' | 'hands_off'; readonly qaPassed: boolean | null } => {
+  const key = lifecycleStatusKey(input.status);
+  const list = input.qaStage ? input.lifecycle?.qa_pass : undefined;
+  const listed = list?.some((name) => lifecycleStatusKey(name) === key) === true;
+  const ready = input.lifecycle?.ready_for_merge;
+  const qaPassed =
+    list === undefined
+      ? null
+      : listed || (ready !== undefined && lifecycleStatusKey(ready) === key);
+  if (listed) {
+    return { ticket: 'open', qaPassed };
+  }
+  const disposition = ticketStatusDisposition(input.status, input.category, input.policy, true);
+  return {
+    ticket: disposition === 'closed' || disposition === 'hands_off' ? disposition : 'open',
+    qaPassed,
+  };
+};
+
 /** The first item that stops the platform's merge now, or `null` when every item holds. */
 export const platformMergeWait = (facts: PlatformMergeFacts): PlatformMergeWait | null => {
   if (!facts.atReady || facts.paused) {
@@ -160,6 +241,9 @@ export const platformMergeWait = (facts: PlatformMergeFacts): PlatformMergeWait 
   }
   if (facts.ticket === 'closed') {
     return 'ticket_closed';
+  }
+  if (facts.qaPassed === false) {
+    return 'ticket_not_qa_passed';
   }
   if (facts.ticket === 'hands_off') {
     return 'ticket_hands_off';

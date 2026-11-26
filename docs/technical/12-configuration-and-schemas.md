@@ -299,6 +299,20 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 > entered no stage, or a first automatic claim — exempts no slot's status (a first claim keeps only
 > the `status_mapping` targets, which the mapping writes at the stage's entry).
 >
+> **`qa_pass`** (S-28.24, TD-029 amendment G, TD-038 amendment D): an optional list of at most 20
+> status names beside `start_from`/`closed` (`LIFECYCLE_STATUS_POLICY_KEYS`) — never written by the
+> platform, not a slot, not a claim switch, not in `platformStatuses`. **Absent, nothing changes.** Set,
+> the `qa` stage passes only on one of its statuses (any other status that is not a return status
+> waits), and the platform's merge of a task whose frozen `qa_stage` is true merges only while the
+> ticket's fresh status is in the list or is the `ready_for_merge` slot's — otherwise the merge waits
+> `ticket_not_qa_passed` (`freshTicketAtMerge`, `packages/domain/src/policies/merge.ts`); a listed
+> status reads `open` there even when it is no slot. The block is read live per firing, so a saved
+> list reaches tasks already in flight. The schema refuses an empty list, a name twice, a list without
+> `qa`, and a name `qa`, `in_progress`, `in_review`, `approved`, `returned`, `start_from` or `closed`
+> already holds; equal to `done` or `ready_for_merge` is allowed. The Jira binding refuses one equal to
+> `pickup_status`, and the save check holds every name to the tracker's list
+> (`422 lifecycle_status_unknown`, `lifecycle.qa_pass[i]`).
+>
 > **New settings key `human_returns.acknowledgements`** (a list of at most 50 words, each 1–40
 > characters). It **adds** words in a project's own language to the shipped acknowledgement vocabulary
 > (TD-029 decision 8). It is graded **not applied** when it comes from the repository file, because a

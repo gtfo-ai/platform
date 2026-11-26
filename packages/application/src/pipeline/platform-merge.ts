@@ -37,7 +37,8 @@
  * (`platformMergeWait`): the task at `ready_for_merge`; no human-return window open (a queued or
  * running `mr.comment.debounce` job for the merge request) and no person's merge-request note
  * younger than the window; the latest review verdict approves; the ticket's fresh status neither
- * closed nor hands-off; the merge request `opened`, not a draft, no `merge_blocker` and `mergeable`
+ * closed nor hands-off — and, for a task with a `qa` stage whose binding sets `qa_pass`, one of
+ * those statuses or the `ready_for_merge` slot's (`ticket_not_qa_passed`, TD-029 amendment G); the merge request `opened`, not a draft, no `merge_blocker` and `mergeable`
  * true; the repository's merge settings known; and **MR head == `tasks.ready_head_sha` ==
  * `tasks.ci_head_sha`** on a pipeline with a CI gate. A failing item is recorded as
  * `task_merge_checks.merge_wait` for the page, never an attempt.
@@ -68,13 +69,13 @@ import {
   changeDigestWithContext,
   classifyMovedHead,
   compilePipeline,
+  freshTicketAtMerge,
   interpret,
   type MergePlanDecision,
   mergeByPersonReasons,
   platformMergeWait,
   READY_FOR_MERGE_STAGE,
   stageOf,
-  ticketStatusDisposition,
   withStatusMappingStatuses,
 } from '@platform/domain';
 import { TransactionOpenError } from '../events/open-transaction.js';
@@ -462,7 +463,7 @@ export const runPlatformMerge = async (
   const windowOpen = await ports.reviewWindowOpen(mr.iid);
   const discussions = windowOpen ? [] : await reads.discussions(mr, context);
   const personWordsPending = windowOpen || personWroteSince(discussions, now - windowMs);
-  const ticket = await freshTicket(options, stored, settings);
+  const { ticket, qaPassed } = await freshTicket(options, stored, settings);
   const wait = platformMergeWait({
     atReady: true,
     paused: false,
@@ -470,6 +471,7 @@ export const runPlatformMerge = async (
     latestVerdict: read.verdict,
     plan: read.plan.plan,
     ticket,
+    qaPassed,
     mergeRequest: {
       state: live.state,
       draft: live.draft,
@@ -1181,15 +1183,22 @@ const reenterRebaseGate = async (options: PlatformMergeOptions, taskId: Id): Pro
   }
 };
 
-/** The ticket's fresh disposition, or `null` when the project judges no ticket status. */
+/**
+ * The ticket's fresh disposition, or `null` when the project judges no ticket status — and, for a
+ * task with a `qa` stage whose binding sets `qa_pass` (read live, TD-029 amendment G decision 6),
+ * whether the fresh status passes QA (`freshTicketAtMerge`).
+ */
 const freshTicket = async (
   options: PlatformMergeOptions,
   stored: StoredTask,
   settings: ProjectSettings,
-): Promise<'open' | 'closed' | 'hands_off' | 'unread' | null> => {
+): Promise<{
+  readonly ticket: 'open' | 'closed' | 'hands_off' | 'unread' | null;
+  readonly qaPassed: boolean | null;
+}> => {
   const base = settings.ticketStatusPolicy ?? null;
   if (base === null) {
-    return null;
+    return { ticket: null, qaPassed: null };
   }
   const policy = withStatusMappingStatuses(
     base,
@@ -1203,10 +1212,15 @@ const freshTicket = async (
   });
   if (read === null) {
     // Fail closed: a bound ticket the platform cannot read is not known to be open.
-    return 'unread';
+    return { ticket: 'unread', qaPassed: null };
   }
-  const disposition = ticketStatusDisposition(read.status, read.statusCategory, policy, true);
-  return disposition === 'closed' || disposition === 'hands_off' ? disposition : 'open';
+  return freshTicketAtMerge({
+    status: read.status,
+    category: read.statusCategory,
+    policy,
+    lifecycle: settings.ticketLifecycle?.slots,
+    qaStage: stored.qaStage,
+  });
 };
 
 /**

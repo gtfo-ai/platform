@@ -55,6 +55,7 @@ import { createIntegrationActionExecutor } from '../integrations/action-executor
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor, type InjectedSecret } from '../integrations/redaction.js';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
+import type { BindingLifecycle } from '../pipeline/binding-lifecycle.js';
 import type { HumanCommandDependencies, TaskCommandDependencies } from '../pipeline/commands.js';
 import { createConversationReader } from '../pipeline/conversation-read.js';
 import type {
@@ -716,6 +717,13 @@ export interface HarnessOptions {
    * does under the project lock. Absent, both answer {@link HarnessOptions.settings}' branch.
    */
   readonly storedDefaultBranch?: () => string;
+  /**
+   * The binding's lifecycle at each read, when a case needs it to change under a live task
+   * (S-28.24): production reads the block off the binding per firing (`settings.ticketLifecycle`),
+   * so a key saved after a task entered a stage reaches it at the next read. Absent, the lifecycle is
+   * {@link HarnessOptions.settings}' `ticketLifecycle`.
+   */
+  readonly storedTicketLifecycle?: () => BindingLifecycle | null;
   /**
    * One scripted run per key. A run the walk reaches with no script fails the test through
    * `drain` ({@link UnscriptedRunError}, PROGRESS backlog 249), and so does a script production
@@ -1889,10 +1897,14 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         options.storedAutonomy === undefined
           ? base
           : { ...base, autonomy: options.storedAutonomy() };
-      const read =
+      const branched =
         options.storedDefaultBranch === undefined
           ? dialled
           : { ...dialled, defaultBranch: options.storedDefaultBranch() };
+      const read =
+        options.storedTicketLifecycle === undefined
+          ? branched
+          : { ...branched, ticketLifecycle: options.storedTicketLifecycle() };
       if (stored === undefined) {
         return read;
       }

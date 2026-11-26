@@ -75,6 +75,23 @@ describe('jiraCloudConfigSchema’s lifecycle block (WP-172 criterion 6)', () =>
     ).toEqual([expect.stringMatching(/^lifecycle\.closed\.1: .*finished/)]);
   });
 
+  it('refuses a pickup_status that qa_pass names (S-28.24, TD-029 amendment G)', () => {
+    expect(
+      issuesOf({
+        ...BASE,
+        pickup_status: 'Ready',
+        lifecycle: { qa: 'CR accepted', qa_pass: ['Releasable', ' READY'] },
+      }),
+    ).toEqual([expect.stringMatching(/^lifecycle\.qa_pass\.1: .*pass QA/)]);
+    expect(
+      issuesOf({
+        ...BASE,
+        pickup_status: 'Ready',
+        lifecycle: { qa: 'CR accepted', qa_pass: ['Releasable'] },
+      }),
+    ).toEqual([]);
+  });
+
   it('accepts a lifecycle block when no pickup_status is set (pickup by label)', () => {
     expect(issuesOf({ ...BASE, lifecycle: { in_progress: 'Doing' } })).toEqual([]);
   });

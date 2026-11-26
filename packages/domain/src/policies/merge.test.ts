@@ -3,18 +3,22 @@
  * stops the platform's merge at the moment of merging. Every guard here is a dangerous negative —
  * removing one makes the platform merge into a team's default branch when it must not.
  */
+import type { TicketLifecycle, TicketStatusCategory } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { ticketStatusPolicyOf } from '../lifecycle/status-disposition.js';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   type ChangeDigestFile,
   changeDigest,
   changeDigestWithContext,
   classifyMovedHead,
+  freshTicketAtMerge,
   MERGE_BY_PERSON_REASONS,
   type MergeByInput,
   MOVED_HEAD_WAITS,
   mergeByPersonReasons,
+  PLATFORM_MERGE_WAITS,
   type PlatformMergeFacts,
   platformMergeWait,
   REBASE_ONLY_WAITS,
@@ -110,6 +114,12 @@ describe('platformMergeWait (TD-038 decision 3)', () => {
     ['a plan approval neither approved nor absent', { plan: null }, 'plan_not_decided'],
     ['the ticket closed', { ticket: 'closed' }, 'ticket_closed'],
     ['the ticket taken by a person', { ticket: 'hands_off' }, 'ticket_hands_off'],
+    ['the ticket not at a QA-passed status', { qaPassed: false }, 'ticket_not_qa_passed'],
+    [
+      'the ticket at a person’s status QA has not passed',
+      { ticket: 'hands_off', qaPassed: false },
+      'ticket_not_qa_passed',
+    ],
     ['the ticket unread', { ticket: 'unread' }, 'ticket_unread'],
     [
       'the merge request closed',
@@ -180,6 +190,89 @@ describe('platformMergeWait (TD-038 decision 3)', () => {
 
   it('a ticket the project does not judge stops nothing', () => {
     expect(platformMergeWait({ ...READY, ticket: null })).toBeNull();
+  });
+
+  it('names every wait it can answer in PLATFORM_MERGE_WAITS, in its order', () => {
+    expect(new Set(PLATFORM_MERGE_WAITS).size).toBe(PLATFORM_MERGE_WAITS.length);
+    expect(PLATFORM_MERGE_WAITS).toContain('ticket_not_qa_passed');
+    expect(PLATFORM_MERGE_WAITS.indexOf('ticket_not_qa_passed')).toBeLessThan(
+      PLATFORM_MERGE_WAITS.indexOf('ticket_hands_off'),
+    );
+  });
+});
+
+/**
+ * S-28.24 — TD-029 amendment G decision 4, TD-038 amendment D: *"Releasable can merge, nothing
+ * else."* The owner's flow with invented names: `qa` CR accepted, Testing (no slot, In Progress
+ * category), Releasable (`done`), and a second accepting status that is no slot at all.
+ */
+describe('the merge asks QA again: qa_pass (TD-029 amendment G)', () => {
+  const LIFECYCLE: TicketLifecycle = {
+    in_progress: 'In progress',
+    qa: 'CR accepted',
+    ready_for_merge: 'Mergeable',
+    returned: ['To do'],
+    done: 'Releasable',
+    qa_pass: ['Releasable', 'Accepted by QA'],
+  };
+  const POLICY = ticketStatusPolicyOf(null, LIFECYCLE);
+  const waitAt = (
+    status: string,
+    category: TicketStatusCategory | null,
+    overrides: { lifecycle?: TicketLifecycle; qaStage?: boolean } = {},
+  ) => {
+    const lifecycle = overrides.lifecycle ?? LIFECYCLE;
+    const fresh = freshTicketAtMerge({
+      status,
+      category,
+      policy: ticketStatusPolicyOf(null, lifecycle),
+      lifecycle,
+      qaStage: overrides.qaStage ?? true,
+    });
+    return platformMergeWait({ ...READY, ...fresh });
+  };
+
+  it.each<[string, TicketStatusCategory | null]>([
+    ['Testing', 'in_progress'],
+    ['CR accepted', 'in_progress'],
+    ['Blocked', 'todo'],
+    ['Somewhere', null],
+  ])('waits with ticket_not_qa_passed at %s (%s)', (status, category) => {
+    expect(waitAt(status, category)).toBe('ticket_not_qa_passed');
+  });
+
+  it.each<[string, TicketStatusCategory | null]>([
+    // A qa_pass name that is also `done`.
+    ['Releasable', 'done'],
+    // A qa_pass name that is no slot, in the In Progress category — today it reads hands-off.
+    ['accepted by qa', 'in_progress'],
+    // The `ready_for_merge` slot: the platform writes it itself after QA's pass.
+    ['Mergeable', 'in_progress'],
+  ])('merges at %s (%s)', (status, category) => {
+    expect(waitAt(status, category)).toBeNull();
+  });
+
+  it('a closed status is still ticket_closed, before the QA item', () => {
+    const lifecycle = { ...LIFECYCLE, closed: ['Done'] };
+    expect(waitAt('Done', 'done', { lifecycle })).toBe('ticket_closed');
+  });
+
+  it('changes nothing for a task with no qa stage, or a binding with no qa_pass', () => {
+    const { qa_pass: _list, ...withoutList } = LIFECYCLE;
+    // Testing is a person's In Progress status: hands-off, exactly as before S-28.24.
+    expect(waitAt('Testing', 'in_progress', { qaStage: false })).toBe('ticket_hands_off');
+    expect(waitAt('Testing', 'in_progress', { lifecycle: withoutList })).toBe('ticket_hands_off');
+    expect(waitAt('Accepted by QA', 'in_progress', { qaStage: false })).toBe('ticket_hands_off');
+    expect(waitAt('Blocked', 'todo', { lifecycle: withoutList })).toBeNull();
+    expect(
+      freshTicketAtMerge({
+        status: 'Testing',
+        category: 'in_progress',
+        policy: POLICY,
+        lifecycle: withoutList,
+        qaStage: true,
+      }).qaPassed,
+    ).toBeNull();
   });
 });
 

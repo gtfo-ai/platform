@@ -114,7 +114,8 @@ const namedStatuses = (
 ];
 
 /**
- * The status policy's names (M28 ruling 1, S-28.4): `start_from` and `closed`. Not slots — they are
+ * The status policy's names (M28 ruling 1, S-28.4): `start_from`, `closed` and — since S-28.24 —
+ * `qa_pass`. Not slots — they are
  * never written and no distinctness rule of the slots applies to them — but a name the tracker does
  * not list would silently start nothing (or close nothing), so they are held to the same
  * membership check.
@@ -131,6 +132,13 @@ const policyStatuses = (
     path: `lifecycle.closed[${index}]`,
     name,
     words: 'statuses that mean a ticket is finished',
+  })),
+  // TD-029 amendment G (S-28.24): a name the tracker does not list would pass nothing, so QA would
+  // never pass and the platform would never merge — held to the same check.
+  ...(slots.qa_pass ?? []).map((name, index) => ({
+    path: `lifecycle.qa_pass[${index}]`,
+    name,
+    words: 'statuses QA passes only on (slot qa_pass)',
   })),
 ];
 

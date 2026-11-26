@@ -5,7 +5,7 @@
  * double was made mergeable. Every dangerous negative asserts **no merge call** and the named
  * reason; removing its guard makes the double merge and the test fail.
  */
-import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
+import type { DomainEvent, Id, IsoDateTime, TicketLifecycle } from '@platform/contracts';
 import {
   AUTONOMY_PRESETS,
   FEATURE_TEMPLATE,
@@ -94,6 +94,8 @@ interface World {
   readonly windowOpen?: boolean;
   readonly personNoteAt?: string;
   readonly ticket?: { readonly status: string; readonly category?: 'done' | 'in_progress' };
+  /** The binding's lifecycle block, read live (S-28.24's `qa_pass`); none by default. */
+  readonly lifecycle?: TicketLifecycle;
   readonly capabilities?: { readonly merge?: boolean; readonly rebase?: boolean };
   readonly mergeAnswer?: 'ok' | 'refuse' | 'transport';
   /**
@@ -506,7 +508,15 @@ const setup = async (world: World = {}) => {
           : {}),
         ...(ticketStatus === undefined
           ? {}
-          : { ticketStatusPolicy: ticketStatusPolicyOf(null, { closed: ['Done'] } as never) }),
+          : {
+              ticketStatusPolicy: ticketStatusPolicyOf(null, {
+                closed: ['Done'],
+                ...world.lifecycle,
+              } as never),
+            }),
+        ...(world.lifecycle === undefined
+          ? {}
+          : { ticketLifecycle: { pickUpFrom: null, slots: world.lifecycle } }),
       }),
     ),
     integrations: staticPipelineIntegrations({
@@ -832,6 +842,63 @@ describe('the dangerous negatives — no merge call, and the named reason (TD-03
     // `task_merge_checks` claimed long ago and mergeable: only the platform's wait brings it back.
     expect(await due({ setting: 'platform', live: { head: 'e'.repeat(40) } })).toBe(1);
     expect(await due({ setting: 'person' })).toBe(0);
+  });
+});
+
+/**
+ * S-28.24 — TD-029 amendment G decision 4, TD-038 amendment D: the owner's flow with invented
+ * names. A task that had a `qa` stage merges only while its ticket is at a `qa_pass` status (or the
+ * `ready_for_merge` slot's); every other status waits `ticket_not_qa_passed` with no merge call.
+ */
+describe('the merge asks QA again: qa_pass (TD-029 amendment G)', () => {
+  const LIFECYCLE: TicketLifecycle = {
+    in_progress: 'In progress',
+    qa: 'CR accepted',
+    ready_for_merge: 'Mergeable',
+    returned: ['To do'],
+    done: 'Releasable',
+    closed: ['Done'],
+    qa_pass: ['Releasable', 'Accepted by QA'],
+  };
+  const at = (status: string, category?: 'done' | 'in_progress', qa = true) =>
+    setup({
+      setting: 'platform',
+      qa,
+      lifecycle: LIFECYCLE,
+      ticket: category === undefined ? { status } : { status, category },
+    });
+
+  it.each<[string, 'done' | 'in_progress' | undefined]>([
+    ['Testing', 'in_progress'],
+    ['CR accepted', 'in_progress'],
+    ['Somewhere else', undefined],
+  ])('waits ticket_not_qa_passed at %s, and makes no merge call', async (status, category) => {
+    const w = await at(status, category);
+    expect(await w.run()).toBe('waiting');
+    expect(await w.waitedFor()).toBe('ticket_not_qa_passed');
+    expect(w.merges).toEqual([]);
+    expect(await w.attempts()).toEqual([]);
+    expect(w.auditLog.entries.filter((entry) => entry.action === 'merge_merge_request')).toEqual(
+      [],
+    );
+  });
+
+  it.each<[string, 'done' | 'in_progress' | undefined]>([
+    ['Releasable', 'done'],
+    ['Accepted by QA', 'in_progress'],
+    ['Mergeable', 'in_progress'],
+  ])('merges at %s', async (status, category) => {
+    const w = await at(status, category);
+    expect(await w.run()).toBe('merged');
+    expect(w.merges).toEqual([{ expected: HEAD, squash: true, remove: false }]);
+  });
+
+  it('a task with no qa stage is judged as before: Testing is a person’s, Releasable merges', async () => {
+    const testing = await at('Testing', 'in_progress', false);
+    expect(await testing.run()).toBe('waiting');
+    expect(await testing.waitedFor()).toBe('ticket_hands_off');
+    const releasable = await at('Releasable', 'done', false);
+    expect(await releasable.run()).toBe('merged');
   });
 });
 

@@ -302,6 +302,15 @@ return status, the `in_progress` or pick-up status, a ticket comment or a note o
 each sends it back to the agent. A comment that asks the agent (`@agentic ask …`) is answered and does
 not send the task back.
 
+**Only some statuses pass QA (`qa_pass`).** If your workflow has a status between the `qa` status and
+the tester's acceptance — `qa: CR ACCEPTED`, then *TESTING*, then *RELESABLE* — set
+`lifecycle.qa_pass: [RELESABLE]` (the lifecycle form's *QA passes only on*). QA then passes only on a
+listed status; any other status that is not a return status keeps the task waiting at QA, and with
+`policies.merge.by: platform` the merge waits too until the ticket's fresh status is listed (or is the
+`ready_for_merge` slot's). A listed status may be the `done` status; it may not be `pickup_status`,
+the `qa`, `in_progress`, `in_review` or `approved` status, nor in `returned`, `start_from` or `closed`.
+Without `qa` mapped the key is refused. Left out, QA passes as described above.
+
 ## 7. Test the connection
 
 *Test connection* performs one read-only call (`GET /rest/api/3/myself`, through the gateway for a

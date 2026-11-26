@@ -254,6 +254,12 @@ moved at that point, and the stage still runs.
 | **Returned** | One or more statuses, never set by the platform: a person moving the ticket into one of them returns the task to the agent. A checkbox per status, with a count of how many are ticked; at most ten. |
 | **Done** | Moved here when the merge request is merged. |
 
+With **QA** mapped, one more checkbox list appears: **QA passes only on** (since S-28.24). Leave it
+empty and QA passes on any status the ticket leaves QA for that is not a *Returned* one. Tick the
+statuses that mean a tester accepted the work (it may be the *Done* status) and QA passes only on
+those: a status neither ticked nor *Returned* keeps the task waiting at QA, and the platform's merge
+waits for a ticked status too (section *QA, and sending a task back*).
+
 Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it
 off): before a task's first run the platform assigns the ticket to the tracker integration's own
 account, moves it to *In progress* if that slot is mapped, and reads the ticket again. If somebody
@@ -1362,7 +1368,8 @@ At **Ready for merge** the task page says who merges it. With *a person*: *"A pe
 project's setting."* With *the platform*, before it merges: *"Merging automatically when GitLab
 reports it mergeable — now: 2 threads are unresolved."* — the *now* is whatever still stops it: the
 provider's own reason, a person's comment from a moment ago (read first), a review that did not
-approve, the ticket closed or taken by a person, or the branch moved since the reviewed commit (then
+approve, the ticket closed or taken by a person, the ticket not at a status that passes QA (when the
+project ticks **QA passes only on**), or the branch moved since the reviewed commit (then
 a person merges it, or **Send back**). The platform reads all of it again at the moment of merging
 and passes the reviewed commit to GitLab, so a push in between refuses the merge; it uses the
 repository's own merge method, squash and branch-removal settings, and never approves the merge
@@ -1397,7 +1404,14 @@ retries (BD-034) the page says so and the merge is left to a person. Each is ann
 When the project maps a *QA* status, a task created afterwards gets a human **QA** stage after the
 rebase gate and before Ready for merge: the ticket moves to the QA status and the merge request
 stays open, and still a draft, while a person tests the branch. QA ends when the ticket leaves the
-QA status for a status that is not a return; the task then goes on to Ready for merge. Merging the
+QA status for a status that is not a return; the task then goes on to Ready for merge. If your
+workflow has a status *between* the QA status and the tester's acceptance (say *CR accepted* →
+*Testing* → *Releasable*), tick the accepting status in **QA passes only on** (the lifecycle form
+shows it once *QA* is mapped; since S-28.24): QA then passes only when the ticket reaches one of
+the ticked statuses, a status that is neither ticked nor a *Returned* one keeps the task waiting at
+QA, and the platform's merge waits too — *"the ticket is not at a status that passes QA"* — until
+the ticket is in a ticked status (or the *Ready for merge* status the platform sets itself). The
+accepting status may be the same as *Done*. Nothing ticked keeps the rule above. Merging the
 merge request during QA ends it too, and a move of the default branch sends the task back through the
 rebase gate. With no *QA* status mapped, the task goes from the rebase gate straight to Ready.
 

@@ -388,6 +388,29 @@ describe('PUT /api/projects/:id/bindings checks the lifecycle block first (WP-18
     ]);
   });
 
+  it('checks qa_pass names too, naming slot qa_pass (S-28.24, TD-029 amendment G)', async () => {
+    const saved = await putBindings({
+      ...MAPPED,
+      lifecycle: { ...MAPPED.lifecycle, qa_pass: ['finished'] },
+    });
+    expect(saved.statusCode).toBe(200);
+    const before = new Map(stored);
+    const response = await putBindings({
+      ...MAPPED,
+      lifecycle: { ...MAPPED.lifecycle, qa_pass: ['Finished', 'Releasable'] },
+    });
+    expect(response.statusCode).toBe(422);
+    const error = response.json().error;
+    expect(error.code).toBe('lifecycle_status_unknown');
+    expect(error.details).toEqual([
+      {
+        path: 'lifecycle.qa_pass[1]',
+        message: expect.stringMatching(/slot qa_pass.*"Releasable"/),
+      },
+    ]);
+    expect(stored).toEqual(before);
+  });
+
   it('checks pickup_status too, since it is the pick_up_from slot', async () => {
     const response = await putBindings({ ...MAPPED, pickup_status: 'Up next' });
     expect(response.statusCode).toBe(422);

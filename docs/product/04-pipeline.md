@@ -93,7 +93,7 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 ### S6c — QA (human, optional; BD-031, amended 2026-10-08)
 - **Active only when the project maps a `qa` status** (see § "Ticket lifecycle" below). It sits after the rebase gate and before Ready for merge, so a person tests a branch that already applies. With no `qa` status mapped, the task goes from the rebase gate straight to Ready for merge, as before.
 - The merge request stays open, and still a draft, while QA runs. The ticket is moved to the project's `qa` status.
-- **Ends** when the ticket leaves the `qa` status for a status that is not a return status. The task then goes on to Ready for merge and to a person's merge, as today. A person who merges during QA ends it too. A default-branch move sends it back through the rebase gate.
+- **Ends** when the ticket leaves the `qa` status for a status that is not a return status — or, when the binding sets `qa_pass` (TD-029 amendment G, S-28.24), only when it reaches one of those statuses; any other status waits, and the platform's merge waits for one too. The task then goes on to Ready for merge and to a person's merge, as today. A person who merges during QA ends it too. A default-branch move sends it back through the rebase gate.
 - **Returns** to Implementation on any form of a human return (below). The same human-rounds bound applies as at Ready for merge (BD-008).
 
 ### S7 — Ready for merge (human)

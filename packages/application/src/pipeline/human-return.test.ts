@@ -1083,6 +1083,58 @@ describe('(14) a pass needs the ticket to have left the qa status', () => {
   });
 });
 
+/**
+ * S-28.24 — TD-029 amendment G decisions 2 and 6: the owner's flow with invented names. The `qa`
+ * slot is *CR accepted*, *Under test* is QA in progress (no slot), *Releasable* accepts (and is
+ * `done`). The binding gains `qa_pass` **after** the task entered `qa`: the window reads the block
+ * live at every firing, so the key reaches the task in flight.
+ */
+describe('qa_pass — QA passes only on the statuses the binding names (S-28.24)', () => {
+  const OWNER: BindingLifecycle = {
+    pickUpFrom: 'Ready for the agent',
+    slots: {
+      in_progress: 'Doing',
+      in_review: 'Waiting for review',
+      approved: 'Reviewed',
+      qa: 'CR accepted',
+      returned: ['Sent back'],
+      done: 'Releasable',
+    },
+  };
+
+  const waitingWithLiveLifecycle = async () => {
+    const live = { current: OWNER };
+    const waiting = await waitingAt('qa', {
+      lifecycle: OWNER,
+      harness: { storedTicketLifecycle: () => live.current },
+    });
+    expect(waiting.ticket.state.status).toBe('CR accepted');
+    return { waiting, live };
+  };
+
+  it('a key saved after the task entered qa waits on Under test and passes on Releasable', async () => {
+    const { waiting, live } = await waitingWithLiveLifecycle();
+    live.current = { ...OWNER, slots: { ...OWNER.slots, qa_pass: ['Releasable'] } };
+
+    later(waiting.harness);
+    await fire(waiting.harness, statusMoved(waiting, 'Under test'));
+    expect(at(waiting.harness)).toEqual(['active', 'qa']);
+    expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
+
+    later(waiting.harness);
+    await fire(waiting.harness, statusMoved(waiting, 'Releasable'));
+    expect(at(waiting.harness)).toEqual(['ready_for_merge', 'ready_for_merge']);
+    expect(eventsOf(waiting.harness, 'task.stage.returned')).toHaveLength(0);
+  });
+
+  it('without the key, the same move to Under test passes QA, as before', async () => {
+    const { waiting } = await waitingWithLiveLifecycle();
+    later(waiting.harness);
+    await fire(waiting.harness, statusMoved(waiting, 'Under test'));
+    expect(at(waiting.harness)).toEqual(['ready_for_merge', 'ready_for_merge']);
+  });
+});
+
 // The claim a return marks stale (TD-029 decision 5): the next agent admission re-claims.
 describe('a return marks the claim stale for a human return', () => {
   it('records stale_cause human_return, and the next admission takes the ticket back', async () => {

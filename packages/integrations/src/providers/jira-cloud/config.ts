@@ -234,6 +234,16 @@ export const jiraCloudConfigSchema = z
         });
       }
     }
+    // TD-029 amendment G (S-28.24): a status that passes QA is not the one work is picked up from.
+    for (const [index, name] of (lifecycle.qa_pass ?? []).entries()) {
+      if (lifecycleStatusKey(name) === pickupKey) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['lifecycle', 'qa_pass', index],
+          message: `qa_pass[${index}] names the status pickup_status (the pick_up_from slot) names; the status work is picked up from cannot also pass QA`,
+        });
+      }
+    }
   });
 
 export type JiraCloudConfig = z.infer<typeof jiraCloudConfigSchema>;

@@ -797,6 +797,65 @@ describe('ticketLifecycleSchema', () => {
     expect(issues({ closed: ['Done', 'DONE'] })).toEqual(['closed.1']);
     expect(issues({ start_from: ['Ready'], closed: ['ready'] })).toEqual(['closed.0']);
   });
+
+  describe('qa_pass (TD-029 amendment G, S-28.24)', () => {
+    // The owner's flow, with invented names: CR accepted (qa) → Testing → Releasable (done).
+    const OWNER = {
+      in_progress: 'Doing',
+      qa: 'CR accepted',
+      returned: ['To do again', 'Waiting for review'],
+      done: 'Releasable',
+      closed: ['Closed'],
+    };
+
+    it('takes a list equal to done, to ready_for_merge, or naming no slot at all', () => {
+      expect(issues({ ...OWNER, qa_pass: ['Releasable'] })).toEqual([]);
+      expect(issues({ ...OWNER, ready_for_merge: 'Mergeable', qa_pass: [' mergeable'] })).toEqual(
+        [],
+      );
+      expect(issues({ ...OWNER, qa_pass: ['Accepted by QA', 'RELEASABLE'] })).toEqual([]);
+      expect(ticketLifecycleSchema.parse({ ...OWNER, qa_pass: ['Releasable'] }).qa_pass).toEqual([
+        'Releasable',
+      ]);
+    });
+
+    it('refuses an empty list, a status named twice and a list past the bound', () => {
+      expect(issues({ ...OWNER, qa_pass: [] })).toEqual(['qa_pass']);
+      expect(issues({ ...OWNER, qa_pass: ['Releasable', ' releasable'] })).toEqual(['qa_pass.1']);
+      const names = (count: number) => Array.from({ length: count }, (_, index) => `P${index}`);
+      expect(issues({ ...OWNER, qa_pass: names(MAX_LIFECYCLE_POLICY_STATUSES) })).toEqual([]);
+      expect(issues({ ...OWNER, qa_pass: names(MAX_LIFECYCLE_POLICY_STATUSES + 1) })).toEqual([
+        'qa_pass',
+      ]);
+    });
+
+    it('refuses a list without the qa slot mapped', () => {
+      const { qa: _qa, ...withoutQa } = OWNER;
+      expect(issues({ ...withoutQa, qa_pass: ['Releasable'] })).toEqual(['qa_pass']);
+      expect(issues({ qa_pass: ['Releasable'] })).toEqual(['qa_pass']);
+    });
+
+    it.each([
+      ['qa', { qa: 'CR accepted' }],
+      ['in_progress', { in_progress: 'Doing' }],
+      ['in_review', { in_review: 'In review' }],
+      ['approved', { approved: 'Approved' }],
+      ['returned', { returned: ['Sent back'] }],
+      ['start_from', { start_from: ['Ready'] }],
+      ['closed', { closed: ['Closed'] }],
+    ] as const)('refuses a name %s already holds, case-insensitively', (_key, holder) => {
+      const name = Object.values(holder)
+        .flat()
+        .find((value) => typeof value === 'string') as string;
+      expect(
+        issues({
+          qa: 'CR accepted',
+          ...holder,
+          qa_pass: ['Releasable', ` ${name.toUpperCase()} `],
+        }),
+      ).toEqual(['qa_pass.1']);
+    });
+  });
 });
 
 /** WP-170 ruling (e): the acknowledgement words a project adds (TD-029 decision 8). */

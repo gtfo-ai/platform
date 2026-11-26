@@ -4,8 +4,10 @@
  * commit and the plan decision it rested on — each of the three).
  */
 import type { ProviderSync, TaskDetailResponse, TaskMerge } from '@platform/contracts';
+import { MOVED_HEAD_WAITS, PLATFORM_MERGE_WAITS } from '@platform/domain';
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { mergeWaitSentence } from '../ui/words/merge-status.js';
 import { MergeStatusNotice, mergeStatusLines } from './merge-status.js';
 
 afterEach(() => {
@@ -214,5 +216,27 @@ describe('who merges, on the task page (S-28.15)', () => {
   it('draws nothing when the read has no merge block', () => {
     const view = render(<MergeStatusNotice detail={detailWith(null)} />);
     expect(view.container.querySelector('[data-testid="merge-status"]')).toBeNull();
+  });
+});
+
+/**
+ * The words census (S-28.24): every wait the platform's merge records has a sentence of its own —
+ * never the code with its underscores turned into spaces. `not_at_ready` is the one exception: the
+ * duty returns before it records a wait for a task that is not at Ready, so the page never shows it.
+ */
+describe('every merge wait has words (S-28.24 census)', () => {
+  const recorded = [...PLATFORM_MERGE_WAITS, ...MOVED_HEAD_WAITS].filter(
+    (wait) => wait !== 'not_at_ready',
+  );
+  it.each(recorded)('%s', (wait) => {
+    const said = mergeWaitSentence('platform', wait, 'GitLab', null);
+    expect(said).not.toContain(`now: ${wait.replaceAll('_', ' ')}.`);
+    expect(said).not.toContain('_');
+  });
+
+  it('says what an unlisted status does: the platform waits for the tester', () => {
+    expect(mergeWaitSentence('platform', 'ticket_not_qa_passed', 'GitLab', null)).toContain(
+      'passes QA',
+    );
   });
 });
