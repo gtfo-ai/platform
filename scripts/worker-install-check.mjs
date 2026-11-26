@@ -10,7 +10,7 @@
  * Run it with the four images built (`node scripts/build-images.mjs`):
  *
  *     node scripts/worker-install-check.mjs [--tag dev] [--project-suffix local] [--host-address <a>]
- *         [--core-port 38789]
+ *         [--core-port 18789]
  *
  * ## What it brings up
  *
@@ -117,7 +117,8 @@ const optionValue = (flag, fallback) => {
 };
 const TAG = optionValue('--tag', process.env.PLATFORM_TAG ?? 'dev');
 const SUFFIX = optionValue('--project-suffix', process.env.GITHUB_RUN_ID ?? 'local');
-const CORE_PORT = Number(optionValue('--core-port', '38789'));
+/** Below 32768, outside Linux's ephemeral range (see `worker-update-check.mjs`'s ports). */
+const CORE_PORT = Number(optionValue('--core-port', '18789'));
 /** The two cores: the first one's worker is installed with `--dir`, the second's as a person does. */
 const CORES = [
   { project: `agentic-install-check-core-${SUFFIX}`, port: CORE_PORT, directory: '' },
@@ -126,8 +127,11 @@ const CORES = [
 const REGISTRY_CONTAINER = `agentic-install-check-registry-${SUFFIX}`;
 /** The project `install.sh` brings the first worker on a machine up as (see the header). */
 const PROJECT = 'agentic-worker';
-/** The first worker's page port, off the default and off the other worker checks' (37357, 37358). */
-const UI_PORT = 37359;
+/**
+ * The first worker's page port, off the default and off the other worker checks' (17357, 17358),
+ * and below 32768 like theirs.
+ */
+const UI_PORT = 17359;
 /** The first installer's shell: the worker's own named objects and page port (passed to compose). */
 const WORKER_NAMES = {
   APP_WORKER_CONTROL_VOLUME: `agentic-install-check-${SUFFIX}-ctl`,

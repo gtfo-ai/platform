@@ -240,6 +240,19 @@ export interface KbSearchCall {
 export interface GitCall {
   readonly process: string;
   readonly method: string;
+  /**
+   * The merge request the call named — its first argument's `iid` and `head_sha`, when it has them
+   * — so a count that came out wrong names what each call asked for (BACKLOG 440: two diff reads
+   * in one process, cause not established).
+   */
+  readonly ref: { readonly iid: unknown; readonly head_sha: unknown } | null;
+  /** When the call was made, in milliseconds since the epoch. */
+  readonly atMs: number;
+  /**
+   * How the fake's call ended, read when the record is: an executor retry or a coalescer eviction
+   * after a failure shows here as a `threw` before the second call (BACKLOG 440).
+   */
+  readonly outcome: 'pending' | 'answered' | 'threw';
 }
 
 /** A second `apps/server` process on the harness's database (WP-72, PROGRESS backlog 38). */
@@ -1379,8 +1392,44 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
           return value;
         }
         return (...args: unknown[]) => {
-          gitCalls.push({ process: processName, method: String(property) });
-          return (value as (...parameters: unknown[]) => unknown).apply(target, args);
+          const first = args[0];
+          const ref =
+            typeof first === 'object' && first !== null && 'iid' in first
+              ? {
+                  iid: (first as { iid?: unknown }).iid,
+                  head_sha: (first as { head_sha?: unknown }).head_sha ?? null,
+                }
+              : null;
+          const call: { -readonly [K in keyof GitCall]: GitCall[K] } = {
+            process: processName,
+            method: String(property),
+            ref,
+            atMs: Date.now(),
+            outcome: 'pending',
+          };
+          gitCalls.push(call);
+          let result: unknown;
+          try {
+            result = (value as (...parameters: unknown[]) => unknown).apply(target, args);
+          } catch (error) {
+            call.outcome = 'threw';
+            throw error;
+          }
+          if (result instanceof Promise) {
+            // A branch of its own that only records: the caller still awaits (and handles) the
+            // promise it is given.
+            result.then(
+              () => {
+                call.outcome = 'answered';
+              },
+              () => {
+                call.outcome = 'threw';
+              },
+            );
+          } else {
+            call.outcome = 'answered';
+          }
+          return result;
         };
       },
     });

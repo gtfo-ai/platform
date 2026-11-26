@@ -132,8 +132,11 @@ const CLAUDE_TOKEN = 'FAKE-wp284-claude-oauth-token-not-a-credential-0001';
 /** The static run token the HTTPS stand-in grants push with (S-22.14). */
 const RUN_TOKEN = 'FAKE-wcc-static-run-token-not-a-credential-0001';
 const ORIGIN = 'http://worker-compose-check.example.test';
-/** The host port the bundle publishes the worker's page on (`APP_WORKER_UI_PORT`), off the default. */
-const UI_PORT = 37357;
+/**
+ * The host port the bundle publishes the worker's page on (`APP_WORKER_UI_PORT`), off the default,
+ * and below 32768 — outside Linux's ephemeral range (see `worker-update-check.mjs`'s ports).
+ */
+const UI_PORT = 17357;
 const TIMEOUT_MS = 15 * 60 * 1000;
 const DOCKER_QUERY_MS = 60_000;
 /** How long both tasks may take to reach Ready — eight to ten runs, one at a time. */

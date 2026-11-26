@@ -91,9 +91,16 @@ const REGISTRY_CONTAINER = `agentic-update-check-registry-${SUFFIX}`;
 /** The owner's own worker, which this check must never touch. */
 const OWNER_PROJECT = 'agentic-worker';
 
-const REGISTRY_PORT = Number(optionValue('--registry-port', '55787'));
-const CORE_PORT = Number(optionValue('--core-port', '38787'));
-const UI_PORT = 37358;
+/**
+ * The host ports this check publishes are fixed, so each sits **below 32768**, outside Linux's
+ * ephemeral range (32768–60999 on a CI runner): a port in it can already be the local end of one of
+ * the job's own outbound connections when `compose up` binds it. The old 37358 failed exactly so on
+ * `main` (docker checks run 44770692380: `failed to bind host port 127.0.0.1:37358/tcp: address
+ * already in use`), and the same sha passed on its other runs.
+ */
+const REGISTRY_PORT = Number(optionValue('--registry-port', '15787'));
+const CORE_PORT = Number(optionValue('--core-port', '18787'));
+const UI_PORT = 17358;
 const REGISTRY = `localhost:${REGISTRY_PORT}`;
 const NAMESPACE = `${REGISTRY}/acme`;
 /**
@@ -576,6 +583,11 @@ const main = async () => {
   try {
     // ── The registry and the attested builds ──────────────────────────────────────────────
     stages.set('the local registry');
+    // Pulled on its own bound first: `docker run` would pull it inside the 60 s a query is given,
+    // and a slow Docker Hub spent it there once (docker checks run 44759408943: the run was killed
+    // after `Downloaded newer image for registry:2`, 64 s into the step). The other two worker
+    // checks already give the registry's start a download's bound.
+    await docker(['pull', '--quiet', 'registry:2'], { timeoutMs: 10 * 60_000 });
     await docker([
       'run',
       '-d',
@@ -741,9 +753,18 @@ const main = async () => {
     const imageOf = async (service) => {
       const id = (await bundle(['ps', '-q', service])).stdout.trim();
       if (id === '') return null;
-      return (
-        await docker(['container', 'inspect', '--format', '{{.Config.Image}}', id])
-      ).stdout.trim();
+      try {
+        return (
+          await docker(['container', 'inspect', '--format', '{{.Config.Image}}', id])
+        ).stdout.trim();
+      } catch (error) {
+        // The container `ps` named was removed before `inspect` read it: a service being recreated
+        // has no image to report yet, which is what the polls below wait through. Once this threw
+        // and failed the whole check mid-recreation (docker checks run 44753698736: `the updater
+        // recreated last: … No such container`).
+        if (String(error?.stderr ?? error).includes('No such container')) return null;
+        throw error;
+      }
     };
     const lastUpdate = async () => {
       const listed = await admin.json('/api/workers');

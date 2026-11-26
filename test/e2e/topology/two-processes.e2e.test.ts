@@ -334,8 +334,10 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     }
     // The coalescer's bound, per process: **at most one read of one revision in each process**,
     // whichever of the two took the dependency gate, the conflict warning and the risk routing.
+    // Every read is printed with the failure: BACKLOG 440 saw `app` read twice once, and the
+    // cause (a second key, a thrown first read, an executor retry) was not established from it.
     for (const [process, count] of byProcess) {
-      expect(count, `${process} read the diff ${count} times`).toBe(1);
+      expect(count, `${process} read the diff ${count} times: ${JSON.stringify(reads)}`).toBe(1);
     }
     // …so the gate entry costs one read per process that ran one of its duties: one or two on this
     // topology, and the audit agrees with the provider's own count.
