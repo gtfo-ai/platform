@@ -1663,3 +1663,38 @@ open:
 
 ## Amendment 2026-11-26 — [BD-034](../business/BD-034-recover-before-escalating.md)
 The bounds this record states are raised. A lost run is re-planned three times (not once), each re-plan excluding the machines that lost it. A usage limit is re-planned three times (not once). A transport failure to start gets eight attempts, backing off from 30 s to 10 min (not three attempts 30 s apart). A shutdown hand-back is allowed five times (not two). A run that ended before the model took a turn is re-planned six times, 1 to 16 minutes apart, instead of escalating at once. BD-034 has the table and the reasons.
+
+## Amendment (2026-11-26, orchestrator-authorised, the product owner's report from agentic.fontai.org) — the 2026-11-06 amendment's items 1, 4, 5 and 6: a manual Start makes its starter the owner, a worker's automatic claim of an unowned task makes its person the owner, and a manual Start labels the ticket
+
+**Context** (read at `28cc71cb`). On fontai a member pressed *Start* on GO-992 (`task.start`, 19:15:32). The task was
+created with **no owner** (`manual-start.ts` records the starter only as the `ticket.matched` actor), so its first
+stage offer was open to every `mine_and_unassigned` worker, and another person's worker claimed it 6 s later. The
+claim then assigned the Jira ticket to the binding's own account, and the ticket never got the binding's
+`pickup_label`, because a manual start bypasses the pick-up rule. The product owner's rule: *the person who started a
+ticket owns it, on the platform and in the tracker, and only their worker works on it; a worker that starts work on a
+ticket makes its person the owner.*
+
+**Decision.**
+
+1. **A manual Start makes its starter the owner** (`source: platform`, `via: command`), written by intake in the
+   transaction that creates the task — before its first offer exists, because an open offer is not re-routed by a later
+   owner change (decision 2's offer names the owner it was written with). The starter is read from the
+   `ticket.matched` event's `user` actor with `rule: 'manual'`. Conditions: the starter may own in the project (item 1's
+   `member`+); otherwise the task is created as before, with the tracker's assignee synced. **Precedence:** a ticket the
+   tracker already assigns to a *different* linked `member`+ person keeps that person as owner (item 5's rule, a
+   member keeps their ticket); every other ticket — unassigned, the binding's own account, an unlinked or non-member
+   assignee — gets the starter. With item 4's write-back on, the change enqueues `ticket_owner_assign` as any
+   platform owner change does.
+2. **A worker's automatic claim of a stage offer for a task with no owner makes the worker's person the owner**, in the
+   claim's transaction, by the same decision and the same write as a pick (`decidePickOwner`, `via: pick`): a task
+   held elsewhere, or a person who may not own, is claimed without assigning. An ask assigns nothing, and the server
+   claimant (no person) assigns nothing. No worker-protocol change.
+3. **A manual Start adds the binding's `pickup_label`** (Jira's `pickup_label`, when configured) to the ticket, add-only
+   through `IntegrationActionExecutor` outside any transaction, after the start's transaction commits — the claim
+   label's shape (BACKLOG 1611). A failed add is logged and does not undo the start (the label is a mark, not the
+   trigger: the task already exists). The platform never removes it.
+
+**Consequences.** On a binding with `lifecycle.assign_owner: true` a started or worker-claimed ticket is assigned in
+the tracker to its person rather than to the binding's account (item 5's `held_by: 'platform_owner'` after the
+write-back, `member` on a re-claim). With the switch off, the platform owner is set and the tracker keeps the binding's
+account until a person changes it — unchanged from item 4.
