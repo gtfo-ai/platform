@@ -472,7 +472,9 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
   `paused` worker. The one claim checks TD-031 §8's eligibility **in its statement** — a **stage**
   or an **ask** offer (WP-283, backlog 741: `finish` of a run that serves an ask settles through the
   ask's own ending, `AskExecutor.settle`, composed on the worker routes — an ask's offer names the asker
-  as its assignee, so the asker's online worker has its head start), not excluded, the offer's images
+  as its assignee, so the asker's online worker has its head start), not excluded (a machine of the
+  task's owner — an ask's asker — only for `OWNER_EXCLUSION_BACKOFF_MS`, 10 minutes after the
+  exclusion: the owner keeps the task, BACKLOG 1661), the offer's images
   held, the worker not revoked, its user may act (backlog 714), not paused, an effective project role
   (the higher of the organisation role and a membership, backlog 886) at `member`+, `workers_from` reached or the assignee's head start, and the project's run credential
   `minted` — or `static`/`deploy_key` behind the git integration's `remote_run_credential: allow`
@@ -501,7 +503,8 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
 - **`release`** is admitted while the run is `starting` with no spawn marker and undoes the claim only
   (TD-031's 2026-11-04 amendment §4): offer `claimed → open` at the same epoch, lease and
   `runs.worker_id` cleared, run `starting → created`, `run.offer.released`, the worker added to
-  `excluded_worker_ids` for `usage_limited`/`provision_failed`, the credential minted for the released
+  `excluded_worker_ids` for `usage_limited`/`provision_failed` (the owner's machine only for the
+  backoff above), the credential minted for the released
   claim revoked (mints recorded by the release only, never a later claimant's), nothing charged; `run_offers.worker_id` keeps the last claimant until the next claim, so a repeat answers
   `204` again. `409 run_started` after the marker, `409 lease_lost` for another claim or an ended run.
 - **`spawn`** (TD-031 decision 9's table gains it) writes the CLI spawn marker, `started_at`, `starting →

@@ -29,6 +29,7 @@ import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline
 import { createTestRunPlanSealer } from '../testing/run-plans.js';
 import { createClaimAdmission } from './claim-admission.js';
 import { RUN_START_RETRY_MS } from './jobs.js';
+import { OWNER_EXCLUSION_BACKOFF_MS } from './offers.js';
 import {
   createRemoteRuns,
   type RemotePackageAnswer,
@@ -1256,6 +1257,40 @@ describe('a started or automatically claimed task has an owner (TD-031 2026-11-2
     expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId });
     expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBe(BOB);
     expect(ownerEvents(w)).toHaveLength(1);
+  });
+
+  /**
+   * BACKLOG 1661 (TD-031's 2026-11-26 amendment item 5): the owner keeps the task through a release
+   * that excludes their machine — another person's `mine_and_unassigned` machine never takes it, and
+   * the owner's machine takes it again once `OWNER_EXCLUSION_BACKOFF_MS` has passed since the release.
+   */
+  it('a provision_failed release keeps the owner: only the owner’s machine takes it again, after the backoff', async () => {
+    const w = await world({ before: membersOf });
+    const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
+    policy(w, W1, 'mine_and_unassigned');
+    policy(w, W2, 'mine_and_unassigned');
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId: w.runId });
+    expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBe(ALICE);
+    const releasedAt = w.harness.clock.now();
+    expect(
+      await w.remote.release({
+        runId: w.runId,
+        workerId: W1,
+        epoch: 1,
+        reason: 'provision_failed',
+        now: releasedAt,
+      }),
+    ).toBe('released');
+    // The owner is kept, and the offer excludes her machine.
+    expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBe(ALICE);
+    expect(await claimAs(w, W1)).toEqual({ kind: 'none' });
+    expect(await claimAs(w, W2)).toEqual({ kind: 'none' });
+    w.harness.clock.advance(OWNER_EXCLUSION_BACKOFF_MS - 1_000);
+    expect(await claimAs(w, W1)).toEqual({ kind: 'none' });
+    w.harness.clock.advance(1_000);
+    // Bob's machine still does not: the task is Alice's.
+    expect(await claimAs(w, W2)).toEqual({ kind: 'none' });
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId: w.runId });
   });
 
   it('assigns nothing when the worker’s person may not own in the project', async () => {

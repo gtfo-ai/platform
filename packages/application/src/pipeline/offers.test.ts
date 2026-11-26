@@ -9,7 +9,16 @@ import type { Id, IsoDateTime } from '@platform/contracts';
 import { createRun, recordRunCreated, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { BroadcastMessage } from '../ports/broadcast.js';
-import { offerRun, RUN_OFFERS_TOPIC, recordClaim, serverLeaseOwner } from './offers.js';
+import {
+  exclusionClock,
+  exclusionRefuses,
+  OWNER_EXCLUSION_BACKOFF_MS,
+  offerRun,
+  RUN_OFFERS_TOPIC,
+  recordClaim,
+  serverLeaseOwner,
+} from './offers.js';
+import { RUN_START_RETRY_MAX_MS } from './stage-enqueue.js';
 import type { ExecutionRoutingRepository, RunOfferRepository } from './store.js';
 
 const NOW = '2026-11-04T09:00:00.000Z' as IsoDateTime;
@@ -237,5 +246,44 @@ describe('recordClaim', () => {
     expect(recorded.run.status).toBe('starting');
     expect(recorded.events.map((event) => event.type)).toEqual(['run.claimed']);
     expect(recorded.events[0]?.payload).toMatchObject({ claimant_kind: 'server', lease_epoch: 3 });
+  });
+});
+
+describe('the owner keeps the task: an exclusion’s backoff (BACKLOG 1661)', () => {
+  const since = '2026-11-26T10:00:00.000Z' as IsoDateTime;
+  const at = (ms: number) => new Date(Date.parse(since) + ms).toISOString() as IsoDateTime;
+
+  it('is BD-034’s longest wait between two start attempts, ten minutes', () => {
+    expect(OWNER_EXCLUSION_BACKOFF_MS).toBe(RUN_START_RETRY_MAX_MS);
+    expect(OWNER_EXCLUSION_BACKOFF_MS).toBe(600_000);
+  });
+
+  it('refuses the owner’s excluded machine until the backoff, and admits it from the backoff on', () => {
+    const owners = (now: IsoDateTime) =>
+      exclusionRefuses({ excluded: true, offerIsMine: true, excludedSince: since, now });
+    expect(owners(since)).toBe(true);
+    expect(owners(at(OWNER_EXCLUSION_BACKOFF_MS - 1))).toBe(true);
+    expect(owners(at(OWNER_EXCLUSION_BACKOFF_MS))).toBe(false);
+    expect(owners(at(OWNER_EXCLUSION_BACKOFF_MS + 86_400_000))).toBe(false);
+  });
+
+  it('refuses anybody else’s excluded machine for ever, and never a machine the offer does not exclude', () => {
+    const later = at(OWNER_EXCLUSION_BACKOFF_MS + 86_400_000);
+    expect(
+      exclusionRefuses({ excluded: true, offerIsMine: false, excludedSince: since, now: later }),
+    ).toBe(true);
+    expect(
+      exclusionRefuses({ excluded: false, offerIsMine: false, excludedSince: since, now: since }),
+    ).toBe(false);
+    expect(
+      exclusionRefuses({ excluded: false, offerIsMine: true, excludedSince: since, now: since }),
+    ).toBe(false);
+  });
+
+  it('counts from the later of the offer and its last release', () => {
+    expect(exclusionClock({ offeredAt: since, releasedAt: null })).toBe(since);
+    expect(exclusionClock({ offeredAt: since, releasedAt: at(60_000) })).toBe(at(60_000));
+    // A release recorded before a re-offer (another offer's column) never moves the clock back.
+    expect(exclusionClock({ offeredAt: at(60_000), releasedAt: since })).toBe(at(60_000));
   });
 });

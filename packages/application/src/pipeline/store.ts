@@ -2236,7 +2236,8 @@ export interface NewRunOffer {
    * The workers this offer is **not** for (`excluded_worker_ids`, TD-031 §12): the stage entry's
    * previous offer's exclusions, plus the worker that lost it —
    * {@link RunOfferRepository.carriedExclusions}, read by `stage.execute` when it re-plans an entry.
-   * Absent is none.
+   * Absent is none. A machine of the offer's owner is kept off only for `OWNER_EXCLUSION_BACKOFF_MS`
+   * (`./offers.ts`, BACKLOG 1661); anybody else's for the offer's life.
    */
   readonly excludedWorkerIds?: readonly Id[];
 }
@@ -2367,6 +2368,14 @@ export interface ExpiredRunOffer {
     readonly name: string;
     readonly cause: WorkspaceUnavailableCause;
   } | null;
+  /**
+   * BACKLOG 1661 (TD-031's 2026-11-26 amendment item 5): a **stage** offer's task owner — the
+   * person whose machines (and machines that take everyone's tasks) were the only ones that could
+   * take it — by name (their own text; empty when the account has none). Absent or `null`: an
+   * unowned task, an ask, an offer no worker could take (`workers_from` null: `server_only`), or a
+   * store that does not know.
+   */
+  readonly owner?: { readonly name: string } | null;
 }
 
 /** One claim (TD-031 §2): who claims, under which owner, until when. */
@@ -2516,7 +2525,8 @@ export interface RunOfferRepository {
    * **A release** (WP-281, TD-031 decision 6 and its 2026-11-04 amendment §4): undoes the claim at
    * `epoch` held by `owner`, only while the run is `starting` with no CLI spawn marker — the offer
    * `claimed → open` with its epoch **kept** (so the releasing claimant's fence is stale), the release
-   * recorded, `excludeWorkerId` appended to `excluded_worker_ids` when given, and the run's
+   * recorded, `excludeWorkerId` appended to `excluded_worker_ids` when given (an owner's machine
+   * only until `OWNER_EXCLUSION_BACKOFF_MS` after `released_at`, BACKLOG 1661), and the run's
    * `lease_owner`, `lease_expires_at` and `worker_id` cleared, `starting → created`. Locks the offer,
    * then the run (the one lock order). The caller appends `run.offer.released` and revokes the
    * minted credential after the commit.
@@ -2541,7 +2551,9 @@ export interface RunOfferRepository {
    * a worker a usage limit stopped (`rate_limited`): its own pause refuses it at the claim until the
    * reset, and excluding it would leave a single-worker core with nobody to claim (TD-031's
    * 2026-11-05 amendment). `[]` for an entry with no offer yet, and for one whose newest offer a
-   * server claimant held. Each id once, in the order they were excluded.
+   * server claimant held. Each id once, in the order they were excluded. A carried machine of the
+   * task's owner is kept off the new offer only for `OWNER_EXCLUSION_BACKOFF_MS` from its
+   * `offered_at` (BACKLOG 1661, TD-031's 2026-11-26 amendment item 5): the owner keeps the task.
    */
   carriedExclusions(
     tx: Transaction,

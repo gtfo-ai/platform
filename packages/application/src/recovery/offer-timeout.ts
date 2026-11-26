@@ -65,15 +65,31 @@ export const OFFER_REROUTE_SITE = 'run_offer_reroute';
 /** `run_offers.withdrawn_reason` for an expired offer: a code, the column holds 64 characters. */
 export const OFFER_TIMEOUT_REASON = 'offer_timeout';
 
-/** The escalation's brief (TD-031 decision 1: *no claimant took this run*), naming when it expired. */
+/**
+ * The escalation's brief (TD-031 decision 1: *no claimant took this run*), naming when it expired —
+ * and, since BACKLOG 1661 (TD-031's 2026-11-26 amendment item 5), the task's **owner** when it has
+ * one: the owner keeps the task, so only their machines and machines that take everyone's tasks
+ * could have taken it, and "connect another worker" would be false advice.
+ */
 export const offerTimeoutBrief = (
-  offer: Pick<ExpiredRunOffer, 'offeredAt' | 'expiresAt' | 'blockedMachine'>,
+  offer: Pick<ExpiredRunOffer, 'offeredAt' | 'expiresAt' | 'blockedMachine' | 'owner'>,
 ): string => {
   const machine = offer.blockedMachine ?? null;
+  const owner = offer.owner ?? null;
+  const ownerName =
+    owner === null ? null : owner.name.trim() === '' ? 'its owner' : owner.name.slice(0, 200);
+  const head = `no claimant took this run: it was offered at ${offer.offeredAt} and nobody claimed it before its offer timeout at ${offer.expiresAt}.`;
+  const waitedFor =
+    ownerName === null
+      ? ''
+      : ` The task is ${ownerName}'s, so it waited for ${ownerName}'s machines (or a machine that takes everyone's tasks) and none of them took it.`;
   // S-28.12: a machine that handed the run back because it cannot start runs is named, with why.
-  return machine === null
-    ? `no claimant took this run: it was offered at ${offer.offeredAt} and nobody claimed it before its offer timeout at ${offer.expiresAt}. Check where this project's runs may execute (project settings, Execution) — a workers-only project needs a connected worker, a server-only project a server runner`
-    : `no claimant took this run: it was offered at ${offer.offeredAt} and nobody claimed it before its offer timeout at ${offer.expiresAt}. The machine that last took it, ${machine.name.slice(0, 200)}, cannot start runs: ${WORKSPACE_CAUSE_BRIEF[machine.cause]}. Fix it on that computer and press Try again on its page, or connect another worker; then retry the task`;
+  if (machine !== null) {
+    return `${head}${waitedFor} The machine that last took it, ${machine.name.slice(0, 200)}, cannot start runs: ${WORKSPACE_CAUSE_BRIEF[machine.cause]}. Fix it on that computer and press Try again on its page, ${ownerName === null ? 'or connect another worker' : 'or assign the task to someone with a connected worker'}; then retry the task`;
+  }
+  return ownerName === null
+    ? `${head} Check where this project's runs may execute (project settings, Execution) — a workers-only project needs a connected worker, a server-only project a server runner`
+    : `${head}${waitedFor} Start one of ${ownerName}'s workers, or assign the task to someone with a connected worker; then retry the task`;
 };
 
 /** S-28.12: a workspace failure's cause in the brief's words. */

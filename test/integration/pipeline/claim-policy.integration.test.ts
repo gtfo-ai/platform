@@ -30,6 +30,7 @@ import {
   createRemoteRuns,
   createTestRunPlanSealer,
   INITIAL_TASK_VERSION,
+  OWNER_EXCLUSION_BACKOFF_MS,
   type PipelineStore,
   type RunOfferClaim,
   routeNewOffer,
@@ -289,6 +290,8 @@ const offered = async (
   options: {
     readonly routing?: OfferRouting;
     readonly askedBy?: Id;
+    /** Workers the offer is not for (a re-planned entry's carried exclusions, TD-031 §12). */
+    readonly excluded?: readonly Id[];
   } = {},
 ): Promise<Id> => {
   const runId = nextId();
@@ -337,6 +340,7 @@ const offered = async (
         (options.askedBy === undefined
           ? workersRouting()
           : workersRouting({ assigneeUserId: options.askedBy })),
+      ...(options.excluded === undefined ? {} : { excludedWorkerIds: options.excluded }),
     });
   });
   if (options.askedBy !== undefined) {
@@ -974,5 +978,131 @@ describe('the list and the count (S-26.4, criterion 5)', () => {
     } finally {
       await pool.end();
     }
+  });
+});
+
+/**
+ * **The owner keeps the task** (BACKLOG 1661, TD-031's 2026-11-26 amendment item 5): an owner is not
+ * given back when a claim is released or its run is lost, so only their machines and `everything`
+ * machines take the later offers — and an offer's exclusion keeps the owner's own machine off only
+ * for `OWNER_EXCLUSION_BACKOFF_MS`, so the task waits for its owner instead of stranding.
+ */
+describe('the owner keeps the task: an owner’s excluded machine is eligible again after the backoff (BACKLOG 1661)', () => {
+  const BACKOFF = OWNER_EXCLUSION_BACKOFF_MS;
+
+  it('the owner’s only machine lost: the re-offer excludes it, another person’s mine_and_unassigned machine cannot take it, the owner’s machine takes it after the backoff, an everything machine at once', async () => {
+    const projectId = await project('ok');
+    const owner = await user([projectId], 'Owner');
+    const other = await user([projectId], 'Other');
+    const third = await user([projectId], 'Third');
+    const ownersMachine = await worker(owner, { policy: 'mine_and_unassigned' });
+    const othersMachine = await worker(other, { policy: 'mine_and_unassigned' });
+    const everyMachine = await worker(third, { policy: 'everything' });
+    const taskId = await task(projectId);
+    await own(taskId, owner);
+    // The re-planned entry's offer, carrying the lost machine (`carriedExclusions`), offered at NOW.
+    const runId = await offered(projectId, taskId, { excluded: [ownersMachine] });
+
+    // Inside the backoff: the owner's machine is still excluded, on both sides of the boundary.
+    expect(await automatic(ownersMachine, runId, false, NOW)).toBeNull();
+    expect(await automatic(ownersMachine, runId, false, addMs(NOW, BACKOFF - 1_000))).toBeNull();
+    // Another person's `mine_and_unassigned` machine: the task is owned, so not theirs — ever.
+    expect(await automatic(othersMachine, runId, false, NOW)).toBeNull();
+    expect(await automatic(othersMachine, runId, false, addMs(NOW, BACKOFF))).toBeNull();
+    // An `everything` machine of a third person takes it at once.
+    expect(await automatic(everyMachine, runId, false, NOW)).toBe(runId);
+    // The backoff passed: the owner's machine takes it — and the claim commits.
+    expect(await automatic(ownersMachine, runId, true, addMs(NOW, BACKOFF))).toBe(runId);
+    const [row] = await sql<{ state: string; worker_id: string }>(
+      'select state, worker_id from run_offers where run_id = $1',
+      [runId],
+    );
+    expect(row).toEqual({ state: 'claimed', worker_id: ownersMachine });
+  });
+
+  it('keeps an excluded machine of anybody but the owner off for the offer’s life, and an unowned task’s exclusions too', async () => {
+    const projectId = await project('ox');
+    const owner = await user([projectId]);
+    const other = await user([projectId]);
+    const othersMachine = await worker(other, { policy: 'everything' });
+    const owned = await task(projectId);
+    await own(owned, owner);
+    const ownedRun = await offered(projectId, owned, { excluded: [othersMachine] });
+    const longAfter = addMs(NOW, BACKOFF + 3_600_000);
+    expect(await automatic(othersMachine, ownedRun, false, longAfter)).toBeNull();
+
+    // Nobody owns it: no machine is "the owner's", so the exclusion has no backoff.
+    const unowned = await task(projectId);
+    const unownedRun = await offered(projectId, unowned, { excluded: [othersMachine] });
+    expect(await automatic(othersMachine, unownedRun, false, longAfter)).toBeNull();
+    // The control: the same machine, not excluded, takes an unowned task at once.
+    const control = await task(projectId);
+    const controlRun = await offered(projectId, control);
+    expect(await automatic(othersMachine, controlRun, false, NOW)).toBe(controlRun);
+  });
+
+  it('a provision_failed release excludes the owner’s machine until the backoff after released_at, and a usage limit until its pause ends as well', async () => {
+    const projectId = await project('or');
+    const owner = await user([projectId]);
+    const ownersMachine = await worker(owner, { policy: 'mine' });
+    const taskId = await task(projectId);
+    await own(taskId, owner);
+    const runId = await offered(projectId, taskId);
+    expect(await automatic(ownersMachine, runId, true, NOW)).toBe(runId);
+    const releasedAt = addMs(NOW, 60_000);
+    const released = await inTx(async (tx) =>
+      store.offers.release(tx, {
+        runId,
+        epoch: 1,
+        owner: `worker:${ownersMachine}`,
+        reason: 'provision_failed',
+        excludeWorkerId: ownersMachine,
+        now: releasedAt,
+      }),
+    );
+    expect(released.kind).toBe('released');
+    // Counted from the release, not from the offer: NOW + backoff is still inside it.
+    expect(await automatic(ownersMachine, runId, false, addMs(NOW, BACKOFF))).toBeNull();
+    expect(
+      await automatic(ownersMachine, runId, false, addMs(releasedAt, BACKOFF - 1_000)),
+    ).toBeNull();
+    expect(await automatic(ownersMachine, runId, false, addMs(releasedAt, BACKOFF))).toBe(runId);
+
+    // A usage limit pauses the machine past the backoff: it waits for the reset, whichever is later.
+    const reset = addMs(releasedAt, BACKOFF + 3_600_000);
+    await sql(
+      "update workers set paused_until = $2, paused_reason = 'usage_limited' where id = $1",
+      [ownersMachine, reset],
+    );
+    expect(await automatic(ownersMachine, runId, false, addMs(releasedAt, BACKOFF))).toBeNull();
+    expect(await automatic(ownersMachine, runId, false, reset)).toBe(runId);
+  });
+
+  it('the offer-timeout read names a stage offer’s owner — only when workers could take it', async () => {
+    const projectId = await project('ot');
+    const owner = await user([projectId], 'Vojtěch');
+    const expiry = addMs(NOW, 60_000);
+    const ownedTask = await task(projectId);
+    await own(ownedTask, owner);
+    const ownedRun = await offered(projectId, ownedTask, {
+      routing: workersRouting({ expiresAt: expiry }),
+    });
+    const unownedRun = await offered(projectId, await task(projectId), {
+      routing: workersRouting({ expiresAt: expiry }),
+    });
+    const serverTask = await task(projectId);
+    await own(serverTask, owner);
+    const serverRun = await offered(projectId, serverTask, {
+      routing: workersRouting({ serverFrom: PAST, workersFrom: null, expiresAt: expiry }),
+    });
+    const expired = await inTx(
+      async (tx) => store.offers.expiredOpen(tx, { now: expiry, limit: 1_000 }),
+      false,
+    );
+    const ownerOf = (runId: Id) => expired.find((offer) => offer.runId === runId)?.owner;
+    expect(ownerOf(ownedRun)).toEqual({ name: 'Vojtěch' });
+    expect(ownerOf(unownedRun)).toBeNull();
+    // `server_only`: no worker could take it, so its owner's machines are not what it waited for.
+    expect(ownerOf(serverRun)).toBeNull();
   });
 });
