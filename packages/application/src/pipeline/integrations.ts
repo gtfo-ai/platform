@@ -111,6 +111,7 @@ import type {
   TicketMatch,
   TicketMatchRule,
   TicketRefInput,
+  TicketSearchHit,
   TicketTransition,
   TransitionResult,
   UnassignResult,
@@ -1336,6 +1337,32 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
     }
     return read(integrations, binding.ref, 'list_statuses', {}, context, async () =>
       binding.port.listStatuses(),
+    );
+  },
+
+  /**
+   * The tickets a person's typed query names — the *Start a ticket* typeahead
+   * (`pipeline/ticket-search.ts`) — or `null` for a project with no task-management binding **or a
+   * provider that does not declare `ticketSearch`** (BD-017: the flag is asked, never a call that
+   * would throw; the dialog then offers the plain key). A read, outside every transaction and any
+   * run; its audit row carries the query's length and the limit, never the typed text.
+   */
+  search: async (
+    query: string,
+    limit: number,
+    context: CallContext,
+  ): Promise<readonly TicketSearchHit[] | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || binding.port.capabilities().ticketSearch !== true) {
+      return null;
+    }
+    return read(
+      integrations,
+      binding.ref,
+      'search_tickets',
+      { query_chars: query.length, limit },
+      context,
+      async () => binding.port.searchTickets(query, { limit }),
     );
   },
 

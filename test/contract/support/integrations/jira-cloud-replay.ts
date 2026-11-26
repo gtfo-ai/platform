@@ -82,6 +82,13 @@
  *     as served. The documents are the same on both roots, because the gateway serves the site's
  *     REST API; the `self` links inside them are left on the site — what the gateway writes there is
  *     not measured, and the adapter builds no link from `self` (`mapping.ts` uses `site_url`).
+ * 18. **Stricter — the typeahead's two JQL shapes are parsed exactly** (*Start a ticket*): the key
+ *     form `project = "P" AND (key = "P-N" OR (key >= "P-A" AND key <= "P-B") …) ORDER BY key ASC`
+ *     (or `project = "P" ORDER BY created DESC`) and the words form `[project in (…) AND ]summary ~
+ *     "w*"[ AND …] ORDER BY updated DESC`, as `buildTicketSearchJql` writes them, anything else of
+ *     that kind refused like divergence 2. Key ranges compare the number within the project, as Jira
+ *     orders issue keys (measured: a bound naming no issue matches none and refuses nothing); a
+ *     word matches a summary word it **starts**, where Jira's text search also stems — stricter.
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -246,6 +253,15 @@ const JQL_WINDOW = /AND updated >= "-(\d+)m"/;
 /** Divergence 16 (S-28.4): the pick-up poll's two status constraints. */
 const JQL_STATUS_IN = / AND status in \(((?:"(?:[^"\\]|\\.)*"(?:, )?)+)\)/;
 const JQL_STATUS_CATEGORY = / AND statusCategory = "([^"]+)"/;
+
+/** Divergence 18: the typeahead's key form and words form (`buildTicketSearchJql`). */
+const JQL_SUGGEST_KEY =
+  /^project = "([A-Z][A-Z0-9_]*)"(?: AND \((.+)\))? ORDER BY (key ASC|created DESC)$/;
+const JQL_SUGGEST_EXACT = /^key = "([A-Z][A-Z0-9_]*)-([0-9]+)"$/;
+const JQL_SUGGEST_RANGE =
+  /^\(key >= "([A-Z][A-Z0-9_]*)-([0-9]+)" AND key <= "([A-Z][A-Z0-9_]*)-([0-9]+)"\)$/;
+const JQL_SUGGEST_WORDS =
+  /^(?:project in \(((?:"[A-Z][A-Z0-9_]*"(?:, )?)+)\) AND )?(summary ~ "[^"\\*]+\*"(?: AND summary ~ "[^"\\*]+\*")*) ORDER BY updated DESC$/u;
 
 /**
  * Divergence 15 (PROGRESS backlog 540): the issue as Jira answers it for a `fields` request.
@@ -469,6 +485,75 @@ export const createJiraReplay = (
   };
 
   /**
+   * Divergence 18: the typeahead's search, or `null` for a JQL that is not one of its two forms.
+   * A form it recognises but cannot read throws (a harness error), like divergence 2.
+   */
+  const suggestIssues = (jql: string): Record<string, unknown>[] | null => {
+    const numberOf = (key: string): number => Number(key.slice(key.indexOf('-') + 1));
+    const projectOf = (key: string): string => key.slice(0, key.indexOf('-'));
+    const keyForm = JQL_SUGGEST_KEY.exec(jql);
+    if (keyForm !== null) {
+      const project = keyForm[1] ?? '';
+      const ranges: { from: number; to: number }[] = [];
+      for (const clause of keyForm[2] === undefined ? [] : keyForm[2].split(' OR ')) {
+        const exact = JQL_SUGGEST_EXACT.exec(clause);
+        const range = exact === null ? JQL_SUGGEST_RANGE.exec(clause) : null;
+        if (exact !== null && exact[1] === project) {
+          ranges.push({ from: Number(exact[2]), to: Number(exact[2]) });
+        } else if (range !== null && range[1] === project && range[3] === project) {
+          ranges.push({ from: Number(range[2]), to: Number(range[4]) });
+        } else {
+          throw new Error(`jira replay: unsupported key clause "${clause}" in "${jql}"`);
+        }
+      }
+      const found = [...issues.values()].filter((issue) => {
+        const key = issue.key as string;
+        return (
+          projectOf(key) === project &&
+          (keyForm[2] === undefined ||
+            ranges.some((range) => numberOf(key) >= range.from && numberOf(key) <= range.to))
+        );
+      });
+      return keyForm[3] === 'key ASC'
+        ? found.toSorted(
+            (left, right) => numberOf(left.key as string) - numberOf(right.key as string),
+          )
+        : found.toSorted((left, right) =>
+            String((right.fields as Record<string, unknown>).created ?? '').localeCompare(
+              String((left.fields as Record<string, unknown>).created ?? ''),
+            ),
+          );
+    }
+    const wordsForm = JQL_SUGGEST_WORDS.exec(jql);
+    if (wordsForm === null) {
+      return null;
+    }
+    const scope =
+      wordsForm[1] === undefined
+        ? null
+        : [...wordsForm[1].matchAll(/"([^"]+)"/g)].map((literal) => literal[1] ?? '');
+    const words = [...(wordsForm[2] ?? '').matchAll(/summary ~ "([^"]+)\*"/g)].map(
+      (literal) => literal[1] ?? '',
+    );
+    const updatedOf = (issue: Record<string, unknown>): number =>
+      Date.parse(String((issue.fields as Record<string, unknown>).updated ?? ''));
+    return [...issues.values()]
+      .filter((issue) => {
+        const key = issue.key as string;
+        const summaryWords =
+          String((issue.fields as Record<string, unknown>).summary ?? '')
+            .normalize('NFKC')
+            .toLowerCase()
+            .match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+        return (
+          (scope === null || scope.includes(projectOf(key))) &&
+          words.every((word) => summaryWords.some((candidate) => candidate.startsWith(word)))
+        );
+      })
+      .toSorted((left, right) => updatedOf(right) - updatedOf(left));
+  };
+
+  /**
    * Divergence 1, as a response rather than as a `throw`.
    *
    * The client deliberately drops a thrown transport error (it carries the `Authorization`
@@ -505,6 +590,21 @@ export const createJiraReplay = (
     }
     if (method === 'GET' && path === 'search/jql') {
       const jql = query.jql ?? '';
+      let suggested: Record<string, unknown>[] | null;
+      try {
+        suggested = suggestIssues(jql);
+      } catch (error) {
+        return harnessError(error instanceof Error ? error.message : String(error));
+      }
+      if (suggested !== null) {
+        const limit = Number(query.maxResults ?? '50');
+        return jsonResponse(200, {
+          isLast: suggested.length <= limit,
+          issues: suggested
+            .slice(0, Math.min(limit, REPLAY_SEARCH_PAGE_CAP))
+            .map((issue) => projectIssueFields(clone(issue), query.fields, 'id')),
+        });
+      }
       if (!JQL_CLAUSE.test(jql) && !JQL_KEYS.test(jql) && !JQL_IDS.test(jql)) {
         return harnessError(`jira replay: unsupported JQL "${jql}"`);
       }

@@ -38,8 +38,10 @@ import {
   LIFECYCLE_MEMBER_CAPABILITY,
   lifecycleStatusSchema,
   normaliseStatusCategory,
+  parseTicketSearchQuery,
   ticketPollPlanSchema,
   ticketSchema,
+  ticketSearchHitSchema,
   ticketTransitionSchema,
   unassignResultSchema,
 } from '@platform/application';
@@ -956,6 +958,85 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
 
       it('assigns the ticket to a person the tracker holds, and refuses one it does not (S-26.3)', async () => {
         await eitherBranch(context, ['assignTo'], checkAssignTo);
+      });
+    });
+
+    /**
+     * The *Start a ticket* typeahead (`searchTickets`): one obligation for every provider, so the
+     * dialog suggests the same tickets whichever tracker a project binds. Each clause runs the
+     * refusal branch for a provider that does not declare `ticketSearch`.
+     */
+    describe('searching tickets (the Start a ticket typeahead)', () => {
+      const declaresSearch = (): boolean => port.capabilities().ticketSearch;
+
+      it('refuses by name when it does not declare ticketSearch', async () => {
+        if (declaresSearch()) {
+          return;
+        }
+        await expectIntegrationError(
+          () => port.searchTickets(context.ticket.key, { limit: 5 }),
+          'unsupported_capability',
+        );
+      });
+
+      it('finds a ticket by its key typed in any case, first, with its title and status', async () => {
+        if (!declaresSearch()) {
+          return;
+        }
+        const ticket = await port.readTicket(context.ticket);
+        const hits = await port.searchTickets(ticket.ref.key.toLowerCase(), { limit: 5 });
+        for (const hit of hits) {
+          expect(ticketSearchHitSchema.safeParse(hit).success, hit.ref.key).toBe(true);
+        }
+        expect(hits[0]?.ref.key, 'the exact key first').toBe(ticket.ref.key);
+        expect(hits[0]?.title).toBe(ticket.title);
+        expect(hits[0]?.status).toBe(ticket.status);
+        expect(hits[0]?.status_category ?? null).toBe(ticket.status_category ?? null);
+      });
+
+      it('finds a ticket by the start of a word of its summary', async () => {
+        if (!declaresSearch()) {
+          return;
+        }
+        const ticket = await port.readTicket(context.ticket);
+        const parsed = parseTicketSearchQuery(ticket.title);
+        const word = parsed?.kind === 'words' ? parsed.words.find((w) => w.length >= 4) : undefined;
+        expect(word, 'the seeded title has a word of four letters or more').toBeDefined();
+        const prefix = (word ?? '').slice(0, 3).toUpperCase();
+        const hits = await port.searchTickets(prefix, { limit: 10 });
+        expect(hits.map((hit) => hit.ref.key)).toContain(ticket.ref.key);
+        // A word nothing starts finds nothing — the read is a search, not a list.
+        expect(await port.searchTickets('zqxjv', { limit: 10 })).toEqual([]);
+      });
+
+      it('holds the limit, and answers nothing for a query with nothing searchable', async () => {
+        if (!declaresSearch()) {
+          return;
+        }
+        const project = context.ticket.key.slice(0, context.ticket.key.indexOf('-'));
+        expect((await port.searchTickets(`${project}-`, { limit: 1 })).length).toBeLessThanOrEqual(
+          1,
+        );
+        expect(await port.searchTickets('  "*" ', { limit: 5 })).toEqual([]);
+      });
+
+      it('answers a hostile query with valid hits inside the binding’s scope, never a throw', async () => {
+        if (!declaresSearch()) {
+          return;
+        }
+        for (const hostile of [
+          '") OR project != "X',
+          'invoice" OR assignee = currentUser() OR summary ~ "',
+          'a\\" OR 1=1 --',
+          '*?~^:[]{}()+!&|',
+        ]) {
+          const hits = await port.searchTickets(hostile, { limit: 5 });
+          expect(hits.length, hostile).toBeLessThanOrEqual(5);
+          for (const hit of hits) {
+            expect(ticketSearchHitSchema.safeParse(hit).success, hostile).toBe(true);
+            expect(port.ticketScope(hit.ref.key).kind, hostile).not.toBe('out_of_scope');
+          }
+        }
       });
     });
 

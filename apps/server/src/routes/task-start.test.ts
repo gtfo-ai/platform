@@ -15,12 +15,16 @@ import {
   ManualStartRefusedError,
   StreamConflictError,
 } from '@platform/application';
-import type { Id, UserRole } from '@platform/contracts';
+import { type Id, MAX_TICKET_SEARCH_QUERY_CHARS, type UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
-import { manualStartAuditParams, type TaskStartCommands } from '../task-start.js';
+import {
+  manualStartAuditParams,
+  type TaskStartCommands,
+  type TicketSearchServed,
+} from '../task-start.js';
 import { type MemoryAttempt, memoryAttemptRecords } from './idempotency-memory.js';
 import { MANUAL_START_REFUSALS, registerTaskStartRoutes } from './task-start.js';
 
@@ -34,13 +38,23 @@ interface World {
   signedIn: boolean;
   projectExists: boolean;
   throws: Error | null;
+  search: TicketSearchServed;
 }
 
 let app: FastifyInstance;
 let world: World;
 let calls: { projectId: string; ticketKey: string; userId: string; key: string }[];
+let searches: { projectId: string; query: string }[];
 let audits: Record<string, unknown>[];
 let attempts: Map<string, MemoryAttempt>;
+
+const SUGGESTION = {
+  ref: { provider: 'fake-jira', key: 'ACME-12', url: 'https://jira.example.test/browse/ACME-12' },
+  title: 'Invoice PDF layout',
+  status: 'To pick up',
+  status_category: 'todo',
+  startable: true,
+} as const;
 
 const started = (key: string): ManualStartRecord => ({
   eventId: EVENT as Id,
@@ -49,9 +63,16 @@ const started = (key: string): ManualStartRecord => ({
 
 const build = async (): Promise<void> => {
   calls = [];
+  searches = [];
   audits = [];
   attempts = new Map();
-  world = { role: 'member', signedIn: true, projectExists: true, throws: null };
+  world = {
+    role: 'member',
+    signedIn: true,
+    projectExists: true,
+    throws: null,
+    search: { status: 'ok', items: [SUGGESTION] },
+  };
 
   app = fastify();
   app.setValidatorCompiler(validatorCompiler);
@@ -74,6 +95,10 @@ const build = async (): Promise<void> => {
   });
 
   const commands: TaskStartCommands = {
+    search: async (input) => {
+      searches.push({ projectId: input.projectId, query: input.query });
+      return world.search;
+    },
     start: async (input) => {
       calls.push({
         projectId: input.projectId,
@@ -289,6 +314,86 @@ describe('POST /api/projects/:project_id/tasks (WP-122)', () => {
     await bare.ready();
     const response = await post({ ticket_key: 'ACME-7' }, { 'idempotency-key': 'start-1' }, bare);
     expect(verdict(response)).toBe('503 task_start_unavailable');
+    await bare.close();
+  });
+});
+
+describe('GET /api/projects/:project_id/ticket-search (the Start a ticket typeahead)', () => {
+  const search = (query: string) =>
+    app.inject({
+      method: 'GET',
+      url: `/api/projects/${PROJECT}/ticket-search?${new URLSearchParams({ q: query }).toString()}`,
+    });
+
+  it('answers the command’s suggestions for a member, with the query trimmed', async () => {
+    const response = await search('  acme-12 ');
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ items: [SUGGESTION] });
+    expect(searches).toEqual([{ projectId: PROJECT, query: 'acme-12' }]);
+  });
+
+  it('is task.create’s, like the start: 401 anonymous, 403 for a viewer, and no search', async () => {
+    world.signedIn = false;
+    expect(verdict(await search('ACME'))).toBe('401 unauthenticated');
+    world.signedIn = true;
+    world.role = 'viewer';
+    expect((await search('ACME')).statusCode).toBe(403);
+    world.role = 'member';
+    expect((await search('ACME')).statusCode).toBe(200);
+    expect(searches).toHaveLength(1);
+  });
+
+  it('refuses an empty query and one past the bound with 400, never cutting it', async () => {
+    expect((await search('   ')).statusCode).toBe(400);
+    expect((await search('x'.repeat(MAX_TICKET_SEARCH_QUERY_CHARS + 1))).statusCode).toBe(400);
+    expect(searches).toEqual([]);
+    expect((await search('x'.repeat(MAX_TICKET_SEARCH_QUERY_CHARS))).statusCode).toBe(200);
+  });
+
+  it('answers each "no suggestions" case by name', async () => {
+    world.search = { status: 'no_binding' };
+    expect(verdict(await search('ACME'))).toBe('409 no_task_management_binding');
+    world.search = { status: 'unsupported' };
+    expect(verdict(await search('ACME'))).toBe('409 ticket_search_unsupported');
+    world.search = { status: 'unavailable', reason: 'the tracker did not answer within 5000 ms' };
+    const unavailable = await search('ACME');
+    expect(verdict(unavailable)).toBe('503 ticket_search_unavailable');
+    expect(unavailable.body).toContain('type the full key');
+    world.projectExists = false;
+    expect((await search('ACME')).statusCode).toBe(404);
+  });
+
+  it('answers 503 by name on a process that composed no integrations', async () => {
+    const bare = fastify();
+    bare.setValidatorCompiler(validatorCompiler);
+    bare.setSerializerCompiler(serializerCompiler);
+    bare.setErrorHandler(async (error, _request, reply) => {
+      const mapped = toApiError(error, 'test-request');
+      return reply.status(mapped.statusCode).send(mapped.body);
+    });
+    bare.addHook('onRequest', async (request) => {
+      request.actor = {
+        userId: USER,
+        email: 'member@example.test',
+        name: 'Member',
+        role: 'viewer',
+        sessionId: 'session-1',
+      };
+    });
+    await registerTaskStartRoutes(bare, {
+      commands: null,
+      queries: {
+        projectRole: async () => 'member',
+        projectExists: async () => true,
+        ...memoryAttemptRecords(new Map()),
+      },
+    });
+    await bare.ready();
+    const response = await bare.inject({
+      method: 'GET',
+      url: `/api/projects/${PROJECT}/ticket-search?q=ACME`,
+    });
+    expect(verdict(response)).toBe('503 ticket_search_unavailable');
     await bare.close();
   });
 });

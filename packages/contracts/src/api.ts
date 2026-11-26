@@ -36,6 +36,8 @@ import {
   isoDateTimeSchema,
   knowledgeProposalStatusSchema,
   MAX_PROPOSAL_DELTA_BYTES,
+  MAX_TICKET_SEARCH_QUERY_CHARS,
+  MAX_TICKET_SEARCH_RESULTS,
   MAX_TICKET_STATUSES,
   mergeRequestRefSchema,
   nonEmptyStringSchema,
@@ -54,6 +56,7 @@ import {
   templateIdSchema,
   ticketRefSchema,
   ticketStatusSchema,
+  ticketSuggestionSchema,
   unitIntervalSchema,
   urlSchema,
   usdSchema,
@@ -1141,6 +1144,30 @@ export const putProjectBindingsRequestSchema = z.strictObject({
  */
 export const ticketStatusesResponseSchema = z.strictObject({
   items: z.array(ticketStatusSchema).max(MAX_TICKET_STATUSES),
+});
+
+/**
+ * `GET /api/projects/:project_id/ticket-search?q=` — the *Start a ticket* dialog's typeahead. `q`
+ * is a key fragment (`ACME-12`) or words of a summary; trimmed, 1 to
+ * {@link MAX_TICKET_SEARCH_QUERY_CHARS} characters, refused (`400`) past that rather than cut.
+ */
+export const ticketSearchQuerySchema = z.strictObject({
+  q: z.string().trim().min(1).max(MAX_TICKET_SEARCH_QUERY_CHARS),
+});
+
+/**
+ * One suggestion: the tracker's ticket ({@link ticketSuggestionSchema}) and whether starting it
+ * would start work — `true` when the project's status policy takes its status (the check
+ * `POST …/tasks` makes, `intakeStatusDecision`), `false` when it would be refused
+ * `ticket_status_not_startable`. A hint for the person, never a decision: the start judges the
+ * ticket again after its own read.
+ */
+export const ticketSearchItemSchema = ticketSuggestionSchema.extend({
+  startable: z.boolean(),
+});
+
+export const ticketSearchResponseSchema = z.strictObject({
+  items: z.array(ticketSearchItemSchema).max(MAX_TICKET_SEARCH_RESULTS),
 });
 
 /** How many skipped tickets `GET …/skipped-tickets` answers, at most (S-28.5): the newest. */
@@ -4504,6 +4531,8 @@ export type ProjectExecutionResponse = z.infer<typeof projectExecutionResponseSc
 export type CiConfigLocationDto = z.infer<typeof ciConfigLocationSchema>;
 export type PutProjectBindingsRequest = z.infer<typeof putProjectBindingsRequestSchema>;
 export type TicketStatusesResponse = z.infer<typeof ticketStatusesResponseSchema>;
+export type TicketSearchItem = z.infer<typeof ticketSearchItemSchema>;
+export type TicketSearchResponse = z.infer<typeof ticketSearchResponseSchema>;
 export type LifecycleErrorCode = z.infer<typeof lifecycleErrorCodeSchema>;
 export type StartDiscoveryResponse = z.infer<typeof startDiscoveryResponseSchema>;
 export type RediscoveryGateResponse = z.infer<typeof rediscoveryGateResponseSchema>;

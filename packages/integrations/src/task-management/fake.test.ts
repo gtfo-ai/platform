@@ -510,3 +510,59 @@ describe('the status policy (divergence 20, S-28.4)', () => {
     ).toEqual(['FAKE-2']);
   });
 });
+
+describe('searchTickets (divergence 22, the Start a ticket typeahead)', () => {
+  const seeded = (options: Partial<Options> = {}) =>
+    build({
+      tickets: [
+        { key: 'ACME-1', title: 'Invoice totals are wrong' },
+        { key: 'ACME-12', title: 'Invoice PDF layout' },
+        { key: 'ACME-120', title: 'Billing export' },
+        { key: 'ACME-2', title: 'Reinvoice later' },
+        { key: 'OPS-12', title: 'Invoice runbook' },
+      ],
+      ...options,
+    });
+
+  it('answers a key prefix by number, the exact key first, ascending', async () => {
+    const port = seeded();
+    const hits = await port.searchTickets('acme-12', { limit: 10 });
+    expect(hits.map((hit) => hit.ref.key)).toEqual(['ACME-12', 'ACME-120']);
+  });
+
+  it('matches word prefixes only, never a substring (stricter than Jira’s stemming)', async () => {
+    const port = seeded();
+    const hits = await port.searchTickets('invoice', { limit: 10 });
+    expect(hits.map((hit) => hit.ref.key).toSorted()).toEqual(['ACME-1', 'ACME-12', 'OPS-12']);
+    expect(hits.map((hit) => hit.ref.key)).not.toContain('ACME-2');
+  });
+
+  it('keeps to projectKeys and asks nothing for a key outside them', async () => {
+    const port = seeded({ projectKeys: ['ACME'] });
+    expect(
+      (await port.searchTickets('invoice', { limit: 10 })).map((hit) => hit.ref.key),
+    ).not.toContain('OPS-12');
+    port.core.resetCalls();
+    expect(await port.searchTickets('OPS-12', { limit: 10 })).toEqual([]);
+    expect(await port.searchTickets('"*"', { limit: 10 })).toEqual([]);
+    expect(port.core.calls).toEqual([]);
+  });
+
+  it('refuses by name when ticketSearch is off', async () => {
+    const port = seeded({ capabilities: { ticketSearch: false } });
+    await expect(port.searchTickets('ACME-1', { limit: 5 })).rejects.toMatchObject({
+      code: 'unsupported_capability',
+    });
+  });
+
+  it('throws what a test scripted for search_tickets', async () => {
+    const port = seeded();
+    port.core.script.failNext(
+      'search_tickets',
+      new IntegrationRateLimitedError('fake-task-management', 'slow down', { retryAfterMs: 1000 }),
+    );
+    await expect(port.searchTickets('invoice', { limit: 5 })).rejects.toBeInstanceOf(
+      IntegrationRateLimitedError,
+    );
+  });
+});

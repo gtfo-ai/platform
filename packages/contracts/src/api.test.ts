@@ -58,12 +58,19 @@ import {
   taskReturnSchema,
   taskStopSchema,
   tasksResponseSchema,
+  ticketSearchQuerySchema,
+  ticketSearchResponseSchema,
   ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
   updateSubscriptionsRequestSchema,
   webhookDeliverySchema,
 } from './api.js';
-import { MAX_TICKET_STATUSES } from './common.js';
+import {
+  MAX_TICKET_SEARCH_QUERY_CHARS,
+  MAX_TICKET_SEARCH_RESULTS,
+  MAX_TICKET_STATUSES,
+  MAX_TICKET_SUGGESTION_TITLE_CHARS,
+} from './common.js';
 
 const uuid = (n: number) => `0199aa11-2b3c-7d4e-8f90-${String(n).padStart(12, '0')}`;
 const AT = '2026-09-09T10:15:30Z';
@@ -1298,6 +1305,59 @@ describe('PATCH /api/integrations/:id (WP-100)', () => {
     expect(patchIntegrationRequestSchema.safeParse({ config: {}, secret_refs: {} }).success).toBe(
       false,
     );
+  });
+});
+
+/** The *Start a ticket* typeahead: the query's bounds and the answer's. */
+describe('ticket search', () => {
+  const item = {
+    ref: {
+      provider: 'jira-cloud',
+      key: 'ACME-12',
+      url: 'https://acme-example.atlassian.net/browse/ACME-12',
+    },
+    title: 'Invoice PDF layout',
+    status: 'To pick up',
+    status_category: 'todo',
+    startable: true,
+  };
+
+  it('trims the query and refuses an empty one and one past the bound, never cutting it', () => {
+    expect(ticketSearchQuerySchema.parse({ q: '  acme-12 ' })).toEqual({ q: 'acme-12' });
+    expect(ticketSearchQuerySchema.safeParse({ q: '   ' }).success).toBe(false);
+    expect(
+      ticketSearchQuerySchema.safeParse({ q: 'x'.repeat(MAX_TICKET_SEARCH_QUERY_CHARS) }).success,
+    ).toBe(true);
+    expect(
+      ticketSearchQuerySchema.safeParse({ q: 'x'.repeat(MAX_TICKET_SEARCH_QUERY_CHARS + 1) })
+        .success,
+    ).toBe(false);
+    expect(ticketSearchQuerySchema.safeParse({ q: 'a', limit: 50 }).success).toBe(false);
+  });
+
+  it('holds the answer at MAX_TICKET_SEARCH_RESULTS and a title at its bound', () => {
+    const many = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        ...item,
+        ref: { ...item.ref, key: `ACME-${index + 1}` },
+      }));
+    expect(ticketSearchResponseSchema.parse({ items: [item] })).toEqual({ items: [item] });
+    expect(
+      ticketSearchResponseSchema.safeParse({ items: many(MAX_TICKET_SEARCH_RESULTS) }).success,
+    ).toBe(true);
+    expect(
+      ticketSearchResponseSchema.safeParse({ items: many(MAX_TICKET_SEARCH_RESULTS + 1) }).success,
+    ).toBe(false);
+    expect(
+      ticketSearchResponseSchema.safeParse({
+        items: [{ ...item, title: 'x'.repeat(MAX_TICKET_SUGGESTION_TITLE_CHARS + 1) }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ticketSearchResponseSchema.safeParse({ items: [{ ...item, status_category: null }] }).success,
+    ).toBe(true);
+    const { startable: _startable, ...noVerdict } = item;
+    expect(ticketSearchResponseSchema.safeParse({ items: [noVerdict] }).success).toBe(false);
   });
 });
 

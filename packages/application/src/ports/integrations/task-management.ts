@@ -19,12 +19,15 @@ import {
   isoDateTimeSchema,
   MAX_LIFECYCLE_POLICY_STATUSES,
   MAX_LIFECYCLE_STATUS_NAME_CHARS,
+  MAX_TICKET_SEARCH_QUERY_CHARS,
+  MAX_TICKET_SEARCH_RESULTS,
   nonEmptyStringSchema,
   type TicketStatusCategory,
   ticketIdSchema,
   ticketRefSchema,
   ticketStatusCategorySchema,
   ticketStatusSchema,
+  ticketSuggestionSchema,
   urlSchema,
   workpadRefSchema,
 } from '@platform/contracts';
@@ -433,6 +436,66 @@ export type TicketPollPlan = z.infer<typeof ticketPollPlanSchema>;
 export type TransitionResult = z.infer<typeof transitionResultSchema>;
 export type TicketDraft = z.infer<typeof ticketDraftSchema>;
 
+// ── The ticket search (the *Start a ticket* typeahead) ──────────────────────
+
+/**
+ * One ticket {@link TaskManagementPort.searchTickets} answers — the contracts'
+ * `ticketSuggestionSchema`, named here so the port reads as one document. Untrusted provider text.
+ */
+export const ticketSearchHitSchema = ticketSuggestionSchema;
+export type TicketSearchHit = z.infer<typeof ticketSearchHitSchema>;
+
+/** The most words one search asks for, and the longest word it keeps (longer is cut, never sent). */
+export const MAX_TICKET_SEARCH_WORDS = 5;
+export const MAX_TICKET_SEARCH_WORD_CHARS = 40;
+
+/**
+ * What a person's typed query **means** to every provider — one reading, so the fake and each
+ * adapter search for the same thing.
+ *
+ *  - `key`: the text is shaped like a ticket key or its prefix (`acme-12`, `ACME-`): a project part
+ *    (a letter, then letters, digits or `_`) upper-cased, a dash, and zero to twelve digits. A
+ *    provider answers the tickets of that project whose number **starts with** `number` (all of the
+ *    project's when it is empty), the exact key first.
+ *  - `words`: anything else is read as words of a summary — maximal runs of Unicode letters, marks
+ *    and digits, NFKC-folded and lower-cased, at least two characters, at most
+ *    {@link MAX_TICKET_SEARCH_WORDS} distinct ones, each cut to {@link MAX_TICKET_SEARCH_WORD_CHARS}.
+ *    A provider answers the tickets whose summary has, **for every word**, a word starting with it.
+ *    Everything else the person typed — quotes, operators, wildcards, backslashes — is dropped here,
+ *    so no punctuation of theirs ever reaches a provider's query language (BD-022).
+ *
+ * `null` when nothing searchable is left (an empty query, punctuation only, one-letter words): the
+ * provider then makes **no** call and answers no tickets.
+ */
+export type TicketSearchQuery =
+  | { readonly kind: 'key'; readonly project: string; readonly number: string }
+  | { readonly kind: 'words'; readonly words: readonly string[] };
+
+const KEY_SHAPED_QUERY = /^([A-Za-z][A-Za-z0-9_]{0,63})-([0-9]{0,12})$/;
+const SEARCH_WORD = /[\p{L}\p{M}\p{N}]+/gu;
+
+export const parseTicketSearchQuery = (text: string): TicketSearchQuery | null => {
+  const trimmed = text.trim().slice(0, MAX_TICKET_SEARCH_QUERY_CHARS);
+  const key = KEY_SHAPED_QUERY.exec(trimmed);
+  if (key !== null) {
+    return { kind: 'key', project: (key[1] ?? '').toUpperCase(), number: key[2] ?? '' };
+  }
+  const words = [
+    ...new Set(
+      (trimmed.normalize('NFKC').toLowerCase().match(SEARCH_WORD) ?? [])
+        .filter((word) => [...word].length >= 2)
+        .map((word) => [...word].slice(0, MAX_TICKET_SEARCH_WORD_CHARS).join('')),
+    ),
+  ].slice(0, MAX_TICKET_SEARCH_WORDS);
+  return words.length === 0 ? null : { kind: 'words', words };
+};
+
+/** {@link TaskManagementPort.searchTickets}' options: how many tickets, at most. */
+export const ticketSearchOptionsSchema = z.strictObject({
+  limit: z.int().min(1).max(MAX_TICKET_SEARCH_RESULTS),
+});
+export type TicketSearchOptions = z.input<typeof ticketSearchOptionsSchema>;
+
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
 /**
@@ -469,6 +532,11 @@ export interface TaskManagementCapabilities {
   readonly assignOthers: boolean;
   /** `listComments` — the human-return window's re-read (WP-171, TD-029). */
   readonly commentsRead: boolean;
+  /**
+   * `searchTickets` — the *Start a ticket* typeahead. A provider without it throws
+   * `IntegrationUnsupportedError` naming the member, and the dialog falls back to the plain key.
+   */
+  readonly ticketSearch: boolean;
 }
 
 /** Catalogue events a task-management delivery can produce (technical/02). */
@@ -670,6 +738,27 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
     ref: TicketRefInput,
     options: ListCommentsOptions,
   ) => Promise<CommentPage>;
+
+  /**
+   * The tickets a person's typed query names — the *Start a ticket* dialog's suggestions. The query
+   * is read by {@link parseTicketSearchQuery}, so every provider searches for the same thing, and it
+   * is **never** spliced into a query language as typed. Obligations, each held by the shared
+   * contract suite:
+   *
+   *  - at most `options.limit` tickets ({@link MAX_TICKET_SEARCH_RESULTS}), one provider request,
+   *    and **no** request for a query that parses to `null`;
+   *  - only tickets inside {@link ticketScope} (a key-shaped query whose project is outside the
+   *    declared scope makes no request);
+   *  - a key-shaped query answers the exact key first; a query the tracker refuses as unanswerable
+   *    is no tickets, never a throw — a transport or credential failure still throws;
+   *  - declared by `ticketSearch`; without it, `IntegrationUnsupportedError` naming the member.
+   *
+   * A read, through the executor (`ticketReads.search`).
+   */
+  readonly searchTickets: (
+    query: string,
+    options: TicketSearchOptions,
+  ) => Promise<readonly TicketSearchHit[]>;
 
   readonly inbound: InboundNormaliser<TaskManagementInboundEvent>;
 }

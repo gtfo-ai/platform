@@ -228,3 +228,16 @@ a label and pointing the URL at a domain that does not exist changed no test at 
   account, `accountType: customer`, **inferred** from the user schema's documented `accountType`
   values: no Atlassian page shows a customer's webhook comment). The code in them is the obviously
   fake `agentic-link-7K3Q9VDM2X` the integration test draws. Not measured against a live site.
+
+- **The *Start a ticket* typeahead's JQL, measured** (2026-11-26, no fixture). `buildTicketSearchJql`
+  writes two shapes, and both were run against a Jira Cloud site through the Atlassian MCP
+  connector's JQL search — **not** through this adapter's client, so the request path, headers and
+  the gateway were not part of the measurement. What was observed: `project in ("P") AND (key =
+  "P-12" OR (key >= "P-120" AND key <= "P-129") OR …)` answered the exact key and the range in key
+  order; a range whose bounds name no issue, and `key = "P-<a number past the last issue>"`, answered
+  **no issues and no error**; `summary ~ "<word>*"` answered the summaries with a word starting
+  with it (Jira also stems). Atlassian's knowledge-base answer above says a search naming an issue
+  key that does not exist is a `400`; the adapter therefore still treats a `400` as "no
+  suggestions" (`search.test.ts`), and the replay serves both shapes (its divergence 18). The
+  responses were the site's own tickets and are not reproduced here (BD-002); `search.test.ts`
+  composes its bodies from `search-jql.json`'s shape with this repository's invented keys.

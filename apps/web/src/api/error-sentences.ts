@@ -535,6 +535,10 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
   ticket_status_not_startable:
     'That ticket is in a status this project does not start work from, or one that means it is finished. Move it to a status work starts from in the tracker, or change those statuses in the project’s tracker settings.',
   ticket_unreadable: 'The ticket tracker did not answer. Try again in a moment.',
+  ticket_search_unsupported:
+    'This project’s ticket tracker cannot be searched, so there are no suggestions. Type the full ticket key.',
+  ticket_search_unavailable:
+    'The ticket tracker could not be searched just now, so there are no suggestions. Type the full ticket key.',
   lifecycle_status_unknown:
     'The tracker has no status by some of the names you chose. Pick them from the tracker’s list.',
   lifecycle_statuses_unavailable:

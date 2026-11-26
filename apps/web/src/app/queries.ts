@@ -238,6 +238,27 @@ export const useTicketStatuses = (projectId: string | null, trackerId: string | 
   });
 };
 
+/**
+ * The *Start a ticket* typeahead (`GET /api/projects/:id/ticket-search`). Asked only for a query of
+ * {@link TICKET_SEARCH_MIN_CHARS} or more (the caller debounces it), keyed by the trimmed query so a
+ * repeat is answered from the cache for a minute, and **not retried**: every read is a provider
+ * call on the binding's budget, and a 409/503 is the server's "no suggestions", which the dialog
+ * shows as a quiet note. React Query's `signal` aborts the request of a query the person typed past.
+ */
+export const TICKET_SEARCH_MIN_CHARS = 2;
+
+export const useTicketSearch = (projectId: string, query: string) => {
+  const { endpoints } = useServices();
+  const trimmed = query.trim();
+  return useQuery({
+    queryKey: queryKeys.ticketSearch(projectId, trimmed),
+    queryFn: ({ signal }) => endpoints.ticketSearch(projectId, trimmed, signal),
+    enabled: [...trimmed].length >= TICKET_SEARCH_MIN_CHARS,
+    retry: false,
+    staleTime: 60_000,
+  });
+};
+
 /** `GET /api/projects/:id/skipped-tickets` (S-28.5) — why labelled tickets did not start. */
 export const useSkippedTickets = (projectId: string | null) => {
   const { endpoints } = useServices();

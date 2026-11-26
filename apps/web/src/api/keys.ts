@@ -72,6 +72,8 @@ export const queryKeys = {
   skippedTickets: (id: string) => ['project', id, 'skipped-tickets'] as const,
   /** S-28.7: the manual CI jobs seen in the project's recent task pipelines. */
   manualJobsSeen: (id: string) => ['project', id, 'ci-manual-jobs'] as const,
+  /** The *Start a ticket* typeahead: one answer per project and trimmed query. */
+  ticketSearch: (id: string, query: string) => ['project', id, 'ticket-search', query] as const,
   ticketStatuses: (id: string, integrationId?: string) =>
     integrationId === undefined
       ? (['project', id, 'ticket-statuses'] as const)

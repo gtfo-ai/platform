@@ -57,7 +57,7 @@ import { Counter } from '../ui/counter.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
 import { TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
-import { Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
+import { Button, EmptyState, ErrorNotice } from '../ui/kit.js';
 import { ListBox, ListBoxHeader } from '../ui/list-box.js';
 import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
@@ -79,6 +79,7 @@ import {
 } from './board-owner-filter.js';
 import { QUEUED_COLUMN_ANCHOR, queueNote } from './queue-words.js';
 import { FIRST_PROJECT_SECTION } from './settings-sections.js';
+import { TicketKeyField } from './ticket-typeahead.js';
 
 /**
  * The columns, in pipeline order, and the column each state belongs to when nothing waits on a
@@ -269,13 +270,14 @@ export const StartTicketForm = ({
     >
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-48 flex-1">
-          <Field
-            {...(inputRef === undefined ? {} : { ref: inputRef })}
+          <TicketKeyField
+            projectId={projectId}
+            {...(inputRef === undefined ? {} : { inputRef })}
             label="Ticket key"
-            hint="For a ticket no start rule matches. The limit on parallel tasks, How much agents do alone and one task per ticket still apply."
+            hint="Type a key or words from the summary to see matching tickets. For a ticket no start rule matches. The limit on parallel tasks, How much agents do alone and one task per ticket still apply."
             placeholder="ACME-123"
             value={key}
-            onChange={(event) => setKey(event.target.value)}
+            onChange={setKey}
           />
         </div>
         <Button type="submit" tone="primary" disabled={start.isPending || key.trim() === ''}>

@@ -929,6 +929,18 @@ empty board's **Start a ticket by hand**): a small dialog opens with the cursor 
 field; type the key and press **Start**. None of these is shown to a viewer. The key is letters,
 digits, `.`, `_` and `-` (for example `ACME-123`).
 
+As you type, the field **suggests tickets** from the project's tracker: a key or the start of one
+(`ACME-12` lists `ACME-12`, `ACME-120`…, the exact key first) or words from a summary (`invoice pdf`
+lists the tickets whose summary has words starting with both). Each suggestion shows the key, the
+summary and the ticket's status — green when the project starts work from that status, *won't start*
+when the start would refuse it. Only tickets of the tracker projects the integration reads are
+suggested. **↓**/**↑** move through the list, **Enter** or a click fills the key in (it starts
+nothing), **Escape** closes the list (a second **Escape** closes the dialog). Typing a full key and
+pressing **Enter** or **Start** works exactly as before; suggestions appear from two characters,
+a moment after you stop typing. If the tracker cannot be searched — no integration that can, the
+tracker failing or slow — the field says *No suggestions from the tracker right now — type the full
+key* and the key still starts.
+
 The start reads the ticket from the tracker and records it as matched **by hand** — and that is the
 only thing it skips. The task is then created exactly as for a rule match: it gets the template its
 issue type maps to, it is **queued** if the project is at its WIP limit, it waits for a human if

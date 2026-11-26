@@ -149,7 +149,8 @@ test.describe('on a laptop the top bar and the row under it stick', () => {
     await startItem.click();
     const dialog = page.getByRole('dialog', { name: 'Start a ticket' });
     await expect(dialog).toBeVisible();
-    const field = dialog.getByRole('textbox').first();
+    // The key field is a combobox since the typeahead (its suggestions come from the tracker).
+    const field = dialog.getByRole('combobox', { name: 'Ticket key' });
     await expect(field).toBeFocused();
     expect(await onTop(field)).toBe(true);
     expect(await onTop(page.getByRole('banner'))).toBe(false);

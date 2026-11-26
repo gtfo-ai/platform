@@ -20,12 +20,33 @@ linkMergeRequest(ref, mrUrl)
 createTicket(draft) -> TicketRef                     # scope-creep valve, epic split
 resolveIdentity(providerUserId|email) -> UserIdentity
 inbound: InboundNormaliser                           # see below; ticket.matched|comment.added|status.changed
-capabilities() -> {webhooks, epics, links, customFields, adf, createTicket, attachments, lifecycleStatuses, transitionsRead, assign, commentsRead, assignOthers}   # lifecycleStatuses…commentsRead: WP-171, below; assignOthers: S-26.3
+capabilities() -> {webhooks, epics, links, customFields, adf, createTicket, attachments, lifecycleStatuses, transitionsRead, assign, commentsRead, assignOthers, ticketSearch}   # lifecycleStatuses…commentsRead: WP-171, below; assignOthers: S-26.3; ticketSearch: the typeahead
 listStatuses() ; listTransitions(ref) ; selfIdentity() ; assignToSelf(ref) ; unassign(ref) ; listComments(ref, {since?, limit})   # WP-171: the M10-head amendment below
 assignTo(ref, identity) -> {changed, assignee}       # S-26.3: the owner write-back (mutation, executor); declared by assignOthers
+searchTickets(query, {limit}) -> [{ref, title, status, status_category}]   # the Start a ticket typeahead (read, executor, `search_tickets`); declared by ticketSearch — below
 testConnection() -> HealthProbe                      # read-only probe (product/08 § Health and setup)
 ```
 Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) lives in the provider module.
+
+> **Amendment (2026-11-26): `searchTickets`, the *Start a ticket* typeahead.** A person's typed
+> query is read **once, by the port** (`parseTicketSearchQuery` in
+> `packages/application/src/ports/integrations/task-management.ts`), never by a provider: a
+> key-shaped query (`acme-12`, `ACME-`) is a project (upper-cased) and a number prefix; anything else
+> is at most five lower-cased words of Unicode letters, marks and digits, two characters or more —
+> every other character (quotes, operators, wildcards, backslashes) is dropped before a provider sees
+> it, and nothing searchable left is **no request**. A provider answers at most `limit` (≤
+> `MAX_TICKET_SEARCH_RESULTS`, 10) tickets in one request, inside `ticketScope`, the exact key first;
+> a query the tracker refuses as unanswerable (`invalid_request`) is no tickets, every other failure
+> throws. Jira Cloud (`buildTicketSearchJql`): `project = "P" AND (key = "P-N" OR (key >= "P-N0" AND
+> key <= "P-N9") OR …) ORDER BY key ASC` with three ranges (none for a leading zero; `project = "P"
+> ORDER BY created DESC` for `P-`), and `[project in (…) AND ]summary ~ "w*" AND … ORDER BY updated
+> DESC` for words — every value a JQL string literal, the one `*` the platform's; a key outside a
+> non-empty `project_keys` asks nothing; one `search/jql` with `fields=summary,status`, through the
+> same client (so the API gateway for a `cloud_id` binding and `Accept-Language: en`). A key range
+> whose bounds name no issue matches none rather than refusing the search (measured 2026-11-26,
+> `SOURCES.md`). The fake matches word *prefixes* where Jira also stems (its divergence 22), and the
+> shared contract suite holds every provider to the key, the word, the limit and hostile input.
+> `ticketReads.search` asks the flag first, so a provider without it answers `unsupported`.
 
 > **Amendment (WP-36): `createTicket` has two callers, not three.** The line above named a
 > *"maintenance chore"* as a third, and the product documents say otherwise: product/19:126's

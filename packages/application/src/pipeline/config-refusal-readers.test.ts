@@ -123,6 +123,11 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
     reason:
       'the manual start (WP-122) asks only `picksUpNewTickets`, the predicate intake asks on the same settings, so the two answer alike; the match it records goes through intake, which parks a refused configuration at its first step',
   },
+  'packages/application/src/pipeline/ticket-search.ts': {
+    count: 1,
+    reason:
+      'the Start a ticket typeahead reads only `ticketStatusPolicy`, the task-management binding’s block, which no configuration document carries, to hint `startable`; it moves no task — a start it leads to goes through intake, which parks a refused configuration at its first step',
+  },
   'packages/application/src/pipeline/saga.ts': {
     count: 5,
     reason:

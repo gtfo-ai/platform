@@ -202,6 +202,7 @@ export * from './pipeline/ticket-lifecycle.js';
 // S-23.15: the switch the project pipeline read asks, beside review-only's.
 export { resolveTicketLintSettings } from './pipeline/ticket-lint.js';
 export * from './pipeline/ticket-poll.js';
+export * from './pipeline/ticket-search.js';
 export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/ticket-status-recheck.js';
 export * from './pipeline/transitions.js';

@@ -1179,6 +1179,8 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   list_comments: 'listComments',
   // S-26.3: the owner write-back, one more `PUT …/assignee`.
   assign_to: 'assignTo',
+  // The *Start a ticket* typeahead: one `search/jql`, its summary and status emitted.
+  search_tickets: 'searchTickets',
   verify_delivery: 'inbound.verify',
   delivery_key: 'inbound.deliveryKey',
   normalise_delivery: 'inbound.normalise',
@@ -1247,6 +1249,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     emitted.assign_to_self = await port.assignToSelf(ref);
     emitted.unassign = await port.unassign(ref);
     emitted.list_comments = await port.listComments(ref, { limit: 10 });
+    emitted.search_tickets = await port.searchTickets(KEY, { limit: 10 });
     // S-26.3: a person the script's ticket is not assigned to, so the read and the `PUT` both run.
     emitted.assign_to = await port.assignTo(ref, {
       provider: 'jira-cloud',

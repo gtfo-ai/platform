@@ -85,6 +85,7 @@ import {
   listCommentsOptionsSchema,
   normaliseStatusCategory,
   parseProviderData,
+  parseTicketSearchQuery,
   type RateLimitPolicy,
   type SecretRedactor,
   silentLogger,
@@ -97,10 +98,14 @@ import {
   type TicketPollPlan,
   type TicketRefInput,
   type TicketScopeVerdict,
+  type TicketSearchHit,
+  type TicketSearchQuery,
   type TicketStartableStatuses,
   type TicketTransition,
   type TransitionResult,
   ticketSchema,
+  ticketSearchHitSchema,
+  ticketSearchOptionsSchema,
   ticketTransitionSchema,
   type UnassignResult,
 } from '@platform/application';
@@ -138,6 +143,7 @@ import {
   toTicket,
   toTicketComment,
   toTicketMatch,
+  toTicketSuggestion,
 } from './mapping.js';
 import { createJiraInboundNormaliser, type JiraPickupRule, projectKeyOf } from './webhook.js';
 
@@ -424,6 +430,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     commentsRead: true,
     // S-26.3: the owner write-back — the same J4 `PUT …/assignee`, with a person's `accountId`.
     assignOthers: true,
+    // The *Start a ticket* typeahead: one `search/jql` of `buildTicketSearchJql`'s.
+    ticketSearch: true,
   };
 
   const logger = options.logger ?? silentLogger;
@@ -1442,6 +1450,55 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
       : { kind: 'out_of_scope', scope: [...config.project_keys] };
   };
 
+  /**
+   * The *Start a ticket* typeahead: **one** `search/jql` request, `fields=summary,status`,
+   * `maxResults` = the limit, no page following. The JQL is {@link buildTicketSearchJql}'s, built
+   * from {@link parseTicketSearchQuery}'s reading and never from the typed text, and `null` (nothing
+   * searchable, or a key outside `project_keys`) makes no request. A `400` is the query being
+   * unanswerable — a project key the site does not have, for an unscoped binding — and answers no
+   * tickets; every other failure throws, so the caller can tell "no match" from "Jira is down".
+   * The answer is filtered through `ticketScope` once more, and a key-shaped query's exact key is
+   * put first.
+   */
+  const searchTickets = async (
+    text: string,
+    searchOptions: { readonly limit: number },
+  ): Promise<readonly TicketSearchHit[]> => {
+    const action = 'search_tickets';
+    const { limit } = ticketSearchOptionsSchema.parse(searchOptions);
+    const query = parseTicketSearchQuery(text);
+    const jql = query === null ? null : buildTicketSearchJql(query, config.project_keys);
+    if (query === null || jql === null) {
+      return [];
+    }
+    let page: z.infer<typeof jiraSubsetSearchResultSchema>;
+    try {
+      page = parse(
+        jiraSubsetSearchResultSchema,
+        await client.send({
+          method: 'GET',
+          path: 'search/jql',
+          query: { jql, fields: 'summary,status', maxResults: limit },
+          action,
+        }),
+        action,
+      );
+    } catch (error) {
+      if (isSearchRefusal(error)) {
+        return [];
+      }
+      throw error;
+    }
+    const exact = query.kind === 'key' ? `${query.project}-${query.number}` : null;
+    const hits = page.issues
+      .map((issue) => parse(ticketSearchHitSchema, toTicketSuggestion(issue, siteUrl), action))
+      .filter((hit) => ticketScope(hit.ref.key).kind !== 'out_of_scope');
+    return [
+      ...hits.filter((hit) => hit.ref.key === exact),
+      ...hits.filter((hit) => hit.ref.key !== exact),
+    ].slice(0, limit);
+  };
+
   const inbound = createJiraInboundNormaliser({
     siteUrl,
     projectKeys: config.project_keys,
@@ -1487,6 +1544,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     assignTo,
     unassign,
     listComments,
+    searchTickets,
     // One guard, not two (standing rule 9). Round 1 wrapped `verify` in `capabilities.webhooks &&`
     // while the verifier itself accepted anything signed with the empty key: deleting the wrapper
     // killed no test, because the wrapper was the only thing working. Both facts are derived from
@@ -1560,6 +1618,59 @@ export const missingIssueKeysIn = (error: unknown, asked: readonly string[]): st
     ].map((match) => match[1] ?? ''),
   );
   return asked.filter((key) => named.has(key));
+};
+
+/**
+ * How many more digits than a person typed a key-prefix search reaches: `ACME-12` asks for
+ * `ACME-12`, `ACME-120`…`ACME-129`, `ACME-1200`…`ACME-1299` and `ACME-12000`…`ACME-12999` — four
+ * clauses, bounded whatever is typed.
+ */
+export const KEY_PREFIX_EXTRA_DIGITS = 3;
+
+/**
+ * The JQL for one typeahead query, or `null` when it must not be asked (the platform's
+ * {@link parseTicketSearchQuery} reading, never the typed text):
+ *
+ *  - **key-shaped** — `project = "P" AND (key = "P-N" OR (key >= "P-N0" AND key <= "P-N9") OR …)
+ *    ORDER BY key ASC` ({@link KEY_PREFIX_EXTRA_DIGITS} ranges; none for a number with a leading
+ *    zero, which no Jira key has), or `project = "P" ORDER BY created DESC` for `P-` alone. Issue
+ *    key ranges are ordered by number within a project; a bound naming no issue matches none rather
+ *    than refusing the search (measured against a Jira Cloud site through the Atlassian MCP
+ *    connector, 2026-11-26, `SOURCES.md`). `null` when `P` is outside a non-empty `project_keys`.
+ *  - **words** — `summary ~ "w*"` per word, joined by `AND`, `ORDER BY updated DESC`. Each word is
+ *    letters, marks and digits only, lower-cased (so `and`/`or`/`not` are never Lucene operators),
+ *    and the one `*` is the platform's.
+ *
+ * Every value is a {@link jqlLiteral}; a non-empty `project_keys` adds `project in (…)` to a words
+ * search, so a binding never suggests a ticket outside its declared scope.
+ */
+export const buildTicketSearchJql = (
+  query: TicketSearchQuery,
+  projectKeys: readonly string[],
+): string | null => {
+  if (query.kind === 'key') {
+    if (projectKeys.length > 0 && !projectKeys.includes(query.project)) {
+      return null;
+    }
+    const project = `project = ${jqlLiteral(query.project)}`;
+    if (query.number === '') {
+      return `${project} ORDER BY created DESC`;
+    }
+    const key = (number: string): string => jqlLiteral(`${query.project}-${number}`);
+    const clauses = [`key = ${key(query.number)}`];
+    if (!query.number.startsWith('0')) {
+      for (let extra = 1; extra <= KEY_PREFIX_EXTRA_DIGITS; extra += 1) {
+        clauses.push(
+          `(key >= ${key(query.number + '0'.repeat(extra))} AND key <= ${key(query.number + '9'.repeat(extra))})`,
+        );
+      }
+    }
+    return `${project} AND (${clauses.join(' OR ')}) ORDER BY key ASC`;
+  }
+  const words = query.words.map((word) => `summary ~ ${jqlLiteral(`${word}*`)}`).join(' AND ');
+  const scope =
+    projectKeys.length === 0 ? '' : `project in (${projectKeys.map(jqlLiteral).join(', ')}) AND `;
+  return `${scope}${words} ORDER BY updated DESC`;
 };
 
 /** A single-quoted-free JQL string literal: `"` and `\` are escaped, per JQL's own rules. */

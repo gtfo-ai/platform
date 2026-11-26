@@ -133,6 +133,15 @@
  *     a `claim_label` before any call. `claimLabel()` answers the `claimLabel` option, or — through
  *     `fakeTaskManagementRegistration` — the binding's `claim_label`, which that schema refuses
  *     when it equals `pickup_label`, as Jira's does.
+ * 22. **Stricter — `searchTickets` matches word prefixes, never substrings** (the *Start a ticket*
+ *     typeahead). A `words` query keeps a ticket only when every word starts one of the title's
+ *     words (letters, marks and digits, folded as `parseTicketSearchQuery` folds the query), where
+ *     Jira's `summary ~ "w*"` also stems; a key query keeps the project's tickets whose number starts
+ *     with the typed digits, the exact key first and then ascending by number, as Jira's
+ *     `ORDER BY key ASC` does; a words query answers the newest-updated first. Out-of-scope tickets
+ *     (`projectKeys`) are never answered and a key outside it asks nothing. Off with
+ *     `capabilities: { ticketSearch: false }`, which refuses by name. Never `invalid_request`: the
+ *     fake has no query language to refuse.
  */
 import {
   type AssignResult,
@@ -155,6 +164,7 @@ import {
   type NormalisedDelivery,
   type NormalisedEvent,
   normaliseStatusCategory,
+  parseTicketSearchQuery,
   type TaskManagementCapabilities,
   type TaskManagementInboundEvent,
   type TaskManagementPort,
@@ -165,18 +175,26 @@ import {
   type TicketMatchRule,
   type TicketPollPlan,
   type TicketRefInput,
+  type TicketSearchHit,
   type TicketStartableStatuses,
   type TicketTransition,
   type TransitionResult,
   ticketCommentSchema,
   ticketPollPlanSchema,
   ticketSchema,
+  ticketSearchHitSchema,
+  ticketSearchOptionsSchema,
   ticketTransitionSchema,
   type UnassignResult,
   unassignResultSchema,
   type WebhookDelivery,
 } from '@platform/application';
-import { type Id, MAX_TICKET_STATUSES, type TicketStatusCategory } from '@platform/contracts';
+import {
+  type Id,
+  MAX_TICKET_STATUSES,
+  MAX_TICKET_SUGGESTION_TITLE_CHARS,
+  type TicketStatusCategory,
+} from '@platform/contracts';
 import * as z from 'zod';
 import {
   buildFakeDelivery,
@@ -513,6 +531,7 @@ export const createFakeTaskManagement = (
     assign: true,
     commentsRead: true,
     assignOthers: true,
+    ticketSearch: true,
     ...options.capabilities,
   };
 
@@ -1029,6 +1048,63 @@ export const createFakeTaskManagement = (
         .toSorted((left, right) => Date.parse(left.updated_at) - Date.parse(right.updated_at))
         .slice(0, limit)
         .map(toMatch);
+    },
+
+    searchTickets: async (text, searchOptions): Promise<readonly TicketSearchHit[]> => {
+      if (!capabilities.ticketSearch) {
+        throw new IntegrationUnsupportedError(PROVIDER, 'searchTickets');
+      }
+      const { limit } = ticketSearchOptionsSchema.parse(searchOptions);
+      const query = parseTicketSearchQuery(text);
+      const scope = options.projectKeys ?? [];
+      const inScope = (key: string): boolean =>
+        scope.length === 0 || scope.includes(key.split('-')[0] ?? key);
+      if (
+        query === null ||
+        (query.kind === 'key' && scope.length > 0 && !scope.includes(query.project))
+      ) {
+        // No provider request, as the Jira adapter makes none: nothing is entered.
+        return [];
+      }
+      core.enter('search_tickets');
+      const wordsOf = (title: string): string[] =>
+        title
+          .normalize('NFKC')
+          .toLowerCase()
+          .match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+      const numberOf = (key: string): string => key.slice(key.indexOf('-') + 1);
+      const found = [...tickets.values()].filter((ticket) => {
+        if (!inScope(ticket.key)) {
+          return false;
+        }
+        if (query.kind === 'key') {
+          return (
+            ticket.key.split('-')[0] === query.project &&
+            numberOf(ticket.key).startsWith(query.number)
+          );
+        }
+        const words = wordsOf(ticket.title);
+        return query.words.every((asked) => words.some((word) => word.startsWith(asked)));
+      });
+      const ordered =
+        query.kind === 'key'
+          ? found.toSorted(
+              (left, right) =>
+                Number(numberOf(left.key)) - Number(numberOf(right.key)) ||
+                left.key.localeCompare(right.key),
+            )
+          : found.toSorted(
+              (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
+            );
+      // Divergence 1: the fake validates its own output.
+      return ordered.slice(0, limit).map((ticket) =>
+        ticketSearchHitSchema.parse({
+          ref: { provider: PROVIDER, key: ticket.key, url: ticket.url },
+          title: [...ticket.title].slice(0, MAX_TICKET_SUGGESTION_TITLE_CHARS).join(''),
+          status: ticket.status,
+          status_category: reportedCategoryOf(ticket.status),
+        }),
+      );
     },
 
     pollPlan: () => poll,

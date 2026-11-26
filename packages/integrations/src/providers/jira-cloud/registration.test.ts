@@ -92,6 +92,8 @@ describe('createJiraCloudRegistration', () => {
       commentsRead: true,
       // S-26.3: the owner write-back (J4 with a person's account id).
       assignOthers: true,
+      // The *Start a ticket* typeahead (one `search/jql`).
+      ticketSearch: true,
     });
   });
 

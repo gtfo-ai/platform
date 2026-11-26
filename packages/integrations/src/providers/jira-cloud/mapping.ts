@@ -35,9 +35,12 @@ import {
   type TicketComment,
   type TicketLink,
   type TicketMatch,
+  type TicketSearchHit,
 } from '@platform/application';
 import {
   isoDateTimeSchema,
+  MAX_LIFECYCLE_STATUS_NAME_CHARS,
+  MAX_TICKET_SUGGESTION_TITLE_CHARS,
   nonEmptyStringSchema,
   type TicketRef,
   type TicketStatusCategory,
@@ -477,6 +480,22 @@ export const toTicket = (input: TicketMappingInput): Ticket => {
     assignee: identityOfUser(issue.fields.assignee),
     reporter: identityOfUser(issue.fields.reporter),
     updated_at: issue.fields.updated,
+  };
+};
+
+/**
+ * One `search/jql` issue asked for `summary,status` as a typeahead suggestion. The title is cut to
+ * {@link MAX_TICKET_SUGGESTION_TITLE_CHARS} and the status name to the platform's bound, between
+ * code points; an issue with no status name reads `Unknown`, as `toTicket` does.
+ */
+export const toTicketSuggestion = (issue: JiraIssue, siteUrl: string): TicketSearchHit => {
+  const cut = (value: string, max: number): string => [...value].slice(0, max).join('');
+  const status = cut(issue.fields.status?.name ?? '', MAX_LIFECYCLE_STATUS_NAME_CHARS);
+  return {
+    ref: issueRef(issue, siteUrl),
+    title: cut(issue.fields.summary ?? '', MAX_TICKET_SUGGESTION_TITLE_CHARS),
+    status: status.trim() === '' ? 'Unknown' : status,
+    status_category: statusCategoryOf(issue.fields.status),
   };
 };
 

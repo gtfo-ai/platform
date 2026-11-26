@@ -823,6 +823,30 @@ export const ticketStatusSchema = z.strictObject({
  */
 export const MAX_TICKET_STATUSES = 500;
 
+/**
+ * **The ticket typeahead's bounds** (the *Start a ticket* dialog's suggestions). The query a person
+ * types is untrusted text and is refused past {@link MAX_TICKET_SEARCH_QUERY_CHARS} at the route,
+ * never cut; one search answers at most {@link MAX_TICKET_SEARCH_RESULTS} tickets, which is also the
+ * `maxResults` the Jira adapter asks for (one provider request, no paging); a suggestion's title is
+ * cut to {@link MAX_TICKET_SUGGESTION_TITLE_CHARS} by the platform (a title is display text, so a cut
+ * is honest where a cut status list was not).
+ */
+export const MAX_TICKET_SEARCH_QUERY_CHARS = 100;
+export const MAX_TICKET_SEARCH_RESULTS = 10;
+export const MAX_TICKET_SUGGESTION_TITLE_CHARS = 300;
+
+/**
+ * One ticket a tracker search answers — the port's `searchTickets` hit and the base of the
+ * `GET …/ticket-search` item. Untrusted provider text (BD-022). `status_category` is the
+ * normalised category the provider sent with the status, or `null` when it sent none.
+ */
+export const ticketSuggestionSchema = z.strictObject({
+  ref: ticketRefSchema,
+  title: z.string().max(MAX_TICKET_SUGGESTION_TITLE_CHARS),
+  status: nonEmptyStringSchema.max(MAX_LIFECYCLE_STATUS_NAME_CHARS),
+  status_category: ticketStatusCategorySchema.nullable(),
+});
+
 /** `tasks.mr_ref` (technical/03) and the `mr` field of ImplementationNotes (technical/12). */
 export const mergeRequestRefSchema = z.strictObject({
   provider: nonEmptyStringSchema.nullish(),
@@ -1163,6 +1187,7 @@ export type Actor = z.infer<typeof actorSchema>;
 export type TicketRef = z.infer<typeof ticketRefSchema>;
 export type TicketStatusCategory = z.infer<typeof ticketStatusCategorySchema>;
 export type TicketStatus = z.infer<typeof ticketStatusSchema>;
+export type TicketSuggestion = z.infer<typeof ticketSuggestionSchema>;
 export type MergeRequestRef = z.infer<typeof mergeRequestRefSchema>;
 export type WorkpadRef = z.infer<typeof workpadRefSchema>;
 export type TicketSnapshotComment = z.infer<typeof ticketSnapshotCommentSchema>;

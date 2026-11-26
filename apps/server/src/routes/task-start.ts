@@ -27,6 +27,18 @@
  * the task page's *Who did what* (`GET /api/tasks/:id/audit`), the export and `get_task_context` —
  * also returns the `task.start` whose `event_id` is the task's originating match
  * (`packages/infrastructure/src/ask/task-audit.ts`), so the person who started the task is listed.
+ *
+ * ## The typeahead: `GET /api/projects/:project_id/ticket-search?q=`
+ *
+ * The dialog's suggestions, under the **same** `task.create` guard as the start: a person who may
+ * not start a ticket does not get to spend the binding's provider budget searching for one. A read
+ * (`searchTicketsForStart`, through the executor, audited as `search_tickets`), so it needs no
+ * `Idempotency-Key` and records no `human_actions` row. `q` is trimmed and refused past
+ * `MAX_TICKET_SEARCH_QUERY_CHARS` (`400`), never cut. Answers: `200` with at most
+ * `MAX_TICKET_SEARCH_RESULTS` items; `409 no_task_management_binding`; `409
+ * ticket_search_unsupported` (the provider declares no search); `503 ticket_search_unavailable`
+ * (the tracker failed or did not answer within `TICKET_SEARCH_DEADLINE_MS`) — the dialog shows a
+ * quiet note for every non-`200` and the plain key keeps working.
  */
 
 import { MANUAL_START_ACTION, ManualStartRefusedError } from '@platform/application';
@@ -36,6 +48,8 @@ import {
   createTaskRequestSchema,
   startTaskResponseSchema,
   ticketRefSchema,
+  ticketSearchQuerySchema,
+  ticketSearchResponseSchema,
 } from '@platform/contracts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -128,6 +142,66 @@ export const registerTaskStartRoutes = async (
     }
     return options.commands;
   };
+
+  typed.get(
+    '/api/projects/:project_id/ticket-search',
+    {
+      preValidation: requirePermission(guard, 'task.create', { project: projectOf }),
+      schema: {
+        summary: 'Suggest tickets to start — the Start a ticket typeahead',
+        description:
+          "Searches the project's task-management binding (Jira Cloud: one `search/jql` request) through `IntegrationActionExecutor`, audited as `search_tickets` and rate-limited on the binding's budget. `q` is a key fragment (`ACME-12`: that project's tickets whose number starts with it, the exact key first) or words of a summary (each word a prefix); the platform reads it into a key or words and **never** passes the typed text into the tracker's query language. Only tickets inside the binding's declared scope (Jira's `project_keys`) are answered; a key outside it asks nothing. Each item carries `startable`: whether the project's status policy would start work from the ticket's status (the check the start makes). Untrusted provider text (BD-022), at most `MAX_TICKET_SEARCH_RESULTS` items. `400` for a `q` empty after trimming or past `MAX_TICKET_SEARCH_QUERY_CHARS`; `409 no_task_management_binding`; `409 ticket_search_unsupported` (the provider declares no search); `503 ticket_search_unavailable` (the tracker failed or did not answer within the deadline). `task.create` (member), like the start.",
+        tags: ['tasks'],
+        params: projectParamsSchema,
+        querystring: ticketSearchQuerySchema,
+        response: {
+          200: ticketSearchResponseSchema,
+          404: apiErrorSchema,
+          409: apiErrorSchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const projectId = request.params.project_id;
+      if (!(await options.queries.projectExists(projectId))) {
+        throw new NotFoundError(`project ${projectId}`);
+      }
+      if (options.commands === null) {
+        throw new HttpError(
+          503,
+          'ticket_search_unavailable',
+          'this process composed no integrations, so it cannot search the tracker; type the full key',
+        );
+      }
+      const answer = await options.commands.search({
+        projectId: projectId as Id,
+        query: request.query.q,
+      });
+      switch (answer.status) {
+        case 'ok':
+          return { items: [...answer.items] };
+        case 'no_binding':
+          throw new HttpError(
+            409,
+            'no_task_management_binding',
+            'this project binds no task-management integration, so there is no tracker to search; bind one in the project settings',
+          );
+        case 'unsupported':
+          throw new HttpError(
+            409,
+            'ticket_search_unsupported',
+            "this project's tracker integration cannot search tickets; type the full key",
+          );
+        case 'unavailable':
+          throw new HttpError(
+            503,
+            'ticket_search_unavailable',
+            `${answer.reason}; type the full key`,
+          );
+      }
+    },
+  );
 
   typed.post(
     '/api/projects/:project_id/tasks',

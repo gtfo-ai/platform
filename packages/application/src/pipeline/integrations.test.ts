@@ -175,6 +175,8 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-87's poller: one resolution per poll of a binding, and one more when a failed poll re-reads
   // the plan to re-arm itself — both in a job, outside every transaction and outside any run.
   'ticket-poll.ts': 2,
+  // The Start a ticket typeahead: one resolution per search, from an HTTP request, outside any run.
+  'ticket-search.ts': 1,
   'ticket-snapshot.ts': 1,
   'workpad.ts': 2,
 };

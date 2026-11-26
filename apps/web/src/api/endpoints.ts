@@ -155,6 +155,7 @@ import {
   taskLimitResponseSchema,
   tasksResponseSchema,
   testIntegrationResponseSchema,
+  ticketSearchResponseSchema,
   ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
   versionResponseSchema,
@@ -458,6 +459,17 @@ export interface Endpoints {
   readonly ticketStatuses: (
     projectId: string,
   ) => Promise<z.output<typeof ticketStatusesResponseSchema>>;
+  /**
+   * `GET /api/projects/:id/ticket-search?q=` — the *Start a ticket* typeahead's suggestions from
+   * the project's tracker (`task.create`, like the start). `409 no_task_management_binding` /
+   * `ticket_search_unsupported` and `503 ticket_search_unavailable` mean "no suggestions"; the
+   * dialog then offers the plain key. `signal` aborts a superseded keystroke's request.
+   */
+  readonly ticketSearch: (
+    projectId: string,
+    query: string,
+    signal?: AbortSignal,
+  ) => Promise<z.output<typeof ticketSearchResponseSchema>>;
   /**
    * `GET /api/projects/:id/skipped-tickets` (S-28.5) — the newest tickets intake did not start, and
    * why, so a person can see why a labelled ticket did not become a task. A project member's read.
@@ -1032,6 +1044,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     ticketStatuses: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/ticket-statuses`, {
         schema: ticketStatusesResponseSchema,
+      }),
+    ticketSearch: (projectId, query, signal) =>
+      client.get(`/api/projects/${seg(projectId)}/ticket-search`, {
+        schema: ticketSearchResponseSchema,
+        query: { q: query },
+        ...(signal === undefined ? {} : { signal }),
       }),
     skippedTickets: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/skipped-tickets`, {
