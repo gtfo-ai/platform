@@ -410,6 +410,18 @@ describe('jira-cloud — reaching the provider', () => {
     it('answers no claim label for a binding that configured none', () => {
       expect(binding.adapter.claimLabel()).toBeNull();
     });
+
+    it('answers the pick-up label a manual Start adds, and none while a pickup_status decides (TD-031 2026-11-26)', () => {
+      // The schema's default is `agentic`, the label the rule matches on.
+      expect(createJiraBinding().adapter.pickupLabel()).toBe(JIRA_PICKUP_LABEL);
+      expect(
+        createJiraBinding({ config: { pickup_label: 'for-the-bot' } }).adapter.pickupLabel(),
+      ).toBe('for-the-bot');
+      // A status rule wins over the label (`pickupRuleOf`): there is no label to add.
+      expect(
+        createJiraBinding({ config: { pickup_status: 'To pick up' } }).adapter.pickupLabel(),
+      ).toBeNull();
+    });
   });
 
   describe('every error carrying provider text leaves through the executor', () => {

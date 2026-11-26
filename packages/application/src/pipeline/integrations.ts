@@ -1962,6 +1962,40 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
   },
 
   /**
+   * The pick-up label (TD-031's 2026-11-26 amendment item 3): adds the binding's `pickupLabel()` to
+   * a ticket a person started by hand — one `setLabels` edit naming that label alone, add-only, so
+   * no other label is touched and the platform never removes it. `null`, with **no call and no
+   * audit row**, for no binding, a platform-issued reference, or a binding whose pick-up rule is not
+   * a label. A shadow task writes nothing (`would_have`, BD-021). `idempotencyKey` is the caller's:
+   * one per task.
+   */
+  pickupLabel: async (
+    ticket: TicketRefInput,
+    context: TicketWriteContext & { readonly idempotencyKey: string },
+  ): Promise<{ readonly label: string } | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    const label = binding.port.pickupLabel();
+    if (label === null) {
+      return null;
+    }
+    await mutate(
+      integrations,
+      binding.ref,
+      'add_pickup_label',
+      { ticket_key: ticket.key, label },
+      context,
+      async () => binding.port.setLabels(ticket, [label], []),
+      () => [label],
+      () => ({ label }),
+      replayable<readonly string[]>(context.idempotencyKey),
+    );
+    return { label };
+  },
+
+  /**
    * The claim refusal's comment (WP-177, TD-029 decision 5): one per refused admission, opened by
    * the marker `agentic:claim-refused:<task>` so the platform never reads it as a person's word.
    * Platform text only — the caller writes no provider text into it — and redacted here anyway, at

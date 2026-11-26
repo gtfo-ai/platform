@@ -205,6 +205,23 @@ describe('the manual start (WP-122)', () => {
     expect(startRows[0]?.user_id).toBe(memberId?.id);
     expect(startRows[0]?.params).toMatchObject({ event_id: started.event_id });
 
+    // TD-031's 2026-11-26 amendment item 1: the member who pressed Start owns the task, so only
+    // their machine's mine-and-unassigned policy takes its offers.
+    const [owned] = await pipeline.query<{
+      owner_user_id: string | null;
+      owner_source: string | null;
+    }>('select owner_user_id::text, owner_source from tasks where id = $1', [task?.id]);
+    expect(owned).toEqual({ owner_user_id: memberId?.id, owner_source: 'platform' });
+    // Item 3: the binding's pick-up label is added to the ticket once the task exists, through
+    // the executor (the fake binding's `pickup_label` defaults to `agentic`).
+    await pipeline.waitFor('the pick-up label added to the started ticket', async () => {
+      const rows = await pipeline.query<{ status: string }>(
+        "select status from integration_actions where action = 'add_pickup_label' and task_id = $1",
+        [task?.id],
+      );
+      return rows.length === 1;
+    });
+
     // A replay of the same intent performs nothing twice: no second match, no second row.
     const replayed = await memberApi.startTask(
       pipeline.projectId,

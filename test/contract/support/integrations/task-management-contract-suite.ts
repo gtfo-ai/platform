@@ -744,6 +744,15 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         expect(context.port.claimLabel()).toBeNull();
       });
 
+      it('answers a pick-up label that is the rule’s own or none, never the claim label (TD-031 2026-11-26)', () => {
+        // A manual Start adds it: a label other than the one the rule matches on would mark the
+        // ticket with something the binding never reads.
+        const label = context.port.pickupLabel();
+        expect(label === null || label === context.pickupLabel).toBe(true);
+        const labelled = context.claimLabel.port.pickupLabel();
+        expect(labelled).not.toBe(context.claimLabel.label);
+      });
+
       it('adds the claim label and removes it again, leaving every other label (BACKLOG 1611)', async () => {
         const { port: labelled, label, ticket } = context.claimLabel;
         expect(labelled.claimLabel()).toBe(label);

@@ -671,6 +671,14 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
    */
   readonly claimLabel: () => string | null;
 
+  /**
+   * The label this binding's pick-up rule matches on (TD-031's 2026-11-26 amendment item 3), from
+   * binding configuration — Jira's `pickup_label` while no `pickup_status` overrides it — or `null`
+   * when the rule is not a label. A manual Start adds it to the ticket it started, so the tracker
+   * reads the same as for a ticket picked up by the rule. Not a provider call.
+   */
+  readonly pickupLabel: () => string | null;
+
   readonly linkMergeRequest: (ref: TicketRefInput, mrUrl: string) => Promise<void>;
 
   readonly createTicket: (draft: TicketDraft) => Promise<TicketRefInput>;

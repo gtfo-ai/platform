@@ -10,8 +10,10 @@ import { TICKET_ASSIGNEE_NAME_MAX_CHARS } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   adoptOwnerOnLink,
+  decideClaimOwner,
   decideOwnerCommand,
   decidePickOwner,
+  decideStarterOwner,
   type OwnerTarget,
   ownerCapabilities,
   ownerChangePermitted,
@@ -432,6 +434,90 @@ describe('a pick assigns (S-26.4, TD-031 amendment item 7)', () => {
     expect(pickRefusalOf(AT, AT)).toBe('task_owned_by_another');
     expect(pickRefusalOf(AT, null)).toBe('task_owned_by_another');
     expect(pickRefusalOf(null, before)).toBe('task_owned_by_another');
+  });
+});
+
+describe('a worker’s automatic claim assigns (TD-031 2026-11-26 amendment item 2)', () => {
+  const claim = (current: TaskOwnership, heldElsewhere = false, workerMayOwn = true) =>
+    decideClaimOwner(current, { workerUserId: ME, heldElsewhere, workerMayOwn, at: AT });
+
+  it('makes the worker’s person the owner of an unassigned task — platform, via pick', () => {
+    expect(claim(UNOWNED)).toEqual({
+      kind: 'write',
+      next: { ...UNOWNED, ownerUserId: ME, ownerSource: 'platform', ownerChangedAt: AT },
+      change: { ownerUserId: ME, previousOwnerUserId: null, source: 'platform', via: 'pick' },
+    });
+  });
+
+  it('never refuses: another person’s task is claimed with its owner kept (an everything machine)', () => {
+    const theirs = { ...UNOWNED, ownerUserId: OTHER, ownerSource: 'platform' as const };
+    // The pick refuses the same row; the automatic claim keeps it and assigns nothing.
+    expect(
+      decidePickOwner(theirs, {
+        pickerUserId: ME,
+        heldElsewhere: false,
+        pickerMayOwn: true,
+        at: AT,
+      }).kind,
+    ).toBe('refused');
+    expect(claim(theirs)).toEqual({ kind: 'unchanged' });
+  });
+
+  it('assigns nothing for a task held elsewhere, a person who may not own, or their own task', () => {
+    expect(claim(UNOWNED, true)).toEqual({ kind: 'unchanged' });
+    expect(claim(UNOWNED, false, false)).toEqual({ kind: 'unchanged' });
+    expect(claim({ ...UNOWNED, ownerUserId: ME, ownerSource: 'tracker' })).toEqual({
+      kind: 'unchanged',
+    });
+  });
+});
+
+describe('a manual Start makes its starter the owner (TD-031 2026-11-26 amendment item 1)', () => {
+  const start = (current: TaskOwnership, starterMayOwn = true) =>
+    decideStarterOwner(current, { starterUserId: ME, starterMayOwn, at: AT });
+  const expectStarter = (current: TaskOwnership) =>
+    expect(start(current)).toEqual({
+      kind: 'write',
+      next: { ...current, ownerUserId: ME, ownerSource: 'platform', ownerChangedAt: AT },
+      change: { ownerUserId: ME, previousOwnerUserId: null, source: 'platform', via: 'command' },
+    });
+
+  it('gives an unassigned ticket to the starter — platform, via command', () => {
+    expectStarter(UNOWNED);
+  });
+
+  it('gives the starter a ticket the binding’s own account, an unlinked person or a non-member holds, keeping the stored assignee', () => {
+    // The sync stored these assignees and left the owner null (a platform or an unmappable person).
+    expectStarter({ ...UNOWNED, ticketAssignee: person('bot', true) });
+    expectStarter({ ...UNOWNED, ticketAssignee: person('unlinked') });
+  });
+
+  it('keeps a ticket the tracker assigns to a different linked member with that member', () => {
+    // What the sync wrote for a linked member assignee: they own it, sourced from the tracker.
+    const synced = {
+      ownerUserId: OTHER,
+      ownerSource: 'tracker' as const,
+      ownerChangedAt: AT,
+      ticketAssignee: person('other-member'),
+    };
+    expect(start(synced)).toEqual({ kind: 'unchanged' });
+  });
+
+  it('changes nothing when the tracker already assigns the starter', () => {
+    const synced = {
+      ownerUserId: ME,
+      ownerSource: 'tracker' as const,
+      ownerChangedAt: AT,
+      ticketAssignee: person('me'),
+    };
+    expect(start(synced)).toEqual({ kind: 'unchanged' });
+  });
+
+  it('creates the task as before when the starter may not own in the project', () => {
+    expect(start(UNOWNED, false)).toEqual({ kind: 'unchanged' });
+    expect(start({ ...UNOWNED, ticketAssignee: person('bot', true) }, false)).toEqual({
+      kind: 'unchanged',
+    });
   });
 });
 

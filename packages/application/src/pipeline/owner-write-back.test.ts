@@ -639,3 +639,75 @@ describe('releasing ownership writes nothing to the tracker (criterion 6)', () =
     expect(ticket.state.assignee).toBe('alice');
   });
 });
+
+// ── TD-031's 2026-11-26 amendment item 1: a manual Start makes its starter the owner ──
+
+describe('a manual Start makes its starter the owner, written back like any platform owner (TD-031 2026-11-26)', () => {
+  /** The `ticket.matched` a person's *Start* appends (`manual-start.ts`): rule manual, a user actor. */
+  const manualStart = (userId: Id): DomainEvent => {
+    const event = ticketMatched() as Extract<DomainEvent, { type: 'ticket.matched' }>;
+    return domainEventSchemasByType['ticket.matched'].parse({
+      ...event,
+      actor: { kind: 'user', user_id: userId },
+      payload: { ...event.payload, rule: 'manual' },
+    }) as DomainEvent;
+  };
+
+  it.each([
+    ['an unassigned ticket', null],
+    ['a ticket the binding’s own account holds', 'bot'],
+    ['a ticket an unlinked person holds', 'stranger'],
+  ] as const)(
+    '%s: the starter owns it, and the write-back assigns their account',
+    async (_label, held) => {
+      const ticket = tracker(held);
+      const harness = harnessFor(ticket, { assignOwner: true });
+      await harness.publish([manualStart(ALICE)]);
+      const taskId = taskIdOf(harness);
+      expect(harness.store.ownershipOf(taskId)).toMatchObject({
+        ownerUserId: ALICE,
+        ownerSource: 'platform',
+      });
+      const changes = ownerEvents(harness) as Extract<
+        DomainEvent,
+        { type: 'task.owner.changed' }
+      >[];
+      expect(
+        changes.map((event) => [event.actor, event.payload.via, event.payload.source]),
+      ).toEqual([[{ kind: 'user', user_id: ALICE }, 'command', 'platform']]);
+      await harness.drain();
+      expect(writeBackJobs(harness)).toHaveLength(1);
+      expect(ticket.calls.map((call) => call.account)).toEqual(['acct-alice']);
+    },
+  );
+
+  it('a ticket the tracker assigns to another linked member keeps that member; nothing is written back', async () => {
+    const ticket = tracker('bob');
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([manualStart(ALICE)]);
+    expect(harness.store.ownershipOf(taskIdOf(harness))).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'tracker',
+    });
+    await harness.drain();
+    expect(writeBackJobs(harness)).toEqual([]);
+    expect(ticket.calls).toEqual([]);
+  });
+
+  it('a starter who may not own in the project leaves the task as a rule match would', async () => {
+    const OUTSIDER = '00000000-0000-4000-8000-0000000000f0' as Id;
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([manualStart(OUTSIDER)]);
+    expect(harness.store.ownershipOf(taskIdOf(harness)).ownerUserId).toBeNull();
+    expect(ownerEvents(harness)).toEqual([]);
+  });
+
+  it('a rule match names no starter: the task stays unowned (the control)', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([ticketMatched()]);
+    expect(harness.store.ownershipOf(taskIdOf(harness)).ownerUserId).toBeNull();
+    expect(ownerEvents(harness)).toEqual([]);
+  });
+});

@@ -813,6 +813,51 @@ describe('picks through RemoteRuns.claim (S-26.4, criterion 4)', () => {
     });
   });
 
+  // TD-031's 2026-11-26 amendment item 2: an automatic claim assigns as a pick does, never refuses.
+  const automaticInput = (workerId: Id) => ({
+    workerId,
+    heldImageDigests: HELD,
+    images: { run: RUN_DIGEST, egress: EGRESS_DIGEST },
+    now: NOW,
+  });
+
+  it('an automatic claim of an unowned stage offer makes the worker’s person the owner — via pick, no take audit', async () => {
+    const { me, taskId, runId } = await arrange('unowned');
+    const w = await worker(me, { policy: 'mine_and_unassigned' });
+    expect(await withRemote((remote) => remote.claim(automaticInput(w)))).toEqual({
+      kind: 'not_packaged',
+      runId,
+    });
+    expect(await ownership(taskId)).toEqual({ owner_user_id: me, owner_source: 'platform' });
+    expect((await ownerEvents(taskId)).map((event) => event.payload)).toEqual([
+      expect.objectContaining({ owner_user_id: me, previous_owner_user_id: null, via: 'pick' }),
+    ]);
+    // The machine's policy, not a person's act on its page: no human_actions row.
+    expect(await actions(taskId)).toEqual([]);
+  });
+
+  it('an automatic claim of another person’s task (an everything machine) keeps its owner', async () => {
+    const { me, other, taskId, runId } = await arrange('another’s');
+    const w = await worker(me, { policy: 'everything' });
+    expect(await withRemote((remote) => remote.claim(automaticInput(w)))).toEqual({
+      kind: 'not_packaged',
+      runId,
+    });
+    expect((await ownership(taskId))?.owner_user_id).toBe(other);
+    expect(await ownerEvents(taskId)).toEqual([]);
+  });
+
+  it('an automatic claim of a task held by an unlinked person assigns nothing', async () => {
+    const { me, taskId, runId } = await arrange('held by an unlinked person');
+    const w = await worker(me, { policy: 'everything' });
+    expect(await withRemote((remote) => remote.claim(automaticInput(w)))).toEqual({
+      kind: 'not_packaged',
+      runId,
+    });
+    expect((await ownership(taskId))?.owner_user_id).toBeNull();
+    expect(await ownerEvents(taskId)).toEqual([]);
+  });
+
   it('a pick of an ask assigns nothing, whoever owns its task', async () => {
     const { me, taskId, runId } = await arrange('an ask another person asked');
     // The task is mine (the arrangement's), the ask another person's: the pick takes the ask.

@@ -36,6 +36,7 @@ import {
   type ExternalIdentity,
   type Id,
   type IsoDateTime,
+  idSchema,
   implementationPlanDataSchema,
   type RiskClass,
   refinedSpecDataSchema,
@@ -105,6 +106,7 @@ import {
   integrationsForProject,
   noRunScopedSecrets,
   ticketReads,
+  ticketWrites,
 } from './integrations.js';
 import {
   enqueueOutbound,
@@ -112,6 +114,7 @@ import {
   enqueueStage,
   type PipelineOutboundData,
 } from './jobs.js';
+import { MANUAL_START_RULE } from './manual-start.js';
 import { closeStageOffer } from './offer-withdrawal.js';
 import { admitOwner } from './owner-admission.js';
 import { nextTaskSequence, syncOwnerAtIntake } from './owner-sync.js';
@@ -369,6 +372,11 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
       ticket: payload.ticket,
       issue_type: payload.issue_type ?? null,
       priority: payload.priority ?? null,
+      // TD-031's 2026-11-26 amendment item 1: a person's manual Start names its starter, who owns
+      // the task intake creates. A rule match (and the reconciler's re-emission) names nobody.
+      ...(payload.rule === MANUAL_START_RULE && event.actor.kind === 'user'
+        ? { starter_user_id: event.actor.user_id }
+        : {}),
     };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);
@@ -404,6 +412,12 @@ export const runIntakeCheck = async (
   // The job payload is a wire boundary like any other, and the ticket in it is provider text.
   const ticket = ticketRefSchema.parse(data.ticket);
   const causeEventId = data.cause_event_id as Id;
+  // TD-031's 2026-11-26 amendment item 1: the person whose manual Start this is, or nobody. A wire
+  // boundary like the ticket: a malformed value is refused rather than written as an owner.
+  const starterUserId =
+    data.starter_user_id === undefined || data.starter_user_id === null
+      ? null
+      : (idSchema.parse(data.starter_user_id) as Id);
 
   const alreadyIntaken = await options.unitOfWork.transaction(async (scope) =>
     options.store.tasks.findByTicket(scope.tx, {
@@ -675,6 +689,13 @@ export const runIntakeCheck = async (
       taskId: created.aggregate.id,
       read: ticketRead,
       causeEventId,
+      /**
+       * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendment item 1),
+       * here — before the first offer is written below, because an open offer names the owner it
+       * was written with — unless the tracker assigns the ticket to another linked member, who
+       * keeps it. The owner's WIP limit below is then the starter's.
+       */
+      starterUserId,
     });
     const withOwner = (events: readonly DomainEvent[]): DomainEvent[] =>
       ownerEvent === null
@@ -695,7 +716,7 @@ export const runIntakeCheck = async (
       await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
       await closeParkedStageRow(options.store, scope.tx, escalated, ESCALATED_OUTCOME);
       await scope.events.append(withOwner([...created.events, ...escalated.events]));
-      return null;
+      return { taskId: created.aggregate.id, work: null };
     }
 
     const counts = await options.store.tasks.counts(scope.tx, projectId);
@@ -716,7 +737,7 @@ export const runIntakeCheck = async (
       );
       await options.store.tasks.save(scope.tx, { ...stored, task: queued.aggregate });
       await scope.events.append(withOwner([...created.events, ...queued.events]));
-      return null;
+      return { taskId: created.aggregate.id, work: null };
     }
 
     const pipeline = compilePipeline(
@@ -738,9 +759,9 @@ export const runIntakeCheck = async (
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     });
     await scope.events.append(withOwner([...created.events, ...applied.events]));
-    return applied.work;
+    return { taskId: created.aggregate.id, work: applied.work };
   });
-  const work = await creation.catch((error: unknown) => {
+  const outcome = await creation.catch((error: unknown) => {
     if (error instanceof DefaultBranchChangedError) {
       (options.logger ?? silentLogger).warn(
         {
@@ -755,8 +776,49 @@ export const runIntakeCheck = async (
     throw error;
   });
 
-  if (work !== null) {
-    await enqueueStage(options.jobs, work);
+  if (outcome !== null && outcome.work !== null) {
+    await enqueueStage(options.jobs, outcome.work);
+  }
+  if (outcome !== null && starterUserId !== null) {
+    await addPickupLabel(options, integrations, { projectId, taskId: outcome.taskId, ticket });
+  }
+};
+
+/**
+ * **A manual Start labels its ticket** (TD-031's 2026-11-26 amendment item 3, BACKLOG 1611's shape):
+ * once the task a person started exists, the binding's pick-up label — Jira's `pickup_label`, when
+ * the pick-up rule is a label — is added to the ticket, add-only, through `IntegrationActionExecutor`
+ * (`ticketWrites.pickupLabel`), here after the creation's transaction committed and outside every
+ * transaction. Here rather than in the start command: the task exists only now, so the idempotency
+ * key is the task's, and a label added before the task existed would wake the binding's own
+ * pick-up rule, whose match (naming no starter) could create the task before the manual one did.
+ * A ticket intake skipped or deduplicated is not labelled. **Best-effort**: the label is a mark,
+ * not the trigger — a failure is audited by the executor and logged, never undoes the start, and is
+ * not retried (a retried intake finds the task and returns). The platform never removes it; a
+ * labelled ticket whose task has finished starts nothing again, because intake keeps one task per
+ * ticket in any state (`tasks (project_id, ticket_key, mode)` is unique, migration 0004).
+ */
+const addPickupLabel = async (
+  options: IntakeCheckOptions,
+  integrations: PipelineIntegrations,
+  input: { readonly projectId: Id; readonly taskId: Id; readonly ticket: TicketRef },
+): Promise<void> => {
+  try {
+    await ticketWrites(integrations).pickupLabel(input.ticket, {
+      projectId: input.projectId,
+      taskId: input.taskId,
+      mode: 'normal',
+      causeEventId: null,
+      idempotencyKey: `ticket_pickup_label:${input.taskId}`,
+    });
+  } catch (error) {
+    if (error instanceof TransactionOpenError) {
+      throw error;
+    }
+    (options.logger ?? silentLogger).warn(
+      { project_id: input.projectId, task_id: input.taskId, err: error },
+      'a manual start could not add the pick-up label to its ticket; the task stands',
+    );
   }
 };
 

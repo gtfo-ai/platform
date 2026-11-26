@@ -1148,3 +1148,122 @@ describe('take this one, and what a worker could claim (WP-293)', () => {
     expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed' });
   });
 });
+
+/**
+ * TD-031's 2026-11-26 amendment items 1–2 (the GO-992 report): a manual Start makes its starter
+ * the owner before the first offer exists, so only their machine's `mine_and_unassigned` policy
+ * takes it; and a worker's automatic claim of an unowned task makes its person the owner.
+ */
+describe('a started or automatically claimed task has an owner (TD-031 2026-11-26)', () => {
+  const ownerEvents = (w: World) =>
+    w.harness
+      .events()
+      .filter(
+        (entry): entry is Extract<DomainEvent, { type: 'task.owner.changed' }> =>
+          entry.type === 'task.owner.changed',
+      );
+  const membersOf = (harness: PipelineHarness) => {
+    harness.store.seedProjectMember(PROJECT as Id, ALICE as Id);
+    harness.store.seedProjectMember(PROJECT as Id, BOB as Id);
+  };
+  const policy = (w: World, workerId: Id, claimPolicy: 'mine_and_unassigned' | 'everything') => {
+    const known = w.workers.get(workerId);
+    if (known === undefined) throw new Error(`no ${workerId}`);
+    w.workers.set(workerId, { ...known, claimPolicy });
+  };
+  /** The `ticket.matched` a person's *Start* appends (`manual-start.ts`): rule manual, a user actor. */
+  const manualStart = (key: string, seq: number, userId: Id): DomainEvent =>
+    domainEventSchemasByType['ticket.matched'].parse({
+      id: `00000000-0000-4000-9000-0000002811${String(seq).padStart(2, '0')}`,
+      stream_type: 'project',
+      stream_id: PROJECT,
+      stream_seq: seq,
+      correlation_id: null,
+      cause_event_id: null,
+      actor: { kind: 'user', user_id: userId },
+      occurred_at: '2026-06-01T09:00:00.000Z',
+      type: 'ticket.matched',
+      payload: {
+        project_id: PROJECT,
+        ticket: { provider: 'fake-jira', key, url: `https://jira.example.test/browse/${key}` },
+        rule: 'manual',
+        priority: null,
+        issue_type: 'Story',
+        epic: null,
+        links: [],
+      },
+    }) as DomainEvent;
+
+  it('the starter owns the task, so of two mine_and_unassigned machines only theirs claims it', async () => {
+    const w = await world({
+      tickets: 0,
+      before: (harness) => {
+        membersOf(harness);
+      },
+    });
+    await w.harness.publish([manualStart('ACME-1', 1, ALICE as Id)]);
+    const runId = w.harness.store.offerRows()[0]?.runId as Id;
+    const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
+    expect(w.harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: ALICE,
+      ownerSource: 'platform',
+    });
+    expect(ownerEvents(w).map((event) => [event.actor, event.payload.via])).toEqual([
+      [{ kind: 'user', user_id: ALICE }, 'command'],
+    ]);
+    policy(w, W1, 'mine_and_unassigned');
+    policy(w, W2, 'mine_and_unassigned');
+    // Bob's machine asked first, as Jan's did on fontai six seconds after the start: nothing.
+    expect(await claimAs(w, W2)).toEqual({ kind: 'none' });
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId });
+    expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBe(ALICE);
+    // The claim of a task its person already owns records no second change.
+    expect(ownerEvents(w)).toHaveLength(1);
+  });
+
+  it('an automatic claim of an unowned stage offer makes the worker’s person the owner — via pick, no take audit', async () => {
+    const takes: { workerId: Id; runId: Id; taskId: Id }[] = [];
+    const w = await world({ takes, before: membersOf });
+    const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
+    expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBeNull();
+    policy(w, W2, 'mine_and_unassigned');
+    expect(await claimAs(w, W2)).toMatchObject({ kind: 'claimed', runId: w.runId });
+    expect(w.harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+    });
+    expect(ownerEvents(w).map((event) => [event.actor, event.payload])).toEqual([
+      [
+        { kind: 'user', user_id: BOB },
+        expect.objectContaining({
+          owner_user_id: BOB,
+          previous_owner_user_id: null,
+          source: 'platform',
+          via: 'pick',
+        }),
+      ],
+    ]);
+    // Not a person's act on their machine's page: the pick's audit row is not written.
+    expect(takes).toEqual([]);
+  });
+
+  it('an everything machine claims another person’s task and keeps its owner — never refused', async () => {
+    const w = await world({ tickets: 0, before: membersOf });
+    await w.harness.publish([manualStart('ACME-1', 1, BOB as Id)]);
+    const runId = w.harness.store.offerRows()[0]?.runId as Id;
+    const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
+    policy(w, W1, 'everything');
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed', runId });
+    expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBe(BOB);
+    expect(ownerEvents(w)).toHaveLength(1);
+  });
+
+  it('assigns nothing when the worker’s person may not own in the project', async () => {
+    // No member seeded: the worker is eligible (its `memberOf`) but its person may not own.
+    const w = await world();
+    const taskId = w.harness.store.snapshot()[0]?.task.id as Id;
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed' });
+    expect(w.harness.store.ownershipOf(taskId).ownerUserId).toBeNull();
+    expect(ownerEvents(w)).toEqual([]);
+  });
+});

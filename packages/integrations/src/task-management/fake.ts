@@ -142,6 +142,12 @@
  *     (`projectKeys`) are never answered and a key outside it asks nothing. Off with
  *     `capabilities: { ticketSearch: false }`, which refuses by name. Never `invalid_request`: the
  *     fake has no query language to refuse.
+ * 23. **Different — `pickupLabel()` answers the `pickupLabel` option, `null` when absent**
+ *     (TD-031's 2026-11-26 amendment item 3), where a Jira binding answers its `pickup_label`,
+ *     `agentic` by default, unless `pickup_status` is set. So a fake built directly makes no
+ *     label call on a manual start unless a test asks for one. Through
+ *     `fakeTaskManagementRegistration` the binding's config decides it as Jira's does: its
+ *     `pickup_label` (default `agentic`) while no `pickup_status` is set.
  */
 import {
   type AssignResult,
@@ -316,6 +322,8 @@ export interface FakeTaskManagementOptions {
    * `claim_label` decides it instead (divergence 21).
    */
   readonly claimLabel?: string | null;
+  /** What `pickupLabel()` answers (TD-031's 2026-11-26 amendment item 3); absent is `null` (divergence 23). */
+  readonly pickupLabel?: string | null;
   /** The fake clock's first instant (`createFakeCore`); the fixed epoch when absent. */
   readonly clockStart?: string;
   /**
@@ -1110,6 +1118,8 @@ export const createFakeTaskManagement = (
     pollPlan: () => poll,
 
     claimLabel: () => options.claimLabel ?? null,
+
+    pickupLabel: () => options.pickupLabel ?? null,
 
     ticketScope: (ticketKey) => {
       const keys = options.projectKeys ?? [];

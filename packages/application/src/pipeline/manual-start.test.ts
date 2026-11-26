@@ -490,3 +490,119 @@ describe('a Jira issue moved to another project (WP-134, backlog 418)', () => {
     ).toEqual(['NEW-6', 'NEW-7', 'OLD-1']);
   });
 });
+
+/**
+ * TD-031's 2026-11-26 amendment items 1 and 3 (the GO-992 report): the person who pressed *Start*
+ * owns the task intake creates — before its first offer, which names that owner — and the ticket
+ * gets the binding's pick-up label once the task exists, through the executor and outside every
+ * transaction. The precedence matrix is the domain's (`decideStarterOwner`) and the write-back's
+ * `owner-write-back.test.ts`.
+ */
+describe('a ticket started by hand has its starter as owner, and the pick-up label (TD-031 2026-11-26)', () => {
+  const labelled = () => {
+    const calls: {
+      readonly key: string;
+      readonly add: readonly string[];
+      readonly remove: readonly string[];
+      readonly inTransaction: boolean;
+    }[] = [];
+    const harness = harnessWith({
+      taskManagement: {
+        readTicket: async (ref) => ticketFor(ref),
+        pickupLabel: () => 'agentic',
+        setLabels: async (ref, add, remove) => {
+          calls.push({ key: ref.key, add, remove, inTransaction: transactionIsOpen() });
+          return [...add];
+        },
+      },
+    });
+    harness.store.seedProjectMember(PROJECT, USER);
+    return { harness, calls };
+  };
+
+  it('makes the starter the owner before the first offer, which names them', async () => {
+    const { harness } = labelled();
+    await start(harness, 'ACME-7');
+    await harness.drain();
+    const task = stateOf(harness, 'ACME-7');
+    expect(task?.state).toBe('active');
+    expect(harness.store.ownershipOf(task?.id as Id)).toMatchObject({
+      ownerUserId: USER,
+      ownerSource: 'platform',
+    });
+    const [change] = harness
+      .events()
+      .filter(
+        (entry): entry is Extract<DomainEvent, { type: 'task.owner.changed' }> =>
+          entry.type === 'task.owner.changed',
+      );
+    expect(change?.actor).toEqual({ kind: 'user', user_id: USER });
+    expect(change?.payload).toMatchObject({
+      owner_user_id: USER,
+      source: 'platform',
+      via: 'command',
+    });
+    // The offer written by the first stage's job names the owner the task was created with.
+    expect(harness.store.offerRows().map((offer) => offer.routing.assigneeUserId)).toEqual([USER]);
+  });
+
+  it('adds the pick-up label once, outside every transaction, after the task exists', async () => {
+    const { harness, calls } = labelled();
+    await start(harness, 'ACME-7');
+    await harness.drain();
+    expect(calls).toEqual([{ key: 'ACME-7', add: ['agentic'], remove: [], inTransaction: false }]);
+    expect(harness.audit.entriesFor('add_pickup_label').map((entry) => entry.status)).toEqual([
+      'ok',
+    ]);
+    // A second match of the same ticket (the label's own rule firing) starts nothing and labels nothing.
+    await harness.publish([ruleMatch('ACME-7')]);
+    expect(harness.store.snapshot()).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('labels nothing for a rule match, which the tracker already labelled (the control)', async () => {
+    const { harness, calls } = labelled();
+    await harness.publish([ruleMatch('ACME-1')]);
+    expect(stateOf(harness, 'ACME-1')?.state).toBe('active');
+    expect(harness.store.ownershipOf(stateOf(harness, 'ACME-1')?.id as Id).ownerUserId).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('a failed label add is logged and the task stands', async () => {
+    const failing = harnessWith({
+      taskManagement: {
+        readTicket: async (ref) => ticketFor(ref),
+        pickupLabel: () => 'agentic',
+        setLabels: async () => {
+          throw new IntegrationError('forbidden', 'fake-jira', 'the account may not edit issues');
+        },
+      },
+    });
+    failing.store.seedProjectMember(PROJECT, USER);
+    await start(failing, 'ACME-7');
+    await failing.drain();
+    expect(stateOf(failing, 'ACME-7')?.state).toBe('active');
+    expect(failing.store.ownershipOf(stateOf(failing, 'ACME-7')?.id as Id).ownerUserId).toBe(USER);
+    expect(failing.audit.entriesFor('add_pickup_label').map((entry) => entry.status)).not.toEqual(
+      [],
+    );
+  });
+
+  it('a binding with no pick-up label makes no call', async () => {
+    const calls: string[] = [];
+    const harness = harnessWith({
+      taskManagement: {
+        readTicket: async (ref) => ticketFor(ref),
+        setLabels: async (ref) => {
+          calls.push(ref.key);
+          return [];
+        },
+      },
+    });
+    await start(harness, 'ACME-7');
+    await harness.drain();
+    expect(stateOf(harness, 'ACME-7')?.state).toBe('active');
+    expect(calls).toEqual([]);
+    expect(harness.audit.entriesFor('add_pickup_label')).toEqual([]);
+  });
+});

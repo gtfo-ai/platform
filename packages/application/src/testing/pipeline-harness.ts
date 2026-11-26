@@ -1464,6 +1464,9 @@ const stubTaskManagement = (
         ticketScope: () => ({ kind: 'unscoped' }),
         // BACKLOG 1611: no claim label, every provider's default; a case about it overrides both.
         claimLabel: () => null,
+        // TD-031's 2026-11-26 amendment item 3: no pick-up label, so a manual start makes no label
+        // call; a case about it overrides it with `setLabels`.
+        pickupLabel: () => null,
         upsertWorkpad: async () => ({
           provider: 'fake-jira',
           ticket_key: 'ACME-1',

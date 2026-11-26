@@ -524,3 +524,73 @@ export const decidePickOwner = (
     },
   };
 };
+
+/**
+ * **A worker's automatic claim assigns** (TD-031's 2026-11-26 amendment item 2): the same decision
+ * and the same write as a pick ({@link decidePickOwner}, `via: pick`), except that a task another
+ * person owns is **not refused** — an `everything` machine claims such a task by its policy, and
+ * the claim stands with the owner kept. So: an unassigned task gets the worker's person; a task
+ * held elsewhere, one the person already owns, and a person who may not own change nothing.
+ */
+export const decideClaimOwner = (
+  current: TaskOwnership,
+  input: {
+    readonly workerUserId: Id;
+    readonly heldElsewhere: boolean;
+    readonly workerMayOwn: boolean;
+    readonly at: IsoDateTime;
+  },
+): OwnershipDecision => {
+  const decision = decidePickOwner(current, {
+    pickerUserId: input.workerUserId,
+    heldElsewhere: input.heldElsewhere,
+    pickerMayOwn: input.workerMayOwn,
+    at: input.at,
+  });
+  return decision.kind === 'refused' ? { kind: 'unchanged' } : decision;
+};
+
+/**
+ * **A manual Start makes its starter the owner** (TD-031's 2026-11-26 amendment item 1), decided at
+ * intake over the ownership the tracker sync just wrote ({@link syncOwnerFromTracker}), in the
+ * transaction that creates the task — before its first offer exists, because an open offer names
+ * the owner it was written with.
+ *
+ * - **A ticket the tracker assigns to a linked `member`-or-above person keeps that person** (the
+ *   2026-11-06 amendment's item 5: a member keeps their ticket) — the sync already made them the
+ *   owner, so a task with an owner is never changed here; the starter themselves included.
+ * - **Every other ticket gets the starter** — unassigned, the binding's own account or a machine,
+ *   an unlinked or non-member assignee — `source: platform`, `via: command`, with
+ *   `ticket_assignee` left as the sync stored it (rule 1: the next sync keeps the owner until
+ *   somebody changes the tracker). Unlike a pick, an assignee the platform cannot map does not stop
+ *   it: the person who pressed *Start* asked for this ticket by name.
+ * - **A starter who may not own** (`starterMayOwn`, item 1's `member`+) changes nothing: the task
+ *   is created as before, with the tracker's assignee synced.
+ */
+export const decideStarterOwner = (
+  current: TaskOwnership,
+  input: {
+    readonly starterUserId: Id;
+    readonly starterMayOwn: boolean;
+    readonly at: IsoDateTime;
+  },
+): OwnershipDecision => {
+  if (!input.starterMayOwn || current.ownerUserId !== null) {
+    return { kind: 'unchanged' };
+  }
+  return {
+    kind: 'write',
+    next: {
+      ...current,
+      ownerUserId: input.starterUserId,
+      ownerSource: 'platform',
+      ownerChangedAt: input.at,
+    },
+    change: {
+      ownerUserId: input.starterUserId,
+      previousOwnerUserId: null,
+      source: 'platform',
+      via: 'command',
+    },
+  };
+};

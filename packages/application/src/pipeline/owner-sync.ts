@@ -45,6 +45,9 @@
  *
  * {@link assignOwnerOnPick} is the fifth writer: a person's *take this one* on their machine's page
  * makes them the owner of an unassigned task, in the run claim's own transaction.
+ * {@link assignOwnerOnClaim} is the sixth (TD-031's 2026-11-26 amendment item 2): a worker's
+ * automatic claim of a stage offer does the same for its person, and never refuses. Intake's sync
+ * also writes a manual Start's starter ({@link syncOwnerAtIntake}, item 1).
  *
  * ## The stream
  *
@@ -64,8 +67,10 @@ import { domainEventSchemasByType } from '@platform/contracts';
 import {
   type AssigneeClass,
   adoptOwnerOnLink,
+  decideClaimOwner,
   decideOwnerCommand,
   decidePickOwner,
+  decideStarterOwner,
   isTerminalTaskState,
   type OwnerChange,
   type OwnerCommandRefusal,
@@ -325,6 +330,14 @@ const applyOnTaskStream = async (
  * the read assignee becomes `ticket_assignee`, and the owner the linked `member` it maps to. The
  * caller appends the answered event after the creation's own, because the stream's sequence is
  * the aggregate's there — `streamSeqAfter` names the next free one ({@link nextTaskSequence}).
+ *
+ * **A manual Start's starter** (`starterUserId`, TD-031's 2026-11-26 amendment item 1) is then
+ * decided over what the sync wrote (`decideStarterOwner`): a task the sync gave a linked member
+ * keeps them, and every other task gets the starter when they may own in the project — in this
+ * same transaction, so before the task's first offer exists. The two changes are exclusive (the
+ * starter is written only over an owner the sync left `null`, and a sync that records a change has
+ * set one), so the answer is at most one event: the sync's, or the starter's with the starter as
+ * its actor.
  */
 export const syncOwnerAtIntake = async (
   options: OwnerSyncOptions,
@@ -334,29 +347,53 @@ export const syncOwnerAtIntake = async (
     readonly taskId: Id;
     readonly read: Pick<TicketRead, 'assignee' | 'assigneeDisplayName'> | null;
     readonly causeEventId: Id;
+    /** The person who pressed *Start* — a `ticket.matched` with `rule: 'manual'` and a user actor. */
+    readonly starterUserId?: Id | null;
   },
 ): Promise<((streamSeq: number) => DomainEvent) | null> => {
-  if (input.read === null || input.read.assignee === null) {
-    // An unassigned ticket, or one intake could not read: nothing to store, nothing to compare.
+  let recorded: { readonly change: OwnerChange; readonly changedAt: IsoDateTime | null } | null =
+    null;
+  if (input.read !== null && input.read.assignee !== null) {
+    // An unassigned ticket, or one intake could not read, has nothing to store or compare.
+    const current = await options.store.tasks.ownership(tx, input.taskId);
+    const decision = await trackerDecision(
+      options,
+      tx,
+      {
+        projectId: input.projectId,
+        assignee: input.read.assignee,
+        assigneeDisplayName: input.read.assigneeDisplayName,
+      },
+      current,
+    );
+    await writeDecision(options.store, tx, input.taskId, current, decision);
+    if (decision.kind === 'write' && decision.change !== null) {
+      recorded = { change: decision.change, changedAt: decision.next.ownerChangedAt };
+    }
+  }
+  let actor: DomainEvent['actor'] = PIPELINE_ACTOR;
+  const starterUserId = input.starterUserId ?? null;
+  if (starterUserId !== null) {
+    // Re-read: the sync above may have written `ticket_assignee`, and `saveOwner` compares it.
+    const synced = await options.store.tasks.ownership(tx, input.taskId);
+    const decision = decideStarterOwner(synced, {
+      starterUserId,
+      starterMayOwn: await options.store.owners.mayOwn(tx, {
+        projectId: input.projectId,
+        userId: starterUserId,
+      }),
+      at: options.clock.now() as IsoDateTime,
+    });
+    await writeDecision(options.store, tx, input.taskId, synced, decision);
+    if (decision.kind === 'write' && decision.change !== null) {
+      recorded = { change: decision.change, changedAt: decision.next.ownerChangedAt };
+      actor = { kind: 'user', user_id: starterUserId };
+    }
+  }
+  if (recorded === null) {
     return null;
   }
-  const current = await options.store.tasks.ownership(tx, input.taskId);
-  const decision = await trackerDecision(
-    options,
-    tx,
-    {
-      projectId: input.projectId,
-      assignee: input.read.assignee,
-      assigneeDisplayName: input.read.assigneeDisplayName,
-    },
-    current,
-  );
-  await writeDecision(options.store, tx, input.taskId, current, decision);
-  if (decision.kind === 'unchanged' || decision.change === null) {
-    return null;
-  }
-  const change = decision.change;
-  const changedAt = decision.next.ownerChangedAt;
+  const { change, changedAt } = recorded;
   return (streamSeq) =>
     ownerChangedEvent(options, {
       projectId: input.projectId,
@@ -364,7 +401,7 @@ export const syncOwnerAtIntake = async (
       streamSeq,
       change,
       changedAt,
-      actor: PIPELINE_ACTOR,
+      actor,
       causeEventId: input.causeEventId,
     });
 };
@@ -933,6 +970,48 @@ export const assignOwnerOnPick = async (
       }
       return decision;
     },
+  });
+  return change?.ownerUserId ?? null;
+};
+
+/**
+ * **A worker's automatic claim assigns** (TD-031's 2026-11-26 amendment item 2): the sixth writer,
+ * in the run claim's own transaction like {@link assignOwnerOnPick} and by the same decision —
+ * except that another person's task is claimed with its owner kept rather than refused
+ * (`decideClaimOwner`), because an `everything` machine takes it by its policy. A task held
+ * elsewhere, or a person who may not own, is claimed without assigning. Answers the owner it
+ * assigned, or `null`. The event's actor is the worker's person: the claim is their machine's.
+ */
+export const assignOwnerOnClaim = async (
+  options: OwnerSyncOptions,
+  scope: Pick<TransactionScope, 'tx' | 'events'>,
+  input: { readonly taskId: Id; readonly workerUserId: Id },
+): Promise<Id | null> => {
+  const stored = await options.store.tasks.load(scope.tx, input.taskId);
+  if (stored === null) {
+    throw new TaskOwnerConflictError(input.taskId);
+  }
+  const projectId = stored.task.projectId;
+  if ((await options.store.tasks.ownership(scope.tx, input.taskId)).ownerUserId !== null) {
+    // An owned task is the common case for a `mine` machine: no lock, nothing decided.
+    return null;
+  }
+  const workerMayOwn = await options.store.owners.mayOwn(scope.tx, {
+    projectId,
+    userId: input.workerUserId,
+  });
+  const change = await applyOnTaskStream(options, scope, {
+    projectId,
+    taskId: input.taskId,
+    actor: { kind: 'user', user_id: input.workerUserId },
+    causeEventId: null,
+    decide: async (current) =>
+      decideClaimOwner(current, {
+        workerUserId: input.workerUserId,
+        heldElsewhere: await heldElsewhereNow(options.store, scope.tx, projectId, current),
+        workerMayOwn,
+        at: options.clock.now() as IsoDateTime,
+      }),
   });
   return change?.ownerUserId ?? null;
 };

@@ -16,6 +16,7 @@ upsertWorkpad(ref, markerId, markdown) -> CommentRef # edit in place (BD-023); J
 addComment(ref, markdown) -> CommentRef              # questions, linter output
 setLabels(ref, add[], remove[]) -> labels          # edits the named labels only, never rewrites the set (BACKLOG 1611)
 claimLabel() -> string | null                        # BACKLOG 1611: the binding's claim_label; added at a claim, removed at a release (best-effort, executor)
+pickupLabel() -> string | null                       # TD-031 2026-11-26: the pick-up rule's label (Jira pickup_label unless pickup_status decides); added once, by intake, to a ticket a person started by hand (key ticket_pickup_label:<task>, best-effort, executor, never removed)
 linkMergeRequest(ref, mrUrl)
 createTicket(draft) -> TicketRef                     # scope-creep valve, epic split
 resolveIdentity(providerUserId|email) -> UserIdentity

@@ -333,13 +333,16 @@ const fakeTicketScopeOf =
   };
 
 /**
- * The prebuilt port, answering `pollPlan()`, `ticketScope()` and `claimLabel()` from **this binding's** config
+ * The prebuilt port, answering `pollPlan()`, `ticketScope()`, `claimLabel()` and `pickupLabel()` from **this binding's** config
  * rather than its own.
  */
 const withBindingConfig = (port: TaskManagementPort, config: unknown): TaskManagementPort => {
   const plan: TicketPollPlan | null = fakePollPlanOf(config);
   const ticketScope = fakeTicketScopeOf(config);
-  const claimLabel = fakeTaskManagementConfigSchema.parse(config).claim_label ?? null;
+  const parsed = fakeTaskManagementConfigSchema.parse(config);
+  const claimLabel = parsed.claim_label ?? null;
+  // As Jira's (divergence 23): the pick-up label, unless a pick-up status overrides the rule.
+  const pickupLabel = typeof parsed.pickup_status === 'string' ? null : parsed.pickup_label;
   return new Proxy(port, {
     get: (target, key, receiver) =>
       key === 'pollPlan'
@@ -348,7 +351,9 @@ const withBindingConfig = (port: TaskManagementPort, config: unknown): TaskManag
           ? ticketScope
           : key === 'claimLabel'
             ? () => claimLabel
-            : Reflect.get(target, key, receiver),
+            : key === 'pickupLabel'
+              ? () => pickupLabel
+              : Reflect.get(target, key, receiver),
   });
 };
 

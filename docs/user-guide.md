@@ -959,6 +959,19 @@ does not know the key, and when the tracker cannot be read at that moment (try a
 leaves one row in the audit log, and once intake has created the task, the task's own *Who did
 what* lists it: the start, with the person who pressed it. Pressing **Start** twice sends one start.
 
+**The person who pressed Start owns the task** (since TD-031's 2026-11-26 amendment): intake creates
+it with you as its owner, before any computer can take its first run — so a worker set to *mine and
+unassigned* takes it only if it is yours, and someone else's such worker leaves it alone. The one
+exception: a ticket Jira already assigns to *another* member of the project with a linked account
+stays theirs. A ticket assigned to nobody, to the platform's own account, or to someone the platform
+cannot link becomes yours. With **Assign the owner in the tracker** on, the ticket is then assigned
+to you in Jira too; off, Jira keeps its assignee. Once the task exists the ticket also gets the
+integration's **pick-up label** (Jira's `pickup_label`, `agentic` unless changed, and only when the
+start rule is a label rather than a status), so Jira shows it as the platform's work like any
+picked-up ticket. The label is only added, never removed; if Jira refuses the edit, the platform
+logs it and the task carries on. A ticket that keeps the label after its task is done or cancelled
+is **not** started again: the platform runs one task per ticket, whatever state that task is in.
+
 ## 4. Task detail
 
 The task page reads like a pull request: what the task is, where it is, and what you do now. It is
@@ -976,13 +989,18 @@ on the platform stays until somebody changes the tracker. A member may take a ta
 nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
 nobody. By default nothing is written to the tracker. **A project can opt in to writing the owner
 back** (since S-26.3; the ticket lifecycle's switch **Assign the owner in the tracker**, Jira only): then an owner set on
-the platform — by a maintainer, or by a person picking the task on their own machine — is also
+the platform — by a maintainer, by a person picking the task on their own machine, by pressing
+**Start** on its ticket, or by a person's worker taking it — is also
 assigned the ticket in Jira, through their linked Jira account. Giving a task back writes nothing (the
 platform never unassigns a person), an owner with no linked Jira account gets no write, a change made
 in Jira before the write wins over it once the platform has seen it, and a shadow task's write is only
 recorded. The task's `owner_writes_back` says whether its current owner is written back, and the task
 read's `take_writes_back` whether *your* Take would be. The owner's computer gets the head start on
-the task's runs (*Settings → Execution*, below). **A task that existed before owners did** — or any
+the task's runs (*Settings → Execution*, below). **A worker that takes a run of a task nobody owns
+makes its person the owner** (since TD-031's 2026-11-26 amendment), as picking it does — unless the
+ticket is assigned in Jira to someone the platform cannot link, or that person may not own tasks in
+the project. A worker set to *everything* that takes another person's task leaves its owner as it is.
+**A task that existed before owners did** — or any
 live task whose ticket assignee the platform has never stored — has its ticket read **once** by the
 recovery pass, about a minute after the upgrade, up to twenty tasks a pass, the most recently
 touched first; so a task stopped because its ticket is assigned to someone else names that person

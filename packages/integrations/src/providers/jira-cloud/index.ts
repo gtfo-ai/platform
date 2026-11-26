@@ -1534,6 +1534,12 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     setLabels,
     // BACKLOG 1611: off unless the binding configured one; the schema refuses the pick-up label.
     claimLabel: () => config.claim_label ?? null,
+    // TD-031's 2026-11-26 amendment item 3: the label a manual Start adds — the pick-up rule's,
+    // and only while the rule is a label (a `pickup_status` wins, `pickupRuleOf`).
+    pickupLabel: () => {
+      const rule = pickupRuleOf(config);
+      return rule.kind === 'label' ? rule.label : null;
+    },
     linkMergeRequest,
     createTicket,
     resolveIdentity,

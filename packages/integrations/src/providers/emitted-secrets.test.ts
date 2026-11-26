@@ -1167,6 +1167,8 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   set_labels: 'setLabels',
   // BACKLOG 1611: pure, off the config — the label is config text.
   claim_label: 'claimLabel',
+  // TD-031's 2026-11-26 amendment item 3: pure, off the config — the pick-up label is config text.
+  pickup_label: 'pickupLabel',
   link_merge_request: 'linkMergeRequest',
   create_ticket: 'createTicket',
   resolve_identity: 'resolveIdentity',
@@ -1233,6 +1235,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     emitted.upsert_workpad = await port.upsertWorkpad(ref, 'workpad', `plan: ${JIRA_TOKEN}`);
     emitted.set_labels = await port.setLabels(ref, [`added-${JIRA_TOKEN}`], []);
     emitted.claim_label = port.claimLabel();
+    emitted.pickup_label = port.pickupLabel();
     emitted.create_ticket = await port.createTicket({
       project_key: 'ACME',
       issue_type: 'Task',

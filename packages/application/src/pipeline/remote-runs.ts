@@ -81,7 +81,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { type ClaimAdmission, ClaimAdmissionRefused } from './claim-admission.js';
 import { leaseExpiryAt } from './lease.js';
 import { claimRunOffer, RUN_OFFERS_TOPIC, recordClaim, workerLeaseOwner } from './offers.js';
-import { assignOwnerOnPick, PickOwnedByAnotherError } from './owner-sync.js';
+import { assignOwnerOnClaim, assignOwnerOnPick, PickOwnedByAnotherError } from './owner-sync.js';
 import { toRunAggregate } from './run-aggregate.js';
 import { openRunPlan } from './run-package.js';
 import type { SettleRunRequest, SettleRunResult } from './settle.js';
@@ -614,6 +614,30 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
           const context = options.context(row.taskId);
           const recorded = recordClaim(offered, offer, context, input.workerId);
           await scope.events.append(recorded.events);
+          const ownerOptions = {
+            store,
+            ids: context.ids,
+            clock: context.clock,
+            ...(options.logger === undefined ? {} : { logger: options.logger }),
+          };
+          if (
+            pick === undefined &&
+            offer.kind === 'stage' &&
+            (offer.workerUserId ?? null) !== null
+          ) {
+            // TD-031's 2026-11-26 amendment item 2: an automatic claim of a stage offer whose task
+            // has no owner makes the worker's person the owner, here — the same decision and the
+            // same write as a pick, the task's row lock the third of the one order — except that
+            // another person's task (an `everything` machine's) is claimed with its owner kept,
+            // never refused. An ask assigns nothing, and the server claimant (no person) never
+            // reaches this. **No `takeAudit` row**: that row is a person's act on their machine's
+            // page, and an automatic claim is the machine's policy — `task.owner.changed` (actor
+            // the worker's person, `via: pick`) is its record.
+            await assignOwnerOnClaim(ownerOptions, scope, {
+              taskId: row.taskId,
+              workerUserId: offer.workerUserId as Id,
+            });
+          }
           if (pick !== undefined) {
             // S-26.4: a pick of a stage offer assigns an unassigned task to the picker, here — the
             // task's row lock is the third of the one order — and refuses another person's (the
@@ -621,16 +645,7 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
             const pickerUserId = offer.workerUserId ?? null;
             const assignedOwner =
               offer.kind === 'stage' && pickerUserId !== null
-                ? await assignOwnerOnPick(
-                    {
-                      store,
-                      ids: context.ids,
-                      clock: context.clock,
-                      ...(options.logger === undefined ? {} : { logger: options.logger }),
-                    },
-                    scope,
-                    { taskId: row.taskId, pickerUserId },
-                  )
+                ? await assignOwnerOnPick(ownerOptions, scope, { taskId: row.taskId, pickerUserId })
                 : null;
             // A person's act: audited with the claim, so a rolled-back claim leaves no row.
             await takeAudit?.record(scope.tx, {
