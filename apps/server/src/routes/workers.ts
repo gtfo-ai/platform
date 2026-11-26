@@ -7,6 +7,7 @@
  *   GET    /api/workers                     own workers; every worker for an administrator
  *   DELETE /api/workers/:id                 revoke (own; any for an administrator)
  *   PUT    /api/workers/:id/claim-policy    what the machine takes — its own user only (S-26.4)
+ *   GET    /api/workers/:id/claim-scope     what its card may offer — its own user only (BD-035)
  *
  * Session-authenticated and, being mutations, behind the CSRF hook (`auth/plugin.ts`). The device
  * pair and the list are `worker.register` (any signed-in active user — TD-031 §10c: "the approver
@@ -46,6 +47,15 @@
  * `worker.claim_policy` per change, none for a repeat. The list carries `claim_policy` and
  * `policy_skipped_offers`; a policy other than `pick_only` is **no blocker** — a *mine* machine
  * with nothing of its own is idle by choice, which `policy_skipped_offers` says instead.
+ *
+ * ## What the card may offer (BD-035, TD-022's visibility amendment item 6)
+ *
+ * `GET /api/workers/:id/claim-scope` is the session twin of the worker protocol's `GET claim-scope`:
+ * the projects where the worker's user is `member` or above now — **not** the projects they see,
+ * because choosing is not seeing and a narrowed person must be able to widen their worker again —
+ * each with its execution setting, and `unassigned_has_taker` asked for this machine (the protocol
+ * read's own statement). Only the worker's own user reads it; anybody else, an administrator
+ * included, is `404`. It is the one read that names a hidden project, and it names no task.
  */
 import {
   apiErrorSchema,
@@ -53,6 +63,7 @@ import {
   imageDigestSchema,
   revokeWorkerResponseSchema,
   type WorkerClaimBlocker,
+  type WorkerClaimScopeExecution,
   type WorkerIdleReason,
   type WorkerSummary,
   workerClaimPolicyRequestSchema,
@@ -64,6 +75,7 @@ import {
   workerLastUpdateSchema,
   workerParamsSchema,
   workerPauseReasonSchema,
+  workerSessionClaimScopeResponseSchema,
   workerStateSchema,
   workersResponseSchema,
 } from '@platform/contracts';
@@ -105,6 +117,23 @@ export interface WorkerRoutesOptions {
    * or `null`: every row answers `idle_reason: null` (nothing is said rather than guessed).
    */
   readonly idle?: WorkerIdleReader | null;
+  /**
+   * What `GET /api/workers/:id/claim-scope` adds to the store's claim scope (BD-035): each project's
+   * execution setting, and `unassigned_has_taker` for the asking machine — the worker protocol's
+   * own closure, so both reads give one answer. Absent or `null`: the read answers `503` by name.
+   */
+  readonly claimScope?: WorkerClaimScopeReads | null;
+}
+
+/** The two reads `GET /api/workers/:id/claim-scope` composes beside the store (BD-035). */
+export interface WorkerClaimScopeReads {
+  /** A project's execution setting, as `GET /api/projects/:id/execution` says `mode` and `notice`. */
+  readonly execution: (projectId: string) => Promise<WorkerClaimScopeExecution>;
+  /** BACKLOG 1456's statement with the asking worker excluded (`unassignedTakersOf`). */
+  readonly unassignedTakers: (
+    workerId: string,
+    projectIds: readonly string[],
+  ) => Promise<ReadonlyMap<string, boolean>>;
 }
 
 const iso = (value: Date): IsoDateTime => value.toISOString() as IsoDateTime;
@@ -504,6 +533,64 @@ export const registerWorkerRoutes = async (
             `the list names ${result.projectIds.length} project(s) you may not take a run of: ${result.projectIds.join(', ')}`,
           );
       }
+    },
+  );
+  typed.get(
+    '/api/workers/:id/claim-scope',
+    {
+      preValidation: requirePermission(guard, 'worker.register'),
+      schema: {
+        summary: 'What your machine’s card may offer: the projects you may run in (BD-035)',
+        description:
+          'The session twin of the worker protocol’s `GET claim-scope`, for *What this machine takes* on the Workers screen and in *Add a worker*: `claim_policy` and `claim_project_ids` as stored, `projects` — every project where you are `member` or above now, by key, **whether or not you see it** (BD-035: choosing is not seeing, so a narrowed worker can be widened again) — each with its execution setting (`mode`, and the `notice` its execution read says), and `unassigned_has_taker` per listed project: whether the server claimant or any machine other than this one takes its unassigned tasks by itself. It names no task. **Only the worker’s own user**: anybody else’s worker is `404`, an administrator’s too (they read the card over `GET /api/projects` and may not write it). `503 claim_scope_unavailable` on a process that composed no execution read.',
+        tags: ['workers'],
+        params: workerParamsSchema,
+        response: {
+          200: workerSessionClaimScopeResponseSchema,
+          404: apiErrorSchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request): Promise<z.output<typeof workerSessionClaimScopeResponseSchema>> => {
+      const actor = actorOf(request);
+      const workerId = request.params.id;
+      const scope = await options.store.claimScope(workerId, options.coreDigests?.() ?? null);
+      if (scope.status === 'not_found' || scope.userId !== actor.userId) {
+        throw new NotFoundError(`worker ${workerId}`);
+      }
+      const reads = options.claimScope ?? null;
+      if (reads === null) {
+        throw new HttpError(
+          503,
+          'claim_scope_unavailable',
+          'this process cannot read the projects’ execution settings; try again in a moment',
+        );
+      }
+      const ids = scope.projects.map((project) => project.id);
+      const takers = await reads.unassignedTakers(workerId, ids);
+      const projects = [];
+      for (const project of scope.projects) {
+        projects.push({
+          id: project.id,
+          key: project.key,
+          name: project.name,
+          execution: await reads.execution(project.id),
+        });
+      }
+      return {
+        worker_id: workerId,
+        claim_policy: scope.claimPolicy,
+        claim_project_ids: scope.claimProjectIds === null ? null : [...scope.claimProjectIds],
+        projects,
+        // The protocol read's rule: a listed project the answer does not name is left unknown.
+        unassigned_has_taker: Object.fromEntries(
+          ids.flatMap((id) => {
+            const value = takers.get(id);
+            return value === undefined ? [] : [[id, value] as const];
+          }),
+        ),
+      };
     },
   );
 };

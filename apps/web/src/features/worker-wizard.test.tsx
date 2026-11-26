@@ -9,7 +9,9 @@
  * worker of this person appears — read again every 5 s on that step, and not on Install; Ready
  * lists the blockers in words; the last step opens the new worker's *What this machine takes* card
  * (its projects chosen and saved there), links each project's Execution settings and ends on its
- * board; every step has exactly one primary button; a worker's name is rendered as text.
+ * board; every step has exactly one primary button; a worker's name is rendered as text. Since
+ * BD-035 the last step reads the worker's `GET /api/workers/:id/claim-scope`, so a project the
+ * person does not see is still listed and chosen there (S-30.1 acceptance 4).
  */
 import type { ProjectExecutionResponse, ProjectSummary, WorkerSummary } from '@platform/contracts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -70,6 +72,8 @@ interface World {
   asked: string[];
   /** The bodies of `PUT /api/workers/:id/claim-policy`, in order. */
   policies: unknown[];
+  /** Project ids `GET /api/projects` leaves out (BD-035); the claim-scope read still lists them. */
+  hidden: string[];
 }
 
 const newWorld = (over: Partial<World> = {}): World => ({
@@ -81,6 +85,7 @@ const newWorld = (over: Partial<World> = {}): World => ({
   ],
   asked: [],
   policies: [],
+  hidden: [],
   ...over,
 });
 
@@ -119,7 +124,28 @@ const fetchFor = (world: World) =>
       return json({ items: world.workers, scope: 'own', timezone: 'UTC' });
     }
     if (path === '/api/projects') {
-      return json({ items: world.projects.map((entry) => entry.summary) });
+      return json({
+        items: world.projects
+          .map((entry) => entry.summary)
+          .filter((summary) => !world.hidden.includes(summary.id)),
+      });
+    }
+    const scope = /^\/api\/workers\/([^/]+)\/claim-scope$/.exec(path);
+    if (scope !== null) {
+      const stored = world.workers.find((worker) => worker.id === scope[1]);
+      return json({
+        worker_id: scope[1],
+        claim_policy: stored?.claim_policy ?? 'everything',
+        claim_project_ids: stored?.claim_projects?.map((entry) => entry.id) ?? null,
+        // Every project the person may run in, the ones they do not see included (BD-035).
+        projects: world.projects.map((entry) => ({
+          id: entry.summary.id,
+          key: entry.summary.key,
+          name: entry.summary.name,
+          execution: { mode: entry.execution.mode, notice: entry.execution.notice },
+        })),
+        unassigned_has_taker: {},
+      });
     }
     const read = /^\/api\/projects\/([^/]+)\/execution$/.exec(path);
     const found = world.projects.find((entry) => entry.summary.id === read?.[1]);
@@ -591,5 +617,30 @@ describe('Add a worker: Choose projects', () => {
     expect(choice.queryByRole('checkbox')).toBeNull();
     expect(choice.getByRole('button', { name: 'Change' })).toBeTruthy();
     expect(screen.getByText(/You can change what this computer takes at any time/)).toBeTruthy();
+  });
+
+  it('chooses a project the person does not see: the card lists what the worker may run (BD-035)', async () => {
+    const world = ready();
+    const hidden = world.projects[0]?.summary.id ?? '';
+    world.hidden = [hidden];
+    start(world, wizardUrl('projects'));
+    const choice = within(
+      (await screen.findByRole('heading', { level: 3, name: 'What this machine takes' })).closest(
+        'section',
+      ) as HTMLElement,
+    );
+    fireEvent.click(choice.getByRole('radio', { name: 'Only these:' }));
+    // *Server Things* is not on the person's projects list, and the card still offers it.
+    fireEvent.click(choice.getByRole('checkbox', { name: 'Server Things' }));
+    fireEvent.click(choice.getByRole('checkbox', { name: 'Web App' }));
+    fireEvent.click(choice.getByRole('button', { name: 'Save' }));
+    await choice.findByText('Saved · applies to the next run');
+    const [body] = world.policies as { claim_project_ids: string[] }[];
+    expect([...(body?.claim_project_ids ?? [])].sort()).toEqual(
+      [hidden, world.projects[1]?.summary.id ?? ''].sort(),
+    );
+    // And *Which projects let workers run* names it too.
+    const projects = within(await screen.findByRole('list', { name: 'Your projects' }));
+    expect(projects.getByText('Server Things')).toBeTruthy();
   });
 });

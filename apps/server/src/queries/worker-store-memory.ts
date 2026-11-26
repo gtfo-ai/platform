@@ -618,6 +618,7 @@ export const createMemoryWorkerStore = (
       }
       return {
         status: 'found',
+        userId: worker.userId,
         claimPolicy: effectiveClaimPolicy(
           worker.claimPolicy ?? null,
           worker.claimProjectIds ?? null,

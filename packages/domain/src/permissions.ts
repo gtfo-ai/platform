@@ -69,6 +69,8 @@ export const PERMISSION_ACTIONS = [
   'integration.write',
   // Projects
   'project.read',
+  // Every project, whatever the person chose for their workers (BD-035, TD-022's visibility amendment)
+  'project.read_all',
   'project.create',
   'project.settings.write',
   'project.pipeline.write',
@@ -147,6 +149,9 @@ export const PERMISSION_REQUIREMENTS = {
   'integration.write': 'admin',
 
   'project.read': 'viewer',
+  // BD-035: an administrator sees every project; anybody else sees the projects they work in
+  // (`apps/server/src/auth/visibility.ts`). Q136 is whether a maintainer joins the admin here.
+  'project.read_all': 'admin',
   'project.create': 'admin',
   'project.settings.write': 'admin',
   'project.pipeline.write': 'maintainer',

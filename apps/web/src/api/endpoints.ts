@@ -165,6 +165,7 @@ import {
   workerDeviceDecisionResponseSchema,
   workerDeviceLookupRequestSchema,
   workerDeviceLookupResponseSchema,
+  workerSessionClaimScopeResponseSchema,
   workersResponseSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
@@ -269,6 +270,15 @@ export interface Endpoints {
    * (WP-280). `scope` says which.
    */
   readonly workers: () => Promise<z.output<typeof workersResponseSchema>>;
+  /**
+   * `GET /api/workers/:id/claim-scope` — what your machine's card may offer (BD-035): every project
+   * where you are `member`+ — the ones you do not see included, so a narrowed worker can be widened
+   * — each with its execution setting, and `unassigned_has_taker` for this machine. Your own worker
+   * only (`404` otherwise).
+   */
+  readonly workerClaimScope: (
+    workerId: string,
+  ) => Promise<z.output<typeof workerSessionClaimScopeResponseSchema>>;
   /**
    * `POST /api/workers/device/lookup` — what a pending device code's machine sent (address, user
    * agent, age) before anybody decides it (WP-280, TD-031 §10c). A read sent as a POST, so the code
@@ -882,6 +892,10 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       }),
     workers: () => client.get('/api/workers', { schema: workersResponseSchema }),
+    workerClaimScope: (workerId) =>
+      client.get(`/api/workers/${seg(workerId)}/claim-scope`, {
+        schema: workerSessionClaimScopeResponseSchema,
+      }),
     workerDevice: (userCode) =>
       client.command('/api/workers/device/lookup', {
         schema: workerDeviceLookupResponseSchema,

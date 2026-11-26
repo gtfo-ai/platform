@@ -39,6 +39,7 @@ const EXPECTED_ROLES: Record<PermissionAction, readonly UserRole[]> = {
   'integration.write': ADMIN_ONLY,
 
   'project.read': ALL,
+  'project.read_all': ADMIN_ONLY,
   'project.create': ADMIN_ONLY,
   'project.settings.write': ADMIN_ONLY,
   'project.pipeline.write': MAINTAINER_UP,

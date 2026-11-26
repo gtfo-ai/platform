@@ -3,9 +3,10 @@
  * `createApp` with a fake server so the real router, query client and endpoint parsers are in the
  * path: per role (the owner changes it, an administrator reads somebody else's with their name, a
  * member is offered nothing on somebody else's), the save's request and its refusals in words, the
- * muted *Skipped …* line, and the consequence line — its evidence, one execution read per project
- * asked for this machine (`?worker_id=`), read only once *Change* opens the controls, and the line
- * said only where it is known to be true.
+ * muted *Skipped …* line, and the consequence line — its evidence, the owner's
+ * `GET /api/workers/:id/claim-scope` (BD-035), one read per owned machine, and the line said only
+ * where it is known to be true. Since BD-035 the owner's card offers what that read lists, so a
+ * project the person does not see is still theirs to choose (S-30.1 acceptance 4).
  */
 import type {
   ProjectSummary,
@@ -55,47 +56,27 @@ const project = (id: string, key: string, name: string): ProjectSummary => ({
 // is retried and stays pending (CI on #109, where every row then stayed on Loading).
 const PROJECTS = [project(AUTIX, 'autix_key', 'Autix'), project(FONTAI, 'fontai_key', 'Fontai')];
 
-/**
- * `GET …/execution`. `others_take_unassigned` is required on the wire: leaving it out (`undefined`)
- * makes an answer the client refuses, the parse-error case.
- */
-const execution = (othersTakeUnassigned: boolean | undefined) => ({
-  mode: 'hybrid',
-  prefer: 'server',
-  fallback_after_seconds: null,
-  assignee_window_seconds: 120,
-  offer_timeout_seconds: 86_400,
-  effective_fallback_after_seconds: 15,
-  stored: false,
-  server_claimant: 'none',
-  notice: null,
-  workers: [],
-  waiting: {
-    open: 0,
-    closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
-  },
-  ...(othersTakeUnassigned === undefined ? {} : { others_take_unassigned: othersTakeUnassigned }),
-});
-
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 interface World {
   role: UserRole;
   workers: WorkerSummary[];
-  /** Per project id: what its execution read says of `others_take_unassigned`. */
+  /** Per project id: the claim-scope read's `unassigned_has_taker`; `undefined` leaves it out. */
   othersTake: Record<string, boolean | undefined>;
+  /** Projects `GET /api/projects` leaves out (BD-035): the claim-scope read still lists them. */
+  hidden: string[];
   /** What the claim-policy PUT answers; by default it stores the body and answers 200. */
   refuse: { status: number; code: string } | null;
   puts: {
     url: string;
     body: { claim_policy: WorkerClaimPolicy; claim_project_ids: string[] | null };
   }[];
-  /** Every execution read, with the machine it was asked for (`?worker_id=`, `null` without). */
-  executionReads: { project: string; workerId: string | null }[];
-  /** Per project id: the execution read answers this status instead (its line must stay hidden). */
-  executionFails: Record<string, number>;
-  /** `GET /api/projects` answers once this settles (the names arrive after the workers). */
+  /** Every claim-scope read, by the machine it was asked for. */
+  scopeReads: string[];
+  /** The claim-scope read answers this status instead (the card falls back, the line unknown). */
+  scopeFails: number | null;
+  /** `GET /api/projects` and the claim-scope read answer once this settles (names arrive late). */
   projectsGate: Promise<void> | null;
 }
 
@@ -103,10 +84,11 @@ const world = (overrides: Partial<World> = {}): World => ({
   role: 'member',
   workers: [workerFixture({ id: MINE, claim_policy: 'mine_and_unassigned' })],
   othersTake: { [AUTIX]: false, [FONTAI]: true },
+  hidden: [],
   refuse: null,
   puts: [],
-  executionReads: [],
-  executionFails: {},
+  scopeReads: [],
+  scopeFails: null,
   projectsGate: null,
   ...overrides,
 });
@@ -154,19 +136,37 @@ const server = (state: World): typeof fetch =>
         timezone: 'UTC',
       });
     }
-    const read = /\/api\/projects\/([^/?]+)\/execution(\?.*)?$/.exec(url);
-    if (read !== null) {
-      const workerId = new URLSearchParams(read[2] ?? '').get('worker_id');
-      state.executionReads.push({ project: read[1] ?? '', workerId });
-      const fails = state.executionFails[read[1] ?? ''];
-      if (fails !== undefined) {
-        return json({ error: { code: 'not_found', message: 'no such worker' } }, fails);
+    const scope = /\/api\/workers\/([^/]+)\/claim-scope$/.exec(url);
+    if (scope !== null && method === 'GET') {
+      const workerId = scope[1] ?? '';
+      state.scopeReads.push(workerId);
+      if (state.projectsGate !== null) await state.projectsGate;
+      if (state.scopeFails !== null) {
+        return json({ error: { code: 'not_found', message: 'no such worker' } }, state.scopeFails);
       }
-      return json(execution(state.othersTake[read[1] ?? '']));
+      const stored = state.workers.find((item) => item.id === workerId);
+      return json({
+        worker_id: workerId,
+        claim_policy: stored?.claim_policy ?? 'everything',
+        claim_project_ids: stored?.claim_projects?.map((entry) => entry.id) ?? null,
+        // Every project the owner may run in — the hidden ones included (BD-035).
+        projects: PROJECTS.map((entry) => ({
+          id: entry.id,
+          key: entry.key,
+          name: entry.name,
+          execution: { mode: 'hybrid', notice: null },
+        })),
+        unassigned_has_taker: Object.fromEntries(
+          Object.entries(state.othersTake).filter(([, value]) => value !== undefined),
+        ),
+      });
     }
     if (url.endsWith('/api/projects')) {
       if (state.projectsGate !== null) await state.projectsGate;
-      return json({ items: PROJECTS, can_create: false });
+      return json({
+        items: PROJECTS.filter((entry) => !state.hidden.includes(entry.id)),
+        can_create: false,
+      });
     }
     if (url.endsWith('/api/version')) {
       return json({ version: '0.0.0-dev', commit: null, built_at: null });
@@ -261,8 +261,8 @@ describe('what this machine takes, per role (S-26.8a)', () => {
     expect(sentenceIn(await policyOf('00000000-0000-4000-8000-000000000a03'))).toBe(
       'This machine takes eva@example.invalid’s tasks and unassigned ones, in Autix.',
     );
-    // Read only: nothing asks the projects' execution, and nothing is written.
-    expect(state.executionReads).toEqual([]);
+    // Read only: nothing asks what somebody else's machine may offer, and nothing is written.
+    expect(state.scopeReads).toEqual([]);
     expect(state.puts).toEqual([]);
   });
 
@@ -327,7 +327,8 @@ describe('before the project names are known (CI on #109)', () => {
       'This machine takes only Vojtěch’s tasks, in Autix.',
     );
     expect(document.querySelector('[data-worker-policy-loading]')).toBeNull();
-    expect(state.executionReads).toEqual([]);
+    // The administrator's own machine asked what it may offer; somebody else's asked nothing.
+    expect(new Set(state.scopeReads)).toEqual(new Set([MINE]));
   });
 });
 
@@ -399,30 +400,24 @@ describe('the consequence line on the Workers screen (S-26.8a)', () => {
     await user.click(within(card).getByRole('radio', { name: 'Only my tasks' }));
   };
 
-  it('asks nothing on load, then each project for this machine once Change opens, and names the one nobody else takes', async () => {
+  it('reads what this machine may offer once, and names the one nobody else takes', async () => {
     const state = world();
     renderWorkers(state);
     const card = await policyOf(MINE);
-    // The page's load asks no project anything.
-    expect(state.executionReads).toEqual([]);
+    // One read, for this machine, so the owner's other machines still count.
+    expect(state.scopeReads).toEqual([MINE]);
     const user = userEvent.setup();
     await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
-    await waitFor(() => expect(state.executionReads).toHaveLength(2));
-    // Every read carries this machine, so the owner's other machines still count.
-    expect([...state.executionReads].sort((a, b) => a.project.localeCompare(b.project))).toEqual([
-      { project: AUTIX, workerId: MINE },
-      { project: FONTAI, workerId: MINE },
-    ]);
     // The default policy says nothing; *Only my tasks* names Autix (false), not Fontai (true).
     expect(card.textContent).not.toContain('nowhere to run');
     await user.click(within(card).getByRole('radio', { name: 'Only my tasks' }));
     expect(
       await within(card).findByText('Unassigned tasks in Autix have nowhere to run.'),
     ).toBeTruthy();
-    // Closing and opening again asks nothing more: the answers are cached per (project, machine).
+    // Closing and opening again asks nothing more: the answer is cached per machine.
     await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.cancel }));
     await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
-    expect(state.executionReads).toHaveLength(2);
+    expect(state.scopeReads).toEqual([MINE]);
   });
 
   it('says nothing for a project somebody else takes, beside one nobody takes', async () => {
@@ -439,27 +434,24 @@ describe('the consequence line on the Workers screen (S-26.8a)', () => {
   });
 
   it.each([404, 500])(
-    'says nothing for a project whose read answers %s, and does not ask it again',
+    'offers the projects the person sees when the read answers %s, says nothing, and does not ask again',
     async (status) => {
       const state = world({
         othersTake: { [AUTIX]: false, [FONTAI]: false },
-        executionFails: { [AUTIX]: status },
+        scopeFails: status,
       });
       renderWorkers(state);
       const card = await policyOf(MINE);
       await chooseOnlyMine(card);
-      // Fontai is known and named; Autix's refusal leaves it unknown, so it is not.
-      expect(
-        await within(card).findByText('Unassigned tasks in Fontai have nowhere to run.'),
-      ).toBeTruthy();
-      expect(card.textContent).not.toContain('Autix');
-      expect(state.executionReads.filter((entry) => entry.project === AUTIX)).toHaveLength(1);
+      // The fallback still offers both projects by name …
+      expect(within(card).getByRole('radio', { name: 'Only these:' })).toBeTruthy();
+      // … and nothing is known of other takers, so the line says nothing.
+      expect(card.textContent).not.toContain('nowhere to run');
+      expect(state.scopeReads).toEqual([MINE]);
     },
   );
 
-  // `others_take_unassigned` is required since #110 (BACKLOG 1445): a read without it is one this
-  // build cannot parse, which is an error like any other — the project stays unknown.
-  it('says nothing for a project whose read this build cannot parse (no answer in it)', async () => {
+  it('says nothing for a project the answer does not name', async () => {
     const state = world({ othersTake: { [AUTIX]: undefined, [FONTAI]: false } });
     renderWorkers(state);
     const card = await policyOf(MINE);
@@ -485,7 +477,34 @@ describe('the consequence line on the Workers screen (S-26.8a)', () => {
     renderWorkers(state);
     await policyOf(THEIRS);
     expect(screen.queryByText(/nowhere to run/)).toBeNull();
-    expect(state.executionReads).toEqual([]);
+    expect(state.scopeReads).toEqual([]);
+  });
+});
+
+describe('choosing is not seeing (BD-035, S-30.1)', () => {
+  it('widens a machine from [Autix] to [Autix, Fontai] although Fontai is not a project the person sees', async () => {
+    const state = world({
+      hidden: [FONTAI],
+      workers: [
+        workerFixture({
+          id: MINE,
+          claim_policy: 'mine',
+          claim_projects: [{ id: AUTIX, key: 'autix_key' }],
+        }),
+      ],
+    });
+    renderWorkers(state);
+    const card = await policyOf(MINE);
+    expect(sentenceIn(card)).toBe('This machine takes only your tasks, in Autix.');
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
+    const fontai = within(card).getByRole('checkbox', { name: 'Fontai' }) as HTMLInputElement;
+    expect(fontai.checked).toBe(false);
+    await user.click(fontai);
+    await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.save }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(state.puts[0]?.body.claim_policy).toBe('mine');
+    expect([...(state.puts[0]?.body.claim_project_ids ?? [])].sort()).toEqual([AUTIX, FONTAI]);
   });
 });
 

@@ -30,16 +30,16 @@
  * A worker's name is its owner's text and a project's name somebody's (BD-022): both render through
  * `ui/untrusted.tsx`. The commands are built from the page's own origin and shown as text fields.
  */
-import type { ProjectExecutionResponse, WorkerSummary } from '@platform/contracts';
+import type { WorkerSummary } from '@platform/contracts';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { type ReactElement, type ReactNode, useEffect } from 'react';
 import { queryKeys } from '../api/keys.js';
 import {
   useProjects,
-  useProjectsExecutionFor,
   useSession,
   useSettingsCommands,
+  useWorkerClaimScope,
 } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
@@ -69,6 +69,7 @@ import {
   INSTALLER_AVAILABLE,
   type InstallOs,
   nextWorkerStep,
+  type ProjectWorkerSetting,
   preferredInstallOs,
   previousWorkerStep,
   projectTakesWorkers,
@@ -547,8 +548,20 @@ interface ProjectRow {
   readonly id: string;
   readonly key: string;
   readonly name: string;
-  readonly execution: ProjectExecutionResponse | null;
+  readonly execution: ProjectWorkerSetting | null;
   readonly failed: boolean;
+}
+
+/**
+ * The rows the last step lists and what the card knows of other takers: for the worker this wizard
+ * set up, its `GET /api/workers/:id/claim-scope` (BD-035) — every project its owner may run in,
+ * seen or not, each with its execution setting — and before that worker is known, the projects the
+ * person sees with each one's execution read.
+ */
+interface ProjectRows {
+  readonly rows: readonly ProjectRow[];
+  /** Per project id, from the claim-scope read; empty while it is not the source. */
+  readonly unassignedHasTaker: Readonly<Record<string, boolean>>;
 }
 
 /**
@@ -560,9 +573,12 @@ interface ProjectRow {
 const WorkerChoice = ({
   worker,
   rows,
+  unassignedHasTaker,
 }: {
   readonly worker: WorkerSummary;
   readonly rows: readonly ProjectRow[];
+  /** Asked for this machine, so the owner's other machines count as takers too (BACKLOG 1456). */
+  readonly unassignedHasTaker: Readonly<Record<string, boolean>>;
 }): ReactElement => {
   const commands = useSettingsCommands();
   const projects: readonly ClaimPolicyProject[] = rows.map((row) => ({
@@ -570,18 +586,6 @@ const WorkerChoice = ({
     name: row.name,
     key: row.key,
   }));
-  // Asked for this machine (`?worker_id=`), so the owner's other machines count as takers too —
-  // the plain read counts only somebody else's (BACKLOG 1456; the Workers screen asks the same).
-  const executions = useProjectsExecutionFor(
-    rows.map((row) => row.id),
-    worker.id,
-    true,
-  );
-  const unassignedHasTaker: Record<string, boolean> = {};
-  rows.forEach((row, index) => {
-    const known = executions[index]?.data?.others_take_unassigned;
-    if (known !== undefined) unassignedHasTaker[row.id] = known;
-  });
   return (
     <div data-worker-choice="">
       <ClaimPolicyCard
@@ -612,16 +616,20 @@ const WorkerChoice = ({
 
 const ProjectsStep = ({
   rows,
+  unassignedHasTaker,
   isAdmin,
   worker,
 }: {
   readonly rows: readonly ProjectRow[];
+  readonly unassignedHasTaker: Readonly<Record<string, boolean>>;
   readonly isAdmin: boolean;
   /** The worker this wizard set up, when it is known: its card is the step's choice. */
   readonly worker: WorkerSummary | null;
 }): ReactElement => (
   <div className="flex flex-col gap-6">
-    {worker === null || rows.length === 0 ? null : <WorkerChoice worker={worker} rows={rows} />}
+    {worker === null || rows.length === 0 ? null : (
+      <WorkerChoice worker={worker} rows={rows} unassignedHasTaker={unassignedHasTaker} />
+    )}
     {rows.length === 0 ? (
       <p className="text-sm text-fg-muted">You are not a member of any project yet.</p>
     ) : (
@@ -796,11 +804,18 @@ const stepStates = (
     } satisfies Step;
   });
 
-/** The person's projects, each with its execution setting — read only on the last step. */
-const useProjectRows = (enabled: boolean): readonly ProjectRow[] | null => {
+/**
+ * The last step's projects, each with its execution setting — read only on that step. With the
+ * worker known, its claim-scope read (BD-035): the projects its owner may run in, the ones they do
+ * not see included, so the card can choose any of them. Before it is known, or when that read
+ * fails, the projects the person sees with each one's execution read.
+ */
+const useProjectRows = (enabled: boolean, workerId: string | null): ProjectRows | null => {
   const { endpoints } = useServices();
+  const scope = useWorkerClaimScope(enabled ? workerId : null);
+  const fromScope = enabled && workerId !== null && !scope.isError;
   const projects = useProjects();
-  const items = enabled ? (projects.data?.items ?? []) : [];
+  const items = enabled && !fromScope ? (projects.data?.items ?? []) : [];
   const executions = useQueries({
     queries: items.map((project) => ({
       queryKey: queryKeys.projectExecution(project.id),
@@ -808,16 +823,36 @@ const useProjectRows = (enabled: boolean): readonly ProjectRow[] | null => {
       staleTime: Number.POSITIVE_INFINITY,
     })),
   });
-  if (!enabled || projects.data === undefined) {
+  if (!enabled) {
     return null;
   }
-  return items.map((project, index) => ({
-    id: project.id,
-    key: project.key,
-    name: project.name,
-    execution: executions[index]?.data ?? null,
-    failed: executions[index]?.isError === true,
-  }));
+  if (fromScope) {
+    return scope.data === undefined
+      ? null
+      : {
+          rows: scope.data.projects.map((project) => ({
+            id: project.id,
+            key: project.key,
+            name: project.name,
+            execution: project.execution,
+            failed: false,
+          })),
+          unassignedHasTaker: scope.data.unassigned_has_taker,
+        };
+  }
+  if (projects.data === undefined) {
+    return null;
+  }
+  return {
+    rows: items.map((project, index) => ({
+      id: project.id,
+      key: project.key,
+      name: project.name,
+      execution: executions[index]?.data ?? null,
+      failed: executions[index]?.isError === true,
+    })),
+    unassignedHasTaker: {},
+  };
 };
 
 const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
@@ -845,7 +880,11 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
       : wizardWorkerOf(workers.data.items, user.id, sinceMs);
 
   const onLastStep = place.step === 'projects';
-  const rows = useProjectRows(onLastStep);
+  const projectRows = useProjectRows(
+    onLastStep,
+    worker === null || worker === false ? null : worker.id,
+  );
+  const rows = projectRows?.rows ?? null;
   const projectTakes =
     rows === null || rows.some((row) => row.execution === null && !row.failed)
       ? null
@@ -929,6 +968,7 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
     ) : (
       <ProjectsStep
         rows={rows}
+        unassignedHasTaker={projectRows?.unassignedHasTaker ?? {}}
         isAdmin={user?.role === 'admin'}
         worker={worker === null || worker === false ? null : worker}
       />

@@ -252,6 +252,8 @@ export type ClaimScopeRead =
   | { readonly status: 'not_found' }
   | {
       readonly status: 'found';
+      /** The worker's user — whose session may read it as `GET /api/workers/:id/claim-scope` (BD-035). */
+      readonly userId: string;
       readonly claimProjectIds: readonly string[] | null;
       readonly projects: readonly ScopeProject[];
       /** The policy as it reads (S-26.4). */
@@ -1119,6 +1121,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
        limit ${WORKER_SCOPE_PROJECTS_MAX}`);
     return {
       status: 'found',
+      userId: row.user_id,
       claimProjectIds: row.claim_project_ids === null ? null : [...row.claim_project_ids],
       projects: projects.rows.map((project) => ({
         id: project.id,

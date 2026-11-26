@@ -9,15 +9,21 @@
  * by its socket address), the second confirmation, which refusal maps to which status, own versus
  * every worker, and revocation's effects on the credential and on the worker's live runs.
  */
+import type { RemoteRuns } from '@platform/application';
 import {
+  type Id,
   type UserRole,
   WORKER_API_PREFIX,
+  WORKER_CLAIM_SCOPE_TAKERS_QUERY,
+  WORKER_PATHS,
+  WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
   WORKER_USER_CODE_ALPHABET,
   type WorkerIdleReason,
   workerCredentialSchema,
   workerDeviceResponseSchema,
   workerDeviceTokenResponseSchema,
+  workerSessionClaimScopeResponseSchema,
 } from '@platform/contracts';
 import {
   DEVICE_CODE_STALE_AFTER_MS,
@@ -27,12 +33,13 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TrustProxySetting } from '../client-address.js';
-import { toApiError } from '../errors.js';
+import { HttpError, toApiError } from '../errors.js';
 import type { IdleCandidate, WorkerIdleReader } from '../queries/worker-idle.js';
 import { createMemoryWorkerStore, type MemoryWorkerStore } from '../queries/worker-store-memory.js';
 import { authenticateWorkerCredential } from '../workers/secrets.js';
+import { registerWorkerPickVerbs } from './worker/pick-verbs.js';
 import { registerWorkerDeviceRoutes } from './worker-device.js';
-import { registerWorkerRoutes } from './workers.js';
+import { registerWorkerRoutes, type WorkerClaimScopeReads } from './workers.js';
 
 const ALICE = '00000000-0000-4000-8000-0000000280a1';
 const BOB = '00000000-0000-4000-8000-0000000280b0';
@@ -56,6 +63,8 @@ const build = async (
     header?: string | null;
     coreDigests?: () => { run: string; egress: string } | null;
     idle?: WorkerIdleReader;
+    /** BD-035: the session claim-scope read's two reads; also registers the protocol's twin. */
+    claimScope?: WorkerClaimScopeReads;
   } = {},
 ): Promise<{ app: FastifyInstance; store: MemoryWorkerStore; world: World }> => {
   const store = createMemoryWorkerStore();
@@ -106,7 +115,39 @@ const build = async (
     now,
     ...(options.coreDigests === undefined ? {} : { coreDigests: options.coreDigests }),
     ...(options.idle === undefined ? {} : { idle: options.idle }),
+    ...(options.claimScope === undefined ? {} : { claimScope: options.claimScope }),
   });
+  if (options.claimScope !== undefined) {
+    const reads = options.claimScope;
+    // The worker protocol's `GET claim-scope` over the same store and the same takers closure, as
+    // `app.ts` composes both (BD-035): the session read must give its answer. The worker is named
+    // by a test header rather than a credential — the credential is the protocol's own test.
+    registerWorkerPickVerbs(instance, {
+      store,
+      remote: {} as RemoteRuns,
+      path: (verb) => `${WORKER_API_PREFIX}/${verb}`,
+      upgradeBody: () => {
+        throw new Error('this test speaks the current protocol');
+      },
+      authenticateWorker: async () => undefined,
+      workerOf: async (request) => ({
+        workerId: String(request.headers['x-test-worker']) as Id,
+        imageDigests: [],
+      }),
+      release: () => null,
+      unresolved: () => new HttpError(503, 'digests_unresolved', 'unresolved'),
+      displays: null,
+      watch: () => {
+        throw new Error('this test claims nothing');
+      },
+      deliverClaimed: async () => {
+        throw new Error('this test claims nothing');
+      },
+      now,
+      unassignedTakers: async (workerId, projectIds) =>
+        reads.unassignedTakers(workerId, projectIds),
+    });
+  }
   app = instance;
   return { app: instance, store, world };
 };
@@ -857,5 +898,119 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     expect(await authenticateWorkerCredential(store, alice.credential)).toBeNull();
     expect(await store.expireUserWorkerLeases(ALICE)).toBe(1);
     expect(store.runs.get(RUN_LIVE)?.leaseExpiresAt).not.toBeNull();
+  });
+});
+
+describe('what the card may offer: GET /api/workers/:id/claim-scope (BD-035, S-30.1)', () => {
+  const VISIBLE = '00000000-0000-4000-8000-0000003001a1';
+  const HIDDEN = '00000000-0000-4000-8000-0000003001b1';
+  const NOT_MINE = '00000000-0000-4000-8000-0000003001c1';
+  const reads: WorkerClaimScopeReads = {
+    execution: async (projectId) =>
+      projectId === HIDDEN
+        ? { mode: 'server_only', notice: 'Runs wait for the platform server.' }
+        : { mode: 'hybrid', notice: null },
+    unassignedTakers: async (_workerId, projectIds) =>
+      new Map(projectIds.map((id, index) => [id, index % 2 === 0] as const)),
+  };
+  const seed = (store: MemoryWorkerStore): void => {
+    store.addProject({ id: VISIBLE, key: 'VIS', name: 'Visible' }, [ALICE, BOB]);
+    store.addProject({ id: HIDDEN, key: 'HID', name: 'Hidden' }, [ALICE]);
+    store.addProject({ id: NOT_MINE, key: 'NOT', name: 'Not mine' }, [BOB]);
+  };
+  const scopeOf = (instance: FastifyInstance, workerId: string) =>
+    instance.inject({ method: 'GET', url: `/api/workers/${workerId}/claim-scope` });
+
+  it('lists every project the owner may run in, a project they do not see included, each with its setting', async () => {
+    const { app: instance, store, world } = await build({ claimScope: reads });
+    seed(store);
+    const alice = await register(instance, world, ALICE);
+    world.actor = { userId: ALICE, role: 'member' };
+    // Narrow the machine to the one project the person would see: the card still offers the other.
+    expect(
+      (
+        await instance.inject({
+          method: 'PUT',
+          url: `/api/workers/${alice.workerId}/claim-policy`,
+          payload: { claim_policy: 'mine', claim_project_ids: [VISIBLE] },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const response = await scopeOf(instance, alice.workerId);
+    expect(response.statusCode, response.body).toBe(200);
+    const body = workerSessionClaimScopeResponseSchema.parse(response.json());
+    expect(body).toEqual({
+      worker_id: alice.workerId,
+      claim_policy: 'mine',
+      claim_project_ids: [VISIBLE],
+      projects: [
+        {
+          id: HIDDEN,
+          key: 'HID',
+          name: 'Hidden',
+          execution: { mode: 'server_only', notice: 'Runs wait for the platform server.' },
+        },
+        { id: VISIBLE, key: 'VIS', name: 'Visible', execution: { mode: 'hybrid', notice: null } },
+      ],
+      unassigned_has_taker: { [HIDDEN]: true, [VISIBLE]: false },
+    });
+  });
+
+  it('answers what the worker protocol’s GET claim-scope answers for the same worker', async () => {
+    const { app: instance, store, world } = await build({ claimScope: reads });
+    seed(store);
+    const alice = await register(instance, world, ALICE);
+    world.actor = { userId: ALICE, role: 'member' };
+    const session = workerSessionClaimScopeResponseSchema.parse(
+      (await scopeOf(instance, alice.workerId)).json(),
+    );
+    const protocol = await instance.inject({
+      method: 'GET',
+      url: `${WORKER_API_PREFIX}/${WORKER_PATHS.claimScope}?${WORKER_CLAIM_SCOPE_TAKERS_QUERY}`,
+      headers: {
+        [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
+        'x-test-worker': alice.workerId,
+      },
+    });
+    expect(protocol.statusCode, protocol.body).toBe(200);
+    const twin = protocol.json() as {
+      projects: unknown[];
+      unassigned_has_taker: Record<string, boolean>;
+    };
+    expect(twin.projects.length).toBeGreaterThan(0);
+    expect(session.projects.map(({ execution: _execution, ...project }) => project)).toEqual(
+      twin.projects,
+    );
+    expect(session.unassigned_has_taker).toEqual(twin.unassigned_has_taker);
+  });
+
+  it('is 404 to anybody but the worker’s own user, an administrator included', async () => {
+    const { app: instance, store, world } = await build({ claimScope: reads });
+    seed(store);
+    const alice = await register(instance, world, ALICE);
+    for (const actor of [
+      { userId: BOB, role: 'member' },
+      { userId: ADMIN, role: 'admin' },
+    ] as const) {
+      world.actor = actor;
+      const refused = await scopeOf(instance, alice.workerId);
+      expect(refused.statusCode, actor.role).toBe(404);
+      expect(refused.json().error.code).toBe('not_found');
+    }
+    // A worker that does not exist answers the same.
+    world.actor = { userId: ALICE, role: 'member' };
+    const missing = await scopeOf(instance, '00000000-0000-4000-8000-0000003001ff');
+    expect(missing.statusCode).toBe(404);
+    // And the owner is answered: the 404s above are about who asks, not about the worker.
+    expect((await scopeOf(instance, alice.workerId)).statusCode).toBe(200);
+  });
+
+  it('answers 503 by name on a process that composed no execution read', async () => {
+    const { app: instance, world } = await build();
+    const alice = await register(instance, world, ALICE);
+    world.actor = { userId: ALICE, role: 'member' };
+    const response = await scopeOf(instance, alice.workerId);
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe('claim_scope_unavailable');
   });
 });

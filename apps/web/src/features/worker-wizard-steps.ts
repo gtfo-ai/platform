@@ -179,12 +179,18 @@ export const wizardWorkerOf = (
       false,
     );
 
+/**
+ * What the last step reads of a project's execution setting: its mode and its notice — the
+ * execution read's, or the claim-scope read's copy of them (BD-035).
+ */
+export type ProjectWorkerSetting = Pick<ProjectExecutionResponse, 'mode' | 'notice'>;
+
 /** The project's git integration keeps its run credential off developers' machines (WP-283). */
-export const credentialKeepsWorkersOff = (execution: ProjectExecutionResponse): boolean =>
+export const credentialKeepsWorkersOff = (execution: ProjectWorkerSetting): boolean =>
   execution.notice?.includes(REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE) === true;
 
 /** Workers may run the project's stages: its mode admits them and its credential lets them. */
-export const projectTakesWorkers = (execution: ProjectExecutionResponse): boolean =>
+export const projectTakesWorkers = (execution: ProjectWorkerSetting): boolean =>
   execution.mode !== 'server_only' && !credentialKeepsWorkersOff(execution);
 
 /**

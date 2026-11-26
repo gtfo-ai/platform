@@ -196,7 +196,7 @@ import { registerPipelineGraphRoutes } from './routes/pipeline-graph.js';
 import { registerProjectBindingRoutes } from './routes/project-bindings.js';
 import { registerProjectCiJobsRoutes } from './routes/project-ci-jobs.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
-import { registerProjectExecutionRoutes } from './routes/project-execution.js';
+import { executionDocument, registerProjectExecutionRoutes } from './routes/project-execution.js';
 import { registerProjectReadinessRoutes } from './routes/project-readiness.js';
 import { registerProjectRepositoryRoutes } from './routes/project-repository.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -820,12 +820,35 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       options.workerIdle !== undefined
         ? options.workerIdle
         : createWorkerIdleReader(options.database, wipLimits);
+    // BACKLOG 1456's statement, the asking worker excluded: one closure for the worker protocol's
+    // `GET claim-scope` and the session's `GET /api/workers/:id/claim-scope` (BD-035), so the two
+    // reads give one answer.
+    const unassignedTakers =
+      options.workerProtocol?.unassignedTakers !== undefined
+        ? options.workerProtocol.unassignedTakers
+        : async (workerId: Id, projectIds: readonly Id[]) =>
+            unassignedTakersOf(options.database, projectIds, { workerId });
     await registerWorkerRoutes(app, {
       store: workerStore,
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
       coreDigests: coreRunDigests,
       idle: workerIdle,
+      claimScope:
+        unassignedTakers === null
+          ? null
+          : {
+              execution: async (projectId) => {
+                const document = executionDocument(
+                  await findProjectExecution(options.database, projectId),
+                  await serverClaimantRunning(options.database),
+                  await remoteRunCredentialRefused(options.database, projectId),
+                );
+                return { mode: document.mode, notice: document.notice };
+              },
+              unassignedTakers: async (workerId, projectIds) =>
+                unassignedTakers(workerId as Id, projectIds as readonly Id[]),
+            },
       ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
     await registerWorkerProtocolRoutes(app, {
@@ -854,11 +877,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       runCalls: options.workerProtocol?.runCalls ?? null,
       offerDisplays: options.workerProtocol?.offerDisplays ?? null,
       // BACKLOG 1456: the execution read's statement, with the asking worker excluded.
-      unassignedTakers:
-        options.workerProtocol?.unassignedTakers !== undefined
-          ? options.workerProtocol.unassignedTakers
-          : async (workerId, projectIds) =>
-              unassignedTakersOf(options.database, projectIds, { workerId }),
+      unassignedTakers,
       // S-28.6: the Workers screen's `idle_reason` for the asking worker, on `GET offers`.
       idleReason:
         workerIdle === null

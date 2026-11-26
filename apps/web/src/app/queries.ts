@@ -307,6 +307,23 @@ export const useProjectExecution = (projectId: string | null) => {
 };
 
 /**
+ * What one machine's *What this machine takes* card may offer (BD-035): the projects its owner may
+ * run in — the ones they do not see included, so a narrowed worker can be widened — each with its
+ * execution setting, and `unassigned_has_taker` for this machine. Asked only for the reader's own
+ * worker (`workerId` null: not asked); a refusal is not retried.
+ */
+export const useWorkerClaimScope = (workerId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.workerClaimScope(workerId ?? ''),
+    queryFn: () => endpoints.workerClaimScope(workerId ?? ''),
+    enabled: workerId !== null,
+    retry: false,
+    ...FOREVER,
+  });
+};
+
+/**
  * The execution read of several projects **for one machine** (`?worker_id=`, #108), asked only
  * while `enabled` — the Workers screen's consequence line (S-26.8a): a row asks its projects once
  * its owner opens *Change*, never on the page's load, and each answer is cached per
@@ -1894,8 +1911,11 @@ export const useSettingsCommands = (mint?: MintKey) => {
         workerId: string;
         body: Parameters<typeof endpoints.setWorkerClaimPolicy>[1];
       }) => endpoints.setWorkerClaimPolicy(input.workerId, input.body),
-      onSuccess: async () => {
+      onSuccess: async (_answer, input) => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.workers], exact: true });
+        await queryClient.invalidateQueries({
+          queryKey: [...queryKeys.workerClaimScope(input.workerId)],
+        });
       },
     }),
     /**

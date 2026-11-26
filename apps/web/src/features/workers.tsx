@@ -25,11 +25,12 @@
  * else — an administrator reading every machine — reads the sentence with the owner's name
  * ("Vojtěch’s tasks"), and the server refuses them regardless. A refused save is said in words:
  * `422 claim_scope_empty` here, `403`/`404`/`project_not_eligible` by the card's own words. The
- * card's consequence line ("Unassigned tasks in Autix have nowhere to run.") reads each project's
- * `others_take_unassigned` from its execution read asked **for this machine** (`?worker_id=`, so
- * the owner's other machines still count): one read per project, asked only once the owner opens
- * *Change* — never on the page's load — and cached per (project, machine). Until it answers, on an
- * error, and on a read-only card the line is unknown and says nothing.
+ * owner's card offers what `GET /api/workers/:id/claim-scope` answers (BD-035): every project they
+ * may run in, **the ones they do not see included**, so a narrowed machine can be widened again —
+ * and its consequence line ("Unassigned tasks in Autix have nowhere to run.") reads that answer's
+ * `unassigned_has_taker`, asked for this machine, so the owner's other machines still count. One
+ * read per owned machine; until it answers the row says *Loading…*, on an error the card offers
+ * the projects the reader sees and the line is unknown, and a read-only card asks nothing.
  *
  * **A ready machine that runs nothing says why** (S-28.6, the M28 ruling A): under the state, one
  * sentence from the server's `idle_reason` (`WorkerIdleLine`, words in `ui/words/worker-idle.ts`) —
@@ -70,9 +71,9 @@ import { type ReactElement, useEffect, useState } from 'react';
 import { ApiError } from '../api/http.js';
 import {
   useProjects,
-  useProjectsExecutionFor,
   useSession,
   useSettingsCommands,
+  useWorkerClaimScope,
   useWorkerDevice,
   useWorkers,
 } from '../app/queries.js';
@@ -276,8 +277,8 @@ export const claimPolicySaveRefusal = (error: unknown): string => {
 };
 
 /**
- * The projects a row's card names. The owner's card offers what the project list answers and
- * nothing else (a chip for a project they cannot see would be refused); a read-only card also
+ * The projects a row's card names. The owner's card offers what its claim-scope read answers and
+ * nothing else (a chip for a project they may not run in would be refused); a read-only card also
  * names a stored project the reader cannot see by its key, and one that no longer exists (`key:
  * null`) as *a removed project* — never the card's *a project you left*, which is the owner's word.
  */
@@ -302,17 +303,16 @@ const cardProjectsOf = (
       ];
 
 /**
- * A row's *What this machine takes*, and its consequence line's evidence: each of the card's
- * projects' execution read asked **for this machine** (`?worker_id=`, so the owner's other machines
- * and the server still count), only once *Change* opens the controls (the card's `onOpenChange`) —
- * never on the page's load — and cached per (project, machine). An answer that has not arrived, a
- * `404` or any other error leaves that project out of `unassignedHasTaker`: unknown, so the card says
- * nothing for it. The card itself decides when the line applies (*Only my tasks*).
+ * A row's *What this machine takes*. The owner's card reads `GET /api/workers/:id/claim-scope`
+ * (BD-035): its projects are every project the owner may run in — a project they do not see
+ * included, so the card can widen a narrowed machine — and its `unassigned_has_taker` is the
+ * consequence line's evidence, asked for this machine (the owner's other machines and the server
+ * still count). A project the answer does not name is unknown, so the card says nothing for it. A
+ * failed read falls back to the projects the reader sees, with nothing known for the line.
  *
- * **Nothing is said before the project names are known** (CI on #109): until the projects read has
- * answered, the row says only *Loading…* — never a sentence that names a project by its key and
- * then by its name, nor a card whose *Change* offers no project and asks nothing. A projects read
- * that failed draws the card with what the workers read carries (keys), rather than waiting on.
+ * **Nothing is said before the project names are known** (CI on #109): until the read that names
+ * them has answered, the row says only *Loading…* — never a sentence that names a project by its
+ * key and then by its name, nor a card whose *Change* offers no project and asks nothing.
  */
 const WorkerPolicy = ({
   worker,
@@ -329,16 +329,22 @@ const WorkerPolicy = ({
   readonly onSave: ((next: ClaimPolicyValue) => Promise<void>) | null;
 }): ReactElement => {
   const editable = onSave !== null;
-  const [asked, setAsked] = useState(false);
-  const ids = editable && projects !== null ? projects.map((project) => project.id) : [];
-  const executions = useProjectsExecutionFor(ids, worker.id, asked);
-  const unassignedHasTaker: Record<string, boolean> = {};
-  ids.forEach((id, index) => {
-    const known = executions[index]?.data?.others_take_unassigned;
-    if (known !== undefined) unassignedHasTaker[id] = known;
-  });
+  const scope = useWorkerClaimScope(editable ? worker.id : null);
+  const offered: readonly ClaimPolicyProject[] | null = !editable
+    ? projects
+    : scope.isSuccess
+      ? scope.data.projects.map((project) => ({
+          id: project.id,
+          name: project.name,
+          key: project.key,
+        }))
+      : scope.isError
+        ? projects
+        : null;
+  const unassignedHasTaker: Readonly<Record<string, boolean>> =
+    editable && scope.isSuccess ? scope.data.unassigned_has_taker : {};
   const skipped = worker.policy_skipped_offers ?? 0;
-  if (projects === null) {
+  if (offered === null) {
     return (
       <div className="flex flex-col gap-1" data-worker-policy="" data-worker-policy-loading="">
         <p className="text-sm text-fg-muted">{WORKERS_POLICY_WORDS.loading}</p>
@@ -349,20 +355,12 @@ const WorkerPolicy = ({
     <div className="flex flex-col gap-1" data-worker-policy="">
       <ClaimPolicyCard
         stored={storedClaimPolicyOf(worker)}
-        projects={cardProjectsOf(worker, projects, editable)}
+        projects={cardProjectsOf(worker, offered, editable)}
         surface="workers"
         headingLevel="h2"
         framed={false}
         unassignedHasTaker={unassignedHasTaker}
-        {...(onSave === null
-          ? {}
-          : {
-              onSave,
-              // Asked once, and kept: closing the controls forgets nothing already read.
-              onOpenChange: (open: boolean) => {
-                if (open) setAsked(true);
-              },
-            })}
+        {...(onSave === null ? {} : { onSave })}
         {...(ownerName === null ? {} : { ownerName })}
       />
       {skipped > 0 ? (

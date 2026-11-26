@@ -47,6 +47,8 @@ export const queryKeys = {
   failedJobs: ['org', 'failed-jobs'] as const,
   /** WP-280: the registered workers, and one pending device code's details by what was typed. */
   workers: ['workers'] as const,
+  /** BD-035: what one machine's card may offer — under the workers' prefix, never the list's key. */
+  workerClaimScope: (workerId: string) => ['workers', workerId, 'claim-scope'] as const,
   workerDevice: (userCode: string) => ['workers', 'device', userCode] as const,
   /** S-28.6: your limit on tasks in flight, and every person's (an administrator's). */
   myTaskLimit: ['me', 'task-limit'] as const,

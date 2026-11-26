@@ -11,17 +11,26 @@
  *   GET    /api/workers                     the caller's workers; every worker for an administrator
  *   DELETE /api/workers/:id                 revoke (own; any for an administrator)
  *   PUT    /api/workers/:id/claim-policy    what the machine takes (its owner only, S-26.4)
+ *   GET    /api/workers/:id/claim-scope     what the card may offer (its owner only, BD-035)
  */
 import * as z from 'zod';
-import { idSchema, isoDateTimeSchema, nonEmptyStringSchema } from './common.js';
+import {
+  executionModeSchema,
+  idSchema,
+  isoDateTimeSchema,
+  nonEmptyStringSchema,
+} from './common.js';
 import {
   coreImageDigestsSchema,
   imageDigestSchema,
   policySkippedOffersSchema,
+  unassignedHasTakerSchema,
   WORKER_CLAIM_SCOPE_MAX_PROJECTS,
+  WORKER_SCOPE_PROJECTS_MAX,
   workerClaimPolicySchema,
   workerClaimScopeSchema,
   workerPauseReasonSchema,
+  workerScopeProjectSchema,
   workerUpdateResultSchema,
   workerUserCodeSchema,
 } from './worker.js';
@@ -226,6 +235,40 @@ export const workerClaimPolicyResponseSchema = z.strictObject({
   performed: z.boolean(),
 });
 export type WorkerClaimPolicyResponse = z.infer<typeof workerClaimPolicyResponseSchema>;
+
+/**
+ * A project's execution setting as the card and the wizard's *Which projects let workers run* read
+ * it (BD-035): its `mode`, and the `notice` `GET /api/projects/:id/execution` would say — the same
+ * sentences, so the wizard recognises the run credential's refusal as it did.
+ */
+export const workerClaimScopeExecutionSchema = z.strictObject({
+  mode: executionModeSchema,
+  notice: z.string().max(1024).nullable(),
+});
+export type WorkerClaimScopeExecution = z.infer<typeof workerClaimScopeExecutionSchema>;
+
+/** One project the card may offer: the worker protocol's entry, with its execution setting. */
+export const workerClaimScopeProjectSchema = workerScopeProjectSchema.extend({
+  execution: workerClaimScopeExecutionSchema,
+});
+export type WorkerClaimScopeProject = z.infer<typeof workerClaimScopeProjectSchema>;
+
+/**
+ * `GET /api/workers/:id/claim-scope` (BD-035, TD-022's visibility amendment item 6) — the session
+ * twin of the worker protocol's `GET claim-scope`: the stored scope and policy, **every** project
+ * where the worker's user is `member` or above now (not only the projects they see — choosing is
+ * not seeing, so a narrowed person can widen again), each with its execution setting, and
+ * `unassigned_has_taker` asked for this machine. The worker's own user only; anybody else `404`.
+ * It names a hidden project's key, name and setting, and nothing of its work.
+ */
+export const workerSessionClaimScopeResponseSchema = z.strictObject({
+  worker_id: idSchema,
+  claim_policy: workerClaimPolicySchema,
+  claim_project_ids: workerClaimScopeSchema,
+  projects: z.array(workerClaimScopeProjectSchema).max(WORKER_SCOPE_PROJECTS_MAX),
+  unassigned_has_taker: unassignedHasTakerSchema,
+});
+export type WorkerSessionClaimScopeResponse = z.infer<typeof workerSessionClaimScopeResponseSchema>;
 
 /**
  * `DELETE /api/workers/:id`. `performed: false` is a worker that was already revoked (a replay);

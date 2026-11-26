@@ -1043,6 +1043,8 @@ describe('the client’s endpoint list against the server’s router', () => {
       '/api/workers/device/lookup',
       '/api/workers/device/approve',
       '/api/workers/{}',
+      // BD-035 (S-30.1): what the machine's card may offer, the projects it does not see included.
+      '/api/workers/{}/claim-scope',
     ]) {
       expect(paths).toContain(path);
     }
@@ -1054,6 +1056,7 @@ describe('the client’s endpoint list against the server’s router', () => {
       // S-26.4: the claim policy's session write. No screen calls it yet (the Workers screen's
       // card is S-26.8a's), so it is asked here rather than read off the client.
       ['PUT', `/api/workers/${PROBE_ID}/claim-policy`],
+      ['GET', `/api/workers/${PROBE_ID}/claim-scope`],
     ] as const) {
       const response = await app.inject({ method, url });
       const body = response.json() as ApiErrorBody;
