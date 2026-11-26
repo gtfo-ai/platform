@@ -39,6 +39,8 @@ import {
   MAX_TICKET_STATUSES,
   mergeRequestRefSchema,
   nonEmptyStringSchema,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
   pathPatternSchema,
   runStatusSchema,
   runTerminalReasonSchema,
@@ -173,7 +175,82 @@ export const userSummarySchema = z.strictObject({
   status: z.enum(['active', 'invited', 'disabled']),
 });
 
-export const inviteUserRequestSchema = z.strictObject({
+// ── Invite links (TD-022's 2026-11-26 amendment) ─────────────────────────────
+
+/** How long a link may be valid, in hours: one hour to thirty days. */
+export const INVITE_VALID_FOR_HOURS_MIN = 1;
+export const INVITE_VALID_FOR_HOURS_MAX = 720;
+export const INVITE_VALID_FOR_HOURS_DEFAULT = 24;
+/** The longest name an account accepted from a link may carry. */
+export const INVITE_NAME_MAX_LENGTH = 128;
+
+/**
+ * A link's state, as the database's `now()` reads it: `pending` until it is accepted, revoked or
+ * past `expires_at`. An accepted (or revoked) link stays that whatever the time.
+ */
+export const inviteStateSchema = z.enum(['pending', 'accepted', 'expired', 'revoked']);
+
+/**
+ * The token as it travels in a POST body — never in a URL (the link carries it in the fragment).
+ * A creation answers 43 base64url characters; anything of the alphabet up to 128 is looked up, so
+ * a mangled link reads as an unknown one (`404 invite_not_found`) rather than a malformed request.
+ */
+export const inviteTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+
+/** `POST /api/org/users/invites` — role defaults to member, validity to 24 hours. */
+export const createInviteRequestSchema = z.strictObject({
+  role: userRoleSchema.optional(),
+  valid_for_hours: z
+    .number()
+    .int()
+    .min(INVITE_VALID_FOR_HOURS_MIN)
+    .max(INVITE_VALID_FOR_HOURS_MAX)
+    .optional(),
+});
+
+/** One link as the administrator's list shows it. Never the token, never its hash. */
+export const inviteSummarySchema = z.strictObject({
+  id: idSchema,
+  role: userRoleSchema,
+  state: inviteStateSchema,
+  created_at: isoDateTimeSchema,
+  created_by: idSchema.nullable(),
+  expires_at: isoDateTimeSchema,
+  accepted_at: isoDateTimeSchema.nullable(),
+  accepted_user_id: idSchema.nullable(),
+  revoked_at: isoDateTimeSchema.nullable(),
+});
+
+/** The creation's answer: the link, **once** — `<APP_BASE_URL origin>/invite#<token>`. */
+export const inviteCreatedSchema = z.strictObject({
+  invite: inviteSummarySchema,
+  url: z.url(),
+});
+
+export const inviteListSchema = z.strictObject({ items: z.array(inviteSummarySchema) });
+
+/** `POST /api/invites/inspect` — reading a link never consumes it. */
+export const inviteInspectRequestSchema = z.strictObject({ token: inviteTokenSchema });
+
+export const inviteInspectResponseSchema = z.strictObject({
+  role: userRoleSchema,
+  state: inviteStateSchema,
+  expires_at: isoDateTimeSchema,
+});
+
+/**
+ * `POST /api/invites/accept` — the password bounds are checked here, because Better Auth's
+ * `create-user` checks no length.
+ */
+export const inviteAcceptRequestSchema = z.strictObject({
+  token: inviteTokenSchema,
+  email: z.email().max(254),
+  name: z.string().trim().min(1).max(INVITE_NAME_MAX_LENGTH),
+  password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+});
+
+export const inviteAcceptedSchema = z.strictObject({
+  user_id: idSchema,
   email: z.email(),
   role: userRoleSchema,
 });
@@ -4377,6 +4454,11 @@ export type SetupStateResponse = z.infer<typeof setupStateResponseSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type UserSummary = z.infer<typeof userSummarySchema>;
 export type OrgUsersResponse = z.infer<typeof orgUsersResponseSchema>;
+export type InviteState = z.infer<typeof inviteStateSchema>;
+export type InviteSummary = z.infer<typeof inviteSummarySchema>;
+export type InviteCreated = z.infer<typeof inviteCreatedSchema>;
+export type InviteInspectResponse = z.infer<typeof inviteInspectResponseSchema>;
+export type InviteAccepted = z.infer<typeof inviteAcceptedSchema>;
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 export type OrgAuditQuery = z.infer<typeof orgAuditQuerySchema>;
 export type OrgAuditResponse = z.infer<typeof orgAuditResponseSchema>;

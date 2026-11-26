@@ -1037,6 +1037,20 @@ export const useOrgUsers = () => {
   });
 };
 
+/**
+ * The invite links (TD-022's 2026-11-26 amendment) — admin-only on the server, so asked only for an
+ * administrator (`enabled`); a 403 is an answer, not a failure worth asking twice.
+ */
+export const useOrgInvites = (enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.orgInvites],
+    queryFn: () => endpoints.orgInvites(),
+    enabled,
+    retry: false,
+  });
+};
+
 export const useIntegrations = () => {
   const { endpoints } = useServices();
   return useQuery({
@@ -1762,6 +1776,25 @@ export const useSettingsCommands = (mint?: MintKey) => {
       onSuccess: async (_result, input) => {
         intents.release(['budget.write', input]);
         await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+      },
+    }),
+    /**
+     * `POST /api/org/users/invites` — no `Idempotency-Key` by decision (the amendment's item 6): the
+     * answer's token is shown once and never stored, so there is nothing to replay; a double submit
+     * makes two links, each listed and revocable.
+     */
+    createInvite: useMutation({
+      mutationFn: (input: Parameters<typeof endpoints.createInvite>[0]) =>
+        endpoints.createInvite(input),
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgInvites] });
+      },
+    }),
+    /** `POST /api/org/users/invites/:id/revoke` — re-read either way: a 409 means it ended first. */
+    revokeInvite: useMutation({
+      mutationFn: (inviteId: string) => endpoints.revokeInvite(inviteId),
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgInvites] });
       },
     }),
     mapIdentity: useMutation({

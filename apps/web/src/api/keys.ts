@@ -10,8 +10,15 @@ export const queryKeys = {
   session: ['session'] as const,
   /** WP-291: whether anybody has signed in yet — read by the sign-in page only. */
   setupState: ['setup-state'] as const,
+  /**
+   * The invite page's inspect (TD-022's 2026-11-26 amendment). Deliberately **without** the token:
+   * the page holds one link, and a credential has no business in the query cache's keys.
+   */
+  inviteInspect: ['invite', 'inspect'] as const,
   version: ['version'] as const,
   orgUsers: ['org', 'users'] as const,
+  /** TD-022's 2026-11-26 amendment: the invite links, under the users prefix (admin-only). */
+  orgInvites: ['org', 'users', 'invites'] as const,
   /** Refused accounts nobody has mapped (WP-44); under the identities prefix, so a mapping refreshes it. */
   identityCandidates: ['org', 'identities', 'candidates'] as const,
   refusedDeliveries: (integrationId: string) =>

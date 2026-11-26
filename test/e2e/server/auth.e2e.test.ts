@@ -7,6 +7,7 @@
  */
 import type { OrgUsersResponse, UserSummary } from '@platform/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createTestClient } from '../../integration/support/postgres.js';
 import {
   BOOTSTRAP_EMAIL,
   BOOTSTRAP_PASSWORD,
@@ -143,6 +144,145 @@ describe('changing your own password (Settings → Password)', () => {
       newPassword: NEW,
     });
     expect(response.status).toBe(401);
+  });
+});
+
+describe('one-time invite links (TD-022’s 2026-11-26 amendment)', () => {
+  const PASSWORD = 'an-invited-fake-password-3333';
+
+  interface Created {
+    readonly invite: { readonly id: string; readonly role: string; readonly state: string };
+    readonly url: string;
+  }
+
+  const tokenOf = (url: string): string => url.slice(url.indexOf('#') + 1);
+
+  const makeLink = async (body: Record<string, unknown> = {}): Promise<Created> => {
+    const admin = await signIn(BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD);
+    const created = await admin.post<Created>('/api/org/users/invites', body);
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    return created.body;
+  };
+
+  const accept = (token: string, email: string, password = PASSWORD) =>
+    new Client(instance.baseUrl).post<{ user_id?: string; error?: { code: string } }>(
+      '/api/invites/accept',
+      { token, email, name: 'Invited Person', password },
+    );
+
+  const inspect = (token: string) =>
+    new Client(instance.baseUrl).post<{ state?: string; role?: string; error?: { code: string } }>(
+      '/api/invites/inspect',
+      { token },
+    );
+
+  const sql = async (text: string, params: readonly unknown[] = []): Promise<void> => {
+    const client = createTestClient(instance.database.connectionString);
+    await client.connect();
+    try {
+      await client.query(text, [...params]);
+    } finally {
+      await client.end();
+    }
+  };
+
+  it('creates a link, accepts it, and signs the new person in with the chosen role', async () => {
+    const created = await makeLink({ role: 'maintainer', valid_for_hours: 1 });
+    expect(created.url).toMatch(/\/invite#[A-Za-z0-9_-]{43}$/);
+    expect(created.invite).toMatchObject({ role: 'maintainer', state: 'pending' });
+
+    const accepted = await accept(tokenOf(created.url), 'invited.maintainer@example.test');
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(201);
+
+    const person = await signIn('invited.maintainer@example.test', PASSWORD);
+    const session = await person.json<{ user: { role: string } }>('/api/auth/get-session');
+    expect(session.body.user.role).toBe('maintainer');
+    // `org.audit.read` is maintainer-and-above: the role bites, not only reads back.
+    expect((await person.json('/api/org/audit')).status).toBe(200);
+
+    // A second accept of the same link is refused; the link is spent.
+    const again = await accept(tokenOf(created.url), 'someone.else@example.test');
+    expect(again.status).toBe(410);
+    expect(again.body.error?.code).toBe('invite_used');
+
+    // The list names it used, by whom, and carries no token.
+    const admin = await signIn(BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD);
+    const list = await admin.json<{
+      items: { id: string; state: string; accepted_user_id: string }[];
+    }>('/api/org/users/invites');
+    expect(list.status).toBe(200);
+    expect(JSON.stringify(list.body)).not.toContain(tokenOf(created.url));
+    const row = list.body.items.find((item) => item.id === created.invite.id);
+    expect(row?.state).toBe('accepted');
+    expect(row?.accepted_user_id).toBe(accepted.body.user_id);
+  });
+
+  it('inspects a link without consuming it', async () => {
+    const created = await makeLink();
+    const token = tokenOf(created.url);
+    for (let read = 0; read < 2; read += 1) {
+      const inspected = await inspect(token);
+      expect(inspected.status).toBe(200);
+      expect(inspected.body).toMatchObject({ role: 'member', state: 'pending' });
+    }
+    expect((await accept(token, 'inspected.first@example.test')).status).toBe(201);
+    expect((await inspect(token)).body.state).toBe('accepted');
+    expect((await inspect('FAKE-no-such-invite-token')).status).toBe(404);
+  });
+
+  it('refuses a revoked link and an expired one', async () => {
+    const revoked = await makeLink();
+    const admin = await signIn(BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD);
+    const revoke = await admin.post(`/api/org/users/invites/${revoked.invite.id}/revoke`, {});
+    expect(revoke.status).toBe(200);
+    const refusedRevoked = await accept(tokenOf(revoked.url), 'revoked.link@example.test');
+    expect(refusedRevoked.status).toBe(410);
+    expect(refusedRevoked.body.error?.code).toBe('invite_revoked');
+
+    const expired = await makeLink({ valid_for_hours: 1 });
+    // Both instants move, or `expires_at > created_at` refuses the update.
+    await sql(
+      "update user_invites set created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' where id = $1",
+      [expired.invite.id],
+    );
+    const refusedExpired = await accept(tokenOf(expired.url), 'expired.link@example.test');
+    expect(refusedExpired.status).toBe(410);
+    expect(refusedExpired.body.error?.code).toBe('invite_expired');
+  });
+
+  it('refuses a short password with 400 and leaves the link pending', async () => {
+    const created = await makeLink();
+    const short = await accept(tokenOf(created.url), 'short.password@example.test', 'eleven-char');
+    expect(short.status).toBe(400);
+    expect((await inspect(tokenOf(created.url))).body.state).toBe('pending');
+  });
+
+  it('answers a taken email 409 and leaves the link usable', async () => {
+    const created = await makeLink();
+    const taken = await accept(tokenOf(created.url), BOOTSTRAP_EMAIL);
+    expect(taken.status).toBe(409);
+    expect(taken.body.error?.code).toBe('email_taken');
+    expect((await inspect(tokenOf(created.url))).body.state).toBe('pending');
+    expect((await accept(tokenOf(created.url), 'after.taken@example.test')).status).toBe(201);
+  });
+
+  it('refuses a non-admin 403 and an anonymous caller 401 on the admin routes', async () => {
+    const created = await makeLink({ role: 'member' });
+    expect((await accept(tokenOf(created.url), 'plain.member@example.test')).status).toBe(201);
+    const member = await signIn('plain.member@example.test', PASSWORD);
+    const anonymous = new Client(instance.baseUrl);
+    for (const [method, path] of [
+      ['GET', '/api/org/users/invites'],
+      ['POST', '/api/org/users/invites'],
+      ['POST', `/api/org/users/invites/${created.invite.id}/revoke`],
+    ] as const) {
+      const init =
+        method === 'GET'
+          ? {}
+          : { method, headers: { 'content-type': 'application/json' }, body: '{}' };
+      expect((await member.json(path, init)).status, `${method} ${path}`).toBe(403);
+      expect((await anonymous.json(path, init)).status, `${method} ${path}`).toBe(401);
+    }
   });
 });
 

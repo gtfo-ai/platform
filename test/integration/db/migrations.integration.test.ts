@@ -155,6 +155,8 @@ const EXPECTED_TABLES = [
   'ticket_status_stops',
   'ticket_status_sweeps',
   'user_identities',
+  // TD-022's 2026-11-26 amendment, migration 0122: one-time invite links, the token's SHA-256 only.
+  'user_invites',
   'users',
   'verifications',
   // WP-280, migration 0096: the device flow's codes (both hashed) and the registered workers

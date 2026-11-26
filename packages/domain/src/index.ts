@@ -40,6 +40,8 @@ export * from './cost/pricing.js';
 export * from './errors.js';
 export * from './events.js';
 export * from './ids.js';
+// One-time invite links: a link's state and the refusal it answers (TD-022's 2026-11-26 amendment)
+export * from './invites.js';
 // The knowledge base: parsing a vault document and ranking it into a context pack (WP-16)
 export * from './knowledge/document.js';
 export * from './knowledge/frontmatter.js';

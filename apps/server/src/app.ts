@@ -83,6 +83,7 @@ import type { TaskCommands } from './commands.js';
 import type { ServerConfig } from './config.js';
 import { organisationSettingsForRequest, repositorySnapshotFrom } from './config-layers.js';
 import { toApiError } from './errors.js';
+import { createInviteCommands } from './invites.js';
 import type { KnowledgeCommands } from './knowledge.js';
 import { checkProposedLifecycles, readProposedAccountIdentities } from './lifecycle-check.js';
 import { type PinoLogger, withLogContext } from './logging.js';
@@ -184,6 +185,7 @@ import { registerDeadLetterRoutes } from './routes/dead-letters.js';
 import { registerDownloadRoutes } from './routes/downloads.js';
 import { type FailedJobsReader, registerFailedJobRoutes } from './routes/failed-jobs.js';
 import { type IntegrationRoutesOptions, registerIntegrationRoutes } from './routes/integrations.js';
+import { registerInviteRoutes } from './routes/invites.js';
 import { registerKbRoutes } from './routes/kb.js';
 import { type IdentityLinkCommands, registerMeIdentityRoutes } from './routes/me-identities.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
@@ -727,6 +729,19 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       // WP-159: open now, by this process's clock — the instant the retry's check reads too.
       models: async () => listedModelIds(options.database, new Date()),
+    });
+    // TD-022's 2026-11-26 amendment: one-time invite links — three admin commands and the public
+    // inspect/accept pair the invite page calls before a session exists.
+    await registerInviteRoutes(app, {
+      invites: createInviteCommands({
+        database: options.database,
+        auth: options.auth,
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      }),
+      projectRole: async (projectId, userId) =>
+        findProjectRole(options.database, projectId, userId),
+      baseUrl: config.baseUrl,
+      newId: () => crypto.randomUUID(),
     });
     // S-28.6 (the M28 ruling B): a person's limit on their tasks in flight — theirs, or an
     // administrator's for anyone; a raise appends what the scheduler hears.

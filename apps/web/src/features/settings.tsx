@@ -7,7 +7,9 @@
  *    (quiet hours, digest, the default chat account), the two halves of the organisation settings
  *    document (`features/org-settings.tsx`, `GET/PATCH /api/org`, WP-93), and *Budgets* — BD-010's
  *    organisation caps, `GET/PUT /api/org/budgets` (WP-30);
- *  - **People** — *Users* (`GET /api/org/users`, which needs `org.read`) and *Linked accounts*
+ *  - **People** — *Users* (`GET /api/org/users`, which needs `org.read`; an administrator also sees
+ *    *Invite people*, the one-time invite links of TD-022's 2026-11-26 amendment,
+ *    `features/invites.tsx`) and *Linked accounts*
  *    (`features/identities.tsx`, WP-43), without which every decision arriving from Slack, Jira or
  *    GitLab is `unmapped_identity`;
  *  - **Admin** (S-25.6) — *Integrations*, *Workers* and the *Audit log*, three screens at their own
@@ -62,6 +64,7 @@ import { ChangePassword } from './change-password.js';
 import { DeadLetters } from './dead-letters.js';
 import { FailedJobs } from './failed-jobs.js';
 import { IdentityMappings } from './identities.js';
+import { InviteLinks } from './invites.js';
 import { Budgets } from './operating-mode.js';
 import {
   OrganisationClock,
@@ -138,6 +141,7 @@ const Session = (): ReactElement => {
 
 const Users = (): ReactElement => {
   const users = useOrgUsers();
+  const session = useSession();
   const items = users.data?.items ?? [];
   return (
     <>
@@ -145,6 +149,8 @@ const Users = (): ReactElement => {
         title="Users"
         description="Everybody with an account on this instance, and their role."
       />
+      {/* An administrator's only, as all three invite routes are (`org.users.manage`). */}
+      {session.data?.user.role === 'admin' ? <InviteLinks /> : null}
       {users.isPending ? <Loading label="Loading users…" /> : null}
       {users.isError ? (
         <ErrorNotice

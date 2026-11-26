@@ -130,6 +130,10 @@ const PUBLIC_PREFIXES: readonly { readonly prefix: string; readonly why: string 
     prefix: '/api/setup-state',
     why: 'WP-291: the sign-in page reads it before a session exists; it discloses one bit, whether anybody has ever signed in (technical/08)',
   },
+  {
+    prefix: '/api/invites/',
+    why: 'TD-022’s 2026-11-26 amendment: the invite page inspects and accepts a link before its holder has an account; the 256-bit token in the body is the credential, and inspecting never consumes it',
+  },
 ];
 
 /** A quoted literal beginning `/api/`, in any of the three quote styles. */
@@ -1110,6 +1114,41 @@ describe('the client’s endpoint list against the server’s router', () => {
     const response = await app.inject({ method: 'GET', url: '/api/setup-state' });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ first_sign_in_pending: true });
+  }, 15_000);
+
+  it('serves the invite links: the admin three refuse an anonymous caller by their own method, the public pair does not (TD-022 2026-11-26)', async () => {
+    const paths = clientPaths(
+      coreClientFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    for (const path of [
+      '/api/org/users/invites',
+      '/api/org/users/invites/{}/revoke',
+      '/api/invites/inspect',
+      '/api/invites/accept',
+    ]) {
+      expect(paths, path).toContain(path);
+    }
+    // With no body at all: the two admin writes are guarded in `preValidation`, so a guard that
+    // slipped to `preHandler` would answer the route's shape (400) instead of 401.
+    for (const [method, url] of [
+      ['GET', '/api/org/users/invites'],
+      ['POST', '/api/org/users/invites'],
+      ['POST', `/api/org/users/invites/${PROBE_ID}/revoke`],
+    ] as const) {
+      const response = await app.inject({ method, url });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${url} ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${url} 401 unauthenticated`,
+      );
+    }
+    // Public: an anonymous caller meets the body's validation, never the session guard.
+    for (const url of ['/api/invites/inspect', '/api/invites/accept']) {
+      const response = await app.inject({ method: 'POST', url, payload: {} });
+      expect(`${url} ${response.statusCode}`).toBe(`${url} 400`);
+    }
   }, 15_000);
 
   it('refuses an anonymous caller on every served path that is not deliberately public', async () => {

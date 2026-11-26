@@ -35,6 +35,8 @@ export const CLIENT_ROUTE_SEGMENTS: readonly string[] = [
   'audit',
   'inbox',
   'integrations',
+  // TD-022's 2026-11-26 amendment: the public invite page (`/invite#<token>`).
+  'invite',
   'onboarding',
   'projects',
   'runs',

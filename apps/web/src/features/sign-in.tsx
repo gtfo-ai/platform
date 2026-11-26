@@ -64,11 +64,12 @@ export const signInNoticeError = (error: unknown): unknown =>
 
 export const SIGN_IN_HEADLINE = 'Tickets in, merge requests out.';
 
-/** The amber ring every focusable thing on this page gets. */
-const FOCUS_RING =
+/** The amber ring every focusable thing on this page gets — and on the invite page, its sibling. */
+export const FOCUS_RING =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signin-beacon';
 
-const SignInField = ({
+/** A field on the night ground; the invite page (`features/invite.tsx`) draws its form with it. */
+export const SignInField = ({
   label,
   ...rest
 }: { readonly label: string } & InputHTMLAttributes<HTMLInputElement>): ReactElement => {

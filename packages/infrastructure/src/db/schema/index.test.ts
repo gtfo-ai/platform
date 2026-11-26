@@ -88,7 +88,8 @@ describe('Drizzle schema', () => {
     // S-28.10 (migration 0116): plus `task_provider_sync`.
     // S-28.13 (migration 0118): plus `task_merge_checks`.
     // S-28.15 (migration 0119): plus `task_merges`.
-    expect(tables.length).toBe(89);
+    // TD-022's 2026-11-26 amendment (migration 0122): plus `user_invites`, the one-time invite links.
+    expect(tables.length).toBe(90);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

@@ -1,6 +1,6 @@
 /**
- * The four Better Auth calls the SPA makes, and the platform's one pre-session read (TD-022,
- * technical/08 § Auth).
+ * The four Better Auth calls the SPA makes, and the platform's three pre-session calls — the setup
+ * state and an invite link's inspect and accept (TD-022, technical/08 § Auth).
  *
  * Better Auth owns `/api/auth/*` and its payloads are camelCase — the one documented exception to
  * the platform's snake_case wire format, because they are a third party's shape rather than one
@@ -15,6 +15,12 @@
  * used to decide what to *offer*, never to decide what is allowed. The server is the authority.
  */
 import {
+  type InviteAccepted,
+  type InviteInspectResponse,
+  inviteAcceptedSchema,
+  inviteAcceptRequestSchema,
+  inviteInspectRequestSchema,
+  inviteInspectResponseSchema,
   type SetupStateResponse,
   setupStateResponseSchema,
   userRoleSchema,
@@ -72,6 +78,18 @@ export interface AuthApi {
    * platform's own route rather than Better Auth's, so its payload is snake_case and strict.
    */
   readonly setupState: () => Promise<SetupStateResponse>;
+  /**
+   * `POST /api/invites/inspect` (TD-022's 2026-11-26 amendment) — an invite link's role, expiry and
+   * state, before an account exists. The token travels in the body only; reading never consumes it.
+   */
+  readonly inspectInvite: (token: string) => Promise<InviteInspectResponse>;
+  /** `POST /api/invites/accept` — creates the account with the link's role; then sign in. */
+  readonly acceptInvite: (request: {
+    readonly token: string;
+    readonly email: string;
+    readonly name: string;
+    readonly password: string;
+  }) => Promise<InviteAccepted>;
 }
 
 export const createAuthApi = (client: ApiClient): AuthApi => ({
@@ -96,6 +114,21 @@ export const createAuthApi = (client: ApiClient): AuthApi => ({
     });
   },
   setupState: () => client.get('/api/setup-state', { schema: setupStateResponseSchema }),
+  inspectInvite: (token) =>
+    client.command('/api/invites/inspect', {
+      schema: inviteInspectResponseSchema,
+      body: inviteInspectRequestSchema.parse({ token }),
+    }),
+  acceptInvite: (request) =>
+    client.command('/api/invites/accept', {
+      schema: inviteAcceptedSchema,
+      body: inviteAcceptRequestSchema.parse({
+        token: request.token,
+        email: request.email,
+        name: request.name,
+        password: request.password,
+      }),
+    }),
 });
 
 /** What the UI shows for a user: the name when there is one, the email otherwise. */

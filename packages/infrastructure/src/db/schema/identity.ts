@@ -153,6 +153,23 @@ export const identityLinkMatches = pgTable('identity_link_matches', {
   confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
 });
 
+/**
+ * One-time invite links (migration 0122, TD-022's 2026-11-26 amendment): the SHA-256 of the token,
+ * never the token. Pending while not accepted, not revoked and before `expires_at`.
+ */
+export const userInvites = pgTable('user_invites', {
+  id: uuid('id').primaryKey(),
+  tokenSha256: text('token_sha256').notNull(),
+  role: userRoleEnum('role').notNull(),
+  createdBy: uuid('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  acceptedUserId: uuid('accepted_user_id'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by'),
+});
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().default(uuidv7),
   orgId: uuid('org_id').notNull(),

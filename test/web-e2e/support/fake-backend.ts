@@ -937,6 +937,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       const routes: Record<string, unknown> = {
         '/api/version': fixtures.version,
         '/api/org/users': fixtures.orgUsers,
+        // TD-022's 2026-11-26 amendment: Settings → Users asks an administrator's invite links.
+        '/api/org/users/invites': { items: [] },
         '/api/org/audit': fixtures.audit,
         // S-23.6: each newest entry is stamped "now", so the fleet reads as working in a browser
         // whose clock is not the fixtures' (a stale one reads as stuck, which is a different test).

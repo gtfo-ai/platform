@@ -2117,7 +2117,8 @@ administrator; anybody else who opens one of their addresses lands where *Settin
   organisation: one field per window (*Per day*, *Per week*, *Per month*, *In total*), each with what
   has been spent of it; empty is no cap. **Save budgets** writes each changed window in turn, and a
   window the server refuses says so under its own field.
-- **Users** — everybody with an account, with their role and whether they are active.
+- **Users** — everybody with an account, with their role and whether they are active. An
+  administrator also sees **Invite people** above the list (*Inviting people*, below).
 - **Linked accounts** (*Provider identities* before) — which Slack, Jira or GitLab account is which
   person, without which a decision made in those tools is refused as unmapped. Each account has
   **Unlink**, which asks first and names the account and the person (or says it is a machine) — it
@@ -2272,6 +2273,24 @@ server only* (pausing and resuming a task offers its run again). A change applie
 after you save it. This is never a key of `.agentic/config.yml` (*Why isn't this in the repository's
 configuration?* says so): where code runs and whose subscription pays is not something a pushed
 commit may change.
+
+### Inviting people
+
+There is no sign-up page: an administrator invites each person with a **one-time link**. Under
+**Settings → Users → Invite people**, choose the **Role** the account gets (*Member* unless you pick
+another; choosing *Administrator* says that whoever opens the link becomes one) and how long it is
+**Valid for** (1 hour, 24 hours — the default —, 3 days, 7 days, 14 days or 30 days), then **Create
+invite link**. The link is shown **once**, with a copy button and who it lets in until when; copy it
+and send it however you like. Nobody can show it again — if you lose it, revoke it and make another.
+
+Below the form, **Invite links** lists every link: *Waiting*, *Used* (and who joined), *Expired* or
+*Revoked*. A waiting link has **Revoke**, which asks first.
+
+Whoever opens the link sees which role it is for and until when, and chooses their **email**, their
+**name** and a **password** (at least 12 characters, typed twice). **Create my account** makes the
+account and signs them in. A link works once; a used, expired, withdrawn or mangled link says so in
+a sentence and asks them to get a new one from an administrator. If the email already has an
+account, the page says so and the link keeps working with another email.
 
 ## 12. Statistics
 

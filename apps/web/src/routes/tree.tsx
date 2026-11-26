@@ -95,6 +95,18 @@ const signInRoute = createRoute({
   component: SignInScreen,
 });
 
+/**
+ * The invite page (TD-022's 2026-11-26 amendment): public like `/sign-in`, because its holder has no
+ * account yet. The token is the URL's **fragment** (`/invite#<token>`), read by the page from
+ * `location.hash` and sent in POST bodies only — it is never a search parameter, so it never reaches
+ * the server's access log. A lazy chunk: almost nobody opens it.
+ */
+const inviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/invite',
+  component: lazyRouteComponent(() => import('../features/invite.js'), 'InviteScreen'),
+});
+
 const authenticatedRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'authenticated',
@@ -564,6 +576,7 @@ const notFoundRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   signInRoute,
+  inviteRoute,
   authenticatedRoute.addChildren([
     dashboardRoute,
     projectsRoute,

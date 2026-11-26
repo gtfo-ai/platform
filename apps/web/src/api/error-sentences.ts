@@ -377,6 +377,16 @@ export const CODE_SENTENCE: Readonly<Record<string, CodeSentence>> = {
   project_not_eligible:
     'You cannot take work from some of the projects you chose. Remove them, or ask a maintainer to make you a member there.',
   unknown_user: 'That person is not a user of this platform. Choose someone from the list.',
+  // TD-022's 2026-11-26 amendment: invite links.
+  invite_not_found:
+    'This invite link is not valid — it may have been copied incompletely. Ask an administrator for a new link.',
+  invite_expired: 'This invite link has expired. Ask an administrator for a new link.',
+  invite_used:
+    'This invite link has already been used, and works only once. Ask an administrator for a new link.',
+  invite_revoked: 'This invite link was withdrawn. Ask an administrator for a new link.',
+  email_taken:
+    'An account with that email already exists. Sign in with it, or use another email — the link still works.',
+  invalid_email: 'That is not an email address. Check it and try again.',
 
   // Retried requests.
   idempotency_key_required:

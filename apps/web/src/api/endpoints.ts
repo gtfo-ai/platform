@@ -44,6 +44,7 @@ import {
   contextPackRecordSchema,
   createIdentityMappingRequestSchema,
   createIntegrationRequestSchema,
+  createInviteRequestSchema,
   createProjectRequestSchema,
   createTaskRequestSchema,
   deadLettersResponseSchema,
@@ -70,6 +71,9 @@ import {
   integrationProvidersResponseSchema,
   integrationSummarySchema,
   integrationsResponseSchema,
+  inviteCreatedSchema,
+  inviteListSchema,
+  inviteSummarySchema,
   kbDocResponseSchema,
   kbHealthResponseSchema,
   kbProposalsResponseSchema,
@@ -178,6 +182,18 @@ const acknowledgedSchema = z.unknown();
 export interface Endpoints {
   readonly version: () => Promise<z.output<typeof versionResponseSchema>>;
   readonly orgUsers: () => Promise<z.output<typeof orgUsersResponseSchema>>;
+  /** `GET /api/org/users/invites` — every invite link and its state; admin. Never a token. */
+  readonly orgInvites: () => Promise<z.output<typeof inviteListSchema>>;
+  /**
+   * `POST /api/org/users/invites` — a one-time link; the answer's `url` is the only time the token
+   * is shown. No `Idempotency-Key` (TD-022's 2026-11-26 amendment, item 6): a double submit makes
+   * two links, each revocable.
+   */
+  readonly createInvite: (
+    body: z.input<typeof createInviteRequestSchema>,
+  ) => Promise<z.output<typeof inviteCreatedSchema>>;
+  /** `POST /api/org/users/invites/:id/revoke`. */
+  readonly revokeInvite: (inviteId: string) => Promise<z.output<typeof inviteSummarySchema>>;
   /**
    * `GET /api/org/identities` — who each provider account is (WP-31's route, WP-43's screen). The
    * list is what turns a click in Slack or a comment in Jira from `unmapped_identity` into a person.
@@ -794,6 +810,16 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
   return {
     version: () => client.get('/api/version', { schema: versionResponseSchema }),
     orgUsers: () => client.get('/api/org/users', { schema: orgUsersResponseSchema }),
+    orgInvites: () => client.get('/api/org/users/invites', { schema: inviteListSchema }),
+    createInvite: (body) =>
+      client.command('/api/org/users/invites', {
+        schema: inviteCreatedSchema,
+        body: createInviteRequestSchema.parse(body),
+      }),
+    revokeInvite: (inviteId) =>
+      client.command(`/api/org/users/invites/${seg(inviteId)}/revoke`, {
+        schema: inviteSummarySchema,
+      }),
     orgIdentities: () => client.get('/api/org/identities', { schema: identityMappingListSchema }),
     identityCandidates: () =>
       client.get('/api/org/identities/candidates', { schema: identityCandidateListSchema }),
