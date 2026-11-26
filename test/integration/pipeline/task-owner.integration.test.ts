@@ -489,7 +489,9 @@ describe('the board’s owner filter and the DTO’s four fields (criterion 6)',
       owner: { user_id: users.alice, name: 'alice' },
       owner_source: 'platform',
       unlinked_assignee: null,
-      owner_writes_back: false,
+      // The binding has no lifecycle block, so the write-back is on by default (TD-031's second
+      // 2026-11-26 amendment), and Alice has a Jira account.
+      owner_writes_back: true,
     });
     expect(heldItem).toMatchObject({
       owner: null,

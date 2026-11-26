@@ -2774,6 +2774,65 @@ describe('a manual Start: the starter wins, in the tracker too, and the claim do
     expect(harness.store.ownershipOf(taskId)).toMatchObject({ ownerUserId: ALICE });
   });
 
+  it('a pre-read between the write-back’s preset and its PUT is not applied: the owner is kept, no assign, no refusal', async () => {
+    for (const held of [null, 'jane'] as const) {
+      const ticket = tracker({ assignee: held, assignsOthers: true });
+      const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+      harness.store.seedIdentity('fake-jira', 'bob', BOB);
+      const stored = await insertTask(harness);
+      const taskId = stored.task.id;
+      // Bob takes it (`via: command`), so his write-back is owed.
+      await takeAs(harness, taskId);
+      // The duty's preset, before its `PUT`: the row names Bob's account, the tracker does not yet.
+      await harness.memory.transaction(async (scope) => {
+        const current = await harness.store.tasks.ownership(scope.tx, taskId);
+        expect(
+          await harness.store.tasks.saveOwner(scope.tx, taskId, {
+            expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+            next: {
+              ...current,
+              ticketAssignee: {
+                provider: 'fake-jira',
+                external_id: 'bob',
+                display_name: null,
+                platform: false,
+              },
+            },
+          }),
+        ).toBe(true);
+      });
+
+      const outcome = await ensureTicketClaim(claimOptions(harness), stored, {
+        taskId,
+        ...REFINEMENT_1,
+      });
+
+      // Canary: applied, the stale read cleared Bob (`tracker_sync`), and the claim then assigned
+      // the bot over nobody or refused Jane's ticket.
+      expect(outcome, String(held)).toEqual({ kind: 'proceed' });
+      expect(assigns(ticket), String(held)).toBe(0);
+      expect(harness.store.ownershipOf(taskId), String(held)).toMatchObject({
+        ownerUserId: BOB,
+        ownerSource: 'platform',
+      });
+      expect(await claimRecordOf(harness, taskId)).toMatchObject({ held_by: 'platform_owner' });
+    }
+  });
+
+  it('a pre-read that answers no ticket still keeps an owner whose write-back is owed', async () => {
+    const ticket = tracker({ nullReads: 1_000, assignsOthers: true });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    harness.store.seedIdentity('fake-jira', 'bob', BOB);
+    const stored = await insertTask(harness);
+    const taskId = stored.task.id;
+    await takeAs(harness, taskId);
+
+    await ensureTicketClaim(claimOptions(harness), stored, { taskId, ...REFINEMENT_1 });
+
+    expect(assigns(ticket)).toBe(0);
+    expect(harness.store.ownershipOf(taskId).ownerUserId).toBe(BOB);
+  });
+
   it('with assign_owner: false the claim assigns the binding’s account as before, and nothing is written back (the control)', async () => {
     const ticket = tracker({ assignsOthers: true });
     const harness = memberHarnessFor(

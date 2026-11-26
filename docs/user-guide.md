@@ -290,7 +290,8 @@ stop is under *Details* (since S-25.14). On the board card, Home's *Needs you* a
 starts, and the platform posts one comment on the ticket — *"The agent did not start work on this
 ticket: it is assigned to somebody else. A maintainer has been asked who should take it."* While
 claiming, a ticket already assigned to a person is not started at all, unless you tick **Also start
-tickets already assigned to a person**. On cancel or rework the platform unassigns itself (and moves
+tickets already assigned to a person** — or somebody presses **Start** on it, which makes them its
+owner whoever Jira shows (and, with **Assign the owner in the tracker**, assigns it to them in Jira). On cancel or rework the platform unassigns itself (and moves
 the ticket back to *Pick up from*, if mapped).
 
 A third switch, **Assign the owner in the tracker** (on unless you untick it; since S-26.8a, on by

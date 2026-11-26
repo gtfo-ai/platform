@@ -39,8 +39,12 @@
  * `held_by: 'platform_owner'` whoever holds it, and writes no assign: otherwise it would put the
  * binding's account over the starter, or read the starter as *elsewhere* on its re-read. An owner
  * set by a worker's automatic claim (`via: claim`) is never written back, so the tracker gets the
- * binding's account as before. The residual is backlog 1422's: a claim whose pre-read lands
- * between the write-back's preset and its `PUT` reads the old assignee as a tracker change.
+ * binding's account as before. A pre-read that lands **between the write-back's preset and its
+ * `PUT`** reads the assignee the `PUT` is replacing; it is not applied as a tracker change while the
+ * write-back is owed and the stored assignee already names the owner (`syncOwnerOnClaimRead`), so it
+ * cannot clear the owner and turn the keep into an assign or a refusal. The residual: a person who
+ * changes the tracker after the write-back landed is not followed by this read (the claim cannot
+ * tell a write-back in flight from one done) — the next sync follows them.
  *
  * ## The status re-check (S-28.4)
  *
@@ -136,7 +140,12 @@ import {
   ticketWrites,
 } from './integrations.js';
 import type { OutboundJobData } from './jobs.js';
-import { type ClaimReadFacts, recordClaimAssign, syncOwnerOnClaimRead } from './owner-sync.js';
+import {
+  type ClaimReadFacts,
+  claimOwnerFacts,
+  recordClaimAssign,
+  syncOwnerOnClaimRead,
+} from './owner-sync.js';
 import { PIPELINE_ACTOR, type StoredTask } from './store.js';
 import { cancelTaskInScope, ticketMovedCancelOutcome } from './task-cancel.js';
 import { retryOnTaskConflict } from './task-conflict.js';
@@ -533,10 +542,28 @@ const claim = async (
     }
   }
   const holder = before?.assignee ?? null;
-  // A read that answered no ticket names no holder, so there is nothing to sync and nothing to keep.
+  // TD-031's second 2026-11-26 amendment: whether the owner write-back is putting a person's owner
+  // on this ticket, so the claim does not race it with its own assign.
+  const writeBack = {
+    assignOwner: assignOwnerOn(lifecycle.slots),
+    provider: task.ticket.provider,
+    providerCanAssign: integrations.taskManagement?.port.capabilities().assignOthers === true,
+    shadow,
+  };
+  // A read that answered no ticket names no holder, so there is nothing to sync; the owner facts
+  // are still read, so an owner whose write-back is owed is kept rather than assigned over.
   const facts =
     before === null
-      ? NO_HOLDER
+      ? {
+          ...NO_HOLDER,
+          ...(await options.unitOfWork.transaction(async (scope) =>
+            claimOwnerFacts(options, scope.tx, {
+              projectId: task.projectId,
+              taskId: task.id,
+              writeBack,
+            }),
+          )),
+        }
       : await retryOnTaskConflict(
           {
             taskId: task.id,
@@ -550,15 +577,7 @@ const claim = async (
                 taskId: task.id,
                 assignee: holder,
                 assigneeDisplayName: redactedName(holder),
-                // TD-031's second 2026-11-26 amendment: whether the owner write-back is putting a
-                // person's owner on this ticket, so the claim does not race it with its own assign.
-                writeBack: {
-                  assignOwner: assignOwnerOn(lifecycle.slots),
-                  provider: task.ticket.provider,
-                  providerCanAssign:
-                    integrations.taskManagement?.port.capabilities().assignOthers === true,
-                  shadow,
-                },
+                writeBack,
               }),
             ),
         );

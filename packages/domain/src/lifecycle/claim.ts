@@ -109,10 +109,10 @@ export const intakeSkipsAssignedTicket = (input: {
  *       (`platformOwnerWritesBack`: the owner was set by a person's act, `via` `command` or `pick`,
  *       the binding's `assign_owner` is not `false`, the owner has a `person` identity for the
  *       provider and the provider can assign others; TD-031's second 2026-11-26 amendment). The
- *       `ticket_owner_assign` duty is assigning the owner in the tracker, so the claim writes the
- *       binding's account over nobody: it would overwrite the owner if the write-back landed
- *       first, and its own re-read would read the owner as *elsewhere* if the write-back landed
- *       between its assign and that read. An owner set by a worker's automatic claim (`via: claim`)
+ *       `ticket_owner_assign` duty is assigning the owner in the tracker, so the claim writes no
+ *       assign of its own, not even over nobody or its own account: its assign would overwrite the
+ *       owner if the write-back landed first, and its re-read would read the owner as *elsewhere*
+ *       if the write-back landed between its assign and that read. An owner set by a worker's automatic claim (`via: claim`)
  *       is never written back, so its ticket is assigned to the binding's account as before;
  *  - `refuse` — a **first** claim of a normal task finds somebody else holding the ticket (an
  *    unlinked account, a person below `member`, a machine, another binding's account), the task

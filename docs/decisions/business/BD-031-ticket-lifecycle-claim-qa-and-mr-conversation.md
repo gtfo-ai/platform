@@ -149,7 +149,9 @@ nothing runs or the platform takes every ticket from its developer.
    `in_progress`. *Take tickets already assigned to someone* now means someone who is **not** a linked
    member; everything else about the claim is unchanged.
 3. **Writing the owner back to the tracker is opt-in** per tracker binding (*assign the owner in the
-   tracker*, default off). Releasing ownership never unassigns a person in the tracker.
+   tracker*, default off). Releasing ownership never unassigns a person in the tracker. *(Amended by
+   TD-031's second 2026-11-26 amendment: on by default, for a person's own act only — never a worker's
+   automatic pickup.)*
 4. **A person links their own tracker or git account** by writing a one-time code as a comment from that
    account. The provider proves the author; an email match or a typed id never does. The person then confirms
    the account the provider names, and a code that two accounts used links nobody. Admins keep their mapping for

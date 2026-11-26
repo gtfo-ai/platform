@@ -63,7 +63,14 @@
  * of PR #92): a read that names the binding's own account — a claim recorded before S-26.2, or one
  * whose record this read raced — keeps the owner a person set.
  */
-import type { DomainEvent, ExternalIdentity, Id, IsoDateTime, UserRole } from '@platform/contracts';
+import type {
+  DomainEvent,
+  ExternalIdentity,
+  Id,
+  IsoDateTime,
+  TicketAssignee,
+  UserRole,
+} from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
   type AssigneeClass,
@@ -80,6 +87,7 @@ import {
   ownerWriteBackReachesTracker,
   recordPlatformAssign,
   recordPlatformUnassign,
+  sameTicketAssignee,
   syncOwnerFromTracker,
   type TaskOwnership,
   taskHeldElsewhere,
@@ -509,8 +517,35 @@ export const syncOwnerOnClaimRead = async (
     taskId: input.taskId,
     actor: PIPELINE_ACTOR,
     causeEventId: null,
-    decide: async (ownership) =>
-      trackerDecision(
+    decide: async (ownership) => {
+      /**
+       * **A write-back in flight is not a tracker change** (TD-031's second 2026-11-26
+       * amendment): the `ticket_owner_assign` duty presets `ticket_assignee` to the owner's
+       * account before its `PUT`, and a manual Start enqueues that duty beside its first stage —
+       * so the claim's pre-read can land between the two and read the assignee the `PUT` is about
+       * to replace. Applied, that read would clear the starter (`tracker_sync`) and the claim would
+       * then assign the bot or refuse. While the owner's write-back is owed and the stored assignee
+       * is already that owner's account, a read naming anybody else is left for the next sync.
+       */
+      const owed = await owedOwnerIdentity(options, scope.tx, {
+        projectId: input.projectId,
+        taskId: input.taskId,
+        ownership,
+        writeBack: input.writeBack,
+      });
+      if (
+        owed !== null &&
+        sameTicketAssignee(ownership.ticketAssignee, owed) &&
+        !sameTicketAssignee(
+          input.assignee === null
+            ? null
+            : { provider: input.assignee.provider, external_id: input.assignee.external_id },
+          owed,
+        )
+      ) {
+        return { kind: 'unchanged' };
+      }
+      return trackerDecision(
         options,
         scope.tx,
         {
@@ -519,56 +554,101 @@ export const syncOwnerOnClaimRead = async (
           assigneeDisplayName: input.assigneeDisplayName,
         },
         ownership,
-      ),
+      );
+    },
   });
   const holder = await classifyRead(options.store, scope.tx, input.projectId, input.assignee);
-  const ownership = await options.store.tasks.ownership(scope.tx, input.taskId);
+  return {
+    holder,
+    ...(await claimOwnerFacts(options, scope.tx, {
+      projectId: input.projectId,
+      taskId: input.taskId,
+      writeBack: input.writeBack,
+    })),
+  };
+};
+
+/**
+ * What the claim knows about the task's owner, with no tracker read applied —
+ * {@link ClaimReadFacts}' `platformOwner` and `platformOwnerWritesBack`, read live in `tx`. The
+ * claim asks it directly when its pre-read answered no ticket (nothing to sync), so an owner whose
+ * write-back is owed is kept there too.
+ */
+export const claimOwnerFacts = async (
+  options: OwnerSyncOptions,
+  tx: Transaction,
+  input: {
+    readonly projectId: Id;
+    readonly taskId: Id;
+    readonly writeBack?: ClaimWriteBackFacts | undefined;
+  },
+): Promise<Pick<ClaimReadFacts, 'platformOwner' | 'platformOwnerWritesBack'>> => {
+  const ownership = await options.store.tasks.ownership(tx, input.taskId);
   const platformOwner =
     ownership.ownerSource === 'platform' &&
     ownership.ownerUserId !== null &&
-    (await options.store.owners.mayOwn(scope.tx, {
+    (await options.store.owners.mayOwn(tx, {
       projectId: input.projectId,
       userId: ownership.ownerUserId,
     }));
   const platformOwnerWritesBack =
     platformOwner &&
-    ownership.ownerUserId !== null &&
-    input.writeBack !== undefined &&
-    (await ownerWriteBackOwed(options, scope.tx, {
+    (await owedOwnerIdentity(options, tx, {
+      projectId: input.projectId,
       taskId: input.taskId,
-      ownerUserId: ownership.ownerUserId,
+      ownership,
       writeBack: input.writeBack,
-    }));
-  return { holder, platformOwner, platformOwnerWritesBack };
+    })) !== null;
+  return { platformOwner, platformOwnerWritesBack };
 };
 
-/** {@link ClaimReadFacts.platformOwnerWritesBack} for a platform owner `ownerUserId`. */
-const ownerWriteBackOwed = async (
+/**
+ * The account the owner write-back is putting on the ticket — the platform owner's `person`
+ * identity for the provider — when that write-back is **owed** ({@link ClaimReadFacts}'
+ * `platformOwnerWritesBack`, less the `mayOwn` question), or `null`.
+ */
+const owedOwnerIdentity = async (
   options: OwnerSyncOptions,
   tx: Transaction,
-  input: { readonly taskId: Id; readonly ownerUserId: Id; readonly writeBack: ClaimWriteBackFacts },
-): Promise<boolean> => {
-  const { writeBack } = input;
-  if (!writeBack.assignOwner || !writeBack.providerCanAssign || writeBack.shadow) {
-    return false;
+  input: {
+    readonly projectId: Id;
+    readonly taskId: Id;
+    readonly ownership: TaskOwnership;
+    readonly writeBack: ClaimWriteBackFacts | undefined;
+  },
+): Promise<Pick<TicketAssignee, 'provider' | 'external_id'> | null> => {
+  const { writeBack, ownership } = input;
+  const ownerUserId = ownership.ownerUserId;
+  if (
+    writeBack === undefined ||
+    ownerUserId === null ||
+    ownership.ownerSource !== 'platform' ||
+    !writeBack.assignOwner ||
+    !writeBack.providerCanAssign ||
+    writeBack.shadow
+  ) {
+    return null;
   }
   const via = await options.store.owners.lastOwnerChangeVia(tx, input.taskId);
-  if (
-    via === null ||
-    !ownerChangeWritesBack({ ownerUserId: input.ownerUserId, source: 'platform', via })
-  ) {
-    return false;
+  if (via === null || !ownerChangeWritesBack({ ownerUserId, source: 'platform', via })) {
+    return null;
   }
   const identity = await options.store.owners.personIdentity(tx, {
-    userId: input.ownerUserId,
+    userId: ownerUserId,
     provider: writeBack.provider,
   });
-  return ownerWriteBackReachesTracker({
-    assignOwner: writeBack.assignOwner,
-    providerTicket: true,
-    hasPersonIdentity: identity !== null,
-    shadow: writeBack.shadow,
-  });
+  if (
+    identity === null ||
+    !ownerWriteBackReachesTracker({
+      assignOwner: writeBack.assignOwner,
+      providerTicket: true,
+      hasPersonIdentity: true,
+      shadow: writeBack.shadow,
+    })
+  ) {
+    return null;
+  }
+  return { provider: writeBack.provider, external_id: identity.externalId };
 };
 
 /**

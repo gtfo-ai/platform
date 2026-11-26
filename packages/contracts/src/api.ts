@@ -2471,7 +2471,7 @@ export const taskOwnerCallerFactsShape = {
   can_unassign: z.boolean(),
   /**
    * Whether *Take it* by **this caller** would also assign the ticket in the tracker (S-26.3, the
-   * owner write-back): the binding sets `lifecycle.assign_owner`, the task names a provider ticket
+   * owner write-back): the binding does not set `lifecycle.assign_owner: false`, the task names a provider ticket
    * and is not shadow, and the caller has a `person` identity for the ticket's provider —
    * `ownerWriteBackReachesTracker` over the caller, the predicate the `ticket_owner_assign` duty
    * decides with. Independent of `owner_writes_back`, which is about the current owner: a task held
@@ -2819,7 +2819,7 @@ export const ownerCandidatesResponseSchema = z.strictObject({
     taskOwnerViewSchema.extend({
       /**
        * Whether assigning **this** person would also assign the ticket in the tracker (S-26.3, the
-       * owner write-back): the binding sets `lifecycle.assign_owner` and the person has a `person`
+       * owner write-back): the binding does not set `lifecycle.assign_owner: false` and the person has a `person`
        * identity for the provider — `ownerWriteBackReachesTracker`, the `ticket_owner_assign`
        * duty's own predicate. Asked of the task named by `?task_id=` (a shadow or platform-issued
        * task reads `false`), else of the project's task-management binding's provider. Optional on

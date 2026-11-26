@@ -1265,8 +1265,10 @@ export const taskRecordSchema = z.strictObject({
   unlinked_assignee: z.strictObject({ display_name: z.string().nullable() }).nullable(),
   /**
    * Whether **the current owner** is (or was, when the platform set them) written back to the
-   * tracker (S-26.3): the project's binding sets `lifecycle.assign_owner`, the task names a provider
-   * ticket and is not shadow, and the owner has a `person` identity for the ticket's provider —
+   * tracker (S-26.3): the project's binding does not set `lifecycle.assign_owner: false` (on by
+   * default since TD-031's second 2026-11-26 amendment), the owner was not set by a worker's
+   * automatic claim (`via: claim`), the task names a provider ticket and is not shadow, and the
+   * owner has a `person` identity for the ticket's provider —
    * `ownerWriteBackReachesTracker` over the owner. `false` for a task with no owner. It says nothing
    * about somebody *else* taking the task: that is the task read's per-caller `take_writes_back` and
    * the owner candidates' `writes_back`.
