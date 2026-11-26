@@ -234,3 +234,8 @@ platform-rebase path keeps its `+`/`-`-only digest. A reviewed head older than t
 provider's first page of 100 versions is not found (`head_version_missing`, a person decides). Both digests are read by
 version and pinned to their heads, and the head is read again after CI, so a push during the judgement is `head_moved`
 and judged again on the next wake-up.
+
+## Amendment D (2026-11-26, S-28.24) — pointer
+
+Decision 3's fresh check gains one item, decided in **TD-029 amendment G** (decision 4): for a task with a frozen
+`qa_stage` whose binding sets `qa_pass`, the ticket's fresh status must be in `qa_pass`, else `ticket_not_qa_passed`.
