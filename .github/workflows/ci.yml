@@ -360,7 +360,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # The two images the workspace e2e runs the real provider against
-      # (`test/e2e/workspace/docker-workspace.e2e.test.ts`): `platform-runtime`
+      # (`test/e2e/workspace/docker-workspace*.e2e.test.ts`): `platform-runtime`
       # as the run container, `platform-egress` as the sidecar. They are built
       # here rather than pulled, so the tier tests **this commit's** images —
       # and a missing image fails the suite rather than skipping a case, which

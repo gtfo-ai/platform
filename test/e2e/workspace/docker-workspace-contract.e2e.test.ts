@@ -66,7 +66,7 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
           const handle = await fixture.provider.create(input, provision);
           created = handle.runId;
           // Q51, admitted: this process is not uid 1000, and `attach` reads a 0600 file owned by
-          // it. The real mode is measured in its own case above, before anything relaxes it.
+          // it. The real mode is measured in its own case in `docker-workspace.e2e.test.ts`, before anything relaxes it.
           await relaxControlDirectoryForHost(fixture, handle.runId);
           return handle;
         },

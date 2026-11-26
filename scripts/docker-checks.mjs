@@ -299,9 +299,10 @@ const plan = (args) => {
 };
 
 const run = (args) => {
-  const [name, leg] = (args[0] ?? '').split(':');
+  const parts = (args[0] ?? '').split(':');
+  const [name, leg] = parts;
   const check = DOCKER_CHECKS.find((candidate) => candidate.name === name);
-  if (check === undefined) {
+  if (check === undefined || parts.length > 2) {
     process.stderr.write(
       `unknown check '${args[0] ?? ''}'; known: ${matrixEntries(DOCKER_CHECKS.map((c) => c.name)).join(', ')}\n`,
     );
