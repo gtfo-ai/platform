@@ -40,10 +40,10 @@ export const CHANGE_PASSWORD_WORDS = {
   changed: 'Your password was changed.',
   changedAndRevoked: 'Your password was changed, and your other sessions were signed out.',
   tooShort: `The new password needs at least ${PASSWORD_MIN_LENGTH} characters.`,
-  tooLong: `The new password can have at most ${PASSWORD_MAX_LENGTH} characters.`,
   mismatch: 'The two new passwords are not the same.',
   unchanged: 'The new password is the same as the current one.',
   wrongCurrent: 'Your current password was not accepted. Nothing was changed.',
+  tooMany: 'Too many attempts in a row. Nothing was changed; wait a minute and try again.',
   signedOut: 'Your session has ended. Sign in again, then change the password.',
   unreachable: 'The server could not be reached, so the change was not confirmed.',
   // Not "was not changed": Better Auth stores the new hash before it revokes the other sessions,
@@ -55,7 +55,6 @@ export const CHANGE_PASSWORD_WORDS = {
 /** Why the form cannot be sent yet, or `null` when it can. Only shown once a field has a value. */
 export const passwordProblem = (current: string, next: string, confirm: string): string | null => {
   if (next.length > 0 && next.length < PASSWORD_MIN_LENGTH) return CHANGE_PASSWORD_WORDS.tooShort;
-  if (next.length > PASSWORD_MAX_LENGTH) return CHANGE_PASSWORD_WORDS.tooLong;
   if (confirm.length > 0 && next !== confirm) return CHANGE_PASSWORD_WORDS.mismatch;
   if (next.length > 0 && current.length > 0 && next === current) {
     return CHANGE_PASSWORD_WORDS.unchanged;
@@ -67,12 +66,15 @@ export const passwordProblem = (current: string, next: string, confirm: string):
 export const changePasswordMessage = (error: unknown): string => {
   if (error instanceof ApiError && error.status === 400) return CHANGE_PASSWORD_WORDS.wrongCurrent;
   if (error instanceof ApiError && error.status === 401) return CHANGE_PASSWORD_WORDS.signedOut;
+  // Better Auth's rate limit (3 per 10 s on this path in production) answers before the handler.
+  if (error instanceof ApiError && error.status === 429) return CHANGE_PASSWORD_WORDS.tooMany;
   if (error instanceof NetworkError) return CHANGE_PASSWORD_WORDS.unreachable;
   return CHANGE_PASSWORD_WORDS.failed;
 };
 
 const explained = (error: unknown): boolean =>
-  (error instanceof ApiError && (error.status === 400 || error.status === 401)) ||
+  (error instanceof ApiError &&
+    (error.status === 400 || error.status === 401 || error.status === 429)) ||
   error instanceof NetworkError;
 
 export const ChangePassword = (): ReactElement => {

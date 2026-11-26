@@ -15,7 +15,7 @@ const json = (body: unknown, status = 200): Response =>
 interface World {
   changes: unknown[];
   /** What `POST /api/auth/change-password` answers. */
-  answer: { readonly status: number; readonly body: unknown };
+  answer: { readonly status: number; readonly body: unknown } | 'throws';
   sessionReads: number;
 }
 
@@ -37,6 +37,7 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
   }
   if (path === '/api/auth/change-password' && init?.method === 'POST') {
     world.changes.push(JSON.parse(String(init.body)));
+    if (world.answer === 'throws') throw new TypeError('Failed to fetch');
     return json(world.answer.body, world.answer.status);
   }
   if (path === '/api/version') return json({ version: '0.0.0-dev', commit: null, built_at: null });
@@ -154,5 +155,25 @@ describe('Settings → Password', () => {
     expect(await screen.findByText(WORDS.wrongCurrent)).toBeTruthy();
     expect(screen.queryByText(WORDS.changedAndRevoked)).toBeNull();
     expect((screen.getByLabelText(WORDS.next) as HTMLInputElement).value).toBe('new-password-2');
+  });
+
+  it.each([
+    ['an ended session', 401, WORDS.signedOut],
+    ['the rate limit', 429, WORDS.tooMany],
+    ['a server failure', 500, WORDS.failed],
+  ])('says %s in its own words', async (_name, status, words) => {
+    world.answer = { status, body: { code: 'X', message: 'x' } };
+    const user = await openPasswordPage();
+    await fill(user, 'old-password-1', 'new-password-2');
+    await user.click(save());
+    expect(await screen.findByText(words)).toBeTruthy();
+  });
+
+  it('says an unreachable server without claiming what happened', async () => {
+    world.answer = 'throws';
+    const user = await openPasswordPage();
+    await fill(user, 'old-password-1', 'new-password-2');
+    await user.click(save());
+    expect(await screen.findByText(WORDS.unreachable)).toBeTruthy();
   });
 });

@@ -32,9 +32,10 @@ export const nonEmptyStringSchema = z.string().min(1);
 
 /**
  * A sign-in password's length, for every way one is set: the bootstrap administrator's
- * (`APP_BOOTSTRAP_ADMIN_PASSWORD`), Better Auth's sign-up, admin create-user and change-password
+ * (`APP_BOOTSTRAP_ADMIN_PASSWORD`), Better Auth's sign-up, change-password and admin set-user-password
  * (`emailAndPassword.minPasswordLength`/`maxPasswordLength`), and the *Password* settings form,
- * which checks it before sending. 12 is the bootstrap's long-standing minimum, applied to all of
+ * which checks it before sending. Not admin create-user: Better Auth checks no length there
+ * (BACKLOG 1647). 12 is the bootstrap's long-standing minimum, applied to all of
  * them so changing a password cannot weaken it; 128 is Better Auth's default maximum. An existing
  * shorter password still signs in — the bound is checked only where a password is set.
  */
