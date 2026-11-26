@@ -1127,10 +1127,11 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(response.json()).toEqual({ first_sign_in_pending: true });
   }, 15_000);
 
-  // No sweep of the web sources here, unlike its neighbours: another synchronous read of every client
-  // file put the event loop over `@fastify/under-pressure`'s bound and every probe after it answered
-  // 500 (measured on CI, #191). That the client calls the four paths is held by the two-way
-  // equality above and by the public list below, which names the two public paths exactly.
+  // No sweep of the web sources here: that the client calls the four paths is held by the two-way
+  // equality above and by the public list, which names the two public paths exactly. (A sweep here
+  // once left every later probe answering 500 on CI — not the census's fault but the app's: its
+  // `@fastify/under-pressure` refused every request after an event-loop spike. `app.ts`'s
+  // `UNDER_PRESSURE_OPTIONS` fixes that, and `app.test.ts` holds it.)
   it('serves the invite links: the admin three refuse an anonymous caller by their own method, the public pair does not (TD-022 2026-11-26)', async () => {
     // With no body at all: the two admin writes are guarded in `preValidation`, so a guard that
     // slipped to `preHandler` would answer the route's shape (400) instead of 401.

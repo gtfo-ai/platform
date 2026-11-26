@@ -489,6 +489,28 @@ export interface BuildAppOptions {
 const MAX_EVENT_LOOP_DELAY_MS = 1_000;
 const MAX_EVENT_LOOP_UTILIZATION = 0.98;
 
+/**
+ * `@fastify/under-pressure`'s options: it **measures** and never refuses.
+ *
+ * Every request proceeds whatever the samples say, and `/healthz` asks `isUnderPressure()` itself,
+ * so a momentarily busy process reports `degraded` instead of failing every request in flight —
+ * including the SSE streams, which are long-lived and must not be dropped by a spike.
+ *
+ * The `pressureHandler` is what makes that true. Left `undefined` (as it was until #191), the plugin
+ * falls back to its own handler (`handlePressure` in 9.1.0): `503` and `underPressureError` for
+ * **every** request while the event-loop utilisation sampled above 0.98, which `errors.ts` answers
+ * as `500 internal_error`. Measured on CI: a census test's synchronous sweep of the web sources
+ * spiked the sample, and every request after it answered 500. A handler that returns nothing tells
+ * the plugin to call `next()`.
+ */
+export const UNDER_PRESSURE_OPTIONS = {
+  maxEventLoopDelay: MAX_EVENT_LOOP_DELAY_MS,
+  maxEventLoopUtilization: MAX_EVENT_LOOP_UTILIZATION,
+  exposeStatusRoute: false,
+  retryAfter: 5,
+  pressureHandler: (): undefined => undefined,
+} as const;
+
 export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstance> => {
   const { config } = options;
   const capabilities = roleCapabilities(config.role);
@@ -576,16 +598,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     encodings: ['br', 'gzip', 'deflate'],
   });
 
-  await app.register(underPressure, {
-    maxEventLoopDelay: MAX_EVENT_LOOP_DELAY_MS,
-    maxEventLoopUtilization: MAX_EVENT_LOOP_UTILIZATION,
-    // No status route and no automatic 503: `/healthz` asks `isUnderPressure()` itself, so a
-    // momentarily busy process reports `degraded` instead of failing every request in flight —
-    // including the SSE streams, which are long-lived and must not be dropped by a spike.
-    exposeStatusRoute: false,
-    retryAfter: 5,
-    pressureHandler: undefined,
-  });
+  // No status route and no refusal: see `UNDER_PRESSURE_OPTIONS`.
+  await app.register(underPressure, UNDER_PRESSURE_OPTIONS);
 
   /**
    * One log line and one histogram observation per request, with the request id in scope for

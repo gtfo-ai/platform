@@ -1,6 +1,8 @@
+import underPressure from '@fastify/under-pressure';
 import type { FastifyInstance } from 'fastify';
+import fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildApp } from './app.js';
+import { buildApp, UNDER_PRESSURE_OPTIONS } from './app.js';
 import type { Auth } from './auth/better-auth.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { createLogger } from './logging.js';
@@ -335,5 +337,33 @@ describe('graceful shutdown', () => {
     expect(sent.at(-1)).toBe('shutdown');
     expect(closed).toBe(true);
     expect(harness.hub.connectionCount).toBe(0);
+  });
+});
+
+describe('under pressure, the server still answers (#191)', () => {
+  /**
+   * The plugin forced into pressure through its one deterministic input — a failing health check —
+   * so the test does not depend on how busy the machine is. Without `UNDER_PRESSURE_OPTIONS`'
+   * `pressureHandler`, the plugin's own handler answers this request 503 (and the application's
+   * error mapping 500): the state every census probe on CI was left in.
+   */
+  it('serves a request while isUnderPressure() is true, and still reports the pressure', async () => {
+    const bare = fastify();
+    await bare.register(underPressure, {
+      ...UNDER_PRESSURE_OPTIONS,
+      healthCheck: async () => false,
+      healthCheckInterval: 5,
+    });
+    bare.get('/probe', async () => ({ ok: true }));
+    try {
+      await bare.ready();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(bare.isUnderPressure()).toBe(true);
+      const response = await bare.inject({ method: 'GET', url: '/probe' });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true });
+    } finally {
+      await bare.close();
+    }
   });
 });
