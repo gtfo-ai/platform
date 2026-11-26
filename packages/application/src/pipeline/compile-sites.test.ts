@@ -49,8 +49,8 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     how: "the handler's own transaction (EventBus owns it) and intake's: the loaded task's `stored.pipelineDial`; intake's insert is the one writer, from `pipelineDialFor(settings)` read before the transaction opened",
   },
   'packages/application/src/pipeline/jobs.ts': {
-    sites: 4,
-    how: "inside the job's transaction: the loaded row's `stored`/`current.pipelineDial` — the human-return window's return and its `qa` pass are two since WP-178",
+    sites: 5,
+    how: "inside the job's transaction: the loaded row's `stored`/`current.pipelineDial` — the human-return window's return and its `qa` pass are two since WP-178, and the stale wake-up's forward (PR #196) asks of the same row whether the stage the task is on is an agent or gate stage",
   },
   'packages/application/src/pipeline/commands.ts': {
     sites: 7,
@@ -264,9 +264,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2323 ms (median 1927 ms); 2× it, 15 s floor.
-  it('counts forty-four — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5, forty before S-28.15, forty-two before S-28.18 and S-28.20 — and states how each resolves the dial', () => {
+  it('counts forty-five — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15, thirty-eight before S-28.1, thirty-nine before S-28.5, forty before S-28.15, forty-two before S-28.18 and S-28.20, forty-four before PR #196 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(44);
+    expect(total).toBe(45);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

@@ -847,9 +847,43 @@ export const stageExecuteHandler = (
     // needs it: `ensureTicketSnapshot` asks one question of the row this load already has, and
     // re-loading it would be a second transaction per agent stage for a field in hand (WP-15f,
     // review round 1).
+    // Backlog (2026-11-26, the #190 review): the stage the task has moved on to, when this wake-up
+    // is for one it has left — read in the same transaction as the miss, forwarded below.
+    let movedTo: { readonly stage: Slug; readonly attempt: number } | null = null;
     const admitted = await options.unitOfWork.transaction(async (scope) => {
       const stored = await options.store.tasks.load(scope.tx, request.taskId);
-      if (stored === null || stored.task.currentStage !== request.stage) {
+      if (stored === null) {
+        return null;
+      }
+      if (stored.task.currentStage !== request.stage) {
+        const current = stored.task.currentStage;
+        if (current !== null && isRunnableTaskState(stored.task.state)) {
+          const kind = stageOf(
+            compilePipeline(
+              stored.task.template,
+              stored.template,
+              stored.pipelineDial,
+              stored.qaStage,
+            ),
+            current,
+          )?.kind;
+          const attempt = stored.task.stageAttempts[current] ?? 0;
+          // An agent attempt that already had a run is never forwarded: its run was cancelled,
+          // failed or swept, or its re-run is owed by a delayed job or the stranded-stage recovery
+          // (which escalates a stage nothing moved after its run ended, never re-runs it).
+          if (
+            kind === 'gate' ||
+            (kind === 'agent' &&
+              (await options.store.tasks.stageAttemptRuns(
+                scope.tx,
+                stored.task.id,
+                current,
+                attempt,
+              )) === 0)
+          ) {
+            movedTo = { stage: current, attempt };
+          }
+        }
         return null;
       }
       return {
@@ -865,6 +899,47 @@ export const stageExecuteHandler = (
         stored,
       };
     });
+
+    /**
+     * **A wake-up for a stage the task has left is forwarded to the stage it is on** (the #190
+     * review, fontai 2026-11-26). `stage.execute` is `stately` per task — one job waiting, one
+     * running — so when a CI webhook settles `ci_gate` while that gate's 30-second recheck is
+     * waiting, the next stage's enqueue is `coalesced` onto the recheck and dropped. The recheck
+     * then fires here for a stage the task has left; before this it did nothing, and the next stage
+     * waited minutes for the stranded-stage recovery (`recovery/stranded-stage.ts`). This job is
+     * running, so the waiting slot is free and the forward is admitted; when the current stage's own
+     * job is already waiting it coalesces onto it, which is that job. Bounded: the forwarded job is
+     * for the task's current stage and attempt, so it forwards again only if the task moves again,
+     * and a duplicate of a live run starts nothing (`revalidateOpen`). Only a stage nothing has run
+     * yet is forwarded to — a gate, or an agent attempt with no run row — so a cancelled or ended run
+     * is never started again here, and a delayed retry or hand-back keeps its own delayed job (the
+     * forward carries no model/effort overrides and no delay, because it only ever starts a fresh
+     * entry). A forward into a gate starts its check count and outage clock afresh; that happens
+     * only when the gate's own recheck was coalesced away, once per stale job, so the bound stands.
+     * The `supersededBy` forward below is the same rule for an attempt within one stage (PROGRESS
+     * backlog 494).
+     */
+    const forwardTo = movedTo as { readonly stage: Slug; readonly attempt: number } | null;
+    if (admitted === null && forwardTo !== null) {
+      const forwarded = await enqueueStage(options.jobs, {
+        taskId: request.taskId,
+        projectId: request.projectId,
+        stage: forwardTo.stage,
+        attempt: forwardTo.attempt,
+      });
+      logger.info(
+        {
+          task_id: request.taskId,
+          stage: request.stage,
+          attempt: request.attempt,
+          current_stage: forwardTo.stage,
+          current_attempt: forwardTo.attempt,
+          forwarded: forwarded.status,
+        },
+        'a stage wake-up for a stage the task has left was forwarded to the stage it is on',
+      );
+      return;
+    }
 
     const stage = admitted?.stage ?? null;
     if (admitted === null || stage === null) {

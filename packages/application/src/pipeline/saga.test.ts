@@ -4286,6 +4286,77 @@ describe('the CI gate waits for a pipeline up to its CI timeout (WP-136)', () =>
     expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(1);
   });
 
+  /** `stage.execute`'s `stately` admission: a second enqueue while one waits is coalesced. */
+  const statelyStageQueue = (harness: PipelineHarness): string[] => {
+    const dropped: string[] = [];
+    const jobs = harness.jobs as { enqueue: PipelineHarness['jobs']['enqueue'] };
+    const real = jobs.enqueue.bind(harness.jobs);
+    jobs.enqueue = async (request) => {
+      const waitingJob = harness.jobs.enqueued.some(
+        (queued) =>
+          queued.queue === JOB_QUEUES.stageExecute && queued.singletonKey === request.singletonKey,
+      );
+      if (request.queue === JOB_QUEUES.stageExecute && waitingJob) {
+        dropped.push((request.data as unknown as { stage: string }).stage);
+        return { status: 'coalesced', jobId: null };
+      }
+      return real(request);
+    };
+    return dropped;
+  };
+
+  /** A webhook-bound task whose CI failed while its gate's recheck waited: now at implementation. */
+  const settledWhileRecheckWaits = async () => {
+    const harness = waiting(() => pipeline('running'), { plan: WEBHOOK });
+    const dropped = statelyStageQueue(harness);
+    await harness.publish([ticketMatched()]);
+    await nextCheck(harness);
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    const runs = () => harness.specs.filter((spec) => spec.stage === 'implementation').length;
+    const before = runs();
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: taskOf(harness).task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'failed',
+        failed_jobs: [{ name: 'test:unit', log_ref: 'log:1' }],
+        coverage_pct: null,
+      }),
+    ]);
+    expect(taskOf(harness).task.currentStage).toBe('implementation');
+    expect(dropped).toContain('implementation');
+    expect(runs()).toBe(before);
+    return { harness, runs, before };
+  };
+
+  /**
+   * The #190 review (fontai, 2026-11-26): `stage.execute` is `stately` per task, so the stage the
+   * webhook's settlement enqueues is coalesced onto the gate's queued recheck and dropped. The
+   * recheck, firing for a stage the task has left, forwards the wake-up to the stage it is on —
+   * before, the task waited for the stranded-stage recovery.
+   */
+  it('runs the stage a webhook settlement entered when its job was coalesced onto the queued recheck', async () => {
+    const { harness, runs, before } = await settledWhileRecheckWaits();
+    // The recheck fires for `ci_gate`, which the task has left, and forwards the wake-up.
+    await nextCheck(harness);
+    expect(runs()).toBe(before + 1);
+    expect(lastEscalation(harness)).toBeUndefined();
+  });
+
+  it('forwards nothing when the task was paused at the stage it moved to', async () => {
+    const { harness, runs, before } = await settledWhileRecheckWaits();
+    await pauseTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    expect(taskOf(harness).task.state).toBe('paused');
+    await nextCheck(harness);
+    expect(runs()).toBe(before);
+    expect(stageJobs(harness)).toEqual([]);
+  });
+
   it('waits for another gate by time from its entry, backing off, and parks at its sixty-minute limit (BD-034)', async () => {
     const harness = waiting(() => pipeline('success'), { mergeability: () => null });
     await harness.publish([ticketMatched()]);

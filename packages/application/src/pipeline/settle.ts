@@ -1586,7 +1586,9 @@ const enqueueFollowOn = async (
      * **A dropped re-enqueue is stated, not silent** (WP-149, PROGRESS backlog 445): the queue is
      * `stately` per task, so when another job for the task is already queued the enqueue is
      * `coalesced`. Nothing the bound needs is lost — it is read off the runs — and if that job is for
-     * something else, the stranded-stage recovery finds the entry and escalates it.
+     * something else, the stranded-stage recovery finds the entry and escalates it. (A queued job
+     * for a stage the task has left forwards only to an entry nothing ran — `jobs.ts` — so it does
+     * not rescue this re-run.)
      */
     logger.warn(
       { task_id: run.taskId, stage: run.stage, attempt: run.attempt },
