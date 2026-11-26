@@ -109,7 +109,7 @@ describe('a usage limit and a lost worker (WP-285, WP-286)', () => {
     expect(limited.runtime.localState().usage_paused_until).not.toBeNull();
   }, 300_000);
 
-  it('re-offers a stage a lost worker held once, to a second worker; a second loss of the entry needs a human (WP-286 (4))', async () => {
+  it('re-offers a stage a lost worker held to a second worker, and re-offers the second loss too, excluding both machines (WP-286 (4), BD-034)', async () => {
     const topology = await core('worker-lost', { pipelineEnv: FAST_SWEEP });
     const { pipeline } = topology;
     await setExecution(pipeline, { mode: 'workers_only', prefer: 'workers' });
@@ -154,21 +154,26 @@ describe('a usage limit and a lost worker (WP-285, WP-286)', () => {
     );
     expect(task?.state).toBe('active');
 
-    // The second machine goes dark too: the entry's second loss is a person's.
+    // The second machine goes dark too: since BD-034 the entry's second loss is re-planned as well
+    // (three re-plans before a person is asked), its offer excluding both lost machines.
     secondLink.retarget(null);
     await expireLease(pipeline, second.workerId);
-    await pipeline.waitFor('the task to need a human', async () => {
-      const [row] = await pipeline.query<{ state: string }>(
-        'select state::text as state from tasks',
-      );
-      return row?.state === 'needs_human';
+    await pipeline.waitFor('the stage to be offered a third time', async () => {
+      const rows = await refinementRuns(pipeline);
+      return rows.length === 3;
     });
     runs = await refinementRuns(pipeline);
-    expect(runs.map((run) => run.terminal_reason)).toEqual(['lease_expired', 'lease_expired']);
-    const [brief] = await pipeline.query<{ brief: string }>(
-      "select payload ->> 'blocker_brief' as brief from events where type = 'task.escalated'",
+    expect(runs.map((run) => run.terminal_reason)).toEqual([
+      'lease_expired',
+      'lease_expired',
+      null,
+    ]);
+    expect([...(runs[2]?.excluded ?? [])].sort()).toEqual([first.workerId, second.workerId].sort());
+    const [after] = await pipeline.query<{ state: string }>(
+      'select state::text as state from tasks',
     );
-    expect(brief?.brief).toContain(`run ${runs[0]?.id} (held by worker ${first.workerId})`);
-    expect(brief?.brief).toContain(`run ${runs[1]?.id} (held by worker ${second.workerId})`);
+    expect(after?.state).toBe('active');
+    const escalated = await pipeline.query("select 1 from events where type = 'task.escalated'");
+    expect(escalated).toHaveLength(0);
   }, 300_000);
 });
