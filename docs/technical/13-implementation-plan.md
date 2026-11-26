@@ -2167,6 +2167,36 @@ Rules:
 **Order.** S-29.1, then S-29.2, then S-29.3. When all three are on `main`, the worker session deploys the cores (Autix,
 FontAI) and installs the second worker on the owner's Mac with `--name`.
 
+## Milestone M30 — a person sees only the projects they work in (architect, 2026-11-26; the owner's decision)
+
+The owner's rule: outside an organisation admin, a person sees only the projects they are assigned to, and "assigned"
+means the projects they chose for their worker. The decision is **BD-035**. The design and the full list of surfaces
+are in **TD-022's 2026-11-26 visibility amendment**, items 1–8. Everything else follows from one function,
+`visibleProjects(actor)` in `apps/server/src/auth/visibility.ts`. The guard answers 404 for a hidden project, every
+list and aggregate takes the set as a parameter, and the stream filters by it.
+
+Rules:
+- **No test runs locally.** CI is the verdict.
+- **No migration**, unless S-30.1 measures that the statement needs an index on `tasks.owner_user_id`. The index
+  would be an additive migration, with its header per TD-032.
+- A slice's PR fixes the docs it makes false: the user guide's board, inbox and Workers sentences, and the operator
+  guide's roles section. It adds its own LEDGER line.
+- **Lanes:** S-30.1 goes first, because it moves the claim card off `GET /api/projects` before anything narrows that
+  read. After it, S-30.2 and S-30.3 are built in parallel: one touches `routes/`, `auth/` and `queries/`, the other
+  `sse/`. **S-30.2 merges first.** If S-30.3 landed alone, a narrowed person would still see project B's board but
+  get no live frames for it. With S-30.2 alone, the stream still carries B's ids, which is the smaller interim.
+- Q135 (a new worker's starting scope) and Q136 (maintainers) do not block. Build BD-035 as written. Either answer
+  is a change of one rule.
+
+| Slice | Title | Depends | Decision(s) | Acceptance | Risk |
+|---|---|---|---|---|---|
+| **S-30.1** | The visible set, and the card that can still widen it | — | BD-035; TD-022 visibility amendment, items 1 and 6 | (1) `visibleProjects` answers BD-035's rule. A unit table over in-memory queries covers each case: admin → all; no worker and no membership → all; a worker scoped to [A] → {A}; [A] plus a `null` worker → all; a legacy `'{}'` worker → all; a revoked worker is ignored; a membership adds; a non-terminal owned task adds, a terminal one does not. `project-visibility-queries.integration.test.ts` holds the SQL statement to the same table. (2) `project.read_all: 'admin'` is in `permissions.ts`, and the exhaustive role×action test is updated. (3) `GET /api/workers/:id/claim-scope` is answered to the worker's own user only, and anybody else gets 404. It lists the `member`+ projects, each with its execution setting and `unassigned_has_taker`. A route test asserts that its `projects` and `unassigned_has_taker` equal the worker protocol's `GET claim-scope` for the same worker. The execution setting is this read's own addition. (4) The *What this machine takes* card, on the Workers screen and in the wizard's Choose projects step, and the wizard's *Which projects let workers run* list read it. A ui test (`workers.test.tsx`, `worker-wizard.test.tsx`) widens a worker from [A] to [A, B] where B is not in the person's visible set. (5) `client-census.test.ts` names the new path. Nothing else a person sees changes in this slice. | low |
+| **S-30.2** | A hidden project answers 404, and lists leave it out | S-30.1 | TD-022 visibility amendment, items 2–5 and 8 | (1) The guard answers 401, then 404 for a missing or hidden project, then 403. For a project, a task, a run, an artifact and a shadow batch, a hidden id and a missing id get byte-identical bodies (`rbac.test.ts`, `scope.test.ts`, one route test per family). The same holds for commands, for example `POST /api/tasks/:id/questions/:qid/answer`. (2) These filter in SQL: `GET /api/projects`, `org/inbox`, `org/agents`, `org/stats` and `.csv` (totals included; a hidden `?project_id=` is 404), `org/audit`'s project rows, `integrations`' `used_by`, and `refused-deliveries`. Route tests run over fake queries, and `pipeline-queries.integration.test.ts` adds cases. The inbox/agents partition test still holds. (3) `apps/server/src/routes/visibility-census.test.ts` classifies every route the server registers, read off `onRoute`, into exactly one of items 2–6, in both directions. Item 4's "visible by construction" routes each have an assertion. (4) `test/e2e/visibility/project-visibility.e2e.test.ts` uses two members and an admin, with projects A and B. The member whose worker is scoped to [A] gets 404 for B's board and task, and their inbox lacks B's question. The other member and the admin see both. After the worker is revoked, the first member sees both. (5) In the web app, a 404 for a project or task shows the not-found screen, and the project switcher lists what `GET /api/projects` returns (ui test). (6) The user guide says who sees what and how to widen it. | high (authorisation) |
+| **S-30.3** | The live stream says nothing about a hidden project | S-30.1 | TD-022 visibility amendment, item 7 | (1) At `/events` and at `/events/subscriptions`, a `project:`, `task:` or `run:` topic of a hidden project is 404, as a missing one is (`topic-access.test.ts`). (2) The `org` topic filters per connection on live and replayed frames alike. A frame with no `project_id` is resolved through its `task_id` or `run_id`. An unresolved frame is dropped for a narrowed connection and delivered to an unnarrowed one (`hub.test.ts`, `domain-event-bridge.test.ts`). (3) The connection's set is re-read at every subscription change and is never older than 60 s. A hub test with a fake clock covers narrowing (a project's frames stop) and widening (they start again). (4) In `test/e2e/visibility/stream-visibility.e2e.test.ts`, a member scoped to [A] receives no `org` frame for a task in B, while an unscoped member and an admin do. | high (authorisation) |
+
+**Order.** S-30.1 first, then S-30.2 and S-30.3 in parallel, with S-30.2 merged first. When both are on `main`, deploy to fontai and check the
+one narrowed member's board, inbox and Agents screen against an admin's.
+
 ## Suggested agent team for the orchestrator
 - **Architect (this role, read-only)** for questions about decisions; **Backend developer** (domain/application/infrastructure), **Integrations developer** (providers + contract tests), **Runner/security developer** (SDK runner, launcher, isolation), **Frontend developer** (SPA), **Prompt engineer** (roles, evals), **Reviewer** (fresh context, security checklist), **Docs writer**. Sequence M1 WPs by dependencies; WP-13 early because the whole runner path depends on it.
 

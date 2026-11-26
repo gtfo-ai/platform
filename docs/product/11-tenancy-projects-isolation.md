@@ -31,6 +31,7 @@ What we give up: cross-tenant analytics and a shared control plane. Acceptable n
 - Agent workspaces are per task (own checkout), destroyed after the task completes (retained for N days for debugging, configurable).
 - Integration credentials are org-level (one Jira token) but **bindings** are project-level; a project can override with its own credentials.
 - Roles: `viewer` sees boards and artifacts; `member` sees transcripts and answers questions; `maintainer` approves plans, knowledge proposals, budgets and pipeline settings; `admin` manages integrations and users. External identities (Jira, GitLab, Slack) are mapped to platform users by email; unmapped identities cannot trigger actions (Q10).
+- **Visibility (BD-035).** Outside an organisation admin, a person sees only the projects they work in: the projects they chose for their workers, plus their project memberships, plus the projects of tasks they own. A person who has chosen nothing sees every project. A hidden project reads as one that does not exist. Visibility narrows what a person sees; what they may do is still decided by their role.
 
 ## Multi-project on one repository
 
