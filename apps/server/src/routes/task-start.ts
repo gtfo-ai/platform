@@ -156,6 +156,7 @@ export const registerTaskStartRoutes = async (
         querystring: ticketSearchQuerySchema,
         response: {
           200: ticketSearchResponseSchema,
+          400: apiErrorSchema,
           404: apiErrorSchema,
           409: apiErrorSchema,
           503: apiErrorSchema,
