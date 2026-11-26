@@ -149,6 +149,29 @@ export interface OrgRoutesOptions {
    * is counted as able to claim, as none can without them.
    */
   readonly coreDigests?: () => RunImageDigests | null;
+  /**
+   * The three project-bearing lists (BD-035), each taking the caller's visible set. Absent: this
+   * process's database (`listRunningAgents`, `listInbox`, `listAuditEntries`); a route test passes
+   * its own to assert the set reaches them.
+   */
+  readonly lists?: OrgListQueries;
+}
+
+/** The organisation lists that filter by the caller's visible projects (BD-035). */
+export interface OrgListQueries {
+  readonly agents: typeof listRunningAgents extends (
+    database: Database,
+    ...rest: infer Rest
+  ) => infer Answer
+    ? (...rest: Rest) => Answer
+    : never;
+  readonly inbox: (visible: readonly string[] | null) => ReturnType<typeof listInbox>;
+  readonly audit: typeof listAuditEntries extends (
+    database: Database,
+    ...rest: infer Rest
+  ) => infer Answer
+    ? (...rest: Rest) => Answer
+    : never;
 }
 
 /**
@@ -209,6 +232,13 @@ export const registerOrgRoutes = async (
     visibleProjects: options.visibleProjects,
   };
 
+  const lists: OrgListQueries = options.lists ?? {
+    agents: async (visible, readOptions) =>
+      listRunningAgents(options.database, visible, readOptions),
+    inbox: async (visible) => listInbox(options.database, visible),
+    audit: async (auditOptions) => listAuditEntries(options.database, auditOptions),
+  };
+
   /** Who is writing. Unreachable through `requirePermission`, which refuses an anonymous caller. */
   const actorOf = (request: FastifyRequest): { readonly userId: string } => {
     const actor = request.actor;
@@ -246,7 +276,7 @@ export const registerOrgRoutes = async (
     },
     async (request) => {
       const query = request.query;
-      const page = await listAuditEntries(options.database, {
+      const page = await lists.audit({
         // BD-035: a hidden project's rows are left out; the organisation's are kept.
         visible: await visibleIdsFor(request, options.visibleProjects),
         limit: query.limit ?? DEFAULT_PAGE_SIZE,
@@ -273,7 +303,7 @@ export const registerOrgRoutes = async (
       },
     },
     async (request) =>
-      listRunningAgents(options.database, await visibleIdsFor(request, options.visibleProjects), {
+      lists.agents(await visibleIdsFor(request, options.visibleProjects), {
         coreDigests: options.coreDigests?.() ?? null,
       }),
   );
@@ -307,8 +337,7 @@ export const registerOrgRoutes = async (
         response: { 200: inboxResponseSchema },
       },
     },
-    async (request) =>
-      listInbox(options.database, await visibleIdsFor(request, options.visibleProjects)),
+    async (request) => lists.inbox(await visibleIdsFor(request, options.visibleProjects)),
   );
 
   /**

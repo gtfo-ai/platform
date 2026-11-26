@@ -883,10 +883,11 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         unassignedTakers === null
           ? null
           : {
-              execution: async (projectId) => {
+              serverClaimantRunning: async () => serverClaimantRunning(options.database),
+              execution: async (projectId, serverClaimant) => {
                 const document = executionDocument(
                   await findProjectExecution(options.database, projectId),
-                  await serverClaimantRunning(options.database),
+                  serverClaimant,
                   await remoteRunCredentialRefused(options.database, projectId),
                 );
                 return { mode: document.mode, notice: document.notice };

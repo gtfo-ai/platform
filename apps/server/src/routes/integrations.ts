@@ -89,6 +89,22 @@ export interface IntegrationRoutesOptions {
   readonly organisationCredentials:
     | (() => Promise<readonly { readonly integrationId: string; readonly readable: boolean }[]>)
     | null;
+  /**
+   * The list's two reads (BD-035: the summaries take the caller's visible set for `used_by`).
+   * Absent: this process's database; a route test passes its own.
+   */
+  readonly lists?: IntegrationListQueries;
+}
+
+/** `GET /api/integrations`' reads. */
+export interface IntegrationListQueries {
+  readonly rows: () => ReturnType<typeof listIntegrationRows>;
+  readonly summaries: typeof integrationSummaries extends (
+    database: Database,
+    ...rest: infer Rest
+  ) => infer Answer
+    ? (...rest: Rest) => Answer
+    : never;
 }
 
 const integrationParamsSchema = z.strictObject({ integration_id: z.uuid() });
@@ -107,6 +123,11 @@ export const registerIntegrationRoutes = async (
       findProjectRole(options.database, projectId, userId),
     visibleProjects: options.visibleProjects,
   };
+  const lists: IntegrationListQueries = options.lists ?? {
+    rows: async () => listIntegrationRows(options.database),
+    summaries: async (rows, credentials, now, visible) =>
+      integrationSummaries(options.database, rows, credentials, now, visible),
+  };
 
   typed.get(
     '/api/integrations',
@@ -121,7 +142,7 @@ export const registerIntegrationRoutes = async (
       },
     },
     async (request) => {
-      const rows = await listIntegrationRows(options.database);
+      const rows = await lists.rows();
       const unknown = rows
         .filter((row) => findShippedProvider(row.provider) === undefined)
         .map((row) => row.id);
@@ -146,8 +167,7 @@ export const registerIntegrationRoutes = async (
       return {
         // S-25.3: the read's own instant — "recently" is a question about now.
         // BD-035: `used_by` names only the projects the caller sees.
-        items: await integrationSummaries(
-          options.database,
+        items: await lists.summaries(
           rows,
           credentials,
           new Date(),

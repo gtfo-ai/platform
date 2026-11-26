@@ -130,8 +130,16 @@ export interface WorkerRoutesOptions {
 
 /** The two reads `GET /api/workers/:id/claim-scope` composes beside the store (BD-035). */
 export interface WorkerClaimScopeReads {
-  /** A project's execution setting, as `GET /api/projects/:id/execution` says `mode` and `notice`. */
-  readonly execution: (projectId: string) => Promise<WorkerClaimScopeExecution>;
+  /** Whether this instance has a server claimant now — read once per request, for every project. */
+  readonly serverClaimantRunning: () => Promise<boolean>;
+  /**
+   * A project's execution setting, as `GET /api/projects/:id/execution` says `mode` and `notice`,
+   * given the instance's claimant as {@link serverClaimantRunning} answered it.
+   */
+  readonly execution: (
+    projectId: string,
+    serverClaimant: boolean,
+  ) => Promise<WorkerClaimScopeExecution>;
   /** BACKLOG 1456's statement with the asking worker excluded (`unassignedTakersOf`). */
   readonly unassignedTakers: (
     workerId: string,
@@ -575,13 +583,14 @@ export const registerWorkerRoutes = async (
       }
       const ids = scope.projects.map((project) => project.id);
       const takers = await reads.unassignedTakers(workerId, ids);
+      const serverClaimant = await reads.serverClaimantRunning();
       const projects = [];
       for (const project of scope.projects) {
         projects.push({
           id: project.id,
           key: project.key,
           name: project.name,
-          execution: await reads.execution(project.id),
+          execution: await reads.execution(project.id, serverClaimant),
         });
       }
       return {

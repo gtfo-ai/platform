@@ -123,13 +123,6 @@ export const resolveTopic = async (
   throw new NotFoundError(`topic ${topic}`);
 };
 
-/**
- * Refuses the whole subscription unless every topic in it is allowed.
- *
- * All or nothing on purpose: silently dropping the topics a caller may not have would give them a
- * stream that looks subscribed and is quietly missing half of what they asked for, which is the
- * failure mode hardest to notice from a UI.
- */
 /** What an authorised subscription carries to the hub (BD-035). */
 export interface AuthorisedTopics {
   /** The person's visible projects, read for this check. */
@@ -138,6 +131,13 @@ export interface AuthorisedTopics {
   readonly topicProjects: ReadonlyMap<string, string>;
 }
 
+/**
+ * Refuses the whole subscription unless every topic in it is allowed.
+ *
+ * All or nothing on purpose: silently dropping the topics a caller may not have would give them a
+ * stream that looks subscribed and is quietly missing half of what they asked for, which is the
+ * failure mode hardest to notice from a UI.
+ */
 export const authoriseTopics = async (
   dependencies: TopicAccessDependencies,
   actor: { readonly userId: string; readonly role: UserRole },

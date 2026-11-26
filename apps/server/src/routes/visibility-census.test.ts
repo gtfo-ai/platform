@@ -25,9 +25,12 @@
  * test that asserts it — read off disk here, so a renamed test fails this file.
  *
  * **What it cannot see**, stated: whether a `list` route's statement really filters (the
- * integration tier's cases do: `read-api`, `refused-deliveries`, `stats-queries`), and a route
- * registered only by a composition this census does not make. `HEAD` mirrors `GET` and is asserted
- * to, rather than classified twice.
+ * integration tier's cases do: `read-api`, `refused-deliveries`, `stats-queries`; the wiring is
+ * `visible-lists.test.ts`); a route registered only by a composition this census does not make;
+ * and the browser bundle `webRoot` serves (`web/fallback.ts`'s `createClientFallback`, the SPA's
+ * shell and its static assets), which runs from the not-found handler, for which Fastify emits no
+ * `onRoute` — it names no project and serves no data, and this census builds with no `webRoot`.
+ * `HEAD` mirrors `GET` and is asserted to, rather than classified twice.
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';

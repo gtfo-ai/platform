@@ -907,11 +907,18 @@ describe('what the card may offer: GET /api/workers/:id/claim-scope (BD-035, S-3
   const VISIBLE = '00000000-0000-4000-8000-0000003001a1';
   const HIDDEN = '00000000-0000-4000-8000-0000003001b1';
   const NOT_MINE = '00000000-0000-4000-8000-0000003001c1';
+  let claimantReads = 0;
   const reads: WorkerClaimScopeReads = {
-    execution: async (projectId) =>
-      projectId === HIDDEN
-        ? { mode: 'server_only', notice: 'Runs wait for the platform server.' }
-        : { mode: 'hybrid', notice: null },
+    serverClaimantRunning: async () => {
+      claimantReads += 1;
+      return true;
+    },
+    execution: async (projectId, serverClaimant) =>
+      !serverClaimant
+        ? { mode: 'hybrid', notice: 'the claimant was not passed through' }
+        : projectId === HIDDEN
+          ? { mode: 'server_only', notice: 'Runs wait for the platform server.' }
+          : { mode: 'hybrid', notice: null },
     unassignedTakers: async (_workerId, projectIds) =>
       new Map(projectIds.map((id, index) => [id, index % 2 === 0] as const)),
   };
@@ -938,6 +945,7 @@ describe('what the card may offer: GET /api/workers/:id/claim-scope (BD-035, S-3
         })
       ).statusCode,
     ).toBe(200);
+    const claimantBefore = claimantReads;
     const response = await scopeOf(instance, alice.workerId);
     expect(response.statusCode, response.body).toBe(200);
     const body = workerSessionClaimScopeResponseSchema.parse(response.json());
@@ -956,6 +964,8 @@ describe('what the card may offer: GET /api/workers/:id/claim-scope (BD-035, S-3
       ],
       unassigned_has_taker: { [HIDDEN]: true, [VISIBLE]: false },
     });
+    // The instance's claimant is read once for the request, not once per listed project.
+    expect(claimantReads - claimantBefore).toBe(1);
   });
 
   it('answers what the worker protocol’s GET claim-scope answers for the same worker', async () => {
