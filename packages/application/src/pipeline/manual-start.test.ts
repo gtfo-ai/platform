@@ -520,7 +520,7 @@ describe('a ticket started by hand has its starter as owner, and the pick-up lab
     return { harness, calls };
   };
 
-  it('makes the starter the owner before the first offer, which names them', async () => {
+  it('makes the starter the owner in the transaction that creates the task, before its first offer', async () => {
     const { harness } = labelled();
     await start(harness, 'ACME-7');
     await harness.drain();
@@ -542,8 +542,8 @@ describe('a ticket started by hand has its starter as owner, and the pick-up lab
       source: 'platform',
       via: 'command',
     });
-    // The offer written by the first stage's job names the owner the task was created with.
-    expect(harness.store.offerRows().map((offer) => offer.routing.assigneeUserId)).toEqual([USER]);
+    // Written in the creation's transaction, so before any offer of the task exists; that only the
+    // starter's machine then claims is `remote-runs.test.ts`'s two-worker case.
   });
 
   it('adds the pick-up label once, outside every transaction, after the task exists', async () => {

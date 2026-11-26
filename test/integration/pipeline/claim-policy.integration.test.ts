@@ -858,6 +858,18 @@ describe('picks through RemoteRuns.claim (S-26.4, criterion 4)', () => {
     expect(await ownerEvents(taskId)).toEqual([]);
   });
 
+  it('an automatic claim of an ask assigns nothing, even on a task nobody owns', async () => {
+    const { me, taskId, runId } = await arrange('an ask I asked');
+    await own(taskId, null);
+    const w = await worker(me, { policy: 'everything' });
+    expect(await withRemote((remote) => remote.claim(automaticInput(w)))).toEqual({
+      kind: 'not_packaged',
+      runId,
+    });
+    expect((await ownership(taskId))?.owner_user_id).toBeNull();
+    expect(await ownerEvents(taskId)).toEqual([]);
+  });
+
   it('a pick of an ask assigns nothing, whoever owns its task', async () => {
     const { me, taskId, runId } = await arrange('an ask another person asked');
     // The task is mine (the arrangement's), the ask another person's: the pick takes the ask.

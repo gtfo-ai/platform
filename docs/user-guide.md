@@ -970,7 +970,9 @@ integration's **pick-up label** (Jira's `pickup_label`, `agentic` unless changed
 start rule is a label rather than a status), so Jira shows it as the platform's work like any
 picked-up ticket. The label is only added, never removed; if Jira refuses the edit, the platform
 logs it and the task carries on. A ticket that keeps the label after its task is done or cancelled
-is **not** started again: the platform runs one task per ticket, whatever state that task is in.
+is **not** started again: the platform runs one task per ticket, whatever state that task is in. A
+started task counts toward your own work-in-progress limit (*Why a queued ticket has not started*, above),
+so if you are at it the task waits in the queue like any other task you own.
 
 ## 4. Task detail
 
@@ -999,7 +1001,8 @@ read's `take_writes_back` whether *your* Take would be. The owner's computer get
 the task's runs (*Settings → Execution*, below). **A worker that takes a run of a task nobody owns
 makes its person the owner** (since TD-031's 2026-11-26 amendment), as picking it does — unless the
 ticket is assigned in Jira to someone the platform cannot link, or that person may not own tasks in
-the project. A worker set to *everything* that takes another person's task leaves its owner as it is.
+the project. A worker set to *everything* that takes another person's task leaves its owner as it is. The
+task then counts toward that person's work-in-progress limit.
 **A task that existed before owners did** — or any
 live task whose ticket assignee the platform has never stored — has its ticket read **once** by the
 recovery pass, about a minute after the upgrade, up to twenty tasks a pass, the most recently
