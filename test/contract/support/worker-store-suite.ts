@@ -593,6 +593,8 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       const read = await world.store.claimScope(worker);
       expect(read).toEqual({
         status: 'found',
+        // BD-035: whose worker it is — what `GET /api/workers/:id/claim-scope` answers 404 by.
+        userId: owner,
         claimProjectIds: null,
         projects: [
           { id: alpha, key: 'alpha', name: 'Project alpha' },

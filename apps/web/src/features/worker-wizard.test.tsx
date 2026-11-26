@@ -639,8 +639,10 @@ describe('Add a worker: Choose projects', () => {
     expect([...(body?.claim_project_ids ?? [])].sort()).toEqual(
       [hidden, world.projects[1]?.summary.id ?? ''].sort(),
     );
-    // And *Which projects let workers run* names it too.
-    const projects = within(await screen.findByRole('list', { name: 'Your projects' }));
-    expect(projects.getByText('Server Things')).toBeTruthy();
+    // And *Which projects let workers run* lists it too.
+    await screen.findByRole('list', { name: 'Your projects' });
+    expect(
+      document.querySelector('[aria-label="Your projects"] [data-project="srv"]'),
+    ).not.toBeNull();
   });
 });

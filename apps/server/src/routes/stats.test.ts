@@ -180,6 +180,8 @@ describe('GET /api/org/stats', () => {
         projectId: PROJECT,
         timezone: 'UTC',
         asOf: body.generated_at,
+        // BD-035: an unnarrowed caller, so every project.
+        visible: null,
       },
     ]);
   });
