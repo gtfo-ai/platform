@@ -1741,7 +1741,8 @@ amendment item 2), and the tracker keeps the binding's account.
 3. **An unreadable binding writes nothing back** (1672): a project whose task-management binding is ambiguous or whose
    lifecycle block fails its schema reads `assign_owner` as **off** in the pipeline, as the task DTO already does.
 4. **An automatic claim recorded as a pick before the 2026-11-26 amendment is read as a claim** (1673): a `via: pick`
-   owner change with no take-audit row of the same worker and run is a claim for the write-back-owed reading.
+   owner change with no take-audit row of the same person and owner is a claim for the write-back-owed reading (the
+   event names no worker or run, so the person and the owner are the link).
 5. **A refused write-back leaves the ticket with the platform's account, not with nobody** (1674): on a terminal refusal
    (or an expired job) of `ticket_owner_assign`, while the ticket is still unassigned, the binding's account is
    assigned as an ordinary claim would; a ticket a person holds is never touched.

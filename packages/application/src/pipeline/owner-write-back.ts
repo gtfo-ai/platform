@@ -56,7 +56,11 @@
  * back to the platform's owner (backlog 1421). A sync that **runs** between the preset and the `PUT`
  * reads the tracker's old assignee, which differs from the preset, so it moves the owner — and the
  * read after the `PUT` lands moves it back: TD-031's *"a sync racing the call reads no change"*
- * holds only for reads made after the call (backlog 1422).
+ * holds only for reads made after the call (backlog 1422). **The expired-job fallback's limit**
+ * (BACKLOG 1675): an expired write-back's own `PUT` may still be in flight — pg-boss's timer fails the
+ * job while its handler runs — and land between the fallback's re-read and its `assignToSelf`, or
+ * after it; the last writer wins, so the ticket may show the binding's account over the owner the
+ * write-back assigned, or the owner over the binding's.
  */
 import type {
   ExternalIdentity,

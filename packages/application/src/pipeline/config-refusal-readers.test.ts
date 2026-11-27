@@ -144,9 +144,9 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
       'the lifecycle handler and its duty (WP-177), the entry move the `stage.execute` job performs before the plan (WP-184), and the `ready_for_merge` move `mr_ready` asks for once the merge request reads back non-draft (S-28.10), read only `ticketLifecycle` — the task-management binding’s block, which no configuration document carries — and move the ticket, never the task',
   },
   'packages/application/src/pipeline/owner-write-back.ts': {
-    count: 2,
+    count: 3,
     reason:
-      'the owner write-back’s handler and its duty (S-26.3) read only `ticketLifecycle.slots.assign_owner` — the task-management binding’s block, which no configuration document carries — and assign the ticket, never move the task',
+      'the owner write-back’s handler and its duty (S-26.3) read only `ticketLifecycle.slots.assign_owner` and `ticketLifecycleReading` (BACKLOG 1672), and the fallback after a refused or expired write-back (BACKLOG 1674, 1675) only whether `ticketLifecycle` claims — the task-management binding’s block, which no configuration document carries — and assign the ticket, never move the task',
   },
   'packages/application/src/pipeline/ticket-release.ts': {
     count: 1,

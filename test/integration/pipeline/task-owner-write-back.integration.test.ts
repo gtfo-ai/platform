@@ -246,26 +246,24 @@ const ownerChangedOnLog = async (
 };
 
 /**
- * The `human_actions` row a person's *take this one* writes beside its owner change
- * (`createPostgresWorkerTakeAudit`), under the worker's person.
+ * The `human_actions` rows a person's *take this one* writes beside its owner change, through the
+ * production writer (`createPostgresWorkerTakeAudit`), from a machine of that person's — so the
+ * reading is held to the rows the take really writes, not to a copy of their shape.
  */
 const pickAudited = async (taskId: Id, owner: Id): Promise<void> => {
   const workerId = nextId();
   await query(
-    `insert into human_actions (task_id, user_id, action, params)
-     values ($1, $2, 'task.owner', $3::jsonb)`,
-    [
+    `insert into workers (id, user_id, name, credential_hash, last_seen_at)
+     values ($1, $2, 'laptop', $3, now())`,
+    [workerId, owner, workerId.replaceAll('-', '').padEnd(64, '0').slice(0, 64)],
+  );
+  await within((tx) =>
+    pipeline.createPostgresWorkerTakeAudit().record(tx, {
+      workerId,
+      runId: nextId(),
       taskId,
-      owner,
-      JSON.stringify({
-        user_id: owner,
-        via: 'pick',
-        worker_id: workerId,
-        run_id: nextId(),
-        changed: true,
-        owner_user_id: owner,
-      }),
-    ],
+      assignedOwner: owner,
+    }),
   );
 };
 

@@ -551,15 +551,54 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     stale_cause: null,
     held_by: 'platform_owner',
   } as const;
+  /** The claim record after a release: no claim holds the ticket. */
+  const releasedClaim = {
+    ...keptClaim,
+    held_by: undefined,
+    released_at: '2026-06-01T09:00:40.000Z',
+    release_cause: 'cancelled',
+  } as const;
+
+  /**
+   * The state the fallback exists for. A claiming binding's first stage claims during intake's
+   * drain — the harness assigns the binding's account then — so each case puts the ticket and the
+   * stored assignee back to **nobody**, forgets that assign, and stores the claim record it is about:
+   * one kept for the owner's write-back (`held_by: 'platform_owner'`), or one released (no claim
+   * holds the ticket).
+   */
+  const unassignedWith = async (
+    harness: PipelineHarness,
+    ticket: ReturnType<typeof tracker>,
+    claim: typeof keptClaim | typeof releasedClaim,
+  ): Promise<Id> => {
+    const taskId = taskIdOf(harness);
+    ticket.state.assignee = null;
+    ticket.selfAssigns.length = 0;
+    await harness.memory.transaction(async (scope) => {
+      const current = await harness.store.tasks.ownership(scope.tx, taskId);
+      if (current.ticketAssignee !== null) {
+        expect(
+          await harness.store.tasks.saveOwner(scope.tx, taskId, {
+            expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+            next: { ...current, ticketAssignee: null },
+          }),
+        ).toBe(true);
+      }
+      const { held_by: heldBy, ...rest } = claim;
+      await harness.store.tasks.saveTicketClaim(
+        scope.tx,
+        taskId,
+        (heldBy === undefined ? rest : { ...rest, held_by: heldBy }) as never,
+      );
+    });
+    return taskId;
+  };
 
   it('assigns the binding’s account once, records it, and drops the claim’s platform_owner mark', async () => {
     const ticket = tracker(null);
     const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
     await harness.publish([ticketMatched()]);
-    const taskId = taskIdOf(harness);
-    await harness.memory.transaction(async (scope) =>
-      harness.store.tasks.saveTicketClaim(scope.tx, taskId, keptClaim as never),
-    );
+    const taskId = await unassignedWith(harness, ticket, keptClaim);
     ticket.state.refuse = forbidden();
 
     await assign(harness, BOB);
@@ -581,11 +620,11 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     expect(claim?.held_by).toBeUndefined();
   });
 
-  it('assigns it too when the refusal comes before any claim is held, and records it releasable (BACKLOG 1676)', async () => {
+  it('assigns it too when no claim holds the ticket, and records it releasable (BACKLOG 1676)', async () => {
     const ticket = tracker(null);
     const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
     await harness.publish([ticketMatched()]);
-    const taskId = taskIdOf(harness);
+    const taskId = await unassignedWith(harness, ticket, releasedClaim);
     ticket.state.refuse = forbidden();
 
     await assign(harness, BOB);
@@ -613,10 +652,11 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     const ticket = tracker(null);
     const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
     await harness.publish([ticketMatched()]);
-    const taskId = taskIdOf(harness);
+    const taskId = await unassignedWith(harness, ticket, releasedClaim);
     ticket.state.refuse = forbidden();
     await assign(harness, BOB);
     expect(ticket.state.assignee).toBe('bot');
+    const unassignsBefore = ticket.unassigns();
 
     await releaseTicket(releaseOptions(harness), {
       taskId,
@@ -624,13 +664,14 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
       keySuffix: 'cancelled:test',
       causeEventId: null,
     });
-    expect(ticket.unassigns()).toBe(1);
+    expect(ticket.unassigns()).toBe(unassignsBefore + 1);
     expect(ticket.state.assignee).toBeNull();
 
     // The control: a person who took the ticket meanwhile is left alone by the same release.
     const kept = tracker(null);
     const other = harnessFor(kept, { slots: { claim: true, assign_owner: true } });
     await other.publish([ticketMatched()]);
+    await unassignedWith(other, kept, releasedClaim);
     kept.state.refuse = forbidden();
     await assign(other, BOB);
     kept.state.assignee = 'carol';
@@ -651,7 +692,7 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
       logger,
     });
     await harness.publish([ticketMatched()]);
-    const taskId = taskIdOf(harness);
+    const taskId = await unassignedWith(harness, ticket, keptClaim);
     ticket.state.refuse = forbidden();
     ticket.state.refuseSelf = forbidden();
 
@@ -681,6 +722,7 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     const ticket = tracker(null);
     const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
     await harness.publish([ticketMatched()]);
+    await unassignedWith(harness, ticket, keptClaim);
     harness.holdOutbound((data) => data.duty === 'ticket_owner_assign');
     await assign(harness, BOB);
     const [job] = harness.jobs.take(JOB_QUEUES.pipelineOutbound);
@@ -738,6 +780,7 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     const ticket = tracker(null);
     const harness = harnessFor(ticket, { slots: { claim: true, assign_owner: true } });
     await harness.publish([ticketMatched()]);
+    await unassignedWith(harness, ticket, keptClaim);
 
     await assign(harness, BOB);
 
