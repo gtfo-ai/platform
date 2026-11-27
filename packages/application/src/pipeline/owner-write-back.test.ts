@@ -600,13 +600,20 @@ describe('a refused write-back over nobody assigns the binding’s account, as a
     await harness.publish([ticketMatched()]);
     const taskId = await unassignedWith(harness, ticket, keptClaim);
     ticket.state.refuse = forbidden();
+    // Intake's first claim audited its own assign before the case reset the ticket to nobody.
+    const auditedBefore = harness.audit.entriesFor('assign_to_self').length;
 
     await assign(harness, BOB);
 
     expect(ticket.calls.map((call) => call.account)).toEqual(['acct-bob']);
     expect(ticket.selfAssigns).toHaveLength(1);
     expect(ticket.state.assignee).toBe('bot');
-    expect(harness.audit.entriesFor('assign_to_self').map((entry) => entry.status)).toEqual(['ok']);
+    expect(
+      harness.audit
+        .entriesFor('assign_to_self')
+        .slice(auditedBefore)
+        .map((entry) => entry.status),
+    ).toEqual(['ok']);
     // The platform's owner stands; the stored assignee is the binding's own account.
     expect(harness.store.ownershipOf(taskId)).toMatchObject({
       ownerUserId: BOB,
